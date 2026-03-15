@@ -44,6 +44,12 @@ shared:
       - "095"
       - "097"
     local_crs: EPSG:7131
+    zones:
+      zone_type: taz
+      source_file: pilates/activitysim/data/sfbay/taz_sfbay.geojson
+      fallback_source_files: []
+      canonical_id_col: taz1454
+      activitysim_index_col: TAZ
   skims:
     zone_type: taz
     fname: as-base-skims-sfbay-taz.omx
@@ -273,7 +279,7 @@ beam:
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
-  router_directory: r5/sfbay-area-cbg5500-network
+  router_directory: r5/sfbay-cbg5500-weakConn-network
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10

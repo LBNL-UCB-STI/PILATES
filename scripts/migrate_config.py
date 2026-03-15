@@ -25,6 +25,24 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
+ZONE_DEFAULTS = {
+    "seattle": {
+        "source_file": "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson",
+        "fallback_source_files": [
+            "pilates/beam/production/seattle/shape/block-groups-32048.shp"
+        ],
+        "canonical_id_col": "OBJECTID",
+        "activitysim_index_col": "TAZ",
+    },
+    "sfbay": {
+        "source_file": "pilates/activitysim/data/sfbay/taz_sfbay.geojson",
+        "fallback_source_files": [],
+        "canonical_id_col": "taz1454",
+        "activitysim_index_col": "TAZ",
+    },
+}
+
+
 class ConfigMigrator:
     """
     Migrates legacy PILATES configurations to new hierarchical structure.
@@ -110,6 +128,18 @@ class ConfigMigrator:
             "FIPS": fips_data,
             "local_crs": self.legacy.get("local_crs", {}).get(region, "EPSG:4326"),
         }
+        zone_defaults = ZONE_DEFAULTS.get(region)
+        skims_zone_type = self.legacy.get("skims_zone_type")
+        if zone_defaults and skims_zone_type:
+            geography["zones"] = {
+                "zone_type": skims_zone_type,
+                "source_file": zone_defaults["source_file"],
+                "fallback_source_files": list(
+                    zone_defaults.get("fallback_source_files", [])
+                ),
+                "canonical_id_col": zone_defaults["canonical_id_col"],
+                "activitysim_index_col": zone_defaults["activitysim_index_col"],
+            }
 
         # Skims
         skims = {

@@ -240,9 +240,13 @@ class ZonesConfig(BaseModel):
         ...,
         description="The geographic resolution of zones (e.g., 'taz', 'block_group')",
     )
-    source_file: str = Field(
-        ...,
+    source_file: Optional[str] = Field(
+        None,
         description="User-provided path to the canonical zone geometry source file.",
+    )
+    fallback_source_files: List[str] = Field(
+        default_factory=list,
+        description="Optional fallback zone geometry sources tried in order if source_file is unavailable.",
     )
     canonical_id_col: str = Field(
         ..., description="Column in source_file with the canonical zone ID."
@@ -250,6 +254,14 @@ class ZonesConfig(BaseModel):
     activitysim_index_col: str = Field(
         "TAZ", description="Column name for ActivitySim's 0-based internal index."
     )
+
+    @model_validator(mode="after")
+    def validate_zone_sources(self):
+        if not self.source_file and not self.fallback_source_files:
+            raise ValueError(
+                "ZonesConfig requires source_file or at least one fallback_source_files entry"
+            )
+        return self
 
 
 class SkimsConfig(BaseModel):

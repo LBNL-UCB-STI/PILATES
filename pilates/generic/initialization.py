@@ -5,6 +5,10 @@ from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.zone_utils import (
+    copy_canonical_zone_source_to_dir,
+    resolve_canonical_zone_source_path,
+)
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
@@ -323,9 +327,9 @@ class Initialization(Model):
                             "falling back to cwd='%s'.",
                             project_root,
                         )
-                    zone_source_path = zones_config.source_file
-                    if not os.path.isabs(zone_source_path):
-                        zone_source_path = os.path.join(project_root, zone_source_path)
+                    zone_source_path = resolve_canonical_zone_source_path(
+                        settings, workspace
+                    )
 
                     asim_input_dir = workspace.get_asim_mutable_data_dir()
                     os.makedirs(asim_input_dir, exist_ok=True)
@@ -340,7 +344,9 @@ class Initialization(Model):
                                 zone_source_path,
                                 dest_path,
                             )
-                            shutil.copy(zone_source_path, dest_path)
+                            copy_canonical_zone_source_to_dir(
+                                zone_source_path, asim_input_dir
+                            )
                         else:
                             logger.info(
                                 "Canonical zones already at destination: %s",

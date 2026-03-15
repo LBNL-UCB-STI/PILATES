@@ -10,6 +10,7 @@ models within the PILATES framework.
 import logging
 import os
 import inspect
+from pathlib import Path
 import pandas as pd
 import geopandas as gpd
 import numpy as np
@@ -23,6 +24,89 @@ from pilates.utils.path_utils import find_project_root
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_zone_source_path(path: str) -> str:
+    if os.path.isabs(path):
+        return path
+    project_root = find_project_root(start_path=os.path.dirname(__file__))
+    if project_root:
+        return os.path.join(project_root, path)
+    return os.path.abspath(path)
+
+
+def get_zone_source_candidates(
+    settings: PilatesConfig, workspace: "Workspace" = None
+) -> list[str]:
+    zone_config = settings.shared.geography.zones
+    candidates: list[str] = []
+    configured_paths = []
+    activitysim_config = getattr(settings, "activitysim", None)
+    source_file = getattr(zone_config, "source_file", None)
+    fallback_source_files = list(
+        getattr(zone_config, "fallback_source_files", []) or []
+    )
+    if source_file:
+        configured_paths.append(source_file)
+    configured_paths.extend(fallback_source_files)
+
+    for configured in configured_paths:
+        if (
+            workspace is not None
+            and activitysim_config is not None
+            and hasattr(workspace, "get_asim_mutable_data_dir")
+        ):
+            mutable_candidate = os.path.join(
+                workspace.get_asim_mutable_data_dir(),
+                os.path.basename(configured),
+            )
+            if mutable_candidate not in candidates:
+                candidates.append(mutable_candidate)
+        resolved = _resolve_zone_source_path(configured)
+        if resolved not in candidates:
+            candidates.append(resolved)
+    return candidates
+
+
+def resolve_canonical_zone_source_path(
+    settings: PilatesConfig, workspace: "Workspace" = None
+) -> str:
+    candidates = get_zone_source_candidates(settings, workspace)
+    zone_config = settings.shared.geography.zones
+    source_file = getattr(zone_config, "source_file", None)
+    primary_resolved = (
+        _resolve_zone_source_path(source_file) if source_file else None
+    )
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            if primary_resolved and os.path.abspath(candidate) != os.path.abspath(
+                primary_resolved
+            ):
+                logger.warning(
+                    "Primary canonical zone source unavailable; using fallback source: %s",
+                    candidate,
+                )
+            return candidate
+
+    raise FileNotFoundError(
+        "Canonical zone source file not found. Tried: "
+        + ", ".join(candidates)
+    )
+
+
+def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
+    os.makedirs(dest_dir, exist_ok=True)
+    source = Path(source_path)
+    dest_path = Path(dest_dir) / source.name
+
+    if source.suffix.lower() == ".shp":
+        for sibling in source.parent.glob(f"{source.stem}.*"):
+            shutil.copy(sibling, Path(dest_dir) / sibling.name)
+        return str(dest_path)
+
+    shutil.copy(source, dest_path)
+    return str(dest_path)
 
 
 def _log_zarr_runtime_context() -> None:
@@ -142,27 +226,7 @@ def load_canonical_zones(
     zone_config = settings.shared.geography.zones
 
     id_col = zone_config.canonical_id_col
-    source_file = None
-
-    if settings.activitysim is not None:
-        source_file_basename = os.path.basename(zone_config.source_file)
-        candidate = os.path.join(
-            workspace.get_asim_mutable_data_dir(), source_file_basename
-        )
-        if os.path.exists(candidate):
-            source_file = candidate
-
-    if source_file is None:
-        source_file = zone_config.source_file
-        if not os.path.isabs(source_file):
-            project_root = find_project_root(start_path=os.path.dirname(__file__))
-            if project_root:
-                source_file = os.path.join(project_root, source_file)
-
-    if not os.path.exists(source_file):
-        raise FileNotFoundError(
-            f"Canonical zone source file not found: {source_file}"
-        )
+    source_file = resolve_canonical_zone_source_path(settings, workspace)
 
     logger.info(f"Reading canonical zones from '{source_file}'")
     gdf = gpd.read_file(source_file)

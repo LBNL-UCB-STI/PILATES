@@ -24,7 +24,9 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
 from pilates.utils.zone_utils import (
+    copy_canonical_zone_source_to_dir,
     load_canonical_zones,
+    resolve_canonical_zone_source_path,
 )
 from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
@@ -2589,9 +2591,7 @@ def _copy_data_to_mutable_location(
         return os.path.abspath(os.path.join(project_root, path))
 
     # --- 1. Handle Canonical Zone Geometries ---
-    zone_source_path = settings.shared.geography.zones.source_file
-    if not os.path.isabs(zone_source_path):
-        zone_source_path = os.path.join(project_root, zone_source_path)
+    zone_source_path = resolve_canonical_zone_source_path(settings, workspace)
 
     if os.path.exists(zone_source_path):
         zone_fname = os.path.basename(zone_source_path)
@@ -2599,7 +2599,7 @@ def _copy_data_to_mutable_location(
         logger.info(
             f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
         )
-        shutil.copy(zone_source_path, asim_zones_path)
+        copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
 
         input_records.add_record(
             FileRecord(

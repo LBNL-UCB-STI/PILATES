@@ -124,6 +124,7 @@ def test_migrate_config_stringifies_region_ids_and_preserves_activitysim_mapping
         "end_year": 2020,
         "travel_model": "beam",
         "activity_demand_model": "activitysim",
+        "skims_zone_type": "taz",
         "region_to_region_id": {
             "seattle": 53199100,
             "sfbay": "06197001",
@@ -142,6 +143,15 @@ def test_migrate_config_stringifies_region_ids_and_preserves_activitysim_mapping
     assert migrated["activitysim"]["region_mappings"] == {
         "region_to_subdir": {"seattle": "seattle"},
         "region_to_bucket": {"seattle": "seattle-activitysim"},
+    }
+    assert migrated["shared"]["geography"]["zones"] == {
+        "zone_type": "taz",
+        "source_file": "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson",
+        "fallback_source_files": [
+            "pilates/beam/production/seattle/shape/block-groups-32048.shp"
+        ],
+        "canonical_id_col": "OBJECTID",
+        "activitysim_index_col": "TAZ",
     }
 
 
