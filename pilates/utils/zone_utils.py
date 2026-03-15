@@ -35,22 +35,54 @@ def _resolve_zone_source_path(path: str) -> str:
     return os.path.abspath(path)
 
 
+def _get_zone_source_field(zone_source, field_name: str, default=None):
+    if hasattr(zone_source, field_name):
+        return getattr(zone_source, field_name, default)
+    if isinstance(zone_source, dict):
+        return zone_source.get(field_name, default)
+    return default
+
+
+def _get_primary_zone_source_config(zone_config):
+    return {
+        "zone_type": _get_zone_source_field(zone_config, "zone_type"),
+        "source_file": _get_zone_source_field(zone_config, "source_file"),
+        "canonical_id_col": _get_zone_source_field(zone_config, "canonical_id_col"),
+        "activitysim_index_col": _get_zone_source_field(
+            zone_config, "activitysim_index_col", "TAZ"
+        ),
+        "source_crs": _get_zone_source_field(zone_config, "source_crs"),
+    }
+
+
 def get_zone_source_candidates(
     settings: PilatesConfig, workspace: "Workspace" = None
-) -> list[str]:
-    zone_config = settings.shared.geography.zones
-    candidates: list[str] = []
-    configured_paths = []
+) -> list[tuple[str, dict]]:
+    geography_config = settings.shared.geography
+    zone_config = geography_config.zones
+    candidates: list[tuple[str, dict]] = []
     activitysim_config = getattr(settings, "activitysim", None)
-    source_file = getattr(zone_config, "source_file", None)
-    fallback_source_files = list(
-        getattr(zone_config, "fallback_source_files", []) or []
-    )
-    if source_file:
-        configured_paths.append(source_file)
-    configured_paths.extend(fallback_source_files)
+    configured_sources = [_get_primary_zone_source_config(zone_config)]
+    alternative_zone = _get_zone_source_field(geography_config, "alternative_zones")
+    if alternative_zone:
+        configured_sources.append(
+            {
+                "zone_type": _get_zone_source_field(alternative_zone, "zone_type"),
+                "source_file": _get_zone_source_field(alternative_zone, "source_file"),
+                "canonical_id_col": _get_zone_source_field(
+                    alternative_zone, "canonical_id_col"
+                ),
+                "activitysim_index_col": _get_zone_source_field(
+                    alternative_zone, "activitysim_index_col", "TAZ"
+                ),
+                "source_crs": _get_zone_source_field(alternative_zone, "source_crs"),
+            }
+        )
 
-    for configured in configured_paths:
+    for source_config in configured_sources:
+        configured = source_config.get("source_file")
+        if not configured:
+            continue
         if (
             workspace is not None
             and activitysim_config is not None
@@ -60,25 +92,27 @@ def get_zone_source_candidates(
                 workspace.get_asim_mutable_data_dir(),
                 os.path.basename(configured),
             )
-            if mutable_candidate not in candidates:
-                candidates.append(mutable_candidate)
+            if not any(path == mutable_candidate for path, _ in candidates):
+                candidates.append((mutable_candidate, source_config))
         resolved = _resolve_zone_source_path(configured)
-        if resolved not in candidates:
-            candidates.append(resolved)
+        if not any(path == resolved for path, _ in candidates):
+            candidates.append((resolved, source_config))
     return candidates
 
 
-def resolve_canonical_zone_source_path(
+def resolve_canonical_zone_source(
     settings: PilatesConfig, workspace: "Workspace" = None
-) -> str:
+) -> tuple[str, dict]:
     candidates = get_zone_source_candidates(settings, workspace)
     zone_config = settings.shared.geography.zones
-    source_file = getattr(zone_config, "source_file", None)
+    primary_source = _get_primary_zone_source_config(zone_config)
     primary_resolved = (
-        _resolve_zone_source_path(source_file) if source_file else None
+        _resolve_zone_source_path(primary_source["source_file"])
+        if primary_source["source_file"]
+        else None
     )
 
-    for candidate in candidates:
+    for candidate, source_config in candidates:
         if os.path.exists(candidate):
             if primary_resolved and os.path.abspath(candidate) != os.path.abspath(
                 primary_resolved
@@ -87,12 +121,19 @@ def resolve_canonical_zone_source_path(
                     "Primary canonical zone source unavailable; using fallback source: %s",
                     candidate,
                 )
-            return candidate
+            return candidate, source_config
 
     raise FileNotFoundError(
         "Canonical zone source file not found. Tried: "
-        + ", ".join(candidates)
+        + ", ".join(path for path, _ in candidates)
     )
+
+
+def resolve_canonical_zone_source_path(
+    settings: PilatesConfig, workspace: "Workspace" = None
+) -> str:
+    path, _ = resolve_canonical_zone_source(settings, workspace)
+    return path
 
 
 def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
@@ -223,10 +264,8 @@ def load_canonical_zones(
                           by the canonical zone ID.
     """
     logger.info("--- Loading Canonical Zone Geometries ---")
-    zone_config = settings.shared.geography.zones
-
-    id_col = zone_config.canonical_id_col
-    source_file = resolve_canonical_zone_source_path(settings, workspace)
+    source_file, zone_source = resolve_canonical_zone_source(settings, workspace)
+    id_col = zone_source["canonical_id_col"]
 
     logger.info(f"Reading canonical zones from '{source_file}'")
     gdf = gpd.read_file(source_file)
@@ -246,7 +285,7 @@ def load_canonical_zones(
     gdf = gdf.set_index(id_col)
 
     # Rename the index to the ActivitySim expected index name
-    asim_index_col = zone_config.activitysim_index_col
+    asim_index_col = zone_source["activitysim_index_col"]
     if gdf.index.name != asim_index_col:
         gdf.index.name = asim_index_col
 

@@ -145,13 +145,45 @@ def test_migrate_config_stringifies_region_ids_and_preserves_activitysim_mapping
         "region_to_bucket": {"seattle": "seattle-activitysim"},
     }
     assert migrated["shared"]["geography"]["zones"] == {
-        "zone_type": "taz",
+        "zone_type": "block_group",
         "source_file": "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson",
-        "fallback_source_files": [
-            "pilates/beam/production/seattle/shape/block-groups-32048.shp"
-        ],
         "canonical_id_col": "OBJECTID",
         "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:4326",
+    }
+    assert migrated["shared"]["geography"]["alternative_zones"] == {
+        "zone_type": "block_group",
+        "source_file": "pilates/beam/production/seattle/shape/block-groups-32048.shp",
+        "canonical_id_col": "OBJECTID",
+        "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:32048",
+    }
+
+
+def test_migrate_config_adds_sfbay_zone_fallback_source():
+    legacy = {
+        "region": "sfbay",
+        "start_year": 2018,
+        "end_year": 2018,
+        "travel_model": "beam",
+        "skims_zone_type": "taz",
+    }
+
+    migrated = ConfigMigrator(legacy).migrate()
+
+    assert migrated["shared"]["geography"]["zones"] == {
+        "zone_type": "taz",
+        "source_file": "pilates/activitysim/data/sfbay/taz_sfbay.geojson",
+        "canonical_id_col": "taz1454",
+        "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:4326",
+    }
+    assert migrated["shared"]["geography"]["alternative_zones"] == {
+        "zone_type": "taz",
+        "source_file": "pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp",
+        "canonical_id_col": "taz1454",
+        "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:26910",
     }
 
 

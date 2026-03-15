@@ -47,9 +47,15 @@ shared:
     zones:
       zone_type: taz
       source_file: pilates/activitysim/data/sfbay/taz_sfbay.geojson
-      fallback_source_files: []
+      source_crs: EPSG:4326
       canonical_id_col: taz1454
       activitysim_index_col: TAZ
+    alternative_zones:
+      zone_type: taz
+      source_file: pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp
+      canonical_id_col: taz1454
+      activitysim_index_col: TAZ
+      source_crs: EPSG:26910
   skims:
     zone_type: taz
     fname: as-base-skims-sfbay-taz.omx

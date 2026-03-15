@@ -28,10 +28,15 @@ shared:
     zones:
       zone_type: block_group
       source_file: pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson
-      fallback_source_files:
-      - pilates/beam/production/seattle/shape/block-groups-32048.shp
+      source_crs: EPSG:4326
       canonical_id_col: OBJECTID
       activitysim_index_col: TAZ
+    alternative_zones:
+      zone_type: block_group
+      source_file: pilates/beam/production/seattle/shape/block-groups-32048.shp
+      canonical_id_col: OBJECTID
+      activitysim_index_col: TAZ
+      source_crs: EPSG:32048
   skims:
     fname: as-base-skims-seattle-bg.omx
     origin_fname: as-origin-skims-seattle-bg.csv.gz

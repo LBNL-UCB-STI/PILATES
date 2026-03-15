@@ -27,18 +27,32 @@ logger = logging.getLogger(__name__)
 
 ZONE_DEFAULTS = {
     "seattle": {
+        "zone_type": "block_group",
         "source_file": "pilates/activitysim/data/seattle/block_groups_seattle_4326.geojson",
-        "fallback_source_files": [
-            "pilates/beam/production/seattle/shape/block-groups-32048.shp"
-        ],
         "canonical_id_col": "OBJECTID",
         "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:4326",
+        "alternative_zones": {
+            "zone_type": "block_group",
+            "source_file": "pilates/beam/production/seattle/shape/block-groups-32048.shp",
+            "canonical_id_col": "OBJECTID",
+            "activitysim_index_col": "TAZ",
+            "source_crs": "EPSG:32048",
+        },
     },
     "sfbay": {
+        "zone_type": "taz",
         "source_file": "pilates/activitysim/data/sfbay/taz_sfbay.geojson",
-        "fallback_source_files": [],
         "canonical_id_col": "taz1454",
         "activitysim_index_col": "TAZ",
+        "source_crs": "EPSG:4326",
+        "alternative_zones": {
+            "zone_type": "taz",
+            "source_file": "pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp",
+            "canonical_id_col": "taz1454",
+            "activitysim_index_col": "TAZ",
+            "source_crs": "EPSG:26910",
+        },
     },
 }
 
@@ -132,14 +146,14 @@ class ConfigMigrator:
         skims_zone_type = self.legacy.get("skims_zone_type")
         if zone_defaults and skims_zone_type:
             geography["zones"] = {
-                "zone_type": skims_zone_type,
+                "zone_type": zone_defaults["zone_type"],
                 "source_file": zone_defaults["source_file"],
-                "fallback_source_files": list(
-                    zone_defaults.get("fallback_source_files", [])
-                ),
                 "canonical_id_col": zone_defaults["canonical_id_col"],
                 "activitysim_index_col": zone_defaults["activitysim_index_col"],
+                "source_crs": zone_defaults.get("source_crs"),
             }
+            if zone_defaults.get("alternative_zones"):
+                geography["alternative_zones"] = dict(zone_defaults["alternative_zones"])
 
         # Skims
         skims = {
