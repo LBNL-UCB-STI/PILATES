@@ -1219,6 +1219,107 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
 
 
+def test_traffic_assignment_publishes_present_linkstats_warmstart(
+    stage_env, monkeypatch, tmp_path
+):
+    """
+    Regression: if BEAM preprocess returns LINKSTATS_WARMSTART, the workflow
+    must publish it for the subsequent beam_run step.
+    """
+    from pilates.generic.model_factory import ModelFactory
+    from pilates.workflows.steps import StepOutputsHolder
+    from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    asim_outputs = {
+        "beam_plans_out": str(tmp_path / "beam_plans_out.parquet"),
+        "households_asim_out": str(tmp_path / "households_asim_out.parquet"),
+        "persons_asim_out": str(tmp_path / "persons_asim_out.parquet"),
+    }
+    zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    _write_file(zarr_path)
+    coupler.set(ZARR_SKIMS, str(zarr_path))
+    warmstart_path = tmp_path / "init.linkstats.csv.gz"
+    _write_file(warmstart_path)
+    previous_beam_outputs = {
+        "linkstats_parquet_2018_0": str(warmstart_path)
+    }
+
+    class _BeamPreprocessorWithWarmstart:
+        def preprocess(
+            self,
+            workspace,
+            *,
+            activity_demand_outputs=None,
+            previous_beam_outputs=None,
+            beam_preprocess_inputs=None,
+        ):
+            beam_dir = Path(workspace.get_beam_mutable_data_dir())
+            plans = beam_dir / "plans.csv"
+            households = beam_dir / "households.csv"
+            persons = beam_dir / "persons.csv"
+            for path in (plans, households, persons):
+                _write_file(path)
+            return BeamPreprocessOutputs(
+                beam_mutable_data_dir=beam_dir,
+                prepared_inputs={
+                    BEAM_PLANS_IN: plans,
+                    BEAM_HOUSEHOLDS_IN: households,
+                    BEAM_PERSONS_IN: persons,
+                    LINKSTATS_WARMSTART: warmstart_path,
+                },
+            )
+
+    original_get_preprocessor = ModelFactory.get_preprocessor
+
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "beam":
+            return _BeamPreprocessorWithWarmstart()
+        return original_get_preprocessor(self, model_name, state)
+
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
+
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path(workspace.get_asim_output_dir()),
+    )
+
+    _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            activity_demand_outputs=asim_outputs,
+            previous_beam_outputs=previous_beam_outputs,
+        ),
+        outputs_holder=outputs_holder,
+    )
+
+    beam_run_calls = [
+        call
+        for call in scenario.calls
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
+    ]
+    assert beam_run_calls, "Expected BEAM run step to execute."
+    assert LINKSTATS_WARMSTART in beam_run_calls[0].get("input_keys", [])
+
+
 def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     stage_env, monkeypatch, tmp_path
 ):

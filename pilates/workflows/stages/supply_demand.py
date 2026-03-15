@@ -981,6 +981,40 @@ def _derive_beam_run_input_keys(
     return run_input_keys
 
 
+def _finalize_beam_run_input_keys(
+    *,
+    beam_run_input_keys: Optional[list[str]],
+    outputs_holder: StepOutputsHolder,
+) -> list[str]:
+    """
+    Reconcile BEAM run inputs with the artifacts actually published by preprocess.
+
+    The pre-run key derivation happens before BEAM preprocess executes, but
+    preprocess may decide to publish ``linkstats_warmstart`` after resolving
+    previous outputs. Use the realized preprocess outputs as the final contract.
+    """
+    finalized_keys = list(
+        beam_run_input_keys
+        or [
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        ]
+    )
+    preprocess_outputs = outputs_holder.beam_preprocess
+    prepared_inputs = (
+        preprocess_outputs.prepared_inputs if preprocess_outputs is not None else {}
+    )
+    has_warmstart = LINKSTATS_WARMSTART in prepared_inputs
+    if has_warmstart and LINKSTATS_WARMSTART not in finalized_keys:
+        finalized_keys.append(LINKSTATS_WARMSTART)
+    if not has_warmstart and LINKSTATS_WARMSTART in finalized_keys:
+        finalized_keys = [
+            key for key in finalized_keys if key != LINKSTATS_WARMSTART
+        ]
+    return finalized_keys
+
+
 def _run_beam_preprocess_step(
     *,
     scenario: ScenarioWithCoupler,
@@ -1055,6 +1089,10 @@ def _run_beam_steps(
         iteration=iteration,
         beam_preprocess_inputs=beam_preprocess_inputs,
         runtime_kwargs_extra=runtime_kwargs_extra,
+    )
+    beam_run_input_keys = _finalize_beam_run_input_keys(
+        beam_run_input_keys=beam_run_input_keys,
+        outputs_holder=outputs_holder,
     )
 
     _run_supply_demand_workflow(

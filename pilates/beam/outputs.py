@@ -20,6 +20,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     FINAL_SKIMS_OMX,
     LINKSTATS,
+    LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 
@@ -99,6 +100,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
     )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
