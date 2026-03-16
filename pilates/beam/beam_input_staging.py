@@ -118,15 +118,7 @@ def copy_vehicles_from_atlas(
     os.makedirs(beam_scenario_folder, exist_ok=True)
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
-    if state.run_info_path and os.path.exists(state.run_info_path):
-        logger.info(
-            "[BeamPreprocessor] Restarted run detected. Using previous run's output path from %s",
-            state.run_info_path,
-        )
-        previous_run_dir = os.path.dirname(state.run_info_path)
-        atlas_output_data_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
-    else:
-        atlas_output_data_dir = workspace.get_atlas_output_dir()
+    atlas_output_data_dir = workspace.get_atlas_output_dir()
 
     atlas_vehicle_file_loc = os.path.join(
         atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
@@ -364,11 +356,7 @@ def copy_plans_from_asim(
     logger.info("Attempting to copy final ASIM plans from input records.")
     file_format = settings.activitysim.file_format
 
-    base_path = (
-        os.path.dirname(state.run_info_path)
-        if state.run_info_path and os.path.exists(state.run_info_path)
-        else workspace.full_path
-    )
+    base_path = workspace.full_path
 
     asim_file_paths: Dict[str, Tuple[Optional[str], Optional[FileRecord]]] = {}
     for record in input_records.all_records():
@@ -391,9 +379,6 @@ def copy_plans_from_asim(
 
     required_asim_base_names = ["households", "persons", "beam_plans"]
     asim_output_dir = workspace.get_asim_output_dir()
-    if base_path and os.path.isabs(base_path):
-        rel_asim_output_dir = os.path.relpath(asim_output_dir, workspace.full_path)
-        asim_output_dir = os.path.join(base_path, rel_asim_output_dir)
 
     allow_final_pipeline = has_asim_run_marker(
         asim_output_dir,

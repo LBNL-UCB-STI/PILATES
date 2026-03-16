@@ -112,11 +112,7 @@ def select_atlas_usim_input_path(
     2. Legacy default path.
     3. Forecast output datastore.
     """
-    if state.run_info_path and os.path.exists(state.run_info_path):
-        previous_run_dir = os.path.dirname(state.run_info_path)
-        usim_dir = os.path.join(previous_run_dir, "urbansim", "data")
-    else:
-        usim_dir = workspace.get_usim_mutable_data_dir()
+    usim_dir = workspace.get_usim_mutable_data_dir()
 
     forecast_year = state.forecast_year
     urbansim_settings = settings.urbansim
@@ -199,11 +195,7 @@ def run_vehicle_ownership_stage(
     """
     logger.info("[Main] Running ATLAS vehicle ownership model.")
 
-    if state.run_info_path and os.path.exists(state.run_info_path):
-        previous_run_dir = os.path.dirname(state.run_info_path)
-        urbansim_datastore_dir = os.path.join(previous_run_dir, "urbansim", "data")
-    else:
-        urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
+    urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
 
     forecast_year = state.forecast_year
     urbansim_settings = settings.urbansim

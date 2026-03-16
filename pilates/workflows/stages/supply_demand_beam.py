@@ -292,11 +292,7 @@ def _collect_beam_preprocess_inputs(
                 beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
 
     if getattr(settings, "vehicle_ownership_model_enabled", False) and iteration == 0:
-        if state.run_info_path and os.path.exists(state.run_info_path):
-            previous_run_dir = os.path.dirname(state.run_info_path)
-            atlas_output_dir = os.path.join(previous_run_dir, "atlas", "atlas_output")
-        else:
-            atlas_output_dir = workspace.get_atlas_output_dir()
+        atlas_output_dir = workspace.get_atlas_output_dir()
         atlas_vehicle_path = os.path.join(
             atlas_output_dir,
             f"vehicles2_{forecast_year}.csv",

@@ -25,18 +25,20 @@ def _state(*, forecast_year: int = 2023, run_info_path: str = None) -> SimpleNam
     )
 
 
-def test_select_atlas_usim_input_path_prefers_forecast_output_from_previous_run(tmp_path):
+def test_select_atlas_usim_input_path_prefers_workspace_forecast_even_with_run_info(tmp_path):
     previous_run_dir = tmp_path / "previous_run"
     previous_usim_dir = previous_run_dir / "urbansim" / "data"
     previous_usim_dir.mkdir(parents=True)
     run_info_path = previous_run_dir / "run_info.json"
     run_info_path.write_text("{}")
 
-    expected = previous_usim_dir / "model_data_2023.h5"
-    expected.write_text("")
+    previous_forecast = previous_usim_dir / "model_data_2023.h5"
+    previous_forecast.write_text("")
 
     workspace_usim_dir = tmp_path / "workspace" / "urbansim" / "data"
     workspace_usim_dir.mkdir(parents=True)
+    expected = workspace_usim_dir / "model_data_2023.h5"
+    expected.write_text("")
     current = workspace_usim_dir / "custom_current.h5"
     current.write_text("")
     default = workspace_usim_dir / "custom_default.h5"
