@@ -391,6 +391,62 @@ class BeamPreprocessor(GenericPreprocessor):
 
         return default_folder
 
+    def _default_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        base_input_dir = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+        )
+        return os.path.join(base_input_dir, self.settings.beam.scenario_folder)
+
+    def _config_beam_exchange_scenario_folder(
+        self, workspace: "Workspace"
+    ) -> Optional[str]:
+        base_input_dir = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+        )
+        default_folder = self._default_beam_exchange_scenario_folder(workspace)
+        config_path = os.path.join(base_input_dir, self.settings.beam.config)
+        if not os.path.exists(config_path):
+            return None
+
+        try:
+            with open(config_path, "r") as config_file:
+                for raw_line in config_file:
+                    line = raw_line.split("#", 1)[0].strip()
+                    if not line or "=" not in line:
+                        continue
+                    key, value = [part.strip() for part in line.split("=", 1)]
+                    if key != "folder" or "${beam.inputDirectory}" not in value:
+                        continue
+                    resolved = value.replace("${beam.inputDirectory}", base_input_dir)
+                    resolved = resolved.replace('"', "")
+                    resolved = os.path.normpath(resolved)
+                    if resolved and os.path.normpath(resolved) != os.path.normpath(
+                        default_folder
+                    ):
+                        return resolved
+        except Exception as exc:
+            logger.warning(
+                "[BEAM Preprocessor] Could not parse exchange.scenario.folder from %s: %s. "
+                "Falling back to settings.beam.scenario_folder.",
+                config_path,
+                exc,
+            )
+        return None
+
+    def _beam_exchange_scenario_folder_candidates(
+        self, workspace: "Workspace"
+    ) -> List[str]:
+        candidates = [self._default_beam_exchange_scenario_folder(workspace)]
+        config_folder = self._config_beam_exchange_scenario_folder(workspace)
+        if config_folder is not None and all(
+            os.path.normpath(config_folder) != os.path.normpath(existing)
+            for existing in candidates
+        ):
+            candidates.append(config_folder)
+        return candidates
+
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -521,34 +577,46 @@ class BeamPreprocessor(GenericPreprocessor):
         if not file_format:
             file_format = "parquet"
 
-        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
-        records: List[FileRecord] = []
-        unresolved: List[str] = []
+        candidate_folders = self._beam_exchange_scenario_folder_candidates(workspace)
         current_year = getattr(self.state, "current_year", None)
         current_inner_iter = getattr(self.state, "current_inner_iter", None)
+        folder_errors: List[str] = []
 
-        for short_name, stem in required_keys.items():
-            path = locate_beam_file(beam_scenario_folder, stem, file_format)
-            if path and os.path.exists(path):
-                records.append(
-                    FileRecord(
-                        file_path=path,
-                        short_name=short_name,
-                        description=f"Existing BEAM scenario input: {stem}",
-                        year=current_year,
-                        iteration=current_inner_iter,
+        for idx, beam_scenario_folder in enumerate(candidate_folders):
+            records: List[FileRecord] = []
+            unresolved: List[str] = []
+            for short_name, stem in required_keys.items():
+                path = locate_beam_file(beam_scenario_folder, stem, file_format)
+                if path and os.path.exists(path):
+                    records.append(
+                        FileRecord(
+                            file_path=path,
+                            short_name=short_name,
+                            description=f"Existing BEAM scenario input: {stem}",
+                            year=current_year,
+                            iteration=current_inner_iter,
+                        )
                     )
-                )
-                continue
-            unresolved.append(f"{stem}.{file_format}")
+                    continue
+                unresolved.append(f"{stem}.{file_format}")
 
-        if unresolved:
-            raise FileNotFoundError(
-                "Missing default BEAM scenario inputs in exchange folder "
+            if not unresolved:
+                if idx > 0:
+                    logger.info(
+                        "[BEAM Preprocessor] Default exchange folder was missing inputs; "
+                        "using fallback exchange.scenario.folder from BEAM config: %s",
+                        beam_scenario_folder,
+                    )
+                return RecordStore(recordList=records)
+
+            folder_errors.append(
                 f"{beam_scenario_folder}: {', '.join(unresolved)}"
             )
 
-        return RecordStore(recordList=records)
+        raise FileNotFoundError(
+            "Missing default BEAM scenario inputs in exchange folders "
+            f"{'; '.join(folder_errors)}"
+        )
 
     def existing_beam_exchange_inputs(self, workspace: "Workspace") -> RecordStore:
         """
