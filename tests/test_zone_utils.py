@@ -1,22 +1,5 @@
-<<<<<<< HEAD
 from __future__ import annotations
 
-from pathlib import Path
-
-from pilates.utils.zone_utils import copy_canonical_zone_source_to_dir
-
-
-def test_copy_canonical_zone_source_to_dir_is_noop_for_same_geojson_file(
-    tmp_path: Path,
-) -> None:
-    source = tmp_path / "taz_sfbay.geojson"
-    source.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
-
-    copied = copy_canonical_zone_source_to_dir(str(source), str(tmp_path))
-
-    assert copied == str(source)
-    assert source.read_text(encoding="utf-8") == '{"type":"FeatureCollection","features":[]}'
-=======
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -135,4 +118,15 @@ def test_copy_canonical_zone_source_to_dir_copies_shapefile_sidecars(tmp_path):
     assert output == str(dest_dir / "zones.shp")
     for suffix in (".shp", ".dbf", ".shx", ".prj", ".cpg"):
         assert (dest_dir / f"zones{suffix}").exists()
->>>>>>> 118eca6 (keep temporarily old settings and changes to few tests)
+
+
+def test_copy_canonical_zone_source_to_dir_is_noop_for_same_geojson_file(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "taz_sfbay.geojson"
+    source.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+
+    copied = copy_canonical_zone_source_to_dir(str(source), str(tmp_path))
+
+    assert copied == str(source)
+    assert source.read_text(encoding="utf-8") == '{"type":"FeatureCollection","features":[]}'
