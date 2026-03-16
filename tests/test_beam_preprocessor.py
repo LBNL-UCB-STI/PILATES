@@ -451,7 +451,25 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
 
     def _capture_input_records(input_records, _workspace):
         captured["keys"] = [record.short_name for record in input_records.all_records()]
-        return RecordStore()
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path="/tmp/plans.parquet",
+                    short_name="plans_beam_in",
+                    description="mock staged plans",
+                ),
+                FileRecord(
+                    file_path="/tmp/households.parquet",
+                    short_name="households_beam_in",
+                    description="mock staged households",
+                ),
+                FileRecord(
+                    file_path="/tmp/persons.parquet",
+                    short_name="persons_beam_in",
+                    description="mock staged persons",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _capture_input_records)
 
