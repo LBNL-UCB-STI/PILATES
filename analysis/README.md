@@ -22,7 +22,8 @@ The intended first steps in a notebook are:
 2. inspect scenarios and years,
 3. inspect canonical runs,
 4. resolve epochs,
-5. then move into table loading or deeper analysis.
+5. load common epoch-backed tables as DataFrames,
+6. then move into deeper analysis or raw SQL when needed.
 
 Example:
 
@@ -48,6 +49,12 @@ baseline.epochs(converged=True)
 
 epoch = baseline.epoch(year=2030, converged=True)
 epoch
+
+display(epoch.summary())
+display(epoch.tables.trips(limit=10))
+
+# Raw SQL escape hatch:
+# display(epoch.sql("SELECT * FROM {views.trips} LIMIT 10"))
 ```
 
 Compatibility note:
@@ -113,20 +120,21 @@ If you are an LLM extending this package, start here:
 
 1. Notebook-first archive wrapper: `src/pilates_consist_analysis/archive.py`
 2. Canonical run catalog: `src/pilates_consist_analysis/run_index.py`
-3. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
-4. Tracker/bootstrap and path assumptions: `src/pilates_consist_analysis/runtime.py`
-5. Multi-run grouping/alignment abstraction: `src/pilates_consist_analysis/runset.py`
-6. Epoch grouping primitives: `src/pilates_consist_analysis/epochs.py`
-7. Epoch-scoped views and artifact families: `src/pilates_consist_analysis/epoch_views.py`
-8. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
-9. Dataset assembly (current linkstats path): `src/pilates_consist_analysis/datasets.py`
-10. ActivitySim trips pipeline: `src/pilates_consist_analysis/activitysim_trips.py`
-11. Skim convergence pipeline: `src/pilates_consist_analysis/skim_analysis.py`
-12. Handoff ingest/export helpers: `src/pilates_consist_analysis/handoff.py`
-13. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
-14. Manifest format: `src/pilates_consist_analysis/manifest.py`
-15. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
-16. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
+3. Notebook epoch wrapper and table loaders: `src/pilates_consist_analysis/epoch_api.py`
+4. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
+5. Tracker/bootstrap and path assumptions: `src/pilates_consist_analysis/runtime.py`
+6. Multi-run grouping/alignment abstraction: `src/pilates_consist_analysis/runset.py`
+7. Epoch grouping primitives: `src/pilates_consist_analysis/epochs.py`
+8. Epoch-scoped views and artifact families: `src/pilates_consist_analysis/epoch_views.py`
+9. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
+10. Dataset assembly (current linkstats path): `src/pilates_consist_analysis/datasets.py`
+11. ActivitySim trips pipeline: `src/pilates_consist_analysis/activitysim_trips.py`
+12. Skim convergence pipeline: `src/pilates_consist_analysis/skim_analysis.py`
+13. Handoff ingest/export helpers: `src/pilates_consist_analysis/handoff.py`
+14. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
+15. Manifest format: `src/pilates_consist_analysis/manifest.py`
+16. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
+17. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
 
 When adding a new analysis family, mirror the linkstats pattern:
 - discover artifacts,
@@ -149,6 +157,7 @@ analysis/
     api.py
     archive.py
     cli.py
+    epoch_api.py
     handoff.py
     run_index.py
     runtime.py
@@ -283,6 +292,10 @@ archive.summary()
 archive.scenarios()
 archive.runs().head()
 archive.epochs(converged=True).head()
+
+baseline = archive.scenario("baseline")
+epoch = baseline.epoch(year=2030, converged=True)
+epoch.tables.trips(limit=10).head()
 ```
 
 Exploration notebook:

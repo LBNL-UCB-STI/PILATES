@@ -19,6 +19,7 @@ from .epoch_views import (
     load_artifact_families_from_json,
     resolve_artifact_families,
 )
+from .epoch_api import Epoch, EpochTables
 from .scenario_compare import ScenarioComparison, compare_scenarios
 from .handoff import (
     ArtifactIngestSpec,
@@ -50,6 +51,8 @@ __all__ = [
     "runset_from_runs",
     "SimulationEpoch",
     "EpochPanel",
+    "Epoch",
+    "EpochTables",
     "build_epoch_panel",
     "converged_epoch",
     "ARTIFACT_FAMILIES",

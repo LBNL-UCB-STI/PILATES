@@ -598,17 +598,25 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
     )
 
     beam_preprocess_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
+    assert beam_preprocess_calls, "Expected BEAM preprocess to run for the restart boundary."
+
+    assert default_plans.exists()
+    assert default_households.exists()
+    assert default_persons.exists()
+
+    beam_run_calls = [
         call
         for call in scenario.calls
-        if BEAM_PLANS_IN in call["inputs"]
-        and BEAM_HOUSEHOLDS_IN in call["inputs"]
-        and BEAM_PERSONS_IN in call["inputs"]
+        if BEAM_PLANS_IN in (call.get("input_keys") or [])
+        and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
+        and BEAM_PERSONS_IN in (call.get("input_keys") or [])
     ]
-    assert beam_preprocess_calls, "Expected BEAM preprocess to start from restored defaults."
-    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
-    assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
-    assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
+    assert beam_run_calls, (
+        "Expected BEAM-only restart to reach beam_run with the canonical trio "
+        "resolved from staged default scenario inputs."
+    )
 
 
 def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(

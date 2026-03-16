@@ -7,6 +7,7 @@ from typing import Any, Iterable, Mapping, Optional
 import pandas as pd
 
 from .api import AnalysisSession
+from .epoch_api import Epoch
 from .epochs import SimulationEpoch
 from .run_index import RunIndex, build_run_index
 from .runtime import get_db_health, get_db_health_issues
@@ -70,7 +71,7 @@ class ArchiveScenario:
         converged: bool = False,
         iteration: Optional[int] = None,
         models: Optional[Iterable[str]] = None,
-    ) -> SimulationEpoch:
+    ) -> Epoch:
         return self.archive.epoch(
             year=year,
             scenario_id=self.scenario_id,
@@ -215,6 +216,10 @@ class Archive:
             panel = panel.converged_epochs()
         return panel.to_frame()
 
+    def views(self, epoch: Epoch | SimulationEpoch) -> Any:
+        simulation_epoch = epoch.raw if isinstance(epoch, Epoch) else epoch
+        return self.session.views(simulation_epoch)
+
     def epoch(
         self,
         *,
@@ -223,13 +228,15 @@ class Archive:
         converged: bool = False,
         iteration: Optional[int] = None,
         models: Optional[Iterable[str]] = None,
-    ) -> SimulationEpoch:
+    ) -> Epoch:
+        simulation_epoch: SimulationEpoch
         if converged:
-            return self.session.converged_epoch(
+            simulation_epoch = self.session.converged_epoch(
                 year=year,
                 scenario_id=scenario_id,
                 models=models,
             )
+            return Epoch(archive=self, simulation_epoch=simulation_epoch)
 
         panel = self.session.epochs(
             scenario_id=scenario_id,
@@ -253,7 +260,8 @@ class Archive:
                 f"Multiple epochs found for year={year} with iterations={iterations}. "
                 "Specify iteration or use converged=True."
             )
-        return candidates[0]
+        simulation_epoch = candidates[0]
+        return Epoch(archive=self, simulation_epoch=simulation_epoch)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.session, name)
