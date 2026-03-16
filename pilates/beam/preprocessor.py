@@ -396,6 +396,20 @@ class BeamPreprocessor(GenericPreprocessor):
 
         return None
 
+    def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        """
+        Resolve the effective BEAM exchange folder for staged write operations.
+
+        This is intentionally different from the read/discovery precedence used
+        for beam-only bootstrap defaults. When PILATES stages files that BEAM
+        will consume directly (plans/households/persons, vehicles, merged
+        replanning outputs), those files must land in the folder the generated
+        BEAM config points to at runtime if one is configured there.
+        """
+        return self._config_beam_exchange_scenario_folder(
+            workspace
+        ) or self._default_beam_exchange_scenario_folder(workspace)
+
     def _beam_exchange_scenario_folder_candidates(
         self, workspace: "Workspace"
     ) -> List[str]:
