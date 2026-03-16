@@ -2,6 +2,8 @@
 
 from .keys import CANONICAL_KEY_COLUMNS, AnalysisKey
 from .api import AnalysisSession, open_run
+from .archive import Archive, ArchiveScenario, open_archive
+from .run_index import RunIndex, build_run_index
 from .runset import RunSet, runset_from_query, runset_from_runs
 from .epochs import (
     EpochPanel,
@@ -38,7 +40,11 @@ from .runtime import (
 __all__ = [
     "AnalysisKey",
     "AnalysisSession",
+    "Archive",
+    "ArchiveScenario",
     "CANONICAL_KEY_COLUMNS",
+    "RunIndex",
+    "build_run_index",
     "RunSet",
     "runset_from_query",
     "runset_from_runs",
@@ -62,6 +68,7 @@ __all__ = [
     "export_activitysim_inputs",
     "list_run_artifacts",
     "parse_artifact_ref_arg",
+    "open_archive",
     "open_run",
     "inspect_run_tagging",
     "get_run_tagging_issues",
