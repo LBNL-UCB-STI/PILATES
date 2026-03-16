@@ -20,7 +20,7 @@ class DummyPreprocessor:
     def __init__(self, *_, **__):
         pass
 
-    def copy_data_to_mutable_location(self, settings, output_dir):
+    def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
         # Return two RecordStore objects with known records
         in_record = FileRecord(
             unique_id="in1",
@@ -241,7 +241,7 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
             self.input_path = input_path
             self.output_path = output_path
 
-        def copy_data_to_mutable_location(self, settings, output_dir):
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
             in_record = FileRecord(
                 unique_id="in1",
                 short_name="bad key",
@@ -411,8 +411,8 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
             self.model_name = model_name
             self.calls = calls
 
-        def copy_data_to_mutable_location(self, settings, output_dir):
-            self.calls.append((self.model_name, output_dir))
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
+            self.calls.append((self.model_name, output_dir, workspace))
             record = FileRecord(
                 unique_id=f"{self.model_name}-out",
                 short_name=f"{self.model_name}_output",
@@ -459,3 +459,59 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
 
     assert len(urbansim_calls) == 1
     assert len(activitysim_calls) == 1
+    assert activitysim_calls[0][1] == workspace.get_asim_mutable_data_dir()
+    assert activitysim_calls[0][2] is workspace
+
+
+def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_path):
+    class _ActivitySimPreprocessor:
+        def __init__(self, calls):
+            self.calls = calls
+
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
+            self.calls.append((output_dir, workspace))
+            return RecordStore(), RecordStore()
+
+    class _Factory:
+        def __init__(self):
+            self.calls = []
+
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            if model_name == "activitysim":
+                return _ActivitySimPreprocessor(self.calls)
+            return DummyPreprocessor()
+
+    factory = _Factory()
+    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+
+    workspace = DummyWorkspace()
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones_path.write_text("{}", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel=None,
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use=None,
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(zones_path),
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key",
+                )
+            ),
+        ),
+    )
+
+    init = Initialization("init", None)
+    init.run(settings, workspace)
+
+    assert factory.calls == [(workspace.get_asim_mutable_data_dir(), workspace)]

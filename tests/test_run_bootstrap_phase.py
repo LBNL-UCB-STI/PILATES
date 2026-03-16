@@ -338,6 +338,64 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
     assert coupler.get("plans_beam_in") is not None
     assert coupler.get("households_beam_in") is not None
     assert coupler.get("persons_beam_in") is not None
+    assert isinstance(coupler.get("plans_beam_in"), str)
+    assert isinstance(coupler.get("households_beam_in"), str)
+    assert isinstance(coupler.get("persons_beam_in"), str)
+
+
+@pytest.mark.parametrize("extension", ["csv", "csv.gz"])
+def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_csv_formats_when_parquet_missing(
+    tmp_path, extension
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    scenario_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim" / "2018"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    for stem in ("plans", "households", "persons"):
+        (scenario_dir / f"{stem}.{extension}").write_text(stem, encoding="utf-8")
+
+    beam_conf = tmp_path / "beam" / "input" / "sfbay" / "beam.conf"
+    beam_conf.write_text(
+        'beam.inputDirectory="production/sfbay"\nfolder = ${beam.inputDirectory}"/urbansim/2018"',
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("plans_beam_in") is not None
+    assert coupler.get("households_beam_in") is not None
+    assert coupler.get("persons_beam_in") is not None
+    assert isinstance(coupler.get("plans_beam_in"), str)
+    assert isinstance(coupler.get("households_beam_in"), str)
+    assert isinstance(coupler.get("persons_beam_in"), str)
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_path):
@@ -383,6 +441,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
     )
 
     assert coupler.get("linkstats_warmstart") is not None
+    assert isinstance(coupler.get("linkstats_warmstart"), str)
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(
@@ -434,6 +493,8 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artif
 
     assert coupler.get("zarr_skims") is not None
     assert coupler.get("asim_sharrow_cache_dir") is not None
+    assert isinstance(coupler.get("zarr_skims"), str)
+    assert isinstance(coupler.get("asim_sharrow_cache_dir"), str)
 
 
 def test_bootstrap_output_invariant_accepts_valid_result():

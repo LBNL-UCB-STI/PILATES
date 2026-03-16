@@ -431,6 +431,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         self,
         settings,
         output_dir,
+        workspace: Optional["Workspace"] = None,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy ATLAS input files from the production directory to the run's mutable input directory.

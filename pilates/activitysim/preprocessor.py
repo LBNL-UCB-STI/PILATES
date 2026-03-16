@@ -2013,9 +2013,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self,
         settings: PilatesConfig,
         output_dir: str,
+        workspace: Optional["Workspace"] = None,
     ) -> Tuple[RecordStore, RecordStore]:
         # Delegate to module-level function
-        return _copy_data_to_mutable_location(settings, output_dir)
+        return _copy_data_to_mutable_location(settings, output_dir, workspace)
 
     def preprocess(
         self,
@@ -2581,6 +2582,7 @@ def enrollment_tables(
 def _copy_data_to_mutable_location(
     settings: PilatesConfig,
     folder_path: str,
+    workspace: Optional["Workspace"] = None,
 ) -> Tuple[RecordStore, RecordStore]:
     """
     Copies ActivitySim source data (canonical zones, clipped geometries, configs)

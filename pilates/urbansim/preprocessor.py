@@ -372,6 +372,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         self,
         settings: PilatesConfig,
         output_dir,
+        workspace: Optional["Workspace"] = None,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy UrbanSim input files from production to mutable location.

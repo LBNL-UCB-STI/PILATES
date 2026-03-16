@@ -8,9 +8,7 @@ from consist import MaterializationResult
 from consist.types import CacheOptions
 
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -94,17 +92,7 @@ def seed_bootstrap_artifacts_to_coupler(
         if os.path.exists(zarr_candidate) and (
             not callable(get_value) or get_value(ZARR_SKIMS) is None
         ):
-            artifact = cr.log_output(
-                zarr_candidate,
-                key=ZARR_SKIMS,
-                description="Bootstrap-discovered ActivitySim compiled zarr skims",
-            )
-            set_coupler_from_artifact(
-                coupler,
-                ZARR_SKIMS,
-                artifact,
-                fallback=zarr_candidate,
-            )
+            coupler.set(ZARR_SKIMS, zarr_candidate)
 
         sharrow_cache_dir = os.path.join(workspace.full_path, "shared_cache", "numba")
         has_cache_files = False
@@ -116,17 +104,7 @@ def seed_bootstrap_artifacts_to_coupler(
         if has_cache_files and (
             not callable(get_value) or get_value(ASIM_SHARROW_CACHE_DIR) is None
         ):
-            artifact = cr.log_output(
-                sharrow_cache_dir,
-                key=ASIM_SHARROW_CACHE_DIR,
-                description="Bootstrap-discovered ActivitySim sharrow cache",
-            )
-            set_coupler_from_artifact(
-                coupler,
-                ASIM_SHARROW_CACHE_DIR,
-                artifact,
-                fallback=sharrow_cache_dir,
-            )
+            coupler.set(ASIM_SHARROW_CACHE_DIR, sharrow_cache_dir)
 
     if get_traffic_assignment_model(settings) != "beam":
         return
@@ -163,12 +141,10 @@ def seed_bootstrap_artifacts_to_coupler(
             path = record.get_absolute_path(base_path=workspace.full_path)
             if not path or not os.path.exists(path):
                 continue
-            artifact = cr.log_output(
-                path,
-                key=key,
-                description="Bootstrap-staged default BEAM scenario input",
-            )
-            set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+            # These staged defaults already exist on disk before any active BEAM
+            # step run starts. Publish plain paths so downstream Consist input
+            # resolution never sees bootstrap-time NoopArtifact placeholders.
+            coupler.set(key, path)
 
     beam_cfg = getattr(settings, "beam", None)
     router_directory = getattr(beam_cfg, "router_directory", None)
@@ -188,17 +164,7 @@ def seed_bootstrap_artifacts_to_coupler(
         for candidate in warmstart_candidates:
             if not os.path.exists(candidate):
                 continue
-            artifact = cr.log_output(
-                candidate,
-                key=LINKSTATS_WARMSTART,
-                description="Bootstrap-staged BEAM warm-start linkstats",
-            )
-            set_coupler_from_artifact(
-                coupler,
-                LINKSTATS_WARMSTART,
-                artifact,
-                fallback=candidate,
-            )
+            coupler.set(LINKSTATS_WARMSTART, candidate)
             break
 
 
