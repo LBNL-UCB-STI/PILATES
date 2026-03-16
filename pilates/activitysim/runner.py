@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Mapping
 
 import xarray as xr
-import zarr
 
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
@@ -46,11 +45,9 @@ def _log_activitysim_launch_context(
         dict(environment),
     )
     logger.info(
-        "ActivitySim host Python stack: xarray=%s (%s) zarr=%s (%s)",
+        "ActivitySim host Python stack: xarray=%s (%s)",
         xr.__version__,
         getattr(xr, "__file__", "unknown"),
-        getattr(zarr, "__version__", "unknown"),
-        getattr(zarr, "__file__", "unknown"),
     )
     logger.info(
         "ActivitySim host to_zarr signature: %s",

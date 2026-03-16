@@ -4,6 +4,7 @@ python-dateutil==2.9.0.post0
 pytz==2025.1
 tzdata>=2022.1
 pydantic>=2.0
+pyparsing<3
 
 # Scientific/data packages
 numpy<2.0
@@ -32,6 +33,7 @@ xarray==2025.11.0
 zarr==3.1.5
 asciitree
 numcodecs>=0.10.0
+google-crc32c
 fasteners
 
 # Utility packages
@@ -51,6 +53,8 @@ packaging>=21.0
 # Database packages
 duckdb
 sqlmodel
+dlt
+pyhocon
 
 # Provenance tracking
 openlineage-python

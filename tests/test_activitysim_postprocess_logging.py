@@ -30,10 +30,10 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     calls = []
     h5_table_calls = []
 
-    def _log_output_only(*, key, path, description, **meta):
+    def _log_and_set_output(*, key, path, description, coupler, **meta):
         calls.append((key, meta))
 
-    monkeypatch.setattr(steps_activitysim, "log_output_only", _log_output_only)
+    monkeypatch.setattr(steps_activitysim, "log_and_set_output", _log_and_set_output)
     monkeypatch.setattr(
         steps_activitysim,
         "_log_named_h5_tables",

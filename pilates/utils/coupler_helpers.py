@@ -870,6 +870,10 @@ def set_coupler_from_artifact(
     """
     if artifact is None and fallback is None:
         return
+    if isinstance(artifact, tuple) and artifact:
+        # Tracker.log_h5_container returns (container_artifact, table_artifacts).
+        # Only the primary container artifact belongs in the coupler.
+        artifact = artifact[0]
     canonical_key = resolve_artifact_key(key)
     value = artifact or fallback
 
@@ -1025,6 +1029,7 @@ def log_and_set_output(
         description=description,
         meta=meta,
     )
+    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
     _enqueue_archive_copy(key, path)
 
 
@@ -1090,6 +1095,7 @@ def log_and_set_input(
         description=description,
         meta=meta,
     )
+    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_input_only(

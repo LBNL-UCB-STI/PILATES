@@ -510,10 +510,13 @@ class UrbansimPreprocessor(GenericPreprocessor):
     ) -> UrbanSimPreprocessOutputs:
         """Prepare UrbanSim inputs and return typed outputs."""
         self.state.set_sub_stage_progress("preprocessor")
+        preprocess_kwargs = {}
+        if final_skims_omx is not None:
+            preprocess_kwargs["final_skims_omx"] = final_skims_omx
         return self._preprocess(
             workspace,
             previous_records,
-            final_skims_omx=final_skims_omx,
+            **preprocess_kwargs,
         )
 
     def _preprocess(

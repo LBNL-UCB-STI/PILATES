@@ -14,7 +14,6 @@ import requests
 import geopandas as gpd
 from shapely import wkt
 from tqdm import tqdm
-import matplotlib.pyplot as plt
 
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
@@ -1833,6 +1832,8 @@ def plot_skims(
         units (str): The unit of analysis for the skim measure (e.g., "in miles",
             "in minutes"). Used in plot titles. Defaults to "in miles".
     """
+    import matplotlib.pyplot as plt
+
     random_sample = random_sample
     cols = cols
     rows = int(random_sample / cols)
@@ -2054,10 +2055,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         final_skims_omx: Optional[Any] = None,
     ) -> ActivitySimPreprocessOutputs:
         self.state.set_sub_stage_progress("preprocessor")
+        preprocess_kwargs = {}
+        if final_skims_omx is not None:
+            preprocess_kwargs["final_skims_omx"] = final_skims_omx
         record_store = self._preprocess(
             workspace,
             previous_records if previous_records is not None else RecordStore(),
-            final_skims_omx=final_skims_omx,
+            **preprocess_kwargs,
         )
         records_by_key = {
             getattr(record, "short_name", None): record

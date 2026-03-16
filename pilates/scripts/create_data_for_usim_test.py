@@ -3,8 +3,6 @@ __test__ = False
 import os
 import yaml
 
-from pilates.utils.settings_helper import get as get_setting
-
 WARM_START_ACTIVITIES = True
 
 if __name__ == "__main__":
@@ -12,6 +10,7 @@ if __name__ == "__main__":
     os.chdir("../..")
     from run import warm_start_activities, initialize_docker_client
     from pilates.urbansim import preprocessor as usim_pre
+    from pilates.utils.settings_helper import get as get_setting
 
     with open("settings.yaml") as f:
         settings = yaml.load(f, Loader=yaml.FullLoader)

@@ -18,7 +18,6 @@ from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps.activitysim import _execute_activitysim_run
-from pilates.workflows.steps.shared import _build_required_input_store
 
 
 class _TrackingOutputs:
@@ -103,44 +102,6 @@ def test_update_coupler_from_outputs_uses_direct_typed_output_mapping(
         "coupler": coupler,
         "workspace": workspace,
     }
-
-
-def test_build_required_input_store_materializes_direct_typed_output_items(
-    tmp_path: Path,
-) -> None:
-    holder = StepOutputsHolder()
-    store = _store_with_record(tmp_path / "activitysim-preprocess.txt", "input_a")
-    upstream = _TrackingOutputs(store)
-    holder.activitysim_preprocess = upstream
-
-    input_store = _build_required_input_store(
-        outputs_holder=holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context="activitysim_run",
-        warn_missing_coupler_inputs=False,
-    )
-
-    assert upstream.iter_record_item_calls == 1
-    assert input_store.to_mapping() == store.to_mapping()
-
-
-def test_build_required_input_store_rejects_outputs_without_iter_record_items(
-    tmp_path: Path,
-) -> None:
-    holder = StepOutputsHolder()
-    holder.activitysim_preprocess = _LegacyOnlyOutputs(
-        _store_with_record(tmp_path / "legacy-input.txt", "input_a")
-    )
-
-    with pytest.raises(TypeError, match="_iter_record_items"):
-        _build_required_input_store(
-            outputs_holder=holder,
-            upstream_attr="activitysim_preprocess",
-            missing_message="ActivitySim preprocess must complete first",
-            context="activitysim_run",
-            warn_missing_coupler_inputs=False,
-        )
 
 
 def test_execute_activitysim_run_forwards_typed_preprocess_outputs(

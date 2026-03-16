@@ -296,8 +296,11 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
     class _BeamPostprocessor:
         def postprocess(self, raw_outputs, workspace):
             _write_file(zarr_path)
+            final_skims_omx = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
+            _write_file(final_skims_omx)
             return BeamPostprocessOutputs(
                 zarr_skims=zarr_path,
+                final_skims_omx=final_skims_omx,
             )
 
     def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):

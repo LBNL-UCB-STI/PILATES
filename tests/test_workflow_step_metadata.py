@@ -421,6 +421,7 @@ def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(
     tmp_path,
 ):
     pytest.importorskip("consist")
+    pytest.importorskip("dlt")
     from consist import Tracker
     from consist.integrations.activitysim import ActivitySimConfigAdapter
 

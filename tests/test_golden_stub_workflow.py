@@ -32,8 +32,6 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
-from typing import Optional
-
 import pytest
 import pandas as pd
 import yaml
@@ -206,19 +204,15 @@ def _write_parquet(path: Path, df: pd.DataFrame) -> None:
     df.to_parquet(path, index=False)
 
 
-def _write_usim_toy_h5(path: Path, *, with_year_prefix: Optional[int] = None) -> None:
-    """Create a minimal UrbanSim-style HDF5 with core tables used in tests."""
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _write_usim_toy_h5(path: Path) -> None:
+    """
+    Create a minimal UrbanSim-style HDF5 with core tables used in tests.
 
-    table_prefix = f"/{with_year_prefix}" if with_year_prefix is not None else ""
-    households_key = f"{table_prefix}/households" if table_prefix else "households"
-    blocks_key = f"{table_prefix}/blocks" if table_prefix else "blocks"
-    persons_key = f"{table_prefix}/persons" if table_prefix else "persons"
-    residential_key = (
-        f"{table_prefix}/residential_units" if table_prefix else "residential_units"
-    )
-    jobs_key = f"{table_prefix}/jobs" if table_prefix else "jobs"
-    graveyard_key = f"{table_prefix}/graveyard" if table_prefix else "graveyard"
+    The golden harness patches datastore access to expose year-scoped keys when
+    needed, so the on-disk fixture stays root-keyed to avoid PyTables warnings
+    for numeric groups.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     households = pd.DataFrame({"income": [100000.0, 70000.0]}, index=[1, 2])
     households.index.name = "household_id"
@@ -244,12 +238,12 @@ def _write_usim_toy_h5(path: Path, *, with_year_prefix: Optional[int] = None) ->
     graveyard = pd.DataFrame({"household_id": [1]}, index=[201])
     graveyard.index.name = "person_id"
 
-    households.to_hdf(path, key=households_key, mode="w")
-    blocks.to_hdf(path, key=blocks_key, mode="a")
-    persons.to_hdf(path, key=persons_key, mode="a")
-    residential_units.to_hdf(path, key=residential_key, mode="a")
-    jobs.to_hdf(path, key=jobs_key, mode="a")
-    graveyard.to_hdf(path, key=graveyard_key, mode="a")
+    households.to_hdf(path, key="households", mode="w")
+    blocks.to_hdf(path, key="blocks", mode="a")
+    persons.to_hdf(path, key="persons", mode="a")
+    residential_units.to_hdf(path, key="residential_units", mode="a")
+    jobs.to_hdf(path, key="jobs", mode="a")
+    graveyard.to_hdf(path, key="graveyard", mode="a")
 
 
 def _build_settings(tmp_path: Path):
@@ -351,6 +345,7 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
 
     consist = pytest.importorskip("consist")
+    pytest.importorskip("dlt")
 
     settings = _build_settings(tmp_path)
     settings.land_use_enabled = True
@@ -384,6 +379,16 @@ def golden_stub_env(tmp_path, monkeypatch):
     ):
         path.mkdir(parents=True, exist_ok=True)
 
+    beam_region_dir = beam_dir / settings.run.region
+    beam_region_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(
+        beam_region_dir / settings.beam.config,
+        (
+            f'beam.inputDirectory="production/{settings.run.region}"\n'
+            f'folder = ${{beam.inputDirectory}}"/{settings.beam.scenario_folder}"\n'
+        ),
+    )
+
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
     ]
@@ -396,9 +401,82 @@ def golden_stub_env(tmp_path, monkeypatch):
     usim_merged_path = usim_dir / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     _write_usim_toy_h5(usim_input_path)
     _write_usim_toy_h5(usim_output_path)
-    _write_usim_toy_h5(usim_merged_path, with_year_prefix=2019)
+    _write_usim_toy_h5(usim_merged_path)
     _write_usim_toy_h5(usim_dir / "usim_2017.h5")
-    _write_usim_toy_h5(usim_dir / "usim_2019.h5", with_year_prefix=2019)
+    _write_usim_toy_h5(usim_dir / "usim_2019.h5")
+
+    from pilates.urbansim import postprocessor as usim_postprocessor
+
+    real_read_datastore = usim_postprocessor.read_datastore
+    real_hdf_store = usim_postprocessor.pd.HDFStore
+
+    class _YearScopedOutputStore:
+        def __init__(self, path: Path, year: int) -> None:
+            self._path = str(path)
+            self._year = str(year)
+
+        def close(self) -> None:
+            return None
+
+        def keys(self):
+            with real_hdf_store(self._path, "r") as store:
+                return [f"/{self._year}/{key.strip('/')}" for key in store.keys()]
+
+        def __contains__(self, key):
+            normalized = str(key).strip("/")
+            prefix = f"{self._year}/"
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+            with real_hdf_store(self._path, "r") as store:
+                return f"/{normalized}" in store.keys()
+
+        def __getitem__(self, key):
+            normalized = str(key).strip("/")
+            prefix = f"{self._year}/"
+            if normalized.startswith(prefix):
+                normalized = normalized[len(prefix) :]
+            with real_hdf_store(self._path, "r") as store:
+                return store[f"/{normalized}"]
+
+    def _patched_read_datastore(
+        settings_arg,
+        year=None,
+        warm_start=False,
+        mutable_data_dir=None,
+        mode="r",
+    ):
+        store, table_prefix = real_read_datastore(
+            settings_arg,
+            year=year,
+            warm_start=warm_start,
+            mutable_data_dir=mutable_data_dir,
+            mode=mode,
+        )
+        if (
+            mode == "r"
+            and year is not None
+            and str(table_prefix) == str(year)
+            and all("/" not in key.strip("/") for key in store.keys())
+        ):
+            path = Path(store._path)
+            store.close()
+            return _YearScopedOutputStore(path, year), str(year)
+        return store, table_prefix
+
+    def _patched_hdf_store(path, mode="r", *args, **kwargs):
+        path_str = str(path)
+        year_scoped_paths = {
+            str(usim_output_path): state.forecast_year,
+            str(usim_merged_path): 2019,
+            str(usim_dir / "usim_2019.h5"): 2019,
+        }
+        year = year_scoped_paths.get(path_str)
+        if year is not None and mode == "r":
+            return _YearScopedOutputStore(Path(path_str), year)
+        return real_hdf_store(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(usim_postprocessor, "read_datastore", _patched_read_datastore)
+    monkeypatch.setattr(usim_postprocessor.pd, "HDFStore", _patched_hdf_store)
 
     land_use_path = asim_dir / "land_use.csv"
     households_path = asim_dir / "households.csv"

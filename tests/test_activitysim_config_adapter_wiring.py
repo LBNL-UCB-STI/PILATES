@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import pytest
 from consist.core.step_context import StepContext
 
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -34,31 +35,18 @@ class DummyPreprocessor:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = Path(output_dir)
 
-    def preprocess(self, workspace) -> RecordStore:
+    def preprocess(self, workspace) -> ActivitySimPreprocessOutputs:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         land_use = self.output_dir / "land_use.csv"
         households = self.output_dir / "households.csv"
         persons = self.output_dir / "persons.csv"
         for path in (land_use, households, persons):
             path.write_text("dummy")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(land_use),
-                    short_name=ASIM_LAND_USE_IN,
-                    description="ActivitySim land use input table",
-                ),
-                FileRecord(
-                    file_path=str(households),
-                    short_name=ASIM_HOUSEHOLDS_IN,
-                    description="ActivitySim households input table",
-                ),
-                FileRecord(
-                    file_path=str(persons),
-                    short_name=ASIM_PERSONS_IN,
-                    description="ActivitySim persons input table",
-                ),
-            ]
+        return ActivitySimPreprocessOutputs(
+            mutable_data_dir=self.output_dir,
+            land_use_table=land_use,
+            households_table=households,
+            persons_table=persons,
         )
 
 

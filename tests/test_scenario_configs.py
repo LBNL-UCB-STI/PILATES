@@ -7,8 +7,15 @@ from pilates.utils.settings_helper import get as get_setting
 
 
 def test_all_active_scenarios_use_hierarchical_schema_and_validate():
+    """Active runtime scenarios should use the current hierarchical schema."""
     scenario_paths = sorted(Path("scenarios").rglob("*.yaml"))
-    active_paths = [path for path in scenario_paths if "archive" not in path.parts]
+    active_paths = [
+        path
+        for path in scenario_paths
+        if "archive" not in path.parts
+        and "old-settings" not in path.parts
+        and "_legacy" not in path.parts
+    ]
 
     assert active_paths, "Expected active scenario configs under scenarios/"
 
@@ -20,8 +27,15 @@ def test_all_active_scenarios_use_hierarchical_schema_and_validate():
 
 
 def test_active_scenarios_load_via_runtime_config_loader():
+    """Only active runtime scenarios must load through the current config loader."""
     scenario_paths = sorted(Path("scenarios").rglob("*.yaml"))
-    active_paths = [path for path in scenario_paths if "archive" not in path.parts]
+    active_paths = [
+        path
+        for path in scenario_paths
+        if "archive" not in path.parts
+        and "old-settings" not in path.parts
+        and "_legacy" not in path.parts
+    ]
 
     for path in active_paths:
         settings = load_config(str(path))
@@ -104,7 +118,13 @@ def test_active_sfbay_scenarios_define_expected_zone_sources():
         )
 
 
-def test_archived_scenario_copies_exist_for_migrated_legacy_configs():
+def test_legacy_scenario_copies_preserve_pre_migration_configs():
+    """
+    Migrated scenarios keep a `_legacy/` copy for historical reference only.
+
+    This is a repository preservation contract, not a runtime dependency.
+    The active scenarios above are the ones that must load and execute.
+    """
     migrated_active_paths = [
         Path("scenarios/breathe/settings--sfbay--2018-Baseline.yaml"),
         Path("scenarios/seattle/pilates-run--seattle--fullskim-FC07-0.yaml"),
@@ -129,9 +149,12 @@ def test_archived_scenario_copies_exist_for_migrated_legacy_configs():
     ]
 
     for active_path in migrated_active_paths:
-        archive_path = Path("scenarios/archive") / active_path.relative_to("scenarios")
-        assert archive_path.exists(), f"Missing archive copy for {active_path}"
+        legacy_path = Path("scenarios/_legacy") / active_path.relative_to("scenarios")
+        assert legacy_path.exists(), f"Missing legacy copy for {active_path}"
 
-        archived = yaml.safe_load(archive_path.read_text())
-        assert isinstance(archived, dict), f"{archive_path} did not parse to a mapping"
-        assert "run" not in archived, f"{archive_path} should preserve the legacy schema"
+        legacy = yaml.safe_load(legacy_path.read_text())
+        assert isinstance(legacy, dict), f"{legacy_path} did not parse to a mapping"
+        assert "run" not in legacy, (
+            f"{legacy_path} should remain in the legacy schema as a preserved "
+            "pre-migration reference"
+        )

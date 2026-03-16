@@ -98,10 +98,14 @@ def _execute_activitysim_preprocess(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> ActivitySimPreprocessOutputs:
-    return preprocessor.preprocess(
-        workspace,
-        **_strip_component_runtime_kwargs(kwargs),
-    )
+    filtered_kwargs = _strip_component_runtime_kwargs(kwargs)
+    final_skims_omx = filtered_kwargs.get("final_skims_omx")
+    if final_skims_omx is not None:
+        return preprocessor.preprocess(
+            workspace,
+            final_skims_omx=final_skims_omx,
+        )
+    return preprocessor.preprocess(workspace)
 
 
 def _execute_activitysim_run(
@@ -1280,7 +1284,13 @@ def make_activitysim_postprocess_step(
 
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_and_set_output(
+                key=key,
+                path=path,
+                description=description,
+                coupler=coupler,
+                **meta,
+            ),
             profile_schema_keys={
                 "persons_asim_out",
                 "trips_asim_out",

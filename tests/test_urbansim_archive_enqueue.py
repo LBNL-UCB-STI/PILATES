@@ -38,15 +38,39 @@ def test_create_next_iter_usim_data_enqueues_restart_h5s(monkeypatch, tmp_path):
     _write_h5(
         output_path,
         {
-            "/2023/households": pd.DataFrame({"household_id": [1], "cars": [1]}),
+            "/households": pd.DataFrame({"household_id": [1], "cars": [1]}),
         },
     )
+
+    real_hdf_store = pd.HDFStore
+
+    class _FakeOutputStore:
+        def __init__(self, path):
+            self._path = str(path)
+
+        def close(self):
+            return None
+
+        def keys(self):
+            return ["/2023/households"]
+
+        def __getitem__(self, key):
+            if key != "/2023/households":
+                raise KeyError(key)
+            with real_hdf_store(str(output_path), "r") as store:
+                return store["/households"]
+
+    def _patched_hdf_store(path, mode="r", *args, **kwargs):
+        if str(path) == str(output_path) and mode == "r":
+            return _FakeOutputStore(path)
+        return real_hdf_store(str(path), mode, *args, **kwargs)
 
     monkeypatch.setattr(
         usim_postprocessor,
         "read_datastore",
-        lambda *_args, **_kwargs: (pd.HDFStore(str(output_path), "r"), "2023"),
+        lambda *_args, **_kwargs: (_FakeOutputStore(output_path), "2023"),
     )
+    monkeypatch.setattr(usim_postprocessor.pd, "HDFStore", _patched_hdf_store)
     calls = []
     monkeypatch.setattr(
         usim_postprocessor,

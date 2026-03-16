@@ -1,54 +1,50 @@
-import pandas as pd
-
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 
 
-def test_resolve_atlas_h5_table_key_prefers_year_scoped_when_available(tmp_path):
-    path = tmp_path / "data.h5"
-    df = pd.DataFrame({"x": [1]})
-    df.to_hdf(path, key="households", mode="w")
-    df.to_hdf(path, key="/2019/households", mode="a")
+class _FakeHDFStore:
+    def __init__(self, keys):
+        self._keys = tuple(keys)
 
-    with pd.HDFStore(path, mode="r") as store:
-        resolved = _resolve_atlas_h5_table_key(
-            store, year=2019, table="households", is_start_year=False
-        )
+    def __contains__(self, key):
+        normalized = key if str(key).startswith("/") else f"/{key}"
+        return normalized in self._keys
+
+    def keys(self):
+        return list(self._keys)
+
+
+def test_resolve_atlas_h5_table_key_prefers_year_scoped_when_available(tmp_path):
+    store = _FakeHDFStore(("/households", "/2019/households"))
+    resolved = _resolve_atlas_h5_table_key(
+        store, year=2019, table="households", is_start_year=False
+    )
 
     assert resolved == "/2019/households"
 
 
 def test_resolve_atlas_h5_table_key_falls_back_to_root_for_non_start_year(tmp_path):
-    path = tmp_path / "data.h5"
-    pd.DataFrame({"x": [1]}).to_hdf(path, key="households", mode="w")
-
-    with pd.HDFStore(path, mode="r") as store:
-        resolved = _resolve_atlas_h5_table_key(
-            store, year=2019, table="households", is_start_year=False
-        )
+    store = _FakeHDFStore(("/households",))
+    resolved = _resolve_atlas_h5_table_key(
+        store, year=2019, table="households", is_start_year=False
+    )
 
     assert resolved == "households"
 
 
 def test_resolve_atlas_h5_table_key_uses_root_for_start_year(tmp_path):
-    path = tmp_path / "data.h5"
-    pd.DataFrame({"x": [1]}).to_hdf(path, key="households", mode="w")
-
-    with pd.HDFStore(path, mode="r") as store:
-        resolved = _resolve_atlas_h5_table_key(
-            store, year=2017, table="households", is_start_year=True
-        )
+    store = _FakeHDFStore(("/households",))
+    resolved = _resolve_atlas_h5_table_key(
+        store, year=2017, table="households", is_start_year=True
+    )
 
     assert resolved == "households"
 
 
 def test_resolve_atlas_h5_table_key_falls_back_to_prior_year_scoped_table(tmp_path):
-    path = tmp_path / "data.h5"
-    pd.DataFrame({"x": [1]}).to_hdf(path, key="/2023/households", mode="w")
-
-    with pd.HDFStore(path, mode="r") as store:
-        resolved = _resolve_atlas_h5_table_key(
-            store, year=2025, table="households", is_start_year=False
-        )
+    store = _FakeHDFStore(("/2023/households",))
+    resolved = _resolve_atlas_h5_table_key(
+        store, year=2025, table="households", is_start_year=False
+    )
 
     assert resolved == "/2023/households"
 
@@ -56,12 +52,9 @@ def test_resolve_atlas_h5_table_key_falls_back_to_prior_year_scoped_table(tmp_pa
 def test_resolve_atlas_h5_table_key_falls_back_to_earliest_future_year_scoped_table(
     tmp_path,
 ):
-    path = tmp_path / "data.h5"
-    pd.DataFrame({"x": [1]}).to_hdf(path, key="/2027/households", mode="w")
-
-    with pd.HDFStore(path, mode="r") as store:
-        resolved = _resolve_atlas_h5_table_key(
-            store, year=2025, table="households", is_start_year=False
-        )
+    store = _FakeHDFStore(("/2027/households",))
+    resolved = _resolve_atlas_h5_table_key(
+        store, year=2025, table="households", is_start_year=False
+    )
 
     assert resolved == "/2027/households"

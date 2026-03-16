@@ -149,7 +149,7 @@ def test_beam_preprocess_fails_early_when_default_scenario_inputs_missing(
         lambda *_args, **_kwargs: RecordStore(),
     )
 
-    with pytest.raises(FileNotFoundError, match="persons.parquet"):
+    with pytest.raises(FileNotFoundError, match=r"persons\.\[parquet\|csv\|csv\.gz\]"):
         preprocessor.preprocess(workspace)
 
 

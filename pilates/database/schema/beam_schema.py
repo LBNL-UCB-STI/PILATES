@@ -21,38 +21,26 @@ from pilates.database.schema.activitysim_schema import (
 
 class HouseholdsBeamIn(HouseholdsAsimOut, table=True):
     __tablename__ = "HouseholdsBeamIn"
-    __table_args__ = {"extend_existing": True}
-    __abstract__ = True
-
-    household_id: Optional[int] = Field(
-        default=None,
-        description="Household identifier used to relate persons to households.",
-        sa_column=Column(
-            "household_id",
-            BigInteger,
-            ForeignKey("HouseholdsAsimOut.household_id"),
-            nullable=True,
-            index=True,
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id"],
+            ["HouseholdsAsimOut.household_id"],
         ),
+        {"extend_existing": True},
     )
+    __abstract__ = True
 
 
 class PersonsBeamIn(PersonsAsimOut, table=True):
     __tablename__ = "PersonsBeamIn"
-    __table_args__ = {"extend_existing": True}
-    __abstract__ = True
-
-    person_id: Optional[int] = Field(
-        default=None,
-        description="Person identifier unique within the input population.",
-        sa_column=Column(
-            "person_id",
-            BigInteger,
-            ForeignKey("PersonsAsimOut.person_id"),
-            nullable=True,
-            index=True,
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["person_id"],
+            ["PersonsAsimOut.person_id"],
         ),
+        {"extend_existing": True},
     )
+    __abstract__ = True
 
 
 class VehiclesBeamIn(SQLModel, table=True):

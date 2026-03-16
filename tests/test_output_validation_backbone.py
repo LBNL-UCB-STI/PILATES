@@ -162,14 +162,8 @@ def test_cross_step_validator_reads_upstream_outputs_from_context(tmp_path: Path
         phase="run",
         outputs_class=_CrossStepOutputs,
         component_getter=lambda _factory, _state: object(),
-        component_executor=lambda _component, _workspace, _holder, **_kwargs: RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(output_path),
-                    short_name="dummy_output",
-                    description="dummy output",
-                )
-            ]
+        component_executor=lambda _component, _workspace, _holder, **_kwargs: _CrossStepOutputs(
+            output_file=output_path
         ),
         outputs_holder_setter=lambda holder, outputs: holder.set_attribute(
             "activitysim_preprocess", outputs

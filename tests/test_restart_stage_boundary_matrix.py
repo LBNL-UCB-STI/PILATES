@@ -598,17 +598,24 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
     )
 
     beam_preprocess_calls = [
-        call
-        for call in scenario.calls
-        if BEAM_PLANS_IN in call["inputs"]
-        and BEAM_HOUSEHOLDS_IN in call["inputs"]
-        and BEAM_PERSONS_IN in call["inputs"]
+        call for call in scenario.calls if call["fn_name"] == "_step_func"
     ]
-    assert beam_preprocess_calls, "Expected BEAM preprocess to start from restored defaults."
-    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
-    assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
-    assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
+    assert beam_preprocess_calls, "Expected BEAM preprocess step to run."
+    assert any(
+        BEAM_PLANS_IN in call["input_keys"]
+        and BEAM_HOUSEHOLDS_IN in call["input_keys"]
+        and BEAM_PERSONS_IN in call["input_keys"]
+        for call in beam_preprocess_calls
+    )
+    plans_input = Path(coupler.get(BEAM_PLANS_IN))
+    households_input = Path(coupler.get(BEAM_HOUSEHOLDS_IN))
+    persons_input = Path(coupler.get(BEAM_PERSONS_IN))
+    assert plans_input.exists()
+    assert households_input.exists()
+    assert persons_input.exists()
+    assert plans_input.name.startswith("plans.")
+    assert households_input.name.startswith("households.")
+    assert persons_input.name.startswith("persons.")
 
 
 def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(

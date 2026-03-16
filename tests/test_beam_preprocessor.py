@@ -108,7 +108,10 @@ def mock_beam_shapefile(mock_workspace):
         for i in range(len(scrambled_geoids))
     ]
 
-    gdf = gpd.GeoDataFrame({"geoid10": scrambled_geoids, "geometry": polygons})
+    gdf = gpd.GeoDataFrame(
+        {"geoid10": scrambled_geoids, "geometry": polygons},
+        crs="EPSG:4326",
+    )
 
     try:
         gdf.to_file(shapefile_path, driver="ESRI Shapefile")
@@ -455,7 +458,8 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
 
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _capture_input_records)
 
-    preprocessor._preprocess(mock_workspace, previous_records=previous_records)
+    with pytest.raises(RuntimeError, match="canonical BEAM input trio"):
+        preprocessor._preprocess(mock_workspace, previous_records=previous_records)
 
     assert captured["keys"] == ["households_asim_out"]
 

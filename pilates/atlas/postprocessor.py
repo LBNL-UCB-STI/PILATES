@@ -97,7 +97,18 @@ def resolve_atlas_usim_datastore_path(
         return Path(explicit_path)
 
     usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
-    if state.is_start_year():
+    is_start_year = getattr(state, "is_start_year", None)
+    if callable(is_start_year):
+        start_year = bool(is_start_year())
+    else:
+        start_year_value = getattr(state, "start_year", None)
+        forecast_year = getattr(state, "forecast_year", None)
+        year_value = getattr(state, "year", forecast_year)
+        start_year = (
+            start_year_value is not None and year_value is not None and year_value == start_year_value
+        )
+
+    if start_year:
         usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
     else:
         usim_datastore_fname = get_usim_datastore_fname(

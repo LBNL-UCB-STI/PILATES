@@ -16,7 +16,6 @@ import geopandas as gpd
 import numpy as np
 import xarray as xr
 import shutil
-import zarr
 
 from pilates.config import PilatesConfig
 from pilates.utils.path_utils import find_project_root
@@ -167,11 +166,9 @@ def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
 
 def _log_zarr_runtime_context() -> None:
     logger.info(
-        "Zarr rewrite host Python stack: xarray=%s (%s) zarr=%s (%s)",
+        "Zarr rewrite host Python stack: xarray=%s (%s)",
         xr.__version__,
         getattr(xr, "__file__", "unknown"),
-        getattr(zarr, "__version__", "unknown"),
-        getattr(zarr, "__file__", "unknown"),
     )
     logger.info(
         "Zarr rewrite host to_zarr signature: %s",

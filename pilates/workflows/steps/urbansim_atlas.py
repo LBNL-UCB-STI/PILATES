@@ -368,10 +368,14 @@ def _execute_urbansim_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> UrbanSimPreprocessOutputs:
-    return preprocessor.preprocess(
-        workspace,
-        **_strip_component_runtime_kwargs(kwargs),
-    )
+    filtered_kwargs = _strip_component_runtime_kwargs(kwargs)
+    final_skims_omx = filtered_kwargs.get("final_skims_omx")
+    if final_skims_omx is not None:
+        return preprocessor.preprocess(
+            workspace,
+            final_skims_omx=final_skims_omx,
+        )
+    return preprocessor.preprocess(workspace)
 
 
 def _execute_urbansim_run_typed(

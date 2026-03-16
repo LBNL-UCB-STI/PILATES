@@ -14,7 +14,11 @@ from pilates.generic.initialization import (
 )
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
-from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
+from pilates.utils.coupler_helpers import (
+    enqueue_archive_copy,
+    flush_archive_queue,
+    log_and_set_input,
+)
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
@@ -136,7 +140,12 @@ def seed_bootstrap_artifacts_to_coupler(
         if os.path.exists(zarr_candidate) and (
             not callable(get_value) or get_value(ZARR_SKIMS) is None
         ):
-            coupler.set(ZARR_SKIMS, zarr_candidate)
+            log_and_set_input(
+                key=ZARR_SKIMS,
+                path=zarr_candidate,
+                description="Bootstrap-staged ActivitySim zarr skims cache",
+                coupler=coupler,
+            )
 
         sharrow_cache_dir = os.path.join(workspace.full_path, "shared_cache", "numba")
         has_cache_files = False
@@ -148,7 +157,12 @@ def seed_bootstrap_artifacts_to_coupler(
         if has_cache_files and (
             not callable(get_value) or get_value(ASIM_SHARROW_CACHE_DIR) is None
         ):
-            coupler.set(ASIM_SHARROW_CACHE_DIR, sharrow_cache_dir)
+            log_and_set_input(
+                key=ASIM_SHARROW_CACHE_DIR,
+                path=sharrow_cache_dir,
+                description="Bootstrap-staged ActivitySim sharrow cache directory",
+                coupler=coupler,
+            )
 
     if get_traffic_assignment_model(settings) != "beam":
         return
@@ -185,15 +199,22 @@ def seed_bootstrap_artifacts_to_coupler(
             path = record.get_absolute_path(base_path=workspace.full_path)
             if not path or not os.path.exists(path):
                 continue
-            # These staged defaults already exist on disk before any active BEAM
-            # step run starts. Publish plain paths so downstream Consist input
-            # resolution never sees bootstrap-time NoopArtifact placeholders.
-            coupler.set(key, path)
+            log_and_set_input(
+                key=key,
+                path=path,
+                description=f"Bootstrap-staged default BEAM input: {key}",
+                coupler=coupler,
+            )
 
     if not callable(get_value) or get_value(LINKSTATS_WARMSTART) is None:
         warmstart_path = resolve_initial_linkstats_path(settings, workspace)
         if warmstart_path:
-            coupler.set(LINKSTATS_WARMSTART, warmstart_path)
+            log_and_set_input(
+                key=LINKSTATS_WARMSTART,
+                path=warmstart_path,
+                description="Bootstrap-staged BEAM warmstart linkstats",
+                coupler=coupler,
+            )
 
 
 def run_bootstrap_phase(
