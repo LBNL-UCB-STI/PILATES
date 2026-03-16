@@ -3,12 +3,17 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
-from pilates.workflows.outputs_base import step_output_handoff_mapping
+from pilates.workflows.outputs_base import (
+    step_output_handoff_mapping,
+    step_output_mapping,
+)
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
 
@@ -69,6 +74,42 @@ def test_step_output_handoff_mapping_prefers_coupler_artifacts(
     assert mapping["beam_plans_asim_out"] is artifact
     assert mapping["households_asim_out"] == str(households)
     assert mapping["persons_asim_out"] == str(persons)
+
+
+def test_step_output_handoff_mapping_warns_without_coupler(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    output_path = tmp_path / "beam_plans.parquet"
+    output_path.write_text("x", encoding="utf-8")
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=tmp_path,
+        processed_outputs={"beam_plans_asim_out": output_path},
+    )
+
+    with caplog.at_level("WARNING"):
+        mapping = step_output_handoff_mapping(outputs, coupler=None)
+
+    assert mapping["beam_plans_asim_out"] == str(output_path)
+    assert "called without a readable coupler" in caplog.text
+
+
+def test_step_output_mapping_warns_that_it_is_lossy(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    output_path = tmp_path / "beam_plans.parquet"
+    output_path.write_text("x", encoding="utf-8")
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=tmp_path,
+        processed_outputs={"beam_plans_asim_out": output_path},
+    )
+
+    with caplog.at_level("WARNING"):
+        mapping = step_output_mapping(outputs)
+
+    assert mapping["beam_plans_asim_out"] == str(output_path)
+    assert "is lossy and should not be used for runtime workflow handoffs" in caplog.text
 
 
 def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(

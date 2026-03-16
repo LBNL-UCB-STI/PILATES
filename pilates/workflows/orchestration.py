@@ -905,7 +905,7 @@ def _update_coupler_from_outputs(
     workspace: Any,
 ) -> None:
     _update_coupler_from_mapping(
-        step_output_mapping(outputs),
+        step_output_mapping(outputs, warn_lossy=False),
         coupler=coupler,
         workspace=workspace,
     )

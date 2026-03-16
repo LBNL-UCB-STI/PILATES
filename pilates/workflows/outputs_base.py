@@ -154,20 +154,39 @@ def iter_step_output_items(outputs: Any) -> Tuple[Tuple[str, Any, str], ...]:
     return tuple(iter_items())
 
 
-def step_output_mapping(outputs: Any) -> Dict[str, str]:
+def step_output_mapping(
+    outputs: Any,
+    *,
+    warn_lossy: bool = True,
+) -> Dict[str, str]:
     """
-    Build a key -> path mapping directly from typed outputs.
+    Build a lossy key -> path mapping directly from typed outputs.
+
+    Warning
+    -------
+    This helper intentionally strips artifact identity and content-hash-bearing
+    objects down to filesystem path strings. Use
+    ``step_output_handoff_mapping(...)`` for runtime handoffs between workflow
+    steps/stages/iterations where Consist lineage should be preserved.
 
     Parameters
     ----------
     outputs : Any
         Step outputs object exposing ``_iter_record_items()``.
+    warn_lossy : bool, optional
+        Emit a warning that this helper is lossy. Callers should set this to
+        ``False`` only for intentionally path-only serialization/replay flows.
 
     Returns
     -------
     dict[str, str]
         Mapping of output key to filesystem path string.
     """
+    if warn_lossy:
+        logger.warning(
+            "step_output_mapping(...) is lossy and should not be used for runtime "
+            "workflow handoffs; prefer step_output_handoff_mapping(...)."
+        )
     mapping: Dict[str, str] = {}
     for key, path, _ in iter_step_output_items(outputs):
         sanitized_key = sanitize_artifact_key(key)
@@ -207,6 +226,11 @@ def step_output_handoff_mapping(
     """
     mapping: Dict[str, Any] = {}
     get_value = getattr(coupler, "get", None)
+    if coupler is None or not callable(get_value):
+        logger.warning(
+            "step_output_handoff_mapping(...) called without a readable coupler; "
+            "handoff values will fall back to raw paths."
+        )
     for key, path, _ in iter_step_output_items(outputs):
         sanitized_key = sanitize_artifact_key(key)
         if sanitized_key is None:
