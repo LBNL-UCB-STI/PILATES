@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 import yaml
 from consist import MaterializationResult
 
+from pilates.runtime.cache_recovery import materialize_cached_runs
 from pilates.utils.io import get_traffic_assignment_model
 
 logger = logging.getLogger(__name__)
@@ -738,46 +739,15 @@ def reconstruct_restart_completed_run_outputs(
     source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
     target_root = os.path.realpath(local_run_dir)
 
-    aggregate = MaterializationResult()
-    aggregate.failed.extend(issues)
-
-    materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
-    if run_ids and not callable(materialize_run_outputs_fn):
-        aggregate.failed.append(
-            (
-                "restart_reconstruction",
-                "tracker does not expose materialize_run_outputs",
-            )
-        )
-    elif callable(materialize_run_outputs_fn):
-        for run_id in run_ids:
-            try:
-                result = materialize_run_outputs_fn(
-                    run_id=run_id,
-                    target_root=target_root,
-                    source_root=source_root,
-                    preserve_existing=True,
-                )
-            except Exception as exc:
-                result = MaterializationResult(
-                    failed=[(run_id, f"materialize_run_outputs raised: {exc}")]
-                )
-            aggregate.materialized_from_filesystem.update(
-                dict(getattr(result, "materialized_from_filesystem", {}) or {})
-            )
-            aggregate.materialized_from_db.update(
-                dict(getattr(result, "materialized_from_db", {}) or {})
-            )
-            aggregate.skipped_existing.extend(
-                list(getattr(result, "skipped_existing", []) or [])
-            )
-            aggregate.skipped_unmapped.extend(
-                list(getattr(result, "skipped_unmapped", []) or [])
-            )
-            aggregate.skipped_missing_source.extend(
-                list(getattr(result, "skipped_missing_source", []) or [])
-            )
-            aggregate.failed.extend(list(getattr(result, "failed", []) or []))
+    aggregate = materialize_cached_runs(
+        tracker=tracker,
+        run_ids=run_ids,
+        target_root=target_root,
+        source_root=source_root,
+        preserve_existing=True,
+        initial_failures=issues,
+        missing_api_context="restart_reconstruction",
+    )
 
     return {
         "run_ids": run_ids,

@@ -13,6 +13,7 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
+from pilates.runtime.cache_recovery import materialize_cached_run
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
@@ -265,49 +266,21 @@ def run_bootstrap_phase(
             workspace.full_path,
             probe_run_id,
         )
-        materialization_result: Optional[MaterializationResult] = None
-        materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
-        if not probe_run_id:
-            materialization_result = MaterializationResult(
-                failed=[
-                    (
-                        "bootstrap_initialization",
-                        "cache hit missing run id; cannot materialize cached outputs",
-                    )
-                ]
+        materialization_result, materialization_exc = materialize_cached_run(
+            tracker=tracker,
+            run_id=probe_run_id,
+            target_root=workspace.full_path,
+            source_root=None,
+            preserve_existing=True,
+            context="bootstrap_initialization",
+        )
+        if materialization_exc is not None:
+            logger.warning(
+                "BOOTSTRAP CACHE HIT materialization failed with exception; "
+                "falling back to explicit rerun. run_id=%s error=%s",
+                probe_run_id,
+                materialization_exc,
             )
-        elif not callable(materialize_run_outputs_fn):
-            materialization_result = MaterializationResult(
-                failed=[
-                    (
-                        "bootstrap_initialization",
-                        "tracker does not expose materialize_run_outputs",
-                    )
-                ]
-            )
-        else:
-            try:
-                materialization_result = materialize_run_outputs_fn(
-                    run_id=probe_run_id,
-                    target_root=workspace.full_path,
-                    source_root=None,
-                    preserve_existing=True,
-                )
-            except Exception as exc:
-                materialization_result = MaterializationResult(
-                    failed=[
-                        (
-                            "bootstrap_initialization",
-                            f"materialize_run_outputs raised: {exc}",
-                        )
-                    ]
-                )
-                logger.warning(
-                    "BOOTSTRAP CACHE HIT materialization failed with exception; "
-                    "falling back to explicit rerun. run_id=%s error=%s",
-                    probe_run_id,
-                    exc,
-                )
 
         if materialization_result.complete:
             logger.info(

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Se
 
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
+from pilates.runtime.cache_recovery import run_with_cache_recovery
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
@@ -464,10 +465,14 @@ def run_manifested_steps(
             stage_name=stage_name,
             default_iteration=iteration,
         )
-        result = scenario.run(**run_kwargs)
-        outputs = outputs_holder.get_attribute(spec.name)
-        if outputs is None and getattr(result, "cache_hit", False):
-            outputs = _recover_step_outputs(
+        def _run_step(cache_options: Optional[CacheOptions]) -> Any:
+            step_kwargs = dict(run_kwargs)
+            if cache_options is not None:
+                step_kwargs["cache_options"] = cache_options
+            return scenario.run(**step_kwargs)
+
+        def _recover_outputs(step_result: Any) -> Optional[Any]:
+            return _recover_step_outputs(
                 step_name=spec.name,
                 step_func=spec.step_func,
                 outputs_holder=outputs_holder,
@@ -476,34 +481,18 @@ def run_manifested_steps(
                 workspace=workspace,
                 coupler=coupler,
                 step_inputs=spec.inputs,
-                cached_outputs=getattr(result, "outputs", None),
-                run_id=getattr(getattr(result, "run", None), "id", None),
+                cached_outputs=getattr(step_result, "outputs", None),
+                run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
             )
-        if outputs is None and getattr(result, "cache_hit", False):
-            logger.warning(
-                "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
-                stage_name,
-                spec.name,
-            )
-            rerun_kwargs = dict(run_kwargs)
-            rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
-            result = scenario.run(**rerun_kwargs)
-            outputs = outputs_holder.get_attribute(spec.name)
-            if outputs is None and getattr(result, "cache_hit", False):
-                outputs = _recover_step_outputs(
-                    step_name=spec.name,
-                    step_func=spec.step_func,
-                    outputs_holder=outputs_holder,
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    coupler=coupler,
-                    step_inputs=spec.inputs,
-                    cached_outputs=getattr(result, "outputs", None),
-                    run_id=getattr(getattr(result, "run", None), "id", None),
-                    publish_outputs=True,
-                )
+
+        result, outputs = run_with_cache_recovery(
+            stage_name=stage_name,
+            step_name=spec.name,
+            run_step=_run_step,
+            read_outputs=lambda: outputs_holder.get_attribute(spec.name),
+            recover_outputs=_recover_outputs,
+        )
         if outputs is None:
             raise RuntimeError(f"{spec.name} did not populate outputs_holder")
         manifest[spec.name] = {
@@ -592,11 +581,14 @@ def run_workflow(
                 coupler_keys,
             )
 
-        result = scenario.run(**run_kwargs)
-        if outputs_holder.get_attribute(spec.name) is None and getattr(
-            result, "cache_hit", False
-        ):
-            _recover_step_outputs(
+        def _run_step(cache_options: Optional[CacheOptions]) -> Any:
+            step_kwargs = dict(run_kwargs)
+            if cache_options is not None:
+                step_kwargs["cache_options"] = cache_options
+            return scenario.run(**step_kwargs)
+
+        def _recover_outputs(step_result: Any) -> Optional[Any]:
+            return _recover_step_outputs(
                 step_name=spec.name,
                 step_func=spec.step_func,
                 outputs_holder=outputs_holder,
@@ -605,37 +597,18 @@ def run_workflow(
                 workspace=workspace,
                 coupler=coupler,
                 step_inputs=spec.inputs,
-                cached_outputs=getattr(result, "outputs", None),
-                run_id=getattr(getattr(result, "run", None), "id", None),
+                cached_outputs=getattr(step_result, "outputs", None),
+                run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
             )
-        if outputs_holder.get_attribute(spec.name) is None and getattr(
-            result, "cache_hit", False
-        ):
-            logger.warning(
-                "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
-                stage_name,
-                spec.name,
-            )
-            rerun_kwargs = dict(run_kwargs)
-            rerun_kwargs["cache_options"] = CacheOptions(cache_mode="overwrite")
-            result = scenario.run(**rerun_kwargs)
-            if outputs_holder.get_attribute(spec.name) is None and getattr(
-                result, "cache_hit", False
-            ):
-                _recover_step_outputs(
-                    step_name=spec.name,
-                    step_func=spec.step_func,
-                    outputs_holder=outputs_holder,
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    coupler=coupler,
-                    step_inputs=spec.inputs,
-                    cached_outputs=getattr(result, "outputs", None),
-                    run_id=getattr(getattr(result, "run", None), "id", None),
-                    publish_outputs=True,
-                )
+
+        result, _outputs = run_with_cache_recovery(
+            stage_name=stage_name,
+            step_name=spec.name,
+            run_step=_run_step,
+            read_outputs=lambda: outputs_holder.get_attribute(spec.name),
+            recover_outputs=_recover_outputs,
+        )
 
         if coupler_keys is not None:
             try:
