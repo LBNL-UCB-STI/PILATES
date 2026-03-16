@@ -25,7 +25,7 @@ container_manager: singularity
 singularity_images:
   urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
   atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-  beam: docker://haitamlaarabi/beam:1.1-beta-v260314
+  beam: docker://haitamlaarabi/beam:1.1-beta-v260316
   activitysim: docker://zaneedell/activitysim:0.1.13
   polaris:
 
@@ -33,7 +33,7 @@ singularity_images:
 docker_images:
   urbansim: jdcaicedo/urbansim_demos:v0.1.1
   atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-  beam: haitamlaarabi/beam:1.1-beta-v260314
+  beam: haitamlaarabi/beam:1.1-beta-v260316
   activitysim: zaneedell/activitysim:0.1.7
   polaris: tbd
 docker_stdout: False
