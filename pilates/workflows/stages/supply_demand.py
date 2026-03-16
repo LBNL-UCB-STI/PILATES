@@ -33,7 +33,10 @@ from pilates.workflows.orchestration import (
     run_workflow,
     run_manifested_steps,
 )
-from pilates.workflows.outputs_base import step_output_mapping
+from pilates.workflows.outputs_base import (
+    step_output_handoff_mapping,
+    step_output_mapping,
+)
 from pilates.workflows.step_io import build_outputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -106,12 +109,12 @@ class ActivityDemandPhaseOutputs:
 
     Parameters
     ----------
-    activity_demand_outputs : Optional[dict[str, str]]
+    activity_demand_outputs : Optional[dict[str, Any]]
         Mapping containing ActivitySim outputs needed downstream
         (e.g., households, persons, plans). None if not produced.
     """
 
-    activity_demand_outputs: Optional[Dict[str, str]]
+    activity_demand_outputs: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -125,16 +128,16 @@ class TrafficAssignmentPhaseInputs:
         Forecast year being simulated.
     iteration : int
         Supply-demand iteration index for the year.
-    activity_demand_outputs : Optional[dict[str, str]]
+    activity_demand_outputs : Optional[dict[str, Any]]
         ActivitySim outputs used to seed BEAM inputs for this iteration.
-    previous_beam_outputs : Optional[dict[str, str]]
+    previous_beam_outputs : Optional[dict[str, Any]]
         Prior BEAM outputs (e.g., linkstats) used for warm-starting.
     """
 
     year: int
     iteration: int
-    activity_demand_outputs: Optional[Dict[str, str]]
-    previous_beam_outputs: Optional[Dict[str, str]]
+    activity_demand_outputs: Optional[Dict[str, Any]]
+    previous_beam_outputs: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -144,12 +147,12 @@ class TrafficAssignmentPhaseOutputs:
 
     Parameters
     ----------
-    previous_beam_outputs : Optional[dict[str, str]]
+    previous_beam_outputs : Optional[dict[str, Any]]
         Combined BEAM run + postprocess outputs for warm-starting the
         next iteration, if available.
     """
 
-    previous_beam_outputs: Optional[Dict[str, str]]
+    previous_beam_outputs: Optional[Dict[str, Any]]
 
 
 def _run_supply_demand_manifested_steps(
@@ -584,7 +587,7 @@ def _run_activity_demand_phase(
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim compile requires preprocess outputs.")
-        compile_store_inputs = step_output_mapping(upstream)
+        compile_store_inputs = step_output_handoff_mapping(upstream, coupler=coupler)
         compile_explicit_inputs: Dict[str, Any] = {}
         if ASIM_OMX_SKIMS in compile_store_inputs:
             compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
@@ -763,7 +766,7 @@ def _run_activity_demand_phase(
 
     postprocess_outputs = outputs_holder.activitysim_postprocess
     activity_demand_outputs = (
-        step_output_mapping(postprocess_outputs)
+        step_output_handoff_mapping(postprocess_outputs, coupler=coupler)
         if postprocess_outputs is not None
         else None
     )
@@ -794,8 +797,8 @@ def _collect_previous_beam_outputs(
     workspace: Workspace,
     state: WorkflowState,
     iteration: int,
-    previous_beam_outputs: Optional[Dict[str, str]],
-) -> Optional[Dict[str, str]]:
+    previous_beam_outputs: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
     """
     Resolve previous BEAM outputs for warm-starting.
 
@@ -809,14 +812,14 @@ def _collect_previous_beam_outputs(
     if not callable(get_value):
         return None
 
-    promoted_outputs: Dict[str, str] = {}
+    promoted_outputs: Dict[str, Any] = {}
     for key in (LINKSTATS_WARMSTART, LINKSTATS, BEAM_PLANS_OUT):
         value = get_value(key)
         if value is None:
             continue
         path = artifact_to_path(value, workspace)
         if path and os.path.exists(path):
-            promoted_outputs[key] = path
+            promoted_outputs[key] = value
     return promoted_outputs or None
 
 
@@ -827,8 +830,8 @@ def _collect_beam_preprocess_inputs(
     coupler: CouplerProtocol,
     state: WorkflowState,
     iteration: int,
-    activity_demand_outputs: Optional[Dict[str, str]],
-    previous_beam_outputs: Optional[Dict[str, str]],
+    activity_demand_outputs: Optional[Dict[str, Any]],
+    previous_beam_outputs: Optional[Dict[str, Any]],
 ) -> Dict[str, Any]:
     """
     Build preprocess inputs for BEAM from available upstream sources.
@@ -925,7 +928,7 @@ def _restore_activity_demand_outputs_for_resume(
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
     state: WorkflowState,
-) -> Optional[Dict[str, str]]:
+) -> Optional[Dict[str, Any]]:
     """
     Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
 
@@ -937,14 +940,16 @@ def _restore_activity_demand_outputs_for_resume(
     """
 
     def _require_complete_restore(
-        restored_outputs: Dict[str, str], source: str
-    ) -> Optional[Dict[str, str]]:
+        restored_outputs: Dict[str, Any], source: str
+    ) -> Optional[Dict[str, Any]]:
         if not restored_outputs:
             return None
         missing_keys = sorted(
             key
             for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS
             if key not in restored_outputs
+            or not artifact_to_path(restored_outputs.get(key), workspace)
+            or not os.path.exists(artifact_to_path(restored_outputs.get(key), workspace))
         )
         if missing_keys:
             raise RuntimeError(
@@ -955,14 +960,17 @@ def _restore_activity_demand_outputs_for_resume(
 
     postprocess_outputs = outputs_holder.activitysim_postprocess
     if postprocess_outputs is not None:
-        restored_outputs = step_output_mapping(postprocess_outputs)
+        restored_outputs = step_output_handoff_mapping(
+            postprocess_outputs,
+            coupler=coupler,
+        )
         return _require_complete_restore(restored_outputs, "step outputs")
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
         return None
 
-    restored_outputs: Dict[str, str] = {}
+    restored_outputs: Dict[str, Any] = {}
     for key in (
         "beam_plans_asim_out",
         "beam_plans_out",
@@ -975,13 +983,16 @@ def _restore_activity_demand_outputs_for_resume(
             continue
         path = artifact_to_path(value, workspace)
         if path and os.path.exists(path):
-            restored_outputs[key] = path
+            restored_outputs[key] = value
     if restored_outputs:
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
             usim_datastore_h5=None,
             asim_output_dir=None,
             processed_outputs={
-                key: Path(path) for key, path in restored_outputs.items()
+                key: Path(path)
+                for key, value in restored_outputs.items()
+                for path in [artifact_to_path(value, workspace)]
+                if path is not None
             },
         )
         return _require_complete_restore(restored_outputs, "coupler artifacts")
@@ -1017,7 +1028,7 @@ def _restore_activity_demand_outputs_for_resume(
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
-    activity_demand_outputs: Optional[Dict[str, str]],
+    activity_demand_outputs: Optional[Dict[str, Any]],
 ) -> list[str]:
     """
     Derive BEAM run input keys from preprocess outputs and warm-start signals.
@@ -1140,7 +1151,7 @@ def _run_beam_steps(
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[Dict[str, str]]:
+) -> Optional[Dict[str, Any]]:
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
     """
@@ -1201,7 +1212,7 @@ def _run_beam_steps(
         beam_postprocess_resolution = resolve_step_inputs(
             keys=beam_postprocess_input_keys,
             coupler=coupler,
-            explicit_inputs=step_output_mapping(upstream_run),
+            explicit_inputs=step_output_handoff_mapping(upstream_run, coupler=coupler),
         )
 
     _run_supply_demand_workflow(
@@ -1240,12 +1251,17 @@ def _run_beam_steps(
     if outputs_holder.beam_run is None and outputs_holder.beam_postprocess is None:
         return None
 
-    combined_beam_outputs: Dict[str, str] = {}
+    combined_beam_outputs: Dict[str, Any] = {}
     if outputs_holder.beam_run is not None:
-        combined_beam_outputs.update(step_output_mapping(outputs_holder.beam_run))
+        combined_beam_outputs.update(
+            step_output_handoff_mapping(outputs_holder.beam_run, coupler=coupler)
+        )
     if outputs_holder.beam_postprocess is not None:
         combined_beam_outputs.update(
-            step_output_mapping(outputs_holder.beam_postprocess)
+            step_output_handoff_mapping(
+                outputs_holder.beam_postprocess,
+                coupler=coupler,
+            )
         )
     return combined_beam_outputs
 
@@ -1260,9 +1276,9 @@ def _run_beam_full_skim_step(
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    previous_beam_outputs: Optional[Dict[str, str]],
+    previous_beam_outputs: Optional[Dict[str, Any]],
     runtime_kwargs_extra: Mapping[str, Any],
-) -> Optional[Dict[str, str]]:
+) -> Optional[Dict[str, Any]]:
     """
     Execute dedicated BEAM full-skim step and return its outputs.
     """
@@ -1295,7 +1311,7 @@ def _run_beam_full_skim_step(
 
     if outputs_holder.beam_full_skim is None:
         return None
-    return step_output_mapping(outputs_holder.beam_full_skim)
+    return step_output_handoff_mapping(outputs_holder.beam_full_skim, coupler=coupler)
 
 
 def _run_traffic_assignment_phase(
@@ -1520,7 +1536,7 @@ def run_supply_demand_stage(
             clamped_total_iters,
         )
         total_iters = clamped_total_iters
-    previous_beam_outputs: Optional[Dict[str, str]] = None
+    previous_beam_outputs: Optional[Dict[str, Any]] = None
 
     for i in range(state.iteration, total_iters):
         state.iteration = i

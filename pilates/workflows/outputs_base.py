@@ -193,6 +193,45 @@ def step_output_mapping(outputs: Any) -> Dict[str, str]:
     return mapping
 
 
+def step_output_handoff_mapping(
+    outputs: Any,
+    *,
+    coupler: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Build a runtime handoff mapping, preserving coupler-published artifacts.
+
+    This is for step-to-step or iteration-to-iteration handoffs where artifact
+    identity matters. When the current step has already published a key into the
+    coupler, the coupler value is preferred over the raw filesystem path string.
+    """
+    mapping: Dict[str, Any] = {}
+    get_value = getattr(coupler, "get", None)
+    for key, path, _ in iter_step_output_items(outputs):
+        sanitized_key = sanitize_artifact_key(key)
+        if sanitized_key is None:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
+                key,
+            )
+            continue
+        if sanitized_key != key:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
+                key,
+                sanitized_key,
+            )
+        if sanitized_key in mapping:
+            logger.warning(
+                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
+                sanitized_key,
+            )
+            continue
+        coupler_value = get_value(sanitized_key) if callable(get_value) else None
+        mapping[sanitized_key] = coupler_value if coupler_value is not None else str(path)
+    return mapping
+
+
 def _is_optional_path_type(field_type: Any) -> bool:
     """
     Check whether a type annotation represents Optional[Path].

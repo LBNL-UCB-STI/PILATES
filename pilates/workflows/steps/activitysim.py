@@ -1268,16 +1268,43 @@ def make_activitysim_postprocess_step(
                 meta["content_hash"] = content_hash
             return meta
 
+        handoff_keys = {
+            "beam_plans_asim_out",
+            "households_asim_out",
+            "linkstats",
+            "persons_asim_out",
+        }
+        profile_schema_keys = {
+            "persons_asim_out",
+            "trips_asim_out",
+            "tours_asim_out",
+            "beam_plans_asim_out",
+            "households_asim_out",
+        }
+        handoff_items = []
+        other_items = []
+        for record in outputs._iter_record_items():
+            if record[0] in handoff_keys:
+                handoff_items.append(record)
+            else:
+                other_items.append(record)
+
         _log_step_records(
-            record_items=outputs._iter_record_items(),
+            record_items=other_items,
             log_fn=log_output_only,
-            profile_schema_keys={
-                "persons_asim_out",
-                "trips_asim_out",
-                "tours_asim_out",
-                "beam_plans_asim_out",
-                "households_asim_out",
-            },
+            profile_schema_keys=profile_schema_keys,
+            extra_meta_fn=_extra_meta,
+        )
+        _log_step_records(
+            record_items=handoff_items,
+            log_fn=lambda key, path, description, **meta: log_and_set_output(
+                key=key,
+                path=path,
+                description=description,
+                coupler=coupler,
+                **meta,
+            ),
+            profile_schema_keys=profile_schema_keys,
             extra_meta_fn=_extra_meta,
         )
         if outputs.usim_datastore_h5 is not None:

@@ -199,7 +199,7 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:
     fake_preprocessor = SimpleNamespace(
-        preprocess=lambda _workspace: ActivitySimPreprocessOutputs(
+        preprocess=lambda _workspace, **_kwargs: ActivitySimPreprocessOutputs(
             mutable_data_dir=asim_data_dir,
             land_use_table=asim_data_dir / "land_use.csv",
             households_table=asim_data_dir / "households.csv",
@@ -310,3 +310,53 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_pa
         "/households": "activitysim_postprocess_usim_households_table_updated",
         "/persons": "activitysim_postprocess_usim_persons_table_updated",
     }
+
+
+def test_activitysim_postprocess_publishes_beam_handoff_outputs_to_coupler(
+    monkeypatch, tmp_path
+) -> None:
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(),
+    )
+    output_logger = step_fn.__pilates_output_replayer__
+    output_only_calls = []
+    publish_calls = []
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "log_output_only",
+        lambda **kwargs: output_only_calls.append(kwargs["key"]),
+    )
+    monkeypatch.setattr(
+        steps_activitysim,
+        "log_and_set_output",
+        lambda **kwargs: publish_calls.append(kwargs["key"]),
+    )
+    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
+
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=tmp_path,
+        processed_outputs={
+            "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+            "households_asim_out": tmp_path / "households.parquet",
+            "persons_asim_out": tmp_path / "persons.parquet",
+            "trips_asim_out": tmp_path / "trips.parquet",
+        },
+    )
+
+    output_logger(
+        outputs,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(forecast_year=2030, iteration=0),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(),
+    )
+
+    assert set(publish_calls) == {
+        "beam_plans_asim_out",
+        "households_asim_out",
+        "persons_asim_out",
+    }
+    assert output_only_calls == ["trips_asim_out"]
