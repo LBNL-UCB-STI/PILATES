@@ -663,3 +663,58 @@ def test_activitysim_run_stages_external_zarr_input_into_runtime_cache(
     assert (staged_zarr / ".zarray").read_text() == "{}"
     assert captured["inputs"] is preprocess_outputs
     assert captured["extra_inputs"][ZARR_SKIMS] == str(staged_zarr)
+
+
+def test_activitysim_run_stages_external_sharrow_cache_into_runtime_cache(
+    monkeypatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "run"
+    asim_output_dir = root / "activitysim" / "output"
+    asim_output_dir.mkdir(parents=True)
+    asim_data_dir = root / "activitysim" / "data"
+    asim_data_dir.mkdir(parents=True)
+    for name in ("land_use.csv", "households.csv", "persons.csv"):
+        (asim_data_dir / name).write_text("dummy")
+
+    external_cache = tmp_path / "external" / "numba"
+    (external_cache / "sub").mkdir(parents=True)
+    (external_cache / "sub" / "entry.bin").write_text("cache")
+
+    workspace = _DummyWorkspace(root, asim_output_dir)
+    state = SimpleNamespace(
+        current_year=2023,
+        current_inner_iter=0,
+        forecast_year=2029,
+        set_sub_stage_progress=lambda _value: None,
+    )
+    settings = SimpleNamespace()
+    state.full_settings = settings
+    runner = ActivitysimRunner("activitysim", state)
+
+    preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_data_dir,
+        land_use_table=asim_data_dir / "land_use.csv",
+        households_table=asim_data_dir / "households.csv",
+        persons_table=asim_data_dir / "persons.csv",
+    )
+
+    captured = {}
+
+    def _fake_run(inputs, _workspace, *, extra_inputs=None):
+        captured["inputs"] = inputs
+        captured["extra_inputs"] = dict(extra_inputs or {})
+        return ActivitySimRunOutputs(output_dir=asim_output_dir)
+
+    monkeypatch.setattr(runner, "_run", _fake_run)
+
+    runner.run(
+        preprocess_outputs,
+        workspace,
+        extra_inputs={ASIM_SHARROW_CACHE_DIR: str(external_cache)},
+    )
+
+    staged_cache = root / "shared_cache" / "numba"
+    assert staged_cache.is_dir()
+    assert (staged_cache / "sub" / "entry.bin").read_text() == "cache"
+    assert captured["inputs"] is preprocess_outputs
+    assert captured["extra_inputs"][ASIM_SHARROW_CACHE_DIR] == str(staged_cache)

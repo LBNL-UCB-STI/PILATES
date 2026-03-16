@@ -12,10 +12,12 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.io import locate_beam_file
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,
     clean_expected_outputs,
     enqueue_archive_copy,
     flush_archive_queue,
+    resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
@@ -478,40 +480,52 @@ def _run_activity_demand_phase(
     )
 
     def _resolved_existing_zarr_skims_path() -> Optional[str]:
-        zarr_value = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
-            zarr_value = resolve_artifact_from_value(
-                get_value(ZARR_SKIMS),
-                key=ZARR_SKIMS,
+            zarr_path = artifact_to_existing_path(
+                resolve_artifact_from_value(
+                    get_value(ZARR_SKIMS),
+                    key=ZARR_SKIMS,
+                    workspace=workspace,
+                ),
                 workspace=workspace,
+                materialize_from_archive=True,
             )
-        zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(),
-                "cache",
-                "skims.zarr",
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
-        if zarr_path and os.path.exists(zarr_path):
-            return zarr_path
-        return None
+            if zarr_path:
+                return zarr_path
+        candidate = os.path.join(
+            workspace.get_asim_output_dir(),
+            "cache",
+            "skims.zarr",
+        )
+        return resolve_existing_path(
+            candidate,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
 
     def _resolved_existing_numba_cache_path() -> Optional[str]:
-        cache_value = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
-            cache_value = resolve_artifact_from_value(
-                get_value(ASIM_SHARROW_CACHE_DIR),
-                key=ASIM_SHARROW_CACHE_DIR,
+            cache_path = artifact_to_existing_path(
+                resolve_artifact_from_value(
+                    get_value(ASIM_SHARROW_CACHE_DIR),
+                    key=ASIM_SHARROW_CACHE_DIR,
+                    workspace=workspace,
+                ),
                 workspace=workspace,
+                materialize_from_archive=True,
             )
-        cache_path = artifact_to_path(cache_value, workspace)
-        if not cache_path:
-            cache_path = os.path.join(workspace.full_path, "shared_cache", "numba")
-        if os.path.isdir(cache_path):
+            if cache_path and os.path.isdir(cache_path):
+                for _root, _dirs, files in os.walk(cache_path):
+                    if files:
+                        return cache_path
+        cache_path = resolve_existing_path(
+            os.path.join(workspace.full_path, "shared_cache", "numba"),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if cache_path and os.path.isdir(cache_path):
             for _root, _dirs, files in os.walk(cache_path):
                 if files:
                     return cache_path

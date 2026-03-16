@@ -68,8 +68,12 @@ def _root_h5_table_keys(
     try:
         with pd.HDFStore(path, mode="r") as store:
             keys = sorted(store.keys())
-    except Exception:
-        logger.debug("Skipping HDF5 table enumeration for unreadable file %s", path)
+    except (OSError, FileNotFoundError, ValueError) as exc:
+        logger.debug(
+            "Skipping HDF5 table enumeration for unreadable file %s: %s",
+            path,
+            exc,
+        )
         return {}
 
     table_keys: Dict[str, str] = {}

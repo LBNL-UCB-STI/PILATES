@@ -49,6 +49,7 @@ from pilates.urbansim.outputs import (
     UrbanSimRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -861,6 +862,86 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     ]
     assert not compile_calls, "Did not expect ActivitySim compile when local artifacts already exist."
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
+
+
+def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_restart(
+    stage_env, tmp_path, monkeypatch
+):
+    beam_config_path = (
+        Path(stage_env["workspace"].get_beam_mutable_data_dir())
+        / stage_env["settings"].run.region
+        / stage_env["settings"].beam.config
+    )
+    _write_file(beam_config_path)
+
+    stage_env["settings"].activitysim.num_processes = 25
+    stage_env["settings"].activitysim.persist_sharrow_cache = True
+
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    workspace = stage_env["workspace"]
+    local_root = Path(workspace.full_path)
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+    state.compile_asim()
+
+    zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    if zarr_path.exists() and not zarr_path.is_dir():
+        zarr_path.unlink()
+    zarr_path.mkdir(parents=True, exist_ok=True)
+    (zarr_path / ".zattrs").write_text("{}")
+
+    numba_cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
+    numba_cache_dir.mkdir(parents=True, exist_ok=True)
+    (numba_cache_dir / "entry.bin").write_text("cache")
+
+    archive_zarr_path = archive_root / zarr_path.relative_to(local_root)
+    archive_numba_dir = archive_root / numba_cache_dir.relative_to(local_root)
+    archive_zarr_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(zarr_path, archive_zarr_path, dirs_exist_ok=True)
+    shutil.copytree(numba_cache_dir, archive_numba_dir, dirs_exist_ok=True)
+
+    shutil.rmtree(zarr_path)
+    shutil.rmtree(numba_cache_dir)
+    stage_env["coupler"]._values.pop(ZARR_SKIMS, None)
+    stage_env["coupler"]._values.pop(ASIM_SHARROW_CACHE_DIR, None)
+
+    def _build_manifest_path(workspace, year, iteration):
+        return tmp_path / f"manifest_archive_republish_{year}_{iteration}.json"
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=workspace,
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=_build_manifest_path,
+    )
+
+    compile_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_compile"
+    ]
+    assert not compile_calls, "Did not expect ActivitySim compile when archive artifacts exist."
+    assert zarr_path.exists()
+    assert numba_cache_dir.exists()
+    assert stage_env["coupler"].get(ZARR_SKIMS) is not None
+    assert stage_env["coupler"].get(ASIM_SHARROW_CACHE_DIR) is not None
 
 
 def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(

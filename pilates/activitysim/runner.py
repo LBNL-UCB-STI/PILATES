@@ -159,19 +159,22 @@ def _stage_runtime_input_path(
     input_path: str,
     workspace: Workspace,
 ) -> str:
-    if key != "zarr_skims":
+    if key == "zarr_skims":
+        runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+    elif key == ASIM_SHARROW_CACHE_DIR:
+        runtime_path = asim_sharrow_cache_dir(workspace)
+    else:
         return input_path
-
-    runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
     if os.path.abspath(input_path) == os.path.abspath(runtime_path):
         return runtime_path
 
     os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
     if os.path.isdir(input_path):
-        if os.path.exists(runtime_path):
-            shutil.rmtree(runtime_path)
+        _remove_path_if_present(runtime_path)
         shutil.copytree(input_path, runtime_path)
     else:
+        if os.path.isdir(runtime_path):
+            _remove_path_if_present(runtime_path)
         shutil.copyfile(input_path, runtime_path)
     return runtime_path
 
@@ -439,6 +442,7 @@ class ActivitysimRunner(GenericRunner):
             ASIM_LAND_USE_IN,
             ASIM_OMX_SKIMS,
             "zarr_skims",
+            ASIM_SHARROW_CACHE_DIR,
             "asim_geoms",
         ]
 
