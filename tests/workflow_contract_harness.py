@@ -106,6 +106,7 @@ class DummyPreprocessor:
         activity_demand_outputs: Any = None,
         previous_beam_outputs: Any = None,
         beam_preprocess_inputs: Any = None,
+        **kwargs: Any,
     ) -> Any:
         return self._record_builder(self.model_name, "preprocess")
 

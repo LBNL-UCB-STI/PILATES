@@ -465,6 +465,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        final_skims_omx: Optional[Any] = None,
     ) -> AtlasPreprocessOutputs:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
@@ -583,10 +584,23 @@ class AtlasPreprocessor(GenericPreprocessor):
         # Record BEAM skims as input if needed
         beamac = settings.atlas.beamac
         if beamac > 0:
-            beam_output_dir = workspace.get_beam_output_dir()
-            expected_beam_skims_path = os.path.join(
-                beam_output_dir, settings.shared.skims.fname
-            )
+            if final_skims_omx is not None and Path(final_skims_omx).exists():
+                expected_beam_skims_path = str(Path(final_skims_omx))
+                logger.info(
+                    "[AtlasPreprocessor] Using explicit final_skims_omx artifact: %s",
+                    expected_beam_skims_path,
+                )
+            else:
+                if final_skims_omx is not None:
+                    logger.warning(
+                        "[AtlasPreprocessor] Explicit final_skims_omx artifact did not "
+                        "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
+                        final_skims_omx,
+                    )
+                beam_output_dir = workspace.get_beam_output_dir()
+                expected_beam_skims_path = os.path.join(
+                    beam_output_dir, settings.shared.skims.fname
+                )
             if os.path.exists(expected_beam_skims_path):
                 logger.info(
                     f"[AtlasPreprocessor] Recording BEAM skims as input: {expected_beam_skims_path}"

@@ -57,6 +57,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_FULL_SKIMS,
+    FINAL_SKIMS_OMX,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -433,6 +434,36 @@ def test_land_use_stage_contract(stage_env):
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
+def test_land_use_stage_prefers_explicit_beam_skims_artifact(stage_env):
+    """UrbanSim preprocess should consume BEAM skims via the coupler when available."""
+    from pilates.workflows.steps import StepOutputsHolder
+
+    beam_final_omx = (
+        Path(stage_env["workspace"].get_beam_output_dir()) / "final-skims.omx"
+    )
+    _write_file(beam_final_omx)
+    stage_env["coupler"].set(FINAL_SKIMS_OMX, str(beam_final_omx))
+
+    outputs_holder = StepOutputsHolder()
+    run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    preprocess_call = next(
+        call
+        for call in stage_env["scenario"].calls
+        if call["model"] == "urbansim_preprocess"
+    )
+    assert FINAL_SKIMS_OMX in preprocess_call["input_keys"]
+    assert FINAL_SKIMS_OMX not in preprocess_call["inputs"]
+
+
 def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch):
     """Land use boundary should enqueue restart H5s and flush archive queue."""
     from pilates.workflows.stages import land_use as land_use_stage
@@ -603,6 +634,33 @@ def test_vehicle_ownership_stage_contract(stage_env):
         build_atlas_static_inputs_fallback=lambda workspace: {},
     )
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+
+
+def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env):
+    explicit_final_omx = (
+        Path(stage_env["workspace"].get_beam_output_dir()) / "atlas-final-skims.omx"
+    )
+    _write_file(explicit_final_omx)
+    stage_env["coupler"].set(FINAL_SKIMS_OMX, str(explicit_final_omx))
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+
+    run_vehicle_ownership_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        build_atlas_static_inputs_fallback=lambda workspace: {},
+    )
+
+    preprocess_calls = [
+        call for call in stage_env["scenario"].calls if call.get("model") == "atlas_preprocess"
+    ]
+    assert preprocess_calls, "Expected an ATLAS preprocess step call."
+    assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("input_keys") or [])
+    assert FINAL_SKIMS_OMX not in (preprocess_calls[0].get("inputs") or {})
 
 
 def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
@@ -805,6 +863,55 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
 
 
+def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
+    stage_env, tmp_path
+):
+    beam_config_path = (
+        Path(stage_env["workspace"].get_beam_mutable_data_dir())
+        / stage_env["settings"].run.region
+        / stage_env["settings"].beam.config
+    )
+    _write_file(beam_config_path)
+
+    explicit_final_omx = (
+        Path(stage_env["workspace"].get_beam_output_dir()) / "explicit-final-skims.omx"
+    )
+    _write_file(explicit_final_omx)
+    stage_env["coupler"].set(FINAL_SKIMS_OMX, str(explicit_final_omx))
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    preprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_preprocess"
+    ]
+    assert preprocess_calls, "Expected an ActivitySim preprocess step call."
+    assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("input_keys") or [])
+    assert FINAL_SKIMS_OMX not in (preprocess_calls[0].get("inputs") or {})
+
+
 def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):
     """Supply-demand iteration boundary should enqueue/flush manifest artifacts."""
     from pilates.workflows.stages import supply_demand as sd_stage
@@ -885,6 +992,9 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     _write_file(default_plans)
     _write_file(default_households)
     _write_file(default_persons)
+    coupler.set(BEAM_PLANS_IN, str(default_plans))
+    coupler.set(BEAM_HOUSEHOLDS_IN, str(default_households))
+    coupler.set(BEAM_PERSONS_IN, str(default_persons))
 
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
@@ -910,13 +1020,9 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     )
 
     beam_preprocess_calls = [
-        call
-        for call in scenario.calls
-        if BEAM_PLANS_IN in call["inputs"]
-        and BEAM_HOUSEHOLDS_IN in call["inputs"]
-        and BEAM_PERSONS_IN in call["inputs"]
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
-    assert beam_preprocess_calls, "Expected a BEAM preprocess step call with default inputs."
+    assert beam_preprocess_calls, "Expected a BEAM preprocess step call."
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
     assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
     assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
@@ -953,9 +1059,15 @@ def test_supply_demand_stage_beam_only_clamps_outer_iterations(
         / settings.beam.scenario_folder
     )
     scenario_dir.mkdir(parents=True, exist_ok=True)
-    _write_file(scenario_dir / "plans.parquet")
-    _write_file(scenario_dir / "households.parquet")
-    _write_file(scenario_dir / "persons.parquet")
+    plans_path = scenario_dir / "plans.parquet"
+    households_path = scenario_dir / "households.parquet"
+    persons_path = scenario_dir / "persons.parquet"
+    _write_file(plans_path)
+    _write_file(households_path)
+    _write_file(persons_path)
+    coupler.set(BEAM_PLANS_IN, str(plans_path))
+    coupler.set(BEAM_HOUSEHOLDS_IN, str(households_path))
+    coupler.set(BEAM_PERSONS_IN, str(persons_path))
 
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
@@ -982,13 +1094,14 @@ def test_supply_demand_stage_beam_only_clamps_outer_iterations(
     )
 
     beam_preprocess_calls = [
-        call
-        for call in scenario.calls
-        if BEAM_PLANS_IN in call["inputs"]
-        and BEAM_HOUSEHOLDS_IN in call["inputs"]
-        and BEAM_PERSONS_IN in call["inputs"]
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
     assert len(beam_preprocess_calls) == 1
+    assert beam_preprocess_calls[0]["inputs"][BEAM_PLANS_IN] == str(plans_path)
+    assert beam_preprocess_calls[0]["inputs"][BEAM_HOUSEHOLDS_IN] == str(
+        households_path
+    )
+    assert beam_preprocess_calls[0]["inputs"][BEAM_PERSONS_IN] == str(persons_path)
     assert "Clamping outer supply-demand iterations to 1" in caplog.text
 
 
@@ -1318,6 +1431,73 @@ def test_traffic_assignment_publishes_present_linkstats_warmstart(
     ]
     assert beam_run_calls, "Expected BEAM run step to execute."
     assert LINKSTATS_WARMSTART in beam_run_calls[0].get("input_keys", [])
+
+
+def test_traffic_assignment_prefers_coupler_warmstart_artifact(
+    stage_env, tmp_path
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    state._settings["activity_demand_enabled"] = False
+    state.enabled_stages.discard(state.Stage.activity_demand)
+    state.loop_substages = [state.Stage.traffic_assignment]
+
+    scenario_dir = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.scenario_folder
+    )
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    plans_path = scenario_dir / "plans.parquet"
+    households_path = scenario_dir / "households.parquet"
+    persons_path = scenario_dir / "persons.parquet"
+    _write_file(plans_path)
+    _write_file(households_path)
+    _write_file(persons_path)
+    coupler.set(BEAM_PLANS_IN, str(plans_path))
+    coupler.set(BEAM_HOUSEHOLDS_IN, str(households_path))
+    coupler.set(BEAM_PERSONS_IN, str(persons_path))
+
+    warmstart_path = tmp_path / "init.linkstats.csv.gz"
+    _write_file(warmstart_path)
+    coupler.set(LINKSTATS_WARMSTART, str(warmstart_path))
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_coupler_warmstart_{year}_{iteration}.json"
+        ),
+    )
+
+    beam_preprocess_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
+    assert beam_preprocess_calls, "Expected a BEAM preprocess step call."
+    assert (
+        beam_preprocess_calls[0]["inputs"][LINKSTATS_WARMSTART]
+        == str(warmstart_path)
+    )
 
 
 def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(

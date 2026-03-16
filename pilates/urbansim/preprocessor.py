@@ -505,15 +505,21 @@ class UrbansimPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        final_skims_omx: Optional[Any] = None,
     ) -> UrbanSimPreprocessOutputs:
         """Prepare UrbanSim inputs and return typed outputs."""
         self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(workspace, previous_records)
+        return self._preprocess(
+            workspace,
+            previous_records,
+            final_skims_omx=final_skims_omx,
+        )
 
     def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        final_skims_omx: Optional[Any] = None,
     ) -> UrbanSimPreprocessOutputs:
         """
         Preprocess UrbanSim data, including copying necessary skims.
@@ -561,24 +567,38 @@ class UrbansimPreprocessor(GenericPreprocessor):
                     logger.info(
                         "Updating skims from BEAM mutable output for subsequent iteration."
                     )
-                    if self.state.run_info_path and os.path.exists(
-                        self.state.run_info_path
-                    ):
+                    if final_skims_omx is not None and Path(final_skims_omx).exists():
+                        source_skims_path = str(Path(final_skims_omx))
                         logger.info(
-                            f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
-                        )
-                        previous_run_dir = os.path.dirname(self.state.run_info_path)
-                        beam_mutable_data_dir = os.path.join(
-                            previous_run_dir, "beam", "input"
+                            "[UrbansimPreprocessor] Using explicit final_skims_omx artifact: %s",
+                            source_skims_path,
                         )
                     else:
-                        beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
+                        if final_skims_omx is not None:
+                            logger.warning(
+                                "[UrbansimPreprocessor] Explicit final_skims_omx artifact "
+                                "did not resolve to an existing path: %s. Falling back to "
+                                "legacy BEAM skims discovery.",
+                                final_skims_omx,
+                            )
+                        if self.state.run_info_path and os.path.exists(
+                            self.state.run_info_path
+                        ):
+                            logger.info(
+                                f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
+                            )
+                            previous_run_dir = os.path.dirname(self.state.run_info_path)
+                            beam_mutable_data_dir = os.path.join(
+                                previous_run_dir, "beam", "input"
+                            )
+                        else:
+                            beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
 
-                    source_skims_path = os.path.join(
-                        beam_mutable_data_dir,
-                        settings.run.region,
-                        settings.shared.skims.fname,
-                    )
+                        source_skims_path = os.path.join(
+                            beam_mutable_data_dir,
+                            settings.run.region,
+                            settings.shared.skims.fname,
+                        )
 
                     region_id = settings.urbansim.region_mappings[
                         "region_to_region_id"

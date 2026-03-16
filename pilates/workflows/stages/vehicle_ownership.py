@@ -28,6 +28,7 @@ from pilates.workflows.steps import (
     make_atlas_run_step,
 )
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
@@ -276,8 +277,12 @@ def run_vehicle_ownership_stage(
             workspace,
         )
         atlas_preprocess_inputs = dict(step_inputs)
+        atlas_preprocess_keys = list(atlas_preprocess_inputs.keys())
+        if FINAL_SKIMS_OMX not in atlas_preprocess_keys:
+            atlas_preprocess_keys.append(FINAL_SKIMS_OMX)
         atlas_preprocess_resolution = resolve_step_inputs(
-            keys=atlas_preprocess_inputs.keys(),
+            keys=atlas_preprocess_keys,
+            coupler=coupler,
             explicit_inputs=atlas_preprocess_inputs,
         )
         atlas_run_inputs: Dict[str, Any] = dict(

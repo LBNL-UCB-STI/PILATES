@@ -22,6 +22,7 @@ from pilates.workflows.steps import (
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
@@ -83,8 +84,12 @@ def run_land_use_stage(
         USIM_DATASTORE_CURRENT_H5
     ):
         preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
+    preprocess_keys = list(preprocess_inputs.keys())
+    if FINAL_SKIMS_OMX not in preprocess_keys:
+        preprocess_keys.append(FINAL_SKIMS_OMX)
     preprocess_resolution = resolve_step_inputs(
-        keys=preprocess_inputs.keys(),
+        keys=preprocess_keys,
+        coupler=coupler,
         explicit_inputs=preprocess_inputs,
     )
 

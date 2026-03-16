@@ -68,7 +68,7 @@ def _root_h5_table_keys(
     try:
         with pd.HDFStore(path, mode="r") as store:
             keys = sorted(store.keys())
-    except (OSError, FileNotFoundError, ValueError):
+    except Exception:
         logger.debug("Skipping HDF5 table enumeration for unreadable file %s", path)
         return {}
 
@@ -357,7 +357,7 @@ def _execute_urbansim_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> UrbanSimPreprocessOutputs:
-    return preprocessor.preprocess(workspace)
+    return preprocessor.preprocess(workspace, **kwargs)
 
 
 def _execute_urbansim_run_typed(
@@ -398,7 +398,7 @@ def _execute_atlas_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> AtlasPreprocessOutputs:
-    return preprocessor.preprocess(workspace)
+    return preprocessor.preprocess(workspace, **kwargs)
 
 
 def _execute_atlas_run_typed(

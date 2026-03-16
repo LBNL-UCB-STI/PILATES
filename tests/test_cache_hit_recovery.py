@@ -299,6 +299,39 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     holder.beam_preprocess.validate()
 
 
+def test_recover_beam_preprocess_outputs_does_not_infer_warmstart_alias(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    beam_dir = Path(workspace.get_beam_mutable_data_dir())
+    plans_path = beam_dir / "seattle" / "urbansim" / "plans.parquet"
+    households_path = beam_dir / "seattle" / "urbansim" / "households.parquet"
+    persons_path = beam_dir / "seattle" / "urbansim" / "persons.parquet"
+    linkstats_path = beam_dir / "seattle" / "r5" / "init.linkstats.csv.gz"
+    for path in (plans_path, households_path, persons_path, linkstats_path):
+        _write_file(path)
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    outputs = _recover_cached_outputs(
+        step_name="beam_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs={
+            BEAM_PLANS_IN: str(plans_path),
+            BEAM_HOUSEHOLDS_IN: str(households_path),
+            BEAM_PERSONS_IN: str(persons_path),
+            "linkstats": str(linkstats_path),
+        },
+    )
+
+    assert outputs is not None
+    assert holder.beam_preprocess is not None
+    assert LINKSTATS_WARMSTART not in holder.beam_preprocess.prepared_inputs
+    assert coupler.get(LINKSTATS_WARMSTART) is None
+
+
 def test_recover_activitysim_run_outputs_carries_source_input_hashes(
     tmp_path, monkeypatch
 ):

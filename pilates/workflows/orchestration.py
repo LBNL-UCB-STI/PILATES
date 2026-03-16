@@ -281,9 +281,6 @@ def _publish_recovered_outputs(
     replayer = getattr(step_func, "__pilates_output_replayer__", None)
     if callable(replayer):
         replayer(outputs, settings, state, workspace, outputs_holder)
-        # Ensure recovered outputs are available on the coupler even if the
-        # replayer only logs outputs (and does not set coupler values).
-        _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
         return
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
 
@@ -872,7 +869,6 @@ def _recover_cached_outputs(
 
     if step_name == "beam_preprocess":
         prepared_inputs: Dict[str, Path] = {}
-        has_warmstart = False
         if step_inputs:
             allowed_keys = {
                 BEAM_PLANS_IN,
@@ -885,33 +881,7 @@ def _recover_cached_outputs(
                     continue
                 path = _existing_path(value)
                 if path:
-                    if key == LINKSTATS_WARMSTART:
-                        has_warmstart = True
                     prepared_inputs[key] = Path(path)
-        if step_inputs and not has_warmstart:
-            # If we have any linkstats-like input, recover a warmstart alias.
-            candidate_keys = []
-            if "linkstats" in step_inputs:
-                candidate_keys.append("linkstats")
-            candidate_keys.extend(
-                key
-                for key in sorted(step_inputs)
-                if key.startswith("linkstats_parquet") and "_sub" not in key
-            )
-            candidate_keys.extend(
-                key
-                for key in sorted(step_inputs)
-                if key.startswith("linkstats") and "_sub" not in key
-            )
-            candidate_keys.extend(
-                key for key in sorted(step_inputs) if key.startswith("linkstats")
-            )
-            for key in candidate_keys:
-                path = _existing_path(step_inputs.get(key))
-                if path:
-                    prepared_inputs[LINKSTATS_WARMSTART] = Path(path)
-                    has_warmstart = True
-                    break
         if not prepared_inputs:
             return None
         return _finalize_recovered_outputs(

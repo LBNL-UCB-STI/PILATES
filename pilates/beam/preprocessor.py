@@ -524,6 +524,8 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
         records: List[FileRecord] = []
         unresolved: List[str] = []
+        current_year = getattr(self.state, "current_year", None)
+        current_inner_iter = getattr(self.state, "current_inner_iter", None)
 
         for short_name, stem in required_keys.items():
             path = locate_beam_file(beam_scenario_folder, stem, file_format)
@@ -533,8 +535,8 @@ class BeamPreprocessor(GenericPreprocessor):
                         file_path=path,
                         short_name=short_name,
                         description=f"Existing BEAM scenario input: {stem}",
-                        year=self.state.current_year,
-                        iteration=self.state.current_inner_iter,
+                        year=current_year,
+                        iteration=current_inner_iter,
                     )
                 )
                 continue
@@ -547,6 +549,12 @@ class BeamPreprocessor(GenericPreprocessor):
             )
 
         return RecordStore(recordList=records)
+
+    def existing_beam_exchange_inputs(self, workspace: "Workspace") -> RecordStore:
+        """
+        Return the canonical BEAM exchange inputs already staged in the mutable repo.
+        """
+        return self._register_existing_beam_exchange_inputs(workspace)
 
     def preprocess(
         self,

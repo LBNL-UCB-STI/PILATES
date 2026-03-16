@@ -5,7 +5,7 @@ import shutil
 import time
 from multiprocessing import Pool, cpu_count
 from pathlib import Path
-from typing import Optional, List, Tuple, Union, Dict, TYPE_CHECKING
+from typing import Any, Optional, List, Tuple, Union, Dict, TYPE_CHECKING
 
 import numpy as np
 import openmatrix as omx
@@ -2021,11 +2021,13 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        final_skims_omx: Optional[Any] = None,
     ) -> ActivitySimPreprocessOutputs:
         self.state.set_sub_stage_progress("preprocessor")
         record_store = self._preprocess(
             workspace,
             previous_records if previous_records is not None else RecordStore(),
+            final_skims_omx=final_skims_omx,
         )
         records_by_key = {
             getattr(record, "short_name", None): record
@@ -2052,6 +2054,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
+        final_skims_omx: Optional[Any] = None,
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -2068,14 +2071,37 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Record inputs to preprocessor
         # Raw BEAM skims are an input.
         skims_fname = settings.shared.skims.fname
-        path_to_beam_skims_in_current_run_workspace = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            settings.run.region,
-            skims_fname,
+        explicit_skims_path = (
+            str(Path(final_skims_omx))
+            if final_skims_omx is not None and Path(final_skims_omx).exists()
+            else None
+        )
+        path_to_beam_skims_in_current_run_workspace = (
+            explicit_skims_path
+            if explicit_skims_path is not None
+            else os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                settings.run.region,
+                skims_fname,
+            )
         )
 
+        if explicit_skims_path is not None:
+            logger.info(
+                "[ActivitysimPreprocessor] Using explicit final_skims_omx artifact: %s",
+                explicit_skims_path,
+            )
+        elif final_skims_omx is not None:
+            logger.warning(
+                "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
+                "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
+                final_skims_omx,
+            )
+
         # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
-        if not os.path.exists(path_to_beam_skims_in_current_run_workspace):
+        if explicit_skims_path is None and not os.path.exists(
+            path_to_beam_skims_in_current_run_workspace
+        ):
             logger.info(
                 "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
             )

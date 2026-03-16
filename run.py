@@ -1069,6 +1069,12 @@ def main():
                 warn_undefined=True,
                 description=coupler_schema,
             )
+            bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                coupler=coupler,
+            )
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

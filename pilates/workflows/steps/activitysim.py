@@ -91,7 +91,7 @@ def _execute_activitysim_preprocess(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> ActivitySimPreprocessOutputs:
-    return preprocessor.preprocess(workspace)
+    return preprocessor.preprocess(workspace, **kwargs)
 
 
 def _execute_activitysim_run(

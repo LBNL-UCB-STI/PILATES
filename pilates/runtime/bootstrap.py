@@ -6,6 +6,10 @@ from typing import Any, Callable, Dict, Optional
 
 from consist.types import CacheOptions
 
+from pilates.generic.model_factory import ModelFactory
+from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -13,6 +17,14 @@ from pilates.generic.initialization import (
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
 from pilates.utils.io import get_traffic_assignment_model
+from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
+)
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
@@ -95,6 +107,142 @@ def archive_bootstrap_restart_artifacts(
             )
 
     flush_archive_queue_fn(timeout=300, fail_on_timeout=True)
+
+
+def seed_bootstrap_artifacts_to_coupler(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    model_factory_cls: type[ModelFactory] = ModelFactory,
+) -> None:
+    """
+    Seed coupler keys for bootstrap-staged artifacts needed by later steps.
+
+    In BEAM-only runs, the mutable BEAM repo already contains the canonical
+    plans/households/persons inputs after bootstrap. Publish those staged files
+    into the scenario coupler so downstream steps can depend on explicit
+    coupler-backed artifacts instead of speculative filesystem paths.
+    """
+    get_value = getattr(coupler, "get", None)
+
+    activity_demand_model = getattr(getattr(settings.run, "models", None), "activity_demand", None)
+    if activity_demand_model == "activitysim":
+        zarr_candidate = os.path.join(
+            workspace.get_asim_output_dir(),
+            "cache",
+            "skims.zarr",
+        )
+        if os.path.exists(zarr_candidate) and (
+            not callable(get_value) or get_value(ZARR_SKIMS) is None
+        ):
+            artifact = cr.log_output(
+                zarr_candidate,
+                key=ZARR_SKIMS,
+                description="Bootstrap-discovered ActivitySim compiled zarr skims",
+            )
+            set_coupler_from_artifact(
+                coupler,
+                ZARR_SKIMS,
+                artifact,
+                fallback=zarr_candidate,
+            )
+
+        sharrow_cache_dir = os.path.join(workspace.full_path, "shared_cache", "numba")
+        has_cache_files = False
+        if os.path.isdir(sharrow_cache_dir):
+            for _root, _dirs, files in os.walk(sharrow_cache_dir):
+                if files:
+                    has_cache_files = True
+                    break
+        if has_cache_files and (
+            not callable(get_value) or get_value(ASIM_SHARROW_CACHE_DIR) is None
+        ):
+            artifact = cr.log_output(
+                sharrow_cache_dir,
+                key=ASIM_SHARROW_CACHE_DIR,
+                description="Bootstrap-discovered ActivitySim sharrow cache",
+            )
+            set_coupler_from_artifact(
+                coupler,
+                ASIM_SHARROW_CACHE_DIR,
+                artifact,
+                fallback=sharrow_cache_dir,
+            )
+
+    if get_traffic_assignment_model(settings) != "beam":
+        return
+    if activity_demand_model is not None:
+        return
+
+    model_factory = model_factory_cls()
+    beam_preprocessor = model_factory.get_preprocessor("beam", state)
+    existing_inputs = getattr(beam_preprocessor, "existing_beam_exchange_inputs", None)
+    if not callable(existing_inputs):
+        logger.debug(
+            "BEAM preprocessor does not expose existing_beam_exchange_inputs(); "
+            "skipping bootstrap coupler seeding."
+        )
+        return
+
+    try:
+        record_store = existing_inputs(workspace)
+    except FileNotFoundError as exc:
+        logger.warning(
+            "Bootstrap could not seed default BEAM inputs into coupler: %s",
+            exc,
+        )
+        record_store = None
+
+    allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
+    if record_store is not None:
+        for record in record_store.all_records():
+            key = getattr(record, "short_name", None)
+            if key not in allowed_keys:
+                continue
+            if callable(get_value) and get_value(key) is not None:
+                continue
+            path = record.get_absolute_path(base_path=workspace.full_path)
+            if not path or not os.path.exists(path):
+                continue
+            artifact = cr.log_output(
+                path,
+                key=key,
+                description="Bootstrap-staged default BEAM scenario input",
+            )
+            set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+    beam_cfg = getattr(settings, "beam", None)
+    router_directory = getattr(beam_cfg, "router_directory", None)
+    region = getattr(getattr(settings, "run", None), "region", None)
+    if router_directory and region and (
+        not callable(get_value) or get_value(LINKSTATS_WARMSTART) is None
+    ):
+        router_root = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            region,
+            router_directory,
+        )
+        warmstart_candidates = (
+            os.path.join(router_root, "init.linkstats.parquet"),
+            os.path.join(router_root, "init.linkstats.csv.gz"),
+        )
+        for candidate in warmstart_candidates:
+            if not os.path.exists(candidate):
+                continue
+            artifact = cr.log_output(
+                candidate,
+                key=LINKSTATS_WARMSTART,
+                description="Bootstrap-staged BEAM warm-start linkstats",
+            )
+            set_coupler_from_artifact(
+                coupler,
+                LINKSTATS_WARMSTART,
+                artifact,
+                fallback=candidate,
+            )
+            break
 
 
 def run_bootstrap_phase(

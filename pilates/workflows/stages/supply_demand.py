@@ -52,6 +52,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
@@ -356,11 +357,12 @@ def _run_activity_demand_phase(
     # 2) Compile (per-year) outside manifest checkpointing.
     # 3) Run/Postprocess (per-iteration) for demand outputs.
     preprocess_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_CURRENT_H5],
+        keys=[USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX],
+        coupler=coupler,
         explicit_inputs=inputs.usim_inputs,
     )
     if preprocess_resolution.source_by_key.get(USIM_DATASTORE_CURRENT_H5) == "missing":
-        preprocess_resolution = resolve_preferred_step_input(
+        usim_resolution = resolve_preferred_step_input(
             preferred_keys=[
                 USIM_H5_UPDATED,
                 USIM_DATASTORE_CURRENT_H5,
@@ -369,6 +371,26 @@ def _run_activity_demand_phase(
             coupler=coupler,
             explicit_inputs=inputs.usim_inputs,
             required=False,
+        )
+        final_skims_resolution = resolve_step_inputs(
+            keys=[FINAL_SKIMS_OMX],
+            coupler=coupler,
+        )
+        preprocess_resolution = ResolvedStepInputs(
+            inputs={
+                **usim_resolution.inputs,
+                **final_skims_resolution.inputs,
+            },
+            input_keys=usim_resolution.input_keys + final_skims_resolution.input_keys,
+            source_by_key={
+                **usim_resolution.source_by_key,
+                **final_skims_resolution.source_by_key,
+            },
+            coupler_key_by_key={
+                **usim_resolution.coupler_key_by_key,
+                **final_skims_resolution.coupler_key_by_key,
+            },
+            missing_required=usim_resolution.missing_required,
         )
 
     preferred_sources = {"explicit", "coupler", "fallback"}
@@ -379,7 +401,7 @@ def _run_activity_demand_phase(
         fallback_inputs, _ = build_urbansim_inputs(
             settings, state, workspace, inputs.year
         )
-        preprocess_resolution = resolve_preferred_step_input(
+        usim_resolution = resolve_preferred_step_input(
             preferred_keys=[
                 USIM_H5_UPDATED,
                 USIM_DATASTORE_CURRENT_H5,
@@ -389,6 +411,26 @@ def _run_activity_demand_phase(
             explicit_inputs=inputs.usim_inputs,
             fallback_inputs=fallback_inputs,
             required=True,
+        )
+        final_skims_resolution = resolve_step_inputs(
+            keys=[FINAL_SKIMS_OMX],
+            coupler=coupler,
+        )
+        preprocess_resolution = ResolvedStepInputs(
+            inputs={
+                **usim_resolution.inputs,
+                **final_skims_resolution.inputs,
+            },
+            input_keys=usim_resolution.input_keys + final_skims_resolution.input_keys,
+            source_by_key={
+                **usim_resolution.source_by_key,
+                **final_skims_resolution.source_by_key,
+            },
+            coupler_key_by_key={
+                **usim_resolution.coupler_key_by_key,
+                **final_skims_resolution.coupler_key_by_key,
+            },
+            missing_required=usim_resolution.missing_required,
         )
 
     if preprocess_resolution.missing_required:
@@ -754,7 +796,7 @@ def _collect_previous_beam_outputs(
         return None
 
     promoted_outputs: Dict[str, str] = {}
-    for key in (LINKSTATS, BEAM_PLANS_OUT):
+    for key in (LINKSTATS_WARMSTART, LINKSTATS, BEAM_PLANS_OUT):
         value = get_value(key)
         if value is None:
             continue
@@ -768,6 +810,7 @@ def _collect_beam_preprocess_inputs(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
+    coupler: CouplerProtocol,
     state: WorkflowState,
     iteration: int,
     activity_demand_outputs: Optional[Dict[str, str]],
@@ -802,17 +845,16 @@ def _collect_beam_preprocess_inputs(
                 beam_preprocess_inputs[key] = value
     elif settings.run.models.activity_demand is None:
         logger.info("Falling back on default inputs to BEAM")
-        default_inputs = {
-            BEAM_PLANS_IN: "plans",
-            BEAM_HOUSEHOLDS_IN: "households",
-            BEAM_PERSONS_IN: "persons",
-        }
-        for key, filename in default_inputs.items():
-            beam_preprocess_inputs[key] = _find_input_scenario_dir(
-                settings,
-                workspace,
-                filename,
-            )
+        # In BEAM-only mode the copied mutable scenario already contains the
+        # canonical plans/households/persons files. Let beam_preprocess resolve
+        # and publish those inputs from the staged scenario directory instead of
+        # passing filesystem paths through Consist ahead of time.
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                value = get_value(key)
+                if value is not None:
+                    beam_preprocess_inputs[key] = value
     elif previous_beam_outputs is None:
         raise RuntimeError(
             "TrafficAssignment iteration 0 requires activity_demand_outputs "
@@ -828,9 +870,19 @@ def _collect_beam_preprocess_inputs(
     if previous_beam_outputs is None or not any(
         key.startswith("linkstats") for key in previous_beam_outputs.keys()
     ):
-        warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
-        if warmstart_path:
-            beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
+        get_value = getattr(coupler, "get", None)
+        coupler_warmstart = None
+        if callable(get_value):
+            value = get_value(LINKSTATS_WARMSTART)
+            coupler_warmstart = artifact_to_path(value, workspace) if value is not None else None
+        if coupler_warmstart and os.path.exists(coupler_warmstart):
+            beam_preprocess_inputs.setdefault(
+                LINKSTATS_WARMSTART, coupler_warmstart
+            )
+        else:
+            warmstart_path = _find_initial_linkstats_warmstart(settings, workspace)
+            if warmstart_path:
+                beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
 
     if getattr(settings, "vehicle_ownership_model_enabled", False) and iteration == 0:
         if state.run_info_path and os.path.exists(state.run_info_path):
@@ -1283,6 +1335,7 @@ def _run_traffic_assignment_phase(
     beam_preprocess_inputs = _collect_beam_preprocess_inputs(
         settings=settings,
         workspace=workspace,
+        coupler=coupler,
         state=state,
         iteration=inputs.iteration,
         activity_demand_outputs=inputs.activity_demand_outputs,
