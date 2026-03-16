@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Callable, Dict, Mapping, Union, Any, Optional, cast
 
 from pilates.config.models import PilatesConfig
@@ -19,7 +20,7 @@ from pilates.atlas.inputs import (
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -37,6 +38,26 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _atlas_subyear_manifest_path(
+    *,
+    workspace: Workspace,
+    forecast_year: int,
+    atlas_year: int,
+) -> Path:
+    """
+    Build an ATLAS manifest path scoped to one forecast-year/sub-year pair.
+
+    Sub-year granularity is required so restart/bootstrap recovery can resume
+    ATLAS work at the same biannual precision as execution.
+    """
+    return (
+        Path(workspace.full_path)
+        / ".workflow"
+        / "vehicle_ownership"
+        / f"forecast_year_{forecast_year}_subyear_{atlas_year}.yaml"
+    )
 
 
 def _atlas_sub_years(state: WorkflowState) -> list[int]:
@@ -352,6 +373,13 @@ def run_vehicle_ownership_stage(
                 inputs=atlas_run_resolution.stepref_inputs(),
             ),
         ]
+        atlas_manifest_config = ManifestConfig(
+            path=_atlas_subyear_manifest_path(
+                workspace=workspace,
+                forecast_year=forecast_year,
+                atlas_year=atlas_year,
+            )
+        )
 
         try:
             run_workflow(
@@ -364,6 +392,7 @@ def run_vehicle_ownership_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_atlas,
                 name_suffix=str(atlas_year),
+                manifest_config=atlas_manifest_config,
             )
 
             upstream_run = outputs_holder_atlas.atlas_run
@@ -389,6 +418,7 @@ def run_vehicle_ownership_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_atlas,
                 name_suffix=str(atlas_year),
+                manifest_config=atlas_manifest_config,
             )
 
             atlas_input_root = workspace.get_atlas_mutable_input_dir()

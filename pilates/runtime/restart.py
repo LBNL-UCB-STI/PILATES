@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -16,6 +17,19 @@ _ACTIVITYSIM_MANIFEST_STEPS = (
     "activitysim_preprocess",
     "activitysim_run",
     "activitysim_postprocess",
+)
+_LAND_USE_MANIFEST_STEPS = (
+    "urbansim_preprocess",
+    "urbansim_run",
+    "urbansim_postprocess",
+)
+_ATLAS_MANIFEST_STEPS = (
+    "atlas_preprocess",
+    "atlas_run",
+    "atlas_postprocess",
+)
+_ATLAS_SUBYEAR_MANIFEST_RE = re.compile(
+    r"^forecast_year_(?P<forecast_year>-?\d+)_subyear_(?P<sub_year>-?\d+)\.yaml$"
 )
 
 
@@ -296,12 +310,10 @@ def format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
 
 def resolve_restart_rehydrate_mode(settings: Any) -> str:
     run_cfg = getattr(settings, "run", None)
-    raw = getattr(run_cfg, "restart_rehydrate_mode", "bundle")
-    mode = str(raw).strip().lower() if raw is not None else "bundle"
+    raw = getattr(run_cfg, "restart_rehydrate_mode", "native")
+    mode = str(raw).strip().lower() if raw is not None else "native"
     if mode in {"native", "off"}:
         return mode
-    if mode in {"bundle", "full"}:
-        return "native"
     logger.warning(
         "Unknown run.restart_rehydrate_mode=%r; defaulting to 'native'.",
         raw,
@@ -422,31 +434,192 @@ def _supply_demand_manifest_path(
     return Path(os.path.realpath(run_dir)) / ".workflow" / f"year_{year}_iteration_{iteration}.yaml"
 
 
+def _land_use_manifest_path(
+    *,
+    run_dir: str,
+    year: int,
+) -> Path:
+    return Path(os.path.realpath(run_dir)) / ".workflow" / f"land_use_year_{year}.yaml"
+
+
+def _atlas_subyear_manifest_path(
+    *,
+    run_dir: str,
+    forecast_year: int,
+    sub_year: int,
+) -> Path:
+    return (
+        Path(os.path.realpath(run_dir))
+        / ".workflow"
+        / "vehicle_ownership"
+        / f"forecast_year_{forecast_year}_subyear_{sub_year}.yaml"
+    )
+
+
+def _is_stage_explicitly_enabled(
+    *,
+    state: Any,
+    stage: Any,
+) -> Optional[bool]:
+    enabled_stages = getattr(state, "enabled_stages", None)
+    if isinstance(enabled_stages, (set, list, tuple)):
+        return stage in enabled_stages
+    return None
+
+
+def _atlas_sub_years(
+    *,
+    current_year: int,
+    forecast_year: Optional[int],
+) -> List[int]:
+    sub_years = [current_year]
+    if forecast_year is None or forecast_year <= current_year:
+        return sub_years
+    sub_years.extend(range(current_year + 2, forecast_year + 1, 2))
+    return sub_years
+
+
+def _atlas_manifest_targets(
+    *,
+    archive_run_dir: str,
+    year: int,
+    forecast_year: Optional[int],
+    require_all_subyears: bool,
+    require_complete_steps: bool,
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
+    sub_years = _atlas_sub_years(current_year=year, forecast_year=forecast_year)
+    manifest_scope_year = forecast_year if forecast_year is not None else year
+
+    atlas_dir = Path(os.path.realpath(archive_run_dir)) / ".workflow" / "vehicle_ownership"
+    matched_by_sub_year: Dict[int, List[Path]] = {sub_year: [] for sub_year in sub_years}
+    if atlas_dir.exists():
+        for manifest_path in sorted(atlas_dir.glob("forecast_year_*_subyear_*.yaml")):
+            match = _ATLAS_SUBYEAR_MANIFEST_RE.match(manifest_path.name)
+            if match is None:
+                continue
+            manifest_forecast_year = _coerce_int(match.group("forecast_year"))
+            manifest_sub_year = _coerce_int(match.group("sub_year"))
+            if manifest_forecast_year is None or manifest_sub_year is None:
+                continue
+            if manifest_sub_year not in matched_by_sub_year:
+                continue
+            if manifest_forecast_year != manifest_scope_year:
+                continue
+            matched_by_sub_year[manifest_sub_year].append(manifest_path)
+
+    targets: List[Dict[str, Any]] = []
+    issues: List[Tuple[str, str]] = []
+    step_filter = (
+        set(_ATLAS_MANIFEST_STEPS) if require_complete_steps else None
+    )
+    gap_detected = False
+    for sub_year in sub_years:
+        matching_paths = matched_by_sub_year.get(sub_year, [])
+        manifest_path = sorted(matching_paths)[0] if matching_paths else None
+        if manifest_path is not None and not gap_detected:
+            targets.append(
+                {
+                    "path": manifest_path,
+                    "steps": step_filter,
+                }
+            )
+            continue
+        gap_detected = True
+        if not require_all_subyears:
+            continue
+        missing_path = _atlas_subyear_manifest_path(
+            run_dir=archive_run_dir,
+            forecast_year=manifest_scope_year,
+            sub_year=sub_year,
+        )
+        issues.append((str(missing_path), "workflow manifest is missing"))
+
+    return targets, issues
+
+
 def _restart_manifest_targets(
     *,
     state: Any,
+    archive_run_dir: str,
+    year: int,
     total_iters: int,
     workflow_stage: Any,
-) -> List[Dict[str, Any]]:
+) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
     targets: List[Dict[str, Any]] = []
+    issues: List[Tuple[str, str]] = []
     current_stage = getattr(state, "current_major_stage", None)
     current_sub_stage = getattr(state, "current_sub_stage", None)
     resume_iter = max(_coerce_int(getattr(state, "current_inner_iter", 0)) or 0, 0)
+    forecast_year = _coerce_int(getattr(state, "forecast_year", None))
+
+    land_use_enabled = _is_stage_explicitly_enabled(
+        state=state,
+        stage=workflow_stage.land_use,
+    )
+    if current_stage in {
+        workflow_stage.vehicle_ownership_model,
+        workflow_stage.supply_demand_loop,
+    }:
+        land_use_manifest_path = _land_use_manifest_path(
+            run_dir=archive_run_dir,
+            year=year,
+        )
+        if land_use_enabled is not False and (
+            land_use_enabled is True or land_use_manifest_path.exists()
+        ):
+            targets.append(
+                {
+                    "path": land_use_manifest_path,
+                    "steps": set(_LAND_USE_MANIFEST_STEPS),
+                }
+            )
+
+    vehicle_enabled = _is_stage_explicitly_enabled(
+        state=state,
+        stage=workflow_stage.vehicle_ownership_model,
+    )
+    if (
+        current_stage in {workflow_stage.vehicle_ownership_model, workflow_stage.supply_demand_loop}
+        and vehicle_enabled is not False
+    ):
+        atlas_targets, atlas_issues = _atlas_manifest_targets(
+            archive_run_dir=archive_run_dir,
+            year=year,
+            forecast_year=forecast_year,
+            require_all_subyears=(
+                current_stage == workflow_stage.supply_demand_loop
+                and vehicle_enabled is True
+            ),
+            require_complete_steps=current_stage == workflow_stage.supply_demand_loop,
+        )
+        targets.extend(atlas_targets)
+        issues.extend(atlas_issues)
 
     if current_stage == workflow_stage.supply_demand_loop:
         for iteration in range(0, resume_iter):
-            targets.append({"iteration": iteration, "steps": None})
+            targets.append(
+                {
+                    "path": _supply_demand_manifest_path(
+                        run_dir=archive_run_dir,
+                        year=year,
+                        iteration=iteration,
+                    ),
+                    "steps": None,
+                }
+            )
         if current_sub_stage == workflow_stage.traffic_assignment:
             targets.append(
                 {
-                    "iteration": resume_iter,
+                    "path": _supply_demand_manifest_path(
+                        run_dir=archive_run_dir,
+                        year=year,
+                        iteration=resume_iter,
+                    ),
                     "steps": set(_ACTIVITYSIM_MANIFEST_STEPS),
                 }
             )
-    elif current_stage == workflow_stage.postprocessing:
-        for iteration in range(0, max(total_iters, 0)):
-            targets.append({"iteration": iteration, "steps": None})
-    return targets
+
+    return targets, issues
 
 
 def _load_manifest_run_ids(
@@ -520,25 +693,27 @@ def collect_restart_completed_run_ids(
     if total_iters is None or total_iters < 0:
         total_iters = 1
 
-    targets = _restart_manifest_targets(
+    targets, target_issues = _restart_manifest_targets(
         state=state,
+        archive_run_dir=archive_run_dir,
+        year=year,
         total_iters=total_iters,
         workflow_stage=workflow_stage,
     )
 
     all_run_ids: List[str] = []
     seen: Set[str] = set()
-    issues: List[Tuple[str, str]] = []
+    issues: List[Tuple[str, str]] = list(target_issues)
     manifest_paths: List[str] = []
+    seen_manifest_paths: Set[str] = set()
     for target in targets:
-        iteration = target["iteration"]
+        manifest_path = target["path"]
         step_filter = target["steps"]
-        manifest_path = _supply_demand_manifest_path(
-            run_dir=archive_run_dir,
-            year=year,
-            iteration=iteration,
-        )
-        manifest_paths.append(str(manifest_path))
+        manifest_path_str = str(manifest_path)
+        if manifest_path_str in seen_manifest_paths:
+            continue
+        seen_manifest_paths.add(manifest_path_str)
+        manifest_paths.append(manifest_path_str)
         run_ids, manifest_issues = _load_manifest_run_ids(
             manifest_path=manifest_path,
             step_filter=step_filter,

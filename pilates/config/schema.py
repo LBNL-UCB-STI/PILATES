@@ -81,7 +81,7 @@ FIELD_ANNOTATIONS = {
     },
     "run.restart_rehydrate_mode": {
         "hash_scope": "metadata",
-        "description": "Restart hydration mode (bundle/full/off)",
+        "description": "Restart hydration mode (native/off)",
     },
     "run.restart_strict": {
         "hash_scope": "metadata",

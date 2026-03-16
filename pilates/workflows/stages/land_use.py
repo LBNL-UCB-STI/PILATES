@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Dict, Optional, Union, cast
 
 from pilates.config.models import PilatesConfig
@@ -19,7 +20,7 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
-from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.outputs_base import step_output_mapping
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
@@ -27,6 +28,33 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
+
+
+def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
+    return Path(workspace.full_path) / ".workflow" / f"land_use_year_{year}.yaml"
+
+
+def _with_urbansim_preprocess_manifest_restore_compat(
+    step_func,
+):
+    """
+    Ensure restored preprocess outputs keep ``usim_mutable_data_dir`` path-safe.
+
+    Manifest deserialization can provide this field as a string, while the
+    UrbanSim preprocess output replayer expects a Path-like value.
+    """
+    replayer = getattr(step_func, "__pilates_output_replayer__", None)
+    if not callable(replayer):
+        return step_func
+
+    def _coercing_replayer(outputs, settings, state, workspace, holder):
+        usim_mutable_data_dir = getattr(outputs, "usim_mutable_data_dir", None)
+        if isinstance(usim_mutable_data_dir, str):
+            setattr(outputs, "usim_mutable_data_dir", Path(usim_mutable_data_dir))
+        replayer(outputs, settings, state, workspace, holder)
+
+    setattr(step_func, "__pilates_output_replayer__", _coercing_replayer)
+    return step_func
 
 
 def run_land_use_stage(
@@ -79,6 +107,9 @@ def run_land_use_stage(
     usim_inputs = merge_model_expected_inputs(
         "urbansim", usim_inputs, settings, state, workspace
     )
+    manifest_config = ManifestConfig(
+        path=_build_land_use_manifest_path(workspace=workspace, year=year)
+    )
     preprocess_inputs = dict(usim_inputs)
     if preprocess_inputs.get(USIM_DATASTORE_BASE_H5) == preprocess_inputs.get(
         USIM_DATASTORE_CURRENT_H5
@@ -93,13 +124,16 @@ def run_land_use_stage(
         explicit_inputs=preprocess_inputs,
     )
 
+    preprocess_step = _with_urbansim_preprocess_manifest_restore_compat(
+        make_urbansim_preprocess_step(
+            coupler=coupler,
+            outputs_holder=outputs_holder_year,
+        )
+    )
     preprocess_steps = [
         StepRef(
             name="urbansim_preprocess",
-            step_func=make_urbansim_preprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder_year,
-            ),
+            step_func=preprocess_step,
             inputs=preprocess_resolution.stepref_inputs(),
             input_keys=preprocess_resolution.stepref_input_keys(),
         ),
@@ -115,6 +149,7 @@ def run_land_use_stage(
         coupler=coupler,
         outputs_holder=outputs_holder_year,
         name_suffix=str(year),
+        manifest_config=manifest_config,
     )
 
     upstream_preprocess = outputs_holder_year.urbansim_preprocess
@@ -180,6 +215,7 @@ def run_land_use_stage(
         coupler=coupler,
         outputs_holder=outputs_holder_year,
         name_suffix=str(year),
+        manifest_config=manifest_config,
     )
 
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
@@ -220,6 +256,11 @@ def run_land_use_stage(
         key=f"usim_year_output_h5_{forecast_year}",
         path=usim_forecast_output_path,
     )
+    if manifest_config.path.exists():
+        enqueue_archive_copy(
+            key="workflow_manifest",
+            path=manifest_config.path,
+        )
     flush_archive_queue(timeout=300, fail_on_timeout=True)
 
     return dict(usim_inputs)

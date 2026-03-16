@@ -19,6 +19,7 @@ contract expectations explicit without running heavy model containers.
 import shutil
 import logging
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -721,6 +722,140 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
             and str(call["path"]).endswith("vehicles_output.RData")
             for call in enqueue_calls
         )
+
+
+def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
+    stage_env, monkeypatch
+):
+    """ATLAS should persist/run-id checkpoint per sub-year and skip on replay."""
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    class _RunIdScenario(FakeScenario):
+        def __init__(self, coupler):
+            super().__init__(coupler)
+            self.restored_run_ids = []
+
+        def remember_restored_run_id(
+            self, *, model_name, year, iteration, run_id
+        ) -> None:
+            self.restored_run_ids.append(
+                {
+                    "model_name": model_name,
+                    "year": year,
+                    "iteration": iteration,
+                    "run_id": run_id,
+                }
+            )
+
+        def run(self, **kwargs):
+            super().run(**kwargs)
+            fn = kwargs["fn"]
+            model = kwargs.get("model")
+            if model is None:
+                step_meta = getattr(fn, "__consist_step__", None)
+                model = getattr(step_meta, "model", None)
+            year = kwargs.get("year")
+            iteration = kwargs.get("iteration", 0)
+            phase = kwargs.get("phase")
+            run_id = f"{model}_y{year}_i{iteration}_p{phase}"
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id=run_id),
+            )
+
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = _RunIdScenario(coupler)
+
+    state.forecast_year = state.year + 4  # 2017, 2019, 2021
+    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    monkeypatch.setattr(vo_stage, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+
+    atlas_years = [state.year, state.year + 2, state.year + 4]
+    run_id_expectations = {}
+    for atlas_year in atlas_years:
+        run_id_expectations[atlas_year] = {
+            "atlas_preprocess": f"atlas_preprocess_y{atlas_year}_i0_ppreprocess",
+            "atlas_run": f"atlas_run_y{atlas_year}_i0_prun",
+            "atlas_postprocess": f"atlas_postprocess_y{atlas_year}_i0_ppostprocess",
+        }
+
+    run_vehicle_ownership_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    )
+    first_run_call_count = len(scenario.calls)
+    assert first_run_call_count == len(atlas_years) * 3
+
+    for atlas_year in atlas_years:
+        manifest_path = vo_stage._atlas_subyear_manifest_path(
+            workspace=workspace,
+            forecast_year=state.forecast_year,
+            atlas_year=atlas_year,
+        )
+        assert manifest_path.exists()
+        manifest_data = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+        assert set(manifest_data.keys()) == {
+            "atlas_preprocess",
+            "atlas_run",
+            "atlas_postprocess",
+        }
+        for step_name, expected_run_id in run_id_expectations[atlas_year].items():
+            assert manifest_data[step_name]["run_id"] == expected_run_id
+
+    run_vehicle_ownership_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    )
+    assert len(scenario.calls) == first_run_call_count
+
+    restored = {
+        (
+            item["model_name"],
+            item["year"],
+            item["iteration"],
+            item["run_id"],
+        )
+        for item in scenario.restored_run_ids
+    }
+    for atlas_year in atlas_years:
+        expected = run_id_expectations[atlas_year]
+        assert (
+            "atlas_preprocess",
+            atlas_year,
+            0,
+            expected["atlas_preprocess"],
+        ) in restored
+        assert (
+            "atlas_run",
+            atlas_year,
+            0,
+            expected["atlas_run"],
+        ) in restored
+        assert (
+            "atlas_postprocess",
+            atlas_year,
+            0,
+            expected["atlas_postprocess"],
+        ) in restored
 
 
 def test_supply_demand_stage_contract(stage_env, tmp_path):
