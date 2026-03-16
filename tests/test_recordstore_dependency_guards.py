@@ -14,11 +14,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.workflows.orchestration import _update_coupler_from_outputs
-from pilates.workflows.outputs_base import step_output_mapping
+from pilates.workflows.outputs_base import iter_step_output_items, step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps.activitysim import _execute_activitysim_run
-from pilates.workflows.steps.shared import _build_required_input_store
 
 
 class _TrackingOutputs:
@@ -105,42 +104,33 @@ def test_update_coupler_from_outputs_uses_direct_typed_output_mapping(
     }
 
 
-def test_build_required_input_store_materializes_direct_typed_output_items(
+def test_iter_step_output_items_materializes_direct_typed_output_items(
     tmp_path: Path,
 ) -> None:
-    holder = StepOutputsHolder()
     store = _store_with_record(tmp_path / "activitysim-preprocess.txt", "input_a")
-    upstream = _TrackingOutputs(store)
-    holder.activitysim_preprocess = upstream
+    outputs = _TrackingOutputs(store)
 
-    input_store = _build_required_input_store(
-        outputs_holder=holder,
-        upstream_attr="activitysim_preprocess",
-        missing_message="ActivitySim preprocess must complete first",
-        context="activitysim_run",
-        warn_missing_coupler_inputs=False,
+    items = iter_step_output_items(outputs)
+
+    assert outputs.iter_record_item_calls == 1
+    assert items == (
+        (
+            "input_a",
+            tmp_path / "activitysim-preprocess.txt",
+            "record for input_a",
+        ),
     )
 
-    assert upstream.iter_record_item_calls == 1
-    assert input_store.to_mapping() == store.to_mapping()
 
-
-def test_build_required_input_store_rejects_outputs_without_iter_record_items(
+def test_iter_step_output_items_rejects_outputs_without_iter_record_items(
     tmp_path: Path,
 ) -> None:
-    holder = StepOutputsHolder()
-    holder.activitysim_preprocess = _LegacyOnlyOutputs(
+    outputs = _LegacyOnlyOutputs(
         _store_with_record(tmp_path / "legacy-input.txt", "input_a")
     )
 
     with pytest.raises(TypeError, match="_iter_record_items"):
-        _build_required_input_store(
-            outputs_holder=holder,
-            upstream_attr="activitysim_preprocess",
-            missing_message="ActivitySim preprocess must complete first",
-            context="activitysim_run",
-            warn_missing_coupler_inputs=False,
-        )
+        iter_step_output_items(outputs)
 
 
 def test_execute_activitysim_run_forwards_typed_preprocess_outputs(
@@ -252,7 +242,10 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     )
 
     outputs_holder = StepOutputsHolder()
-    workspace = SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path))
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_usim_mutable_data_dir=lambda: str(tmp_path),
+    )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
     )
@@ -297,7 +290,7 @@ def test_step_output_mapping_matches_real_output_record_store_mapping(
         },
     )
 
-    assert step_output_mapping(outputs) == outputs.to_record_store().to_mapping()
+    assert step_output_mapping(outputs, warn_lossy=False) == outputs.to_record_store().to_mapping()
 
 
 def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -> None:
@@ -307,7 +300,10 @@ def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -
     second.write_text("second", encoding="utf-8")
 
     with caplog.at_level("WARNING"):
-        mapping = step_output_mapping(_DuplicateKeyOutputs(first, second))
+        mapping = step_output_mapping(
+            _DuplicateKeyOutputs(first, second),
+            warn_lossy=False,
+        )
 
     assert mapping == {"linkstats": str(first)}
     assert "Duplicate typed-output artifact key 'linkstats'" in caplog.text
