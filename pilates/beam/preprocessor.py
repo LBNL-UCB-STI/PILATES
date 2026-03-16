@@ -21,6 +21,7 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -1282,17 +1283,10 @@ class BeamPreprocessor(GenericPreprocessor):
             warmstart_source = "previous_beam_output"
 
         if warmstart_abs_path is None:
-            base_dir = os.path.join(
-                str(workspace.get_beam_mutable_data_dir()),
-                self.settings.run.region,
-                self.settings.beam.router_directory,
+            warmstart_abs_path = resolve_initial_linkstats_path(
+                self.settings,
+                workspace,
             )
-            parquet_candidate = os.path.join(base_dir, "init.linkstats.parquet")
-            csv_candidate = os.path.join(base_dir, "init.linkstats.csv.gz")
-            if os.path.exists(parquet_candidate):
-                warmstart_abs_path = parquet_candidate
-            else:
-                warmstart_abs_path = csv_candidate
             warmstart_source = "initial_inputs"
 
         if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):

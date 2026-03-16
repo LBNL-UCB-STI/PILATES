@@ -493,6 +493,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
             config="beam.conf",
             scenario_folder="urbansim",
             router_directory="r5/network",
+            warmstart_linkstats_path="r5/network/init.linkstats.csv.gz",
         ),
         activitysim=SimpleNamespace(file_format="parquet"),
     )
@@ -508,6 +509,53 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
 
     assert coupler.get("linkstats_warmstart") is not None
     assert isinstance(coupler.get("linkstats_warmstart"), str)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_uses_configured_warmstart_path(tmp_path):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    warmstart = (
+        tmp_path / "beam" / "input" / "sfbay" / "custom" / "warmstart.parquet"
+    )
+    warmstart.parent.mkdir(parents=True, exist_ok=True)
+    warmstart.write_text("linkstats", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            router_directory="r5/network",
+            warmstart_linkstats_path="custom/warmstart.parquet",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("linkstats_warmstart") == str(warmstart)
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(

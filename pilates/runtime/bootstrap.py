@@ -12,6 +12,7 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
 from pilates.utils.io import get_traffic_assignment_model
@@ -189,26 +190,10 @@ def seed_bootstrap_artifacts_to_coupler(
             # resolution never sees bootstrap-time NoopArtifact placeholders.
             coupler.set(key, path)
 
-    beam_cfg = getattr(settings, "beam", None)
-    router_directory = getattr(beam_cfg, "router_directory", None)
-    region = getattr(getattr(settings, "run", None), "region", None)
-    if router_directory and region and (
-        not callable(get_value) or get_value(LINKSTATS_WARMSTART) is None
-    ):
-        router_root = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            region,
-            router_directory,
-        )
-        warmstart_candidates = (
-            os.path.join(router_root, "init.linkstats.parquet"),
-            os.path.join(router_root, "init.linkstats.csv.gz"),
-        )
-        for candidate in warmstart_candidates:
-            if not os.path.exists(candidate):
-                continue
-            coupler.set(LINKSTATS_WARMSTART, candidate)
-            break
+    if not callable(get_value) or get_value(LINKSTATS_WARMSTART) is None:
+        warmstart_path = resolve_initial_linkstats_path(settings, workspace)
+        if warmstart_path:
+            coupler.set(LINKSTATS_WARMSTART, warmstart_path)
 
 
 def run_bootstrap_phase(

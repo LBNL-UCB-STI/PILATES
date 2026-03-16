@@ -1,8 +1,61 @@
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
+    """
+    Resolve the initial BEAM warm-start linkstats path from settings.
+
+    Initial warmstart is opt-in: when `beam.warmstart_linkstats_path` is unset,
+    no initial linkstats file is probed. The configured path may use the
+    `{router_directory}` placeholder, which is expanded from `beam.router_directory`
+    before relative-path resolution against the BEAM mutable region input root.
+    """
+    beam_settings = getattr(settings, "beam", None)
+    run_settings = getattr(settings, "run", None)
+    if beam_settings is None or run_settings is None:
+        return None
+
+    region = getattr(run_settings, "region", None)
+    if not region:
+        return None
+
+    beam_region_root = os.path.join(
+        workspace.get_beam_mutable_data_dir(),
+        region,
+    )
+
+    configured_path = getattr(beam_settings, "warmstart_linkstats_path", None)
+    if configured_path:
+        expanded = os.path.expanduser(os.fspath(configured_path))
+        router_directory = getattr(beam_settings, "router_directory", None)
+        if "{router_directory}" in expanded:
+            if not router_directory:
+                logger.warning(
+                    "[BEAM warmstart] warmstart_linkstats_path uses {router_directory} "
+                    "but beam.router_directory is not configured."
+                )
+                return None
+            expanded = expanded.replace("{router_directory}", router_directory)
+        candidate = (
+            expanded
+            if os.path.isabs(expanded)
+            else os.path.join(beam_region_root, expanded)
+        )
+        candidate = os.path.normpath(candidate)
+        if os.path.exists(candidate):
+            return candidate
+        logger.warning(
+            "[BEAM warmstart] Configured warmstart_linkstats_path not found: %s",
+            candidate,
+        )
+        return None
+
+    return None
 
 
 def find_last_run_output_plans(
