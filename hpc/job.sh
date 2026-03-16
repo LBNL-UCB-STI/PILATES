@@ -23,6 +23,8 @@ PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
+CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
+CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
@@ -39,17 +41,64 @@ show_system_info() {
 install_python_deps() {
     local req_file="$1"
     local marker="$VENV_PATH/.last_requirements_hash"
+    local filtered_req
     local current_hash
-    current_hash="$(sha256sum "$req_file" | awk '{print $1}')"
+    filtered_req="$(mktemp)"
+    grep -Ev '^[[:space:]]*consist([[:space:]]|[<>=!~].*)?$' "$req_file" > "$filtered_req" || true
+    current_hash="$(sha256sum "$filtered_req" | awk '{print $1}')"
 
     if [ ! -f "$marker" ] || [ "$current_hash" != "$(cat "$marker")" ]; then
         echo "Installing/updating Python dependencies from $req_file ..."
         python3 -m pip install --upgrade pip setuptools wheel
-        python3 -m pip install -r "$req_file"
+        python3 -m pip install -r "$filtered_req"
         printf "%s\n" "$current_hash" > "$marker"
     else
         echo "Python dependencies are up to date; skipping pip install."
     fi
+
+    rm -f "$filtered_req"
+}
+
+
+resolve_consist_package_spec() {
+    local req_file="$1"
+    if [ -n "$CONSIST_PYPI_PACKAGE" ]; then
+        echo "$CONSIST_PYPI_PACKAGE"
+        return
+    fi
+
+    local package_spec
+    package_spec="$(grep -E '^[[:space:]]*consist([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+    if [ -n "$package_spec" ]; then
+        echo "$package_spec"
+    else
+        echo "consist"
+    fi
+}
+
+
+install_consist() {
+    local req_file="$1"
+    local package_spec
+    package_spec="$(resolve_consist_package_spec "$req_file")"
+
+    if [ -d "$CONSIST_SRC_DIR" ]; then
+        echo "Attempting editable consist install from $CONSIST_SRC_DIR ..."
+        if python3 -m pip install -e "$CONSIST_SRC_DIR"; then
+            echo "Installed local editable consist from $CONSIST_SRC_DIR"
+        else
+            echo "WARNING: editable consist install failed; falling back to $package_spec" >&2
+            python3 -m pip install "$package_spec"
+        fi
+    else
+        echo "Local consist source not found at $CONSIST_SRC_DIR; installing $package_spec"
+        python3 -m pip install "$package_spec"
+    fi
+
+    python3 - <<'PY'
+import consist
+print(f"consist import path: {consist.__file__}")
+PY
 }
 
 
@@ -105,6 +154,7 @@ if [ ! -f "$REQUIREMENTS_FILE" ]; then
 fi
 
 install_python_deps "$REQUIREMENTS_FILE"
+install_consist "$REQUIREMENTS_FILE"
 
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
