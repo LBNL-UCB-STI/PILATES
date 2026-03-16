@@ -1,3 +1,5 @@
+import pytest
+
 from pilates.utils import coupler_helpers
 
 
@@ -67,3 +69,54 @@ def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> Non
     )
     assert ("view.set", "beam/linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
     assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
+
+
+def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetOnly()
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert logged["called"] is False
+    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
+    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetOnly()
+    logged = {"called": False}
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+
+    coupler_helpers.log_and_set_input(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert logged["called"] is False
+    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]

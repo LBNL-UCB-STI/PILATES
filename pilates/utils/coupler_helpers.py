@@ -1013,6 +1013,11 @@ def log_and_set_output(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
+    if cr.current_run() is None:
+        _enqueue_archive_copy(key, path)
+        set_coupler_from_artifact(coupler, key, None, fallback=path)
+        return
+
     artifact = _log_with_optional_h5_container(
         direction="output",
         key=key,
@@ -1021,8 +1026,6 @@ def log_and_set_output(
         meta=meta,
     )
     _enqueue_archive_copy(key, path)
-    if cr.current_run() is None:
-        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_output_only(
@@ -1076,6 +1079,10 @@ def log_and_set_input(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
+    if cr.current_run() is None:
+        set_coupler_from_artifact(coupler, key, None, fallback=path)
+        return
+
     artifact = _log_with_optional_h5_container(
         direction="input",
         key=key,
@@ -1083,8 +1090,6 @@ def log_and_set_input(
         description=description,
         meta=meta,
     )
-    if cr.current_run() is None:
-        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_input_only(
