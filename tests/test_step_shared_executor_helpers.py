@@ -2,12 +2,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pilates.activitysim.outputs import ActivitySimRunOutputs
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
+from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs
-from pilates.workflows.steps.activitysim import _execute_activitysim_postprocess
+from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
+from pilates.workflows.steps.activitysim import (
+    _execute_activitysim_postprocess,
+    _execute_activitysim_preprocess,
+)
 from pilates.workflows.steps.beam import (
     _execute_beam_full_skim,
     _execute_beam_preprocess,
+)
+from pilates.workflows.steps.urbansim_atlas import (
+    _execute_atlas_preprocess_typed,
+    _execute_urbansim_preprocess_typed,
 )
 from pilates.workflows.artifact_keys import BEAM_HOUSEHOLDS_IN, BEAM_PLANS_IN
 from pilates.workflows.steps.shared import StepOutputsHolder
@@ -79,6 +88,83 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
         "households_asim_in": tmp_path / "households.csv",
         "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr",
     }
+
+
+def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class _Preprocessor:
+        def preprocess(self, workspace):
+            captured["workspace"] = workspace
+            return ActivitySimPreprocessOutputs(
+                mutable_data_dir=tmp_path,
+                land_use_table=tmp_path / "land_use.csv",
+                households_table=tmp_path / "households.csv",
+                persons_table=tmp_path / "persons.csv",
+            )
+
+    workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
+    result = _execute_activitysim_preprocess(
+        preprocessor=_Preprocessor(),
+        workspace=workspace,
+        outputs_holder=StepOutputsHolder(),
+        coupler=object(),
+        context="activitysim_preprocess",
+    )
+
+    assert result.mutable_data_dir == tmp_path
+    assert captured["workspace"] is workspace
+
+
+def test_execute_urbansim_preprocess_strips_runtime_only_kwargs(
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class _Preprocessor:
+        def preprocess(self, workspace):
+            captured["workspace"] = workspace
+            return UrbanSimPreprocessOutputs(usim_mutable_data_dir=tmp_path)
+
+    workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
+    result = _execute_urbansim_preprocess_typed(
+        preprocessor=_Preprocessor(),
+        workspace=workspace,
+        outputs_holder=StepOutputsHolder(),
+        coupler=object(),
+        context="urbansim_preprocess",
+    )
+
+    assert result.usim_mutable_data_dir == tmp_path
+    assert captured["workspace"] is workspace
+
+
+def test_execute_atlas_preprocess_strips_runtime_only_kwargs(
+    tmp_path: Path,
+) -> None:
+    captured = {}
+
+    class _Preprocessor:
+        def preprocess(self, workspace):
+            captured["workspace"] = workspace
+            return AtlasPreprocessOutputs(
+                atlas_mutable_input_dir=tmp_path,
+                prepared_inputs={},
+            )
+
+    workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
+    result = _execute_atlas_preprocess_typed(
+        preprocessor=_Preprocessor(),
+        workspace=workspace,
+        outputs_holder=StepOutputsHolder(),
+        coupler=object(),
+        context="atlas_preprocess",
+    )
+
+    assert result.atlas_mutable_input_dir == tmp_path
+    assert captured["workspace"] is workspace
 
 
 def test_execute_beam_preprocess_aliases_fallback_inputs(tmp_path: Path) -> None:
