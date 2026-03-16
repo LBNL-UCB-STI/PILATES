@@ -159,7 +159,7 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert first_call["facet"]["model"] == "initialization"
     assert result["bootstrap_cache_hit"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
-    assert result["manifest_reference"] == {"probe_run_id": "bootstrap_probe"}
+    assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
 
 
 def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
@@ -191,7 +191,7 @@ def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     assert result["bootstrap_cache_hit"] is True
     assert result["fallback_rerun"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 0
-    assert result["manifest_reference"] == {"probe_run_id": "bootstrap_probe"}
+    assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
     assert result["materialization"]["complete"] is True
     assert result["materialization"]["materialized_from_filesystem_count"] == 1
     assert result["materialization"]["skipped_existing_count"] == 1
@@ -238,7 +238,7 @@ def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback
     assert result["bootstrap_cache_hit"] is True
     assert result["fallback_rerun"] is True
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
-    assert result["manifest_reference"] == {
+    assert result["run_reference"] == {
         "probe_run_id": "bootstrap_probe",
         "materialization_run_id": "bootstrap_fallback",
     }
@@ -285,7 +285,7 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_mode == "off"
     assert result["bootstrap_cache_hit"] is False
-    assert result["manifest_reference"] == {"probe_run_id": "bootstrap_off"}
+    assert result["run_reference"] == {"probe_run_id": "bootstrap_off"}
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
@@ -440,7 +440,7 @@ def test_bootstrap_output_invariant_accepts_valid_result():
     run_module._assert_bootstrap_output_invariant(
         {
             "bootstrap_cache_hit": False,
-            "manifest_reference": {"probe_run_id": "bootstrap_probe"},
+            "run_reference": {"probe_run_id": "bootstrap_probe"},
             "staged_artifact_summary": {"copied_records_total": 2},
         }
     )
@@ -450,7 +450,7 @@ def test_bootstrap_output_invariant_accepts_zero_copied_records_for_valid_summar
     run_module._assert_bootstrap_output_invariant(
         {
             "bootstrap_cache_hit": False,
-            "manifest_reference": {"probe_run_id": "bootstrap_probe"},
+            "run_reference": {"probe_run_id": "bootstrap_probe"},
             "staged_artifact_summary": {"copied_records_total": 0},
         }
     )

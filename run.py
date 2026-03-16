@@ -82,10 +82,6 @@ _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
 _RUN_FAILURE_CONTEXT: Dict[str, Any] = {}
 
 
-def _coerce_int(value: Any) -> Optional[int]:
-    return scenario_runtime.coerce_int(value)
-
-
 def _resolve_scenario_id(settings: Any) -> str:
     return scenario_runtime.resolve_scenario_id(settings)
 
@@ -118,6 +114,7 @@ def _format_restart_command(
     if archive_state_path:
         command.extend(["-S", str(archive_state_path)])
     return " ".join(shlex.quote(part) for part in command)
+
 
 def _format_hpc_restart_command(
     *,
@@ -175,10 +172,6 @@ def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
     return scenario_runtime.merge_tag_list(existing, additions)
 
 
-def _facet_to_mapping(facet: Any) -> Dict[str, Any]:
-    return scenario_runtime.facet_to_mapping(facet)
-
-
 def _merge_epoch_facet(
     *,
     existing: Any,
@@ -199,7 +192,6 @@ def _merge_epoch_facet(
 
 
 _EpochTaggingScenarioProxy = scenario_runtime.EpochTaggingScenarioProxy
-_SchemaCoupler = scenario_runtime.SchemaCoupler
 
 
 def _resolve_cache_epoch(settings: Any) -> int:
@@ -403,21 +395,6 @@ def _log_local_storage_info() -> None:
             _format_bytes(usage.free),
             _format_bytes(usage.total),
         )
-
-
-def _is_bootstrap_cache_enabled(settings: Any) -> bool:
-    return bootstrap_runtime.is_bootstrap_cache_enabled(settings)
-
-
-def _build_bootstrap_manifest_reference(
-    *,
-    probe_run_id: Optional[str] = None,
-    materialization_run_id: Optional[str] = None,
-) -> Dict[str, str]:
-    return bootstrap_runtime.build_bootstrap_manifest_reference(
-        probe_run_id=probe_run_id,
-        materialization_run_id=materialization_run_id,
-    )
 
 
 def run_bootstrap_phase(
@@ -645,13 +622,13 @@ def main():
     Architecture:
     - **Consist Scenario**: Manages caching of expensive computations and provenance logging
     - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
-    - **StepConfig**: Declarative config for each model step
-    - **Step Builders**: Encapsulate model-specific execution logic
+    - **Workflow step builders**: Encapsulate model-specific execution logic
 
     Caching Strategy:
     - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
     - Model outputs: Cached per iteration (convergence check)
-    - Restarting: Skips initialization if run_state.yaml exists
+    - Bootstrap: pre-scenario cached run with native materialization on cache hit
+    - Restart: reconstructs completed historical runs before scenario execution
     """
     _RUN_FAILURE_CONTEXT.clear()
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
@@ -939,9 +916,9 @@ def main():
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     if bootstrap_result is not None:
         logger.info(
-            "Bootstrap phase complete: cache_hit=%s manifest_ref=%s summary=%s",
+            "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s",
             bootstrap_result.get("bootstrap_cache_hit"),
-            bootstrap_result.get("manifest_reference"),
+            bootstrap_result.get("run_reference"),
             bootstrap_result.get("staged_artifact_summary"),
         )
 

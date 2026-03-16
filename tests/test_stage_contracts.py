@@ -499,6 +499,7 @@ def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch
     assert USIM_DATASTORE_BASE_H5 in keys
     assert USIM_DATASTORE_CURRENT_H5 in keys
     assert any(key.startswith("usim_year_output_h5_") for key in keys)
+    assert "workflow_manifest" not in keys
     assert flush_calls == [300]
 
 

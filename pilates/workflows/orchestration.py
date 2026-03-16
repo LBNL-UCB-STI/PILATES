@@ -672,6 +672,7 @@ def _detect_stale_steps(
         outputs_data = step_info.get("outputs", {})
         try:
             outputs = deserialize_step_outputs(outputs_class, outputs_data)
+            _coerce_outputs_path_fields(outputs, outputs_class)
             validate = getattr(outputs, "validate", None)
             if callable(validate):
                 validate()
@@ -956,9 +957,41 @@ def _restore_outputs_from_manifest(
     outputs_data = step_info.get("outputs", {})
     try:
         outputs = deserialize_step_outputs(outputs_class, outputs_data)
+        _coerce_outputs_path_fields(outputs, outputs_class)
         validate = getattr(outputs, "validate", None)
         if callable(validate):
             validate()
         return outputs
     except (AssertionError, FileNotFoundError):
         return None
+
+
+def _coerce_outputs_path_fields(outputs: Any, outputs_class: Any) -> None:
+    """
+    Normalize manifest-restored path fields to ``Path`` objects.
+
+    Some StepOutputs classes use postponed annotation evaluation, which can
+    leave deserialized path fields as plain strings. Coerce by declared
+    StepOutputs path metadata so replay/output loggers see consistent types.
+    """
+    path_fields = tuple(getattr(outputs_class, "required_path_fields", ()) or ())
+    path_fields += tuple(getattr(outputs_class, "optional_path_fields", ()) or ())
+    for field_name in path_fields:
+        value = getattr(outputs, field_name, None)
+        if isinstance(value, str):
+            setattr(outputs, field_name, Path(value))
+
+    for field_name in tuple(getattr(outputs_class, "dict_path_fields", ()) or ()):
+        value = getattr(outputs, field_name, None)
+        if not isinstance(value, Mapping):
+            continue
+        if not any(isinstance(path_value, str) for path_value in value.values()):
+            continue
+        setattr(
+            outputs,
+            field_name,
+            {
+                key: (Path(path_value) if isinstance(path_value, str) else path_value)
+                for key, path_value in value.items()
+            },
+        )

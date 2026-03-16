@@ -34,7 +34,7 @@ def is_bootstrap_cache_enabled(settings: Any) -> bool:
     return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
 
 
-def build_bootstrap_manifest_reference(
+def build_bootstrap_run_reference(
     *,
     probe_run_id: Optional[str] = None,
     materialization_run_id: Optional[str] = None,
@@ -245,7 +245,7 @@ def run_bootstrap_phase(
         return {
             "bootstrap_cache_hit": cache_hit,
             "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": build_bootstrap_manifest_reference(
+            "run_reference": build_bootstrap_run_reference(
                 probe_run_id=probe_run_id,
                 materialization_run_id=materialization_run_id,
             ),
@@ -428,8 +428,8 @@ def assert_bootstrap_output_invariant(
             if isinstance(bootstrap_result, dict)
             else None
         ),
-        "manifest_reference": (
-            bootstrap_result.get("manifest_reference")
+        "run_reference": (
+            bootstrap_result.get("run_reference")
             if isinstance(bootstrap_result, dict)
             else None
         ),

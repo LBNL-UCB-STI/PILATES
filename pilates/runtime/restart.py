@@ -542,7 +542,6 @@ def _restart_manifest_targets(
     state: Any,
     archive_run_dir: str,
     year: int,
-    total_iters: int,
     workflow_stage: Any,
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
     targets: List[Dict[str, Any]] = []
@@ -683,21 +682,10 @@ def collect_restart_completed_run_ids(
     if year is None:
         return {"run_ids": [], "issues": [("state.current_year", "missing year")], "manifest_paths": []}
 
-    state_settings = getattr(state, "_settings", {})
-    total_iters_raw = (
-        state_settings.get("supply_demand_iters", 1)
-        if isinstance(state_settings, dict)
-        else 1
-    )
-    total_iters = _coerce_int(total_iters_raw)
-    if total_iters is None or total_iters < 0:
-        total_iters = 1
-
     targets, target_issues = _restart_manifest_targets(
         state=state,
         archive_run_dir=archive_run_dir,
         year=year,
-        total_iters=total_iters,
         workflow_stage=workflow_stage,
     )
 
