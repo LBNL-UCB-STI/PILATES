@@ -97,6 +97,35 @@ default_fare_dollars = {
 #########################
 #### Common functions ###
 #########################
+def _copy_path_if_needed(source_path: str, dest_path: str) -> str:
+    source = Path(source_path)
+    dest = Path(dest_path)
+    try:
+        if source.resolve() == dest.resolve():
+            logger.info("ActivitySim source already at destination: %s", dest)
+            return str(dest)
+    except OSError:
+        pass
+    os.makedirs(os.path.dirname(os.fspath(dest)), exist_ok=True)
+    shutil.copy(os.fspath(source), os.fspath(dest))
+    return os.fspath(dest)
+
+
+def _copytree_if_needed(source_dir: str, dest_dir: str) -> str:
+    source = Path(source_dir)
+    dest = Path(dest_dir)
+    try:
+        if source.resolve() == dest.resolve():
+            logger.info("ActivitySim tree already at destination: %s", dest)
+            return str(dest)
+    except OSError:
+        pass
+    if os.path.exists(dest):
+        shutil.rmtree(dest)
+    shutil.copytree(os.fspath(source), os.fspath(dest))
+    return os.fspath(dest)
+
+
 def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     """
     Retrieves the ordered list of zone keys from the canonical zones file.
@@ -2660,7 +2689,7 @@ def _copy_data_to_mutable_location(
             logger.info(
                 f"Copying clipped geoms from {clipped_geoms_source_path} to {asim_clipped_path}"
             )
-            shutil.copy(clipped_geoms_source_path, asim_clipped_path)
+            _copy_path_if_needed(clipped_geoms_source_path, asim_clipped_path)
 
             input_records.add_record(
                 FileRecord(
@@ -2697,9 +2726,7 @@ def _copy_data_to_mutable_location(
             configs_source_dir, configs_dest_dir
         )
     )
-    if os.path.exists(configs_dest_dir):
-        shutil.rmtree(configs_dest_dir)
-    shutil.copytree(configs_source_dir, configs_dest_dir)
+    _copytree_if_needed(configs_source_dir, configs_dest_dir)
     _ensure_required_asim_config_dirs(
         configs_dest_dir=configs_dest_dir,
         main_configs_dir=get_setting(settings, "activitysim.main_configs_dir", "configs"),
