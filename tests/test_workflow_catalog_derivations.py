@@ -1,7 +1,7 @@
 from pilates.workflows import catalog
 from pilates.workflows.steps import shared as step_shared
-from run import _build_schema_steps
-from run import _is_model_enabled
+from pilates.runtime.launcher import _build_schema_steps
+from pilates.runtime.launcher import _is_model_enabled
 from types import SimpleNamespace
 
 

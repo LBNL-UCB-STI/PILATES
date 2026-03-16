@@ -2,8 +2,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from run import _build_schema_steps, _filter_schema_steps_for_enabled_models
-from run import _is_model_enabled
+from pilates.runtime.launcher import (
+    _build_schema_steps,
+    _filter_schema_steps_for_enabled_models,
+)
+from pilates.runtime.launcher import _is_model_enabled
 from pilates.workflows.catalog import enabled_schema_step_models
 
 

@@ -6,7 +6,7 @@ import pytest
 from consist import define_step
 from consist.types import CacheOptions, OutputPolicyOptions
 
-import run as run_module
+from pilates.runtime import launcher as run_module
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.artifact_keys import ASIM_LAND_USE_IN, ASIM_PERSONS_IN
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5

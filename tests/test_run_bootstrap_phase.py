@@ -8,7 +8,7 @@ import pytest
 from consist import MaterializationResult
 from consist.types import CacheOptions
 
-import run as run_module
+from pilates.runtime import launcher as run_module
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_db_snapshot as snapshot_module
 from workflow_state import WorkflowState
@@ -1159,12 +1159,11 @@ def test_repair_restart_beam_inputs_from_source_repopulates_missing_primary_conf
             assert state_arg is state
             return _BeamPreprocessor()
 
-    monkeypatch.setattr(run_module, "ModelFactory", lambda: _Factory())
-
     repaired = run_module._repair_restart_beam_inputs_from_source(
         settings=settings,
         state=state,
         workspace=workspace,
+        model_factory_cls=lambda: _Factory(),
     )
 
     assert repaired is True
@@ -1468,11 +1467,16 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
         run_module.main()
 
     archive_run_dir = Path(tracker_kwargs["run_dir"])
+    repo_root = Path(__file__).resolve().parents[1]
+    inputs_mount = Path(tracker_kwargs["mounts"]["inputs"])
     workspace_mount = Path(tracker_kwargs["mounts"]["workspace"])
+    project_root = Path(tracker_kwargs["project_root"])
     assert archive_run_dir.parent == archive_root
     assert archive_run_dir.name.startswith(settings.run.output_run_name)
+    assert inputs_mount == repo_root.resolve()
     assert workspace_mount.parent == local_root
     assert workspace_mount.name == archive_run_dir.name
+    assert project_root == repo_root.resolve()
     assert tracker_kwargs["allow_external_paths"] is True
 
 

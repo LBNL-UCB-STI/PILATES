@@ -18,7 +18,6 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from consist import define_step
-import run as run_module
 import yaml
 
 from pilates.activitysim.outputs import (
@@ -62,6 +61,7 @@ from pilates.workflows.steps import (
     make_urbansim_run_step,
 )
 from pilates.workflows.steps import beam as steps_beam
+from pilates.runtime import launcher as run_module
 
 
 class _SchemaCoupler:
