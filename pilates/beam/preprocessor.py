@@ -447,6 +447,34 @@ class BeamPreprocessor(GenericPreprocessor):
             candidates.append(config_folder)
         return candidates
 
+    @staticmethod
+    def _beam_exchange_format_candidates(preferred_format: Optional[str]) -> List[str]:
+        candidates: List[str] = []
+        if preferred_format:
+            candidates.append(preferred_format)
+        for fallback in ("parquet", "csv", "csv.gz"):
+            if fallback not in candidates:
+                candidates.append(fallback)
+        return candidates
+
+    @classmethod
+    def _locate_existing_beam_exchange_input(
+        cls,
+        beam_scenario_folder: str,
+        stem: str,
+        preferred_format: Optional[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        for candidate_format in cls._beam_exchange_format_candidates(preferred_format):
+            if candidate_format == "csv.gz":
+                path = os.path.join(beam_scenario_folder, f"{stem}.csv.gz")
+            elif candidate_format == "csv":
+                path = os.path.join(beam_scenario_folder, f"{stem}.csv")
+            else:
+                path = locate_beam_file(beam_scenario_folder, stem, candidate_format)
+            if path and os.path.exists(path):
+                return path, candidate_format
+        return None, None
+
     def _preprocess(
         self,
         workspace: "Workspace",
@@ -586,19 +614,28 @@ class BeamPreprocessor(GenericPreprocessor):
             records: List[FileRecord] = []
             unresolved: List[str] = []
             for short_name, stem in required_keys.items():
-                path = locate_beam_file(beam_scenario_folder, stem, file_format)
-                if path and os.path.exists(path):
+                path, resolved_format = self._locate_existing_beam_exchange_input(
+                    beam_scenario_folder,
+                    stem,
+                    file_format,
+                )
+                if path and resolved_format:
                     records.append(
                         FileRecord(
                             file_path=path,
                             short_name=short_name,
-                            description=f"Existing BEAM scenario input: {stem}",
+                            description=(
+                                f"Existing BEAM scenario input: {stem}"
+                                f" ({resolved_format})"
+                            ),
                             year=current_year,
                             iteration=current_inner_iter,
                         )
                     )
                     continue
-                unresolved.append(f"{stem}.{file_format}")
+                unresolved.append(
+                    f"{stem}.[{'|'.join(self._beam_exchange_format_candidates(file_format))}]"
+                )
 
             if not unresolved:
                 if idx > 0:
