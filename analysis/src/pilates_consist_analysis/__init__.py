@@ -20,6 +20,7 @@ from .epoch_views import (
     resolve_artifact_families,
 )
 from .epoch_api import Epoch, EpochTables
+from .comparison_api import Comparison, build_comparison
 from .scenario_compare import ScenarioComparison, compare_scenarios
 from .handoff import (
     ArtifactIngestSpec,
@@ -53,7 +54,9 @@ __all__ = [
     "EpochPanel",
     "Epoch",
     "EpochTables",
+    "Comparison",
     "build_epoch_panel",
+    "build_comparison",
     "converged_epoch",
     "ARTIFACT_FAMILIES",
     "ARTIFACT_FAMILIES_ENV_VAR",

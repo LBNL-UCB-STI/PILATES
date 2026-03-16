@@ -2,14 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
 from .api import AnalysisSession
+from .comparison_api import Comparison, build_comparison
 from .epoch_api import Epoch
 from .epochs import SimulationEpoch
 from .run_index import RunIndex, build_run_index
+from .runset import RunSet
 from .runtime import get_db_health, get_db_health_issues
 
 
@@ -71,13 +73,51 @@ class ArchiveScenario:
         converged: bool = False,
         iteration: Optional[int] = None,
         models: Optional[Iterable[str]] = None,
-    ) -> Epoch:
+        ) -> Epoch:
         return self.archive.epoch(
             year=year,
             scenario_id=self.scenario_id,
             converged=converged,
             iteration=iteration,
             models=models,
+        )
+
+    def compare(
+        self,
+        other: str | "ArchiveScenario" | RunSet | Iterable[str],
+        *,
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        model: Optional[str] = None,
+        status: Optional[str] = "completed",
+        datasets: Optional[Sequence[str]] = None,
+        config_namespace: Optional[str] = None,
+        config_prefix: Optional[str] = None,
+        config_include_equal: bool = False,
+        align_on: str = "year",
+        latest_group_by: Optional[Sequence[str]] = None,
+        converged: bool = False,
+        converged_group_by: Optional[Sequence[str]] = None,
+        left_name: Optional[str] = None,
+        right_name: Optional[str] = None,
+    ) -> Comparison:
+        return self.archive.compare(
+            self,
+            other,
+            year=year,
+            iteration=iteration,
+            model=model,
+            status=status,
+            datasets=datasets,
+            config_namespace=config_namespace,
+            config_prefix=config_prefix,
+            config_include_equal=config_include_equal,
+            align_on=align_on,
+            latest_group_by=latest_group_by,
+            converged=converged,
+            converged_group_by=converged_group_by,
+            left_name=left_name or self.scenario_id,
+            right_name=right_name,
         )
 
 
@@ -262,6 +302,97 @@ class Archive:
             )
         simulation_epoch = candidates[0]
         return Epoch(archive=self, simulation_epoch=simulation_epoch)
+
+    def compare(
+        self,
+        left: str | ArchiveScenario | RunSet | Iterable[str],
+        right: str | ArchiveScenario | RunSet | Iterable[str],
+        *,
+        year: Optional[int] = None,
+        iteration: Optional[int] = None,
+        model: Optional[str] = None,
+        status: Optional[str] = "completed",
+        datasets: Optional[Sequence[str]] = None,
+        config_namespace: Optional[str] = None,
+        config_prefix: Optional[str] = None,
+        config_include_equal: bool = False,
+        align_on: str = "year",
+        latest_group_by: Optional[Sequence[str]] = None,
+        converged: bool = False,
+        converged_group_by: Optional[Sequence[str]] = None,
+        left_name: Optional[str] = None,
+        right_name: Optional[str] = None,
+    ) -> Comparison:
+        left_runset = self._resolve_runset(
+            left,
+            year=year,
+            iteration=iteration,
+            model=model,
+            status=status,
+            default_name=left_name or "left",
+        )
+        right_runset = self._resolve_runset(
+            right,
+            year=year,
+            iteration=iteration,
+            model=model,
+            status=status,
+            default_name=right_name or "right",
+        )
+        return build_comparison(
+            self,
+            left=left,
+            right=right,
+            left_runset=left_runset,
+            right_runset=right_runset,
+            year=year,
+            iteration=iteration,
+            datasets=datasets,
+            config_namespace=config_namespace,
+            config_prefix=config_prefix,
+            config_include_equal=config_include_equal,
+            align_on=align_on,
+            latest_group_by=latest_group_by,
+            use_converged=converged,
+            converged_group_by=converged_group_by,
+            left_name=left_name,
+            right_name=right_name,
+        )
+
+    def _resolve_runset(
+        self,
+        selection: str | ArchiveScenario | RunSet | Iterable[str],
+        *,
+        year: Optional[int],
+        iteration: Optional[int],
+        model: Optional[str],
+        status: Optional[str],
+        default_name: str,
+    ) -> RunSet:
+        if isinstance(selection, RunSet):
+            return selection
+        if isinstance(selection, ArchiveScenario):
+            selection = selection.scenario_id
+        if isinstance(selection, str):
+            resolved_name = str(selection).strip() or default_name
+            frame = self.runs(
+                scenario_id=resolved_name,
+                year=year,
+                iteration=iteration,
+                model=model,
+                status=status,
+            )
+            run_ids = [str(value).strip() for value in frame["run_id"].tolist() if str(value).strip()]
+            if not run_ids:
+                raise ValueError(
+                    f"No runs matched comparison selection {resolved_name!r} "
+                    f"(year={year}, iteration={iteration}, model={model}, status={status})."
+                )
+            return self.session.runset_from_ids(run_ids, name=resolved_name)
+        run_ids = [str(value).strip() for value in selection if str(value).strip()]
+        if not run_ids:
+            raise ValueError("Comparison selection contained no run IDs.")
+        return self.session.runset_from_ids(run_ids, name=default_name)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.session, name)
