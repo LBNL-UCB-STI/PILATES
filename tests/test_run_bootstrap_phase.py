@@ -343,6 +343,115 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
     assert isinstance(coupler.get("persons_beam_in"), str)
 
 
+def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    default_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    config_dir = default_dir / "2018"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("plans.parquet", "households.parquet", "persons.parquet"):
+        (config_dir / name).write_text(name, encoding="utf-8")
+
+    beam_conf = tmp_path / "beam" / "input" / "sfbay" / "beam.conf"
+    beam_conf.write_text(
+        'beam.inputDirectory="production/sfbay"\nfolder = ${beam.inputDirectory}"/urbansim/2018"',
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("plans_beam_in") is not None
+    assert coupler.get("households_beam_in") is not None
+    assert coupler.get("persons_beam_in") is not None
+
+
+def test_seed_bootstrap_artifacts_to_coupler_prefers_yaml_scenario_folder_when_present(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    default_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
+    default_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("plans.parquet", "households.parquet", "persons.parquet"):
+        (default_dir / name).write_text(f"default-{name}", encoding="utf-8")
+
+    config_dir = default_dir / "2018"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("plans.parquet", "households.parquet", "persons.parquet"):
+        (config_dir / name).write_text(f"config-{name}", encoding="utf-8")
+
+    beam_conf = tmp_path / "beam" / "input" / "sfbay" / "beam.conf"
+    beam_conf.write_text(
+        'beam.inputDirectory="production/sfbay"\nfolder = ${beam.inputDirectory}"/urbansim/2018"',
+        encoding="utf-8",
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("plans_beam_in") == str(default_dir / "plans.parquet")
+    assert coupler.get("households_beam_in") == str(default_dir / "households.parquet")
+    assert coupler.get("persons_beam_in") == str(default_dir / "persons.parquet")
+
+
 @pytest.mark.parametrize("extension", ["csv", "csv.gz"])
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_csv_formats_when_parquet_missing(
     tmp_path, extension
@@ -427,6 +536,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
             config="beam.conf",
             scenario_folder="urbansim",
             router_directory="r5/network",
+            warmstart_linkstats_path="r5/network/init.linkstats.csv.gz",
         ),
         activitysim=SimpleNamespace(file_format="parquet"),
     )
@@ -443,6 +553,153 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_warmstart(tmp_pat
     assert coupler.get("linkstats_warmstart") is not None
     assert isinstance(coupler.get("linkstats_warmstart"), str)
 
+
+def test_seed_bootstrap_artifacts_to_coupler_uses_configured_warmstart_path(tmp_path):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    warmstart = (
+        tmp_path / "beam" / "input" / "sfbay" / "custom" / "warmstart.parquet"
+    )
+    warmstart.parent.mkdir(parents=True, exist_ok=True)
+    warmstart.write_text("linkstats", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            router_directory="r5/network",
+            warmstart_linkstats_path="custom/warmstart.parquet",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("linkstats_warmstart") == str(warmstart)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_expands_router_directory_in_warmstart_path(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    warmstart = (
+        tmp_path
+        / "beam"
+        / "input"
+        / "sfbay"
+        / "r5"
+        / "network"
+        / "init.linkstats.parquet"
+    )
+    warmstart.parent.mkdir(parents=True, exist_ok=True)
+    warmstart.write_text("linkstats", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            router_directory="r5/network",
+            warmstart_linkstats_path="{router_directory}/init.linkstats.parquet",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("linkstats_warmstart") == str(warmstart)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_does_not_probe_router_dir_when_warmstart_unset(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    router_dir = tmp_path / "beam" / "input" / "sfbay" / "r5" / "network"
+    router_dir.mkdir(parents=True, exist_ok=True)
+    (router_dir / "init.linkstats.csv.gz").write_text("linkstats", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel="beam"),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            router_directory="r5/network",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("linkstats_warmstart") is None
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(
     tmp_path,

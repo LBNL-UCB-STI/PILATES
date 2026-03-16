@@ -18,6 +18,7 @@ from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import locate_beam_file
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
@@ -338,22 +339,31 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
         self.settings = self.state.full_settings
 
-    def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
-        """
-        Resolve the BEAM exchange scenario folder from the active mutable config.
+    def _default_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        base_input_dir = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            self.settings.run.region,
+        )
+        return os.path.join(base_input_dir, self.settings.beam.scenario_folder)
 
-        Falls back to ``settings.beam.scenario_folder`` if no explicit exchange folder
-        can be read from the config file.
+    def _config_beam_exchange_scenario_folder(
+        self, workspace: "Workspace"
+    ) -> Optional[str]:
+        """
+        Parse the BEAM-generated config for an exchange.scenario.folder override.
+
+        The top-level YAML ``settings.beam.scenario_folder`` remains the primary
+        operator contract. The config-derived folder is only used as a fallback
+        when the YAML-selected location is missing required files.
         """
         base_input_dir = os.path.join(
             workspace.get_beam_mutable_data_dir(),
             self.settings.run.region,
         )
-        default_folder = os.path.join(base_input_dir, self.settings.beam.scenario_folder)
-
+        default_folder = self._default_beam_exchange_scenario_folder(workspace)
         config_path = os.path.join(base_input_dir, self.settings.beam.config)
         if not os.path.exists(config_path):
-            return default_folder
+            return None
 
         try:
             with open(config_path, "r") as config_file:
@@ -372,14 +382,9 @@ class BeamPreprocessor(GenericPreprocessor):
                     resolved = value.replace("${beam.inputDirectory}", base_input_dir)
                     resolved = resolved.replace('"', "")
                     resolved = os.path.normpath(resolved)
-                    if resolved:
-                        if os.path.normpath(resolved) != os.path.normpath(default_folder):
-                            logger.info(
-                                "[BEAM Preprocessor] Using exchange.scenario.folder from config: %s "
-                                "(default scenario_folder resolves to %s)",
-                                resolved,
-                                default_folder,
-                            )
+                    if resolved and os.path.normpath(resolved) != os.path.normpath(
+                        default_folder
+                    ):
                         return resolved
         except Exception as exc:
             logger.warning(
@@ -389,7 +394,26 @@ class BeamPreprocessor(GenericPreprocessor):
                 exc,
             )
 
-        return default_folder
+        return None
+
+    def _beam_exchange_scenario_folder_candidates(
+        self, workspace: "Workspace"
+    ) -> List[str]:
+        """
+        Return candidate exchange folders in operator-facing precedence order.
+
+        1. The YAML-declared ``settings.beam.scenario_folder``
+        2. A config-derived ``beam.exchange.scenario.folder`` fallback
+        """
+        default_folder = self._default_beam_exchange_scenario_folder(workspace)
+        candidates = [default_folder]
+        config_folder = self._config_beam_exchange_scenario_folder(workspace)
+        if config_folder is not None and all(
+            os.path.normpath(config_folder) != os.path.normpath(existing)
+            for existing in candidates
+        ):
+            candidates.append(config_folder)
+        return candidates
 
     @staticmethod
     def _beam_exchange_format_candidates(preferred_format: Optional[str]) -> List[str]:
@@ -549,43 +573,55 @@ class BeamPreprocessor(GenericPreprocessor):
         if not file_format:
             file_format = "parquet"
 
-        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
-        records: List[FileRecord] = []
-        unresolved: List[str] = []
+        candidate_folders = self._beam_exchange_scenario_folder_candidates(workspace)
         current_year = getattr(self.state, "current_year", None)
         current_inner_iter = getattr(self.state, "current_inner_iter", None)
+        folder_errors: List[str] = []
 
-        for short_name, stem in required_keys.items():
-            path, resolved_format = self._locate_existing_beam_exchange_input(
-                beam_scenario_folder,
-                stem,
-                file_format,
-            )
-            if path and resolved_format:
-                records.append(
-                    FileRecord(
-                        file_path=path,
-                        short_name=short_name,
-                        description=(
-                            f"Existing BEAM scenario input: {stem}"
-                            f" ({resolved_format})"
-                        ),
-                        year=current_year,
-                        iteration=current_inner_iter,
-                    )
+        for idx, beam_scenario_folder in enumerate(candidate_folders):
+            records: List[FileRecord] = []
+            unresolved: List[str] = []
+            for short_name, stem in required_keys.items():
+                path, resolved_format = self._locate_existing_beam_exchange_input(
+                    beam_scenario_folder,
+                    stem,
+                    file_format,
                 )
-                continue
-            unresolved.append(
-                f"{stem}.[{'|'.join(self._beam_exchange_format_candidates(file_format))}]"
-            )
+                if path and resolved_format:
+                    records.append(
+                        FileRecord(
+                            file_path=path,
+                            short_name=short_name,
+                            description=(
+                                f"Existing BEAM scenario input: {stem}"
+                                f" ({resolved_format})"
+                            ),
+                            year=current_year,
+                            iteration=current_inner_iter,
+                        ),
+                    )
+                    continue
+                unresolved.append(
+                    f"{stem}.[{'|'.join(self._beam_exchange_format_candidates(file_format))}]"
+                )
 
-        if unresolved:
-            raise FileNotFoundError(
-                "Missing default BEAM scenario inputs in exchange folder "
+            if not unresolved:
+                if idx > 0:
+                    logger.info(
+                        "[BEAM Preprocessor] YAML scenario_folder was missing required inputs; "
+                        "using fallback exchange.scenario.folder from BEAM config: %s",
+                        beam_scenario_folder,
+                    )
+                return RecordStore(recordList=records)
+
+            folder_errors.append(
                 f"{beam_scenario_folder}: {', '.join(unresolved)}"
             )
 
-        return RecordStore(recordList=records)
+        raise FileNotFoundError(
+            "Missing default BEAM scenario inputs in exchange folders "
+            f"{'; '.join(folder_errors)}"
+        )
 
     def existing_beam_exchange_inputs(self, workspace: "Workspace") -> RecordStore:
         """
@@ -1149,7 +1185,7 @@ class BeamPreprocessor(GenericPreprocessor):
         Semantics:
         - For the first BEAM run in the PILATES inner-iteration loop, use the initial
           warm-start linkstats file copied into the BEAM mutable input tree
-          (typically `.../<router_directory>/init.linkstats.csv.gz`).
+          (when explicitly configured).
         - For subsequent BEAM runs (inner-iterations > 0), use the linkstats produced by
           the most recent BEAM run's *last* BEAM internal iteration (the one logged without
           a `_sub...` suffix).
@@ -1217,17 +1253,10 @@ class BeamPreprocessor(GenericPreprocessor):
             warmstart_source = "previous_beam_output"
 
         if warmstart_abs_path is None:
-            base_dir = os.path.join(
-                str(workspace.get_beam_mutable_data_dir()),
-                self.settings.run.region,
-                self.settings.beam.router_directory,
+            warmstart_abs_path = resolve_initial_linkstats_path(
+                self.settings,
+                workspace,
             )
-            parquet_candidate = os.path.join(base_dir, "init.linkstats.parquet")
-            csv_candidate = os.path.join(base_dir, "init.linkstats.csv.gz")
-            if os.path.exists(parquet_candidate):
-                warmstart_abs_path = parquet_candidate
-            else:
-                warmstart_abs_path = csv_candidate
             warmstart_source = "initial_inputs"
 
         if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):

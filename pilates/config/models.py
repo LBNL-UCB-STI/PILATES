@@ -562,6 +562,13 @@ class BeamConfig(BaseModel):
     local_output_folder: str
     scenario_folder: str
     router_directory: str
+    warmstart_linkstats_path: Optional[str] = Field(
+        None,
+        description=(
+            "Optional path to the initial BEAM warm-start linkstats file. "
+            "If relative, it is resolved against the mutable BEAM region input root."
+        ),
+    )
     skims_shapefile: str
     skim_zone_source_id_col: str
     skim_zone_geoid_col: str

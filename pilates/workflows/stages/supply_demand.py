@@ -67,6 +67,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.activitysim.runner import persist_sharrow_cache_enabled
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -218,22 +219,7 @@ def _run_supply_demand_workflow(
 def _find_initial_linkstats_warmstart(
     settings: PilatesConfig, workspace: Workspace
 ) -> Optional[str]:
-    beam_settings = settings.beam
-    if beam_settings is None:
-        return None
-    base_dir = os.path.join(
-        workspace.get_beam_mutable_data_dir(),
-        settings.run.region,
-        beam_settings.router_directory,
-    )
-    candidates = [
-        os.path.join(base_dir, "init.linkstats.parquet"),
-        os.path.join(base_dir, "init.linkstats.csv.gz"),
-    ]
-    for candidate in candidates:
-        if os.path.exists(candidate):
-            return candidate
-    return None
+    return resolve_initial_linkstats_path(settings, workspace)
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
