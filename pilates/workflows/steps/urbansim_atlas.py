@@ -51,6 +51,13 @@ from .shared import (
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
+def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(kwargs)
+    filtered.pop("coupler", None)
+    filtered.pop("context", None)
+    return filtered
+
+
 def _root_h5_table_keys(
     path: str,
     *,
@@ -361,7 +368,10 @@ def _execute_urbansim_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> UrbanSimPreprocessOutputs:
-    return preprocessor.preprocess(workspace, **kwargs)
+    return preprocessor.preprocess(
+        workspace,
+        **_strip_component_runtime_kwargs(kwargs),
+    )
 
 
 def _execute_urbansim_run_typed(
@@ -402,7 +412,10 @@ def _execute_atlas_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> AtlasPreprocessOutputs:
-    return preprocessor.preprocess(workspace, **kwargs)
+    return preprocessor.preprocess(
+        workspace,
+        **_strip_component_runtime_kwargs(kwargs),
+    )
 
 
 def _execute_atlas_run_typed(

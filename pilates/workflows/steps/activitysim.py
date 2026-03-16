@@ -72,6 +72,13 @@ logger = logging.getLogger(__name__)
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
+def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    filtered = dict(kwargs)
+    filtered.pop("coupler", None)
+    filtered.pop("context", None)
+    return filtered
+
+
 def _artifact_content_hash(value: Any) -> Optional[str]:
     """
     Extract a content hash from an artifact-like value when available.
@@ -91,7 +98,10 @@ def _execute_activitysim_preprocess(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> ActivitySimPreprocessOutputs:
-    return preprocessor.preprocess(workspace, **kwargs)
+    return preprocessor.preprocess(
+        workspace,
+        **_strip_component_runtime_kwargs(kwargs),
+    )
 
 
 def _execute_activitysim_run(

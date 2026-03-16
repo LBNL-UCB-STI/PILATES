@@ -692,7 +692,10 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def copy_data_to_mutable_location(
-        self, settings: PilatesConfig, output_dir: str
+        self,
+        settings: PilatesConfig,
+        output_dir: str,
+        workspace: Optional["Workspace"] = None,
     ) -> Tuple[RecordStore, RecordStore]:
         """
         Copy BEAM input files for the current region from the production directory

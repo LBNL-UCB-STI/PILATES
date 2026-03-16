@@ -20,7 +20,7 @@ class DummyPreprocessor:
     def __init__(self, *_, **__):
         pass
 
-    def copy_data_to_mutable_location(self, settings, output_dir):
+    def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
         # Return two RecordStore objects with known records
         in_record = FileRecord(
             unique_id="in1",
@@ -241,7 +241,7 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
             self.input_path = input_path
             self.output_path = output_path
 
-        def copy_data_to_mutable_location(self, settings, output_dir):
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
             in_record = FileRecord(
                 unique_id="in1",
                 short_name="bad key",
@@ -411,7 +411,7 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
             self.model_name = model_name
             self.calls = calls
 
-        def copy_data_to_mutable_location(self, settings, output_dir):
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
             self.calls.append((self.model_name, output_dir))
             record = FileRecord(
                 unique_id=f"{self.model_name}-out",

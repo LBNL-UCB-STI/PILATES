@@ -34,6 +34,7 @@ class GenericPreprocessor(
         self,
         settings: PilatesConfig,
         output_dir: str,
+        workspace: Optional["Workspace"] = None,
     ) -> Tuple[RecordStore, RecordStore]:
         """Copy immutable seed inputs into the mutable workspace."""
         raise NotImplementedError

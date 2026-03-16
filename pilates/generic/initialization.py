@@ -449,7 +449,9 @@ class Initialization(Model):
                     asim_input_dir = workspace.get_asim_mutable_data_dir()
                     rec_in, rec_out = (
                         activitysim_preprocessor.copy_data_to_mutable_location(
-                            settings, asim_input_dir
+                            settings,
+                            asim_input_dir,
+                            workspace,
                         )
                     )
                     _accumulate_copy_result(

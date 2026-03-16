@@ -140,8 +140,23 @@ def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
     os.makedirs(dest_dir, exist_ok=True)
     source = Path(source_path)
     dest_path = Path(dest_dir) / source.name
+    try:
+        if source.resolve() == dest_path.resolve():
+            logger.info("Canonical zone source already at destination: %s", dest_path)
+            return str(dest_path)
+    except OSError:
+        pass
 
     if source.suffix.lower() == ".shp":
+        try:
+            if source.parent.resolve() == Path(dest_dir).resolve():
+                logger.info(
+                    "Canonical zone shapefile family already at destination: %s",
+                    dest_dir,
+                )
+                return str(dest_path)
+        except OSError:
+            pass
         for sibling in source.parent.glob(f"{source.stem}.*"):
             shutil.copy(sibling, Path(dest_dir) / sibling.name)
         return str(dest_path)
