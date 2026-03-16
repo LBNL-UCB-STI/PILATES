@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, Optional
 
+from consist import MaterializationResult
 from consist.types import CacheOptions
 
 from pilates.generic.model_factory import ModelFactory
@@ -14,8 +15,6 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
-from pilates.urbansim.postprocessor import get_usim_datastore_fname
-from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
@@ -48,65 +47,23 @@ def build_bootstrap_manifest_reference(
     return reference
 
 
-def archive_bootstrap_restart_artifacts(
-    *,
-    settings: Any,
-    workspace: Workspace,
-    enqueue_archive_copy_fn: Callable[..., Any] = enqueue_archive_copy,
-    flush_archive_queue_fn: Callable[..., Any] = flush_archive_queue,
-    get_usim_datastore_fname_fn: Callable[..., str] = get_usim_datastore_fname,
-) -> None:
-    """
-    Durably archive bootstrap-created local runtime state needed for restart.
-    """
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    if (
-        run_cfg is not None
-        and getattr(run_cfg, "region", None)
-        and urbansim_cfg is not None
-    ):
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        if os.path.isdir(usim_data_dir):
-            enqueue_archive_copy_fn(
-                key="urbansim_bootstrap_data_root",
-                path=usim_data_dir,
-            )
-        usim_base_path = os.path.join(
-            usim_data_dir,
-            get_usim_datastore_fname_fn(settings, io="input"),
-        )
-        if os.path.exists(usim_base_path):
-            enqueue_archive_copy_fn(
-                key="bootstrap_usim_datastore_base_h5",
-                path=usim_base_path,
-            )
-
-    if getattr(model_cfg, "activity_demand", None) == "activitysim":
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-
-        if os.path.isdir(asim_data_dir):
-            enqueue_archive_copy_fn(
-                key="activitysim_bootstrap_data_root",
-                path=asim_data_dir,
-            )
-        if os.path.isdir(asim_configs_dir):
-            enqueue_archive_copy_fn(
-                key="activitysim_bootstrap_configs_root",
-                path=asim_configs_dir,
-            )
-
-    if get_traffic_assignment_model(settings) == "beam":
-        beam_data_dir = workspace.get_beam_mutable_data_dir()
-        if os.path.isdir(beam_data_dir):
-            enqueue_archive_copy_fn(
-                key="beam_mutable_data_dir",
-                path=beam_data_dir,
-            )
-
-    flush_archive_queue_fn(timeout=300, fail_on_timeout=True)
+def _bootstrap_materialization_metadata(
+    result: MaterializationResult,
+) -> Dict[str, Any]:
+    return {
+        "summary": result.summary,
+        "complete": result.complete,
+        "has_failures": result.has_failures,
+        "materialized_from_filesystem_count": len(result.materialized_from_filesystem),
+        "materialized_from_db_count": len(result.materialized_from_db),
+        "skipped_existing_count": len(result.skipped_existing),
+        "skipped_unmapped_count": len(result.skipped_unmapped),
+        "skipped_missing_source_count": len(result.skipped_missing_source),
+        "failed_count": len(result.failed),
+        "skipped_unmapped": list(result.skipped_unmapped),
+        "skipped_missing_source": list(result.skipped_missing_source),
+        "failed": list(result.failed),
+    }
 
 
 def seed_bootstrap_artifacts_to_coupler(
@@ -258,7 +215,6 @@ def run_bootstrap_phase(
     build_step_consist_kwargs_fn: Callable[..., Dict[str, Any]],
     merge_tag_list_fn: Callable[..., list[str]],
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
-    archive_bootstrap_restart_artifacts_fn: Callable[..., None] = archive_bootstrap_restart_artifacts,
     cache_options_cls: type[CacheOptions] = CacheOptions,
 ) -> Dict[str, Any]:
     """
@@ -280,14 +236,12 @@ def run_bootstrap_phase(
         cache_hit: bool,
         probe_run_id: Optional[str],
         materialization_run_id: Optional[str] = None,
+        materialization_result: Optional[MaterializationResult] = None,
+        fallback_rerun: bool = False,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary_fn(workspace)
-        archive_bootstrap_restart_artifacts_fn(
-            settings=settings,
-            workspace=workspace,
-        )
         return {
             "bootstrap_cache_hit": cache_hit,
             "staged_artifact_summary": staged_artifact_summary,
@@ -295,6 +249,12 @@ def run_bootstrap_phase(
                 probe_run_id=probe_run_id,
                 materialization_run_id=materialization_run_id,
             ),
+            "materialization": (
+                _bootstrap_materialization_metadata(materialization_result)
+                if materialization_result is not None
+                else None
+            ),
+            "fallback_rerun": fallback_rerun,
         }
 
     run_kwargs: Dict[str, Any] = {
@@ -349,18 +309,87 @@ def run_bootstrap_phase(
 
     if cache_hit:
         logger.info(
-            "BOOTSTRAP CACHE HIT. Running Phase 1 materialization pass to keep workspace safe."
+            "BOOTSTRAP CACHE HIT. Materializing cached bootstrap outputs into "
+            "workspace root=%s run_id=%s preserve_existing=True",
+            workspace.full_path,
+            probe_run_id,
         )
-        materialized_result = tracker.run(
+        materialization_result: Optional[MaterializationResult] = None
+        materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
+        if not probe_run_id:
+            materialization_result = MaterializationResult(
+                failed=[
+                    (
+                        "bootstrap_initialization",
+                        "cache hit missing run id; cannot materialize cached outputs",
+                    )
+                ]
+            )
+        elif not callable(materialize_run_outputs_fn):
+            materialization_result = MaterializationResult(
+                failed=[
+                    (
+                        "bootstrap_initialization",
+                        "tracker does not expose materialize_run_outputs",
+                    )
+                ]
+            )
+        else:
+            try:
+                materialization_result = materialize_run_outputs_fn(
+                    run_id=probe_run_id,
+                    target_root=workspace.full_path,
+                    source_root=None,
+                    preserve_existing=True,
+                )
+            except Exception as exc:
+                materialization_result = MaterializationResult(
+                    failed=[
+                        (
+                            "bootstrap_initialization",
+                            f"materialize_run_outputs raised: {exc}",
+                        )
+                    ]
+                )
+                logger.warning(
+                    "BOOTSTRAP CACHE HIT materialization failed with exception; "
+                    "falling back to explicit rerun. run_id=%s error=%s",
+                    probe_run_id,
+                    exc,
+                )
+
+        if materialization_result.complete:
+            logger.info(
+                "BOOTSTRAP CACHE HIT materialization complete. %s",
+                materialization_result.summary,
+            )
+            return _finalize_bootstrap_result(
+                cache_hit=True,
+                probe_run_id=probe_run_id,
+                materialization_result=materialization_result,
+            )
+
+        logger.warning(
+            "BOOTSTRAP CACHE HIT materialization incomplete. %s "
+            "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
+            materialization_result.summary,
+            materialization_result.skipped_unmapped,
+            materialization_result.skipped_missing_source,
+            materialization_result.failed,
+        )
+        logger.warning(
+            "BOOTSTRAP fallback rerun triggered because cached output recovery was incomplete."
+        )
+        fallback_result = tracker.run(
             **run_kwargs,
-            cache_options=cache_options_cls(cache_mode="overwrite"),
+            cache_options=cache_options_cls(cache_mode="off"),
         )
         return _finalize_bootstrap_result(
             cache_hit=True,
             probe_run_id=probe_run_id,
-            materialization_run_id=getattr(
-                getattr(materialized_result, "run", None), "id", None
-            ),
+            materialization_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
+            materialization_result=materialization_result,
+            fallback_rerun=True,
         )
 
     logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")

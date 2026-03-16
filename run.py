@@ -20,7 +20,7 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Tuple, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Sequence, cast
 
 from pilates.workspace import Workspace
 from pilates.generic.records import sanitize_artifact_key
@@ -48,11 +48,6 @@ from pilates.utils.coupler_helpers import (
     enqueue_archive_copy,
     flush_archive_queue,
     stop_archive_worker,
-)
-from pilates.utils.restart_bundle import (
-    build_restart_bundle_manifest,
-    manifest_entries_to_local_artifacts,
-    write_restart_bundle_manifest,
 )
 from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.activitysim.preprocessor import required_asim_config_dirs
@@ -425,20 +420,6 @@ def _build_bootstrap_manifest_reference(
     )
 
 
-def _archive_bootstrap_restart_artifacts(
-    *,
-    settings: Any,
-    workspace: Workspace,
-) -> None:
-    bootstrap_runtime.archive_bootstrap_restart_artifacts(
-        settings=settings,
-        workspace=workspace,
-        enqueue_archive_copy_fn=enqueue_archive_copy,
-        flush_archive_queue_fn=flush_archive_queue,
-        get_usim_datastore_fname_fn=get_usim_datastore_fname,
-    )
-
-
 def run_bootstrap_phase(
     *,
     tracker: Any,
@@ -460,7 +441,6 @@ def run_bootstrap_phase(
         build_step_consist_kwargs_fn=build_step_consist_kwargs,
         merge_tag_list_fn=_merge_tag_list,
         merge_epoch_facet_fn=_merge_epoch_facet,
-        archive_bootstrap_restart_artifacts_fn=_archive_bootstrap_restart_artifacts,
         cache_options_cls=CacheOptions,
     )
 
@@ -535,19 +515,6 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _map_local_path_to_archive(
-    *,
-    local_path: str,
-    local_run_dir: str,
-    archive_run_dir: str,
-) -> Optional[str]:
-    return restart_runtime.map_local_path_to_archive(
-        local_path=local_path,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-    )
-
-
 def _repair_restart_state_for_incomplete_atlas_outputs(
     *,
     settings: Any,
@@ -605,56 +572,19 @@ def _repair_restart_beam_inputs_from_source(
     return repaired
 
 
-def _copy_archive_entry_preserve_existing(
+def _reconstruct_restart_completed_run_outputs(
     *,
-    archive_path: str,
-    local_path: str,
-) -> Tuple[int, int]:
-    return restart_runtime.copy_archive_entry_preserve_existing(
-        archive_path=archive_path,
-        local_path=local_path,
-    )
-
-
-def _rehydrate_missing_local_artifacts_from_archive(
-    *,
-    missing_artifacts: List[Dict[str, str]],
+    tracker: Any,
+    state: WorkflowState,
     local_run_dir: str,
     archive_run_dir: str,
-) -> Dict[str, int]:
-    return restart_runtime.rehydrate_missing_local_artifacts_from_archive(
-        missing_artifacts=missing_artifacts,
+) -> Dict[str, Any]:
+    return restart_runtime.reconstruct_restart_completed_run_outputs(
+        tracker=tracker,
+        state=state,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
-        map_local_path_to_archive_fn=_map_local_path_to_archive,
-        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
-    )
-
-
-def _rehydrate_full_local_run_from_archive(
-    *,
-    local_run_dir: str,
-    archive_run_dir: str,
-) -> Dict[str, int]:
-    return restart_runtime.rehydrate_full_local_run_from_archive(
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        copy_archive_entry_fn=_copy_archive_entry_preserve_existing,
-    )
-
-
-def _rehydrate_bundle_local_artifacts_from_archive(
-    *,
-    bundle_manifest: Optional[Dict[str, Any]],
-    local_run_dir: str,
-    archive_run_dir: str,
-) -> Dict[str, int]:
-    return restart_runtime.rehydrate_bundle_local_artifacts_from_archive(
-        bundle_manifest=bundle_manifest,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        manifest_entries_to_local_artifacts_fn=manifest_entries_to_local_artifacts,
-        rehydrate_missing_local_artifacts_fn=_rehydrate_missing_local_artifacts_from_archive,
+        workflow_stage=WorkflowState.Stage,
     )
 
 
@@ -677,7 +607,8 @@ def _run_resume_doctor_diagnostics(
     local_state_path: str,
     local_consist_db_path: Optional[str],
     restart_missing_artifacts_initial: List[Dict[str, str]],
-    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
+    restart_missing_artifacts_after_recovery: List[Dict[str, str]],
+    restart_reconstruction: Optional[Dict[str, Any]],
 ) -> None:
     restart_runtime.run_resume_doctor_diagnostics(
         state=state,
@@ -688,12 +619,12 @@ def _run_resume_doctor_diagnostics(
         local_state_path=local_state_path,
         local_consist_db_path=local_consist_db_path,
         restart_missing_artifacts_initial=restart_missing_artifacts_initial,
-        restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+        restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
         snapshot_latest_dir_fn=snapshot_latest_dir,
         build_manifest_path_fn=build_manifest_path,
-        map_local_path_to_archive_fn=_map_local_path_to_archive,
         format_missing_artifact_summary_fn=_format_missing_artifact_summary,
         log_resume_doctor_check_fn=_log_resume_doctor_check,
+        restart_reconstruction=restart_reconstruction,
     )
 
 
@@ -873,76 +804,85 @@ def main():
 
     restart_rehydrate_mode = _resolve_restart_rehydrate_mode(settings)
     restart_strict = _is_restart_strict(settings)
-    restart_bundle_manifest = build_restart_bundle_manifest(
-        archive_run_dir=archive_run_dir,
-        local_run_dir=local_run_dir,
-        settings=settings,
-        workspace=workspace,
-        state=state,
-        local_consist_db_path=local_consist_db_path,
-    )
-    restart_bundle_manifest_path = write_restart_bundle_manifest(
-        archive_run_dir=archive_run_dir,
-        manifest=restart_bundle_manifest,
-    )
-    logger.info(
-        "Restart bundle manifest ready: path=%s artifacts=%s mode=%s strict=%s",
-        restart_bundle_manifest_path,
-        len(restart_bundle_manifest.get("artifacts", [])),
-        restart_rehydrate_mode,
-        restart_strict,
-    )
-
+    restart_reconstruction: Optional[Dict[str, Any]] = None
     restart_missing_artifacts_initial: List[Dict[str, str]] = []
-    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]] = []
+    restart_missing_artifacts_after_recovery: List[Dict[str, str]] = []
+
+    if is_restart_run and state.data_initialized:
+        if restart_rehydrate_mode == "off":
+            logger.info(
+                "Restart completed-run reconstruction disabled "
+                "(run.restart_rehydrate_mode=off)."
+            )
+        else:
+            restart_reconstruction = _reconstruct_restart_completed_run_outputs(
+                tracker=tracker,
+                state=state,
+                local_run_dir=local_run_dir,
+                archive_run_dir=archive_run_dir,
+            )
+            reconstruction_result = restart_reconstruction["materialization_result"]
+            logger.info(
+                "Restart completed-run reconstruction finished: run_ids=%s "
+                "source_root=%s target_root=%s preserve_existing=True %s",
+                len(restart_reconstruction.get("run_ids", [])),
+                restart_reconstruction.get("source_root"),
+                restart_reconstruction.get("target_root"),
+                reconstruction_result.summary,
+            )
+            if not reconstruction_result.complete:
+                logger.warning(
+                    "Restart completed-run reconstruction incomplete: %s "
+                    "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
+                    reconstruction_result.summary,
+                    reconstruction_result.skipped_unmapped,
+                    reconstruction_result.skipped_missing_source,
+                    reconstruction_result.failed,
+                )
+                if restart_strict:
+                    raise RuntimeError(
+                        "Strict restart preflight failed; completed-run reconstruction "
+                        "was incomplete. "
+                        + reconstruction_result.summary
+                    )
+
     if state.data_initialized:
         restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
         )
+        restart_missing_artifacts_after_recovery = list(
+            restart_missing_artifacts_initial
+        )
         if restart_missing_artifacts_initial:
             logger.warning(
-                "Restart preflight found missing local workspace inputs while "
+                "Restart diagnostic found missing local workspace inputs while "
                 "data_initialized=True: %s",
                 _format_missing_artifact_summary(restart_missing_artifacts_initial),
             )
-            if restart_rehydrate_mode == "off":
-                logger.info(
-                    "Restart rehydration disabled (run.restart_rehydrate_mode=off)."
+            if restart_rehydrate_mode != "off":
+                restart_missing_artifacts_after_recovery = (
+                    _find_missing_restart_local_artifacts(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
                 )
-            elif restart_rehydrate_mode == "full":
-                _rehydrate_full_local_run_from_archive(
-                    local_run_dir=local_run_dir,
-                    archive_run_dir=archive_run_dir,
-                )
-            else:
-                _rehydrate_bundle_local_artifacts_from_archive(
-                    bundle_manifest=restart_bundle_manifest,
-                    local_run_dir=local_run_dir,
-                    archive_run_dir=archive_run_dir,
-                )
-            restart_missing_artifacts_after_rehydrate = (
-                _find_missing_restart_local_artifacts(
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                )
-            )
-            if restart_missing_artifacts_after_rehydrate:
+            if restart_missing_artifacts_after_recovery:
                 logger.warning(
-                    "Restart preflight still missing required local workspace inputs "
-                    "after archive rehydration: %s",
+                    "Restart diagnostic still sees missing local workspace inputs "
+                    "after completed-run reconstruction: %s",
                     _format_missing_artifact_summary(
-                        restart_missing_artifacts_after_rehydrate
+                        restart_missing_artifacts_after_recovery
                     ),
                 )
                 if restart_strict:
                     raise RuntimeError(
                         "Strict restart preflight failed; required restart artifacts are "
-                        "still missing after hydration. missing="
+                        "still missing after completed-run reconstruction. missing="
                         + _format_missing_artifact_summary(
-                            restart_missing_artifacts_after_rehydrate
+                            restart_missing_artifacts_after_recovery
                         )
                     )
     if is_restart_run and _repair_restart_beam_inputs_from_source(
@@ -950,7 +890,7 @@ def main():
         state=state,
         workspace=workspace,
     ):
-        restart_missing_artifacts_after_rehydrate = _find_missing_restart_local_artifacts(
+        restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
@@ -965,7 +905,8 @@ def main():
             local_state_path=local_state_path,
             local_consist_db_path=local_consist_db_path,
             restart_missing_artifacts_initial=restart_missing_artifacts_initial,
-            restart_missing_artifacts_after_rehydrate=restart_missing_artifacts_after_rehydrate,
+            restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
+            restart_reconstruction=restart_reconstruction,
         )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
@@ -973,25 +914,13 @@ def main():
     # lifecycle can evolve independently from normal model steps.
     cr.set_tracker(tracker)
     bootstrap_result: Optional[Dict[str, Any]] = None
-    force_restart_bootstrap = bool(restart_missing_artifacts_after_rehydrate)
-    if (
-        restart_missing_artifacts_initial
-        and not restart_missing_artifacts_after_rehydrate
-    ):
-        logger.info(
-            "Restart preflight recovered missing local inputs from archive; "
-            "continuing without forced bootstrap."
-        )
-    if not state.data_initialized or force_restart_bootstrap:
-        if force_restart_bootstrap:
-            logger.warning(
-                "Forcing bootstrap initialization on restart because required local "
-                "inputs were missing during preflight. initial_missing=%s "
-                "remaining_after_rehydrate=%s",
-                _format_missing_artifact_summary(restart_missing_artifacts_initial),
-                _format_missing_artifact_summary(
-                    restart_missing_artifacts_after_rehydrate
-                ),
+    should_run_bootstrap = is_restart_run or not state.data_initialized
+    if should_run_bootstrap:
+        if is_restart_run and state.data_initialized:
+            logger.info(
+                "Running bootstrap pre-scenario hydration for restart. "
+                "completed-run reconstruction handles stage outputs; bootstrap "
+                "re-hydrates workspace invariants through the normal cached run path."
             )
         else:
             logger.info("Running bootstrap initialization phase.")

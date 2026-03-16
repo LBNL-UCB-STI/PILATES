@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 
 import pytest
+from consist import MaterializationResult
 from consist.types import CacheOptions
 
 import run as run_module
@@ -71,9 +72,11 @@ class DummyInitialization:
 
 
 class DummyTracker:
-    def __init__(self, responses):
+    def __init__(self, responses, materialization_results=None):
         self.responses = list(responses)
+        self.materialization_results = list(materialization_results or [])
         self.calls = []
+        self.materialization_calls = []
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
@@ -84,6 +87,12 @@ class DummyTracker:
             cache_hit=response["cache_hit"],
             run=SimpleNamespace(id=response["run_id"]),
         )
+
+    def materialize_run_outputs(self, **kwargs):
+        self.materialization_calls.append(kwargs)
+        if not self.materialization_results:
+            raise AssertionError("missing prepared materialization result")
+        return self.materialization_results.pop(0)
 
 
 class DummySnapshotTracker:
@@ -153,19 +162,64 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert result["manifest_reference"] == {"probe_run_id": "bootstrap_probe"}
 
 
-def test_run_bootstrap_phase_cache_hit_materializes_with_overwrite(monkeypatch):
+def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
+    materialization_result = MaterializationResult(
+        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
+        skipped_existing=["existing-cache"],
+    )
     tracker = DummyTracker(
         responses=[
             {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-            {
-                "cache_hit": False,
-                "execute_fn": True,
-                "run_id": "bootstrap_materialize",
-            },
-        ]
+        ],
+        materialization_results=[materialization_result],
+    )
+    workspace = DummyWorkspace()
+
+    result = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert len(tracker.calls) == 1
+    assert result["bootstrap_cache_hit"] is True
+    assert result["fallback_rerun"] is False
+    assert result["staged_artifact_summary"]["copied_records_total"] == 0
+    assert result["manifest_reference"] == {"probe_run_id": "bootstrap_probe"}
+    assert result["materialization"]["complete"] is True
+    assert result["materialization"]["materialized_from_filesystem_count"] == 1
+    assert result["materialization"]["skipped_existing_count"] == 1
+    assert tracker.materialization_calls == [
+        {
+            "run_id": "bootstrap_probe",
+            "target_root": workspace.full_path,
+            "source_root": None,
+            "preserve_existing": True,
+        }
+    ]
+
+
+def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback_rerun(monkeypatch):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    partial_materialization = MaterializationResult(
+        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
+        skipped_missing_source=["missing-record"],
+        failed=[("bootstrap_initialization", "missing source")],
+    )
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
+        ],
+        materialization_results=[partial_materialization],
     )
     workspace = DummyWorkspace()
 
@@ -179,15 +233,26 @@ def test_run_bootstrap_phase_cache_hit_materializes_with_overwrite(monkeypatch):
     )
 
     assert len(tracker.calls) == 2
+    fallback_options = tracker.calls[1]["cache_options"]
+    assert isinstance(fallback_options, CacheOptions)
     assert result["bootstrap_cache_hit"] is True
-    overwrite_options = tracker.calls[1]["cache_options"]
-    assert isinstance(overwrite_options, CacheOptions)
-    assert overwrite_options.cache_mode == "overwrite"
+    assert result["fallback_rerun"] is True
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["manifest_reference"] == {
         "probe_run_id": "bootstrap_probe",
-        "materialization_run_id": "bootstrap_materialize",
+        "materialization_run_id": "bootstrap_fallback",
     }
+    assert result["materialization"]["complete"] is False
+    assert result["materialization"]["skipped_missing_source_count"] == 1
+    assert result["materialization"]["failed_count"] == 1
+    assert tracker.materialization_calls == [
+        {
+            "run_id": "bootstrap_probe",
+            "target_root": workspace.full_path,
+            "source_root": None,
+            "preserve_existing": True,
+        }
+    ]
 
 
 def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
@@ -221,81 +286,6 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     assert cache_options.cache_mode == "off"
     assert result["bootstrap_cache_hit"] is False
     assert result["manifest_reference"] == {"probe_run_id": "bootstrap_off"}
-
-
-def test_run_bootstrap_phase_archives_restart_critical_bootstrap_artifacts(monkeypatch, tmp_path):
-    class BootstrapInit:
-        def __init__(self, *_args, **_kwargs):
-            pass
-
-        def run(self, _settings, workspace):
-            os.makedirs(workspace.get_usim_mutable_data_dir(), exist_ok=True)
-            os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
-            os.makedirs(workspace.get_asim_mutable_configs_dir(), exist_ok=True)
-            beam_config_path = Path(
-                workspace.get_beam_mutable_data_dir(), "test", "beam.conf"
-            )
-            beam_config_path.parent.mkdir(parents=True, exist_ok=True)
-            beam_config_path.write_text("beam")
-            Path(workspace.get_usim_mutable_data_dir(), "usim_000.h5").write_text("h5")
-            Path(workspace.get_asim_mutable_data_dir(), "households.csv").write_text("hh")
-            Path(workspace.get_asim_mutable_configs_dir(), "configs").mkdir(parents=True, exist_ok=True)
-            rec = RecordStore(
-                recordList=[
-                    FileRecord(unique_id="out1", short_name="bootstrap_out", file_path="/tmp/dest")
-                ]
-            )
-            return rec
-
-    monkeypatch.setattr(run_module, "Initialization", BootstrapInit)
-    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
-
-    enqueued = []
-    flushed = []
-    monkeypatch.setattr(
-        run_module,
-        "enqueue_archive_copy",
-        lambda *, key, path, workspace=None: enqueued.append((key, path)),
-    )
-    monkeypatch.setattr(
-        run_module,
-        "flush_archive_queue",
-        lambda timeout=None, fail_on_timeout=False: flushed.append((timeout, fail_on_timeout)) or True,
-    )
-
-    tracker = DummyTracker(
-        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}]
-    )
-    workspace = DummyWorkspace(str(tmp_path / "workspace"))
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            bootstrap_cache_enabled=True,
-            region="test",
-            models=SimpleNamespace(activity_demand="activitysim", traffic_assignment="beam"),
-        ),
-        activitysim=SimpleNamespace(main_configs_dir="configs"),
-        beam=SimpleNamespace(config="beam.conf"),
-        urbansim=SimpleNamespace(
-            region_mappings={"region_to_region_id": {"test": "000"}},
-            input_file_template="usim_{region_id}.h5",
-        ),
-    )
-    state = SimpleNamespace(start_year=2017)
-
-    run_module.run_bootstrap_phase(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        scenario_id="test-scenario",
-        seed=None,
-    )
-
-    assert ("urbansim_bootstrap_data_root", workspace.get_usim_mutable_data_dir()) in enqueued
-    assert ("bootstrap_usim_datastore_base_h5", os.path.join(workspace.get_usim_mutable_data_dir(), "usim_000.h5")) in enqueued
-    assert ("activitysim_bootstrap_data_root", workspace.get_asim_mutable_data_dir()) in enqueued
-    assert ("activitysim_bootstrap_configs_root", workspace.get_asim_mutable_configs_dir()) in enqueued
-    assert ("beam_mutable_data_dir", workspace.get_beam_mutable_data_dir()) in enqueued
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
@@ -538,14 +528,13 @@ def test_resume_doctor_ready_summary_logs_expected_checks(tmp_path, caplog):
     local_manifest = run_module.build_manifest_path(workspace=workspace, year=2018, iteration=0)
     local_manifest.parent.mkdir(parents=True, exist_ok=True)
     local_manifest.write_text("manifest", encoding="utf-8")
-    archive_manifest = run_module._map_local_path_to_archive(
-        local_path=str(local_manifest),
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
+    archive_manifest = (
+        Path(archive_run_dir)
+        / ".workflow"
+        / local_manifest.name
     )
-    assert archive_manifest is not None
-    Path(archive_manifest).parent.mkdir(parents=True, exist_ok=True)
-    Path(archive_manifest).write_text("archive-manifest", encoding="utf-8")
+    archive_manifest.parent.mkdir(parents=True, exist_ok=True)
+    archive_manifest.write_text("archive-manifest", encoding="utf-8")
 
     with caplog.at_level("INFO"):
         run_module._run_resume_doctor_diagnostics(
@@ -557,7 +546,8 @@ def test_resume_doctor_ready_summary_logs_expected_checks(tmp_path, caplog):
             local_state_path=str(local_state_path),
             local_consist_db_path=str(local_consist_db_path),
             restart_missing_artifacts_initial=[],
-            restart_missing_artifacts_after_rehydrate=[],
+            restart_missing_artifacts_after_recovery=[],
+            restart_reconstruction=None,
         )
 
     check_messages = [
@@ -574,13 +564,10 @@ def test_resume_doctor_ready_summary_logs_expected_checks(tmp_path, caplog):
         "archive_latest_consist_db_snapshot",
         "required_restart_local_artifacts",
         "supply_demand_manifest_local",
-        "supply_demand_manifest_archive_mapped",
+        "supply_demand_manifest_archive",
     }
     assert "[ResumeDoctor] check=supply_demand_manifest_local status=ok" in caplog.text
-    assert (
-        "[ResumeDoctor] check=supply_demand_manifest_archive_mapped status=ok"
-        in caplog.text
-    )
+    assert "[ResumeDoctor] check=supply_demand_manifest_archive status=ok" in caplog.text
     assert "[ResumeDoctor] summary status=ready reason=all_checks_ok" in caplog.text
 
 
@@ -603,7 +590,8 @@ def test_resume_doctor_degraded_summary_reports_missing_checks_and_manifest_chec
             local_state_path=str(local_run_dir / "run_state.yaml"),
             local_consist_db_path=str(local_run_dir / ".consist" / "provenance.duckdb"),
             restart_missing_artifacts_initial=missing,
-            restart_missing_artifacts_after_rehydrate=missing,
+            restart_missing_artifacts_after_recovery=missing,
+            restart_reconstruction=None,
         )
 
     check_names = _resume_doctor_check_names(caplog)
@@ -614,13 +602,10 @@ def test_resume_doctor_degraded_summary_reports_missing_checks_and_manifest_chec
         "archive_latest_consist_db_snapshot",
         "required_restart_local_artifacts",
         "supply_demand_manifest_local",
-        "supply_demand_manifest_archive_mapped",
+        "supply_demand_manifest_archive",
     }
     assert "[ResumeDoctor] check=supply_demand_manifest_local status=missing" in caplog.text
-    assert (
-        "[ResumeDoctor] check=supply_demand_manifest_archive_mapped status=missing"
-        in caplog.text
-    )
+    assert "[ResumeDoctor] check=supply_demand_manifest_archive status=missing" in caplog.text
     assert "[ResumeDoctor] summary status=degraded reason=missing_checks:" in caplog.text
 
 
@@ -704,16 +689,6 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
-    monkeypatch.setattr(
-        run_module,
-        "build_restart_bundle_manifest",
-        lambda **_kwargs: {"artifacts": []},
-    )
-    monkeypatch.setattr(
-        run_module,
-        "write_restart_bundle_manifest",
-        lambda **_kwargs: str(tmp_path / "archive-root" / "manifest.yaml"),
-    )
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
     def _fail_bootstrap(**_kwargs):
@@ -920,6 +895,65 @@ def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_as
     )
 
 
+def test_reconstruct_restart_completed_run_outputs_materializes_manifest_run_ids(tmp_path):
+    archive_run_dir = tmp_path / "archive-run"
+    local_run_dir = tmp_path / "local-run"
+    manifest_path = archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml"
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(
+        "\n".join(
+            [
+                "activitysim_preprocess:",
+                "  run_id: run-1",
+                "activitysim_postprocess:",
+                "  run_id: run-2",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    tracker = DummyTracker(
+        responses=[],
+        materialization_results=[
+            MaterializationResult(materialized_from_filesystem={"run-1": "/tmp/a"}),
+            MaterializationResult(materialized_from_filesystem={"run-2": "/tmp/b"}),
+        ],
+    )
+    state = SimpleNamespace(
+        current_year=2018,
+        current_inner_iter=1,
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        current_sub_stage=WorkflowState.Stage.activity_demand,
+        _settings={"supply_demand_iters": 2},
+    )
+
+    result = run_module._reconstruct_restart_completed_run_outputs(
+        tracker=tracker,
+        state=state,
+        local_run_dir=str(local_run_dir),
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert result["run_ids"] == ["run-1", "run-2"]
+    assert result["source_root"] == str(archive_run_dir.resolve())
+    assert result["target_root"] == str(local_run_dir.resolve())
+    assert result["materialization_result"].complete is True
+    assert tracker.materialization_calls == [
+        {
+            "run_id": "run-1",
+            "target_root": str(local_run_dir.resolve()),
+            "source_root": str(archive_run_dir.resolve()),
+            "preserve_existing": True,
+        },
+        {
+            "run_id": "run-2",
+            "target_root": str(local_run_dir.resolve()),
+            "source_root": str(archive_run_dir.resolve()),
+            "preserve_existing": True,
+        },
+    ]
+
+
 def test_restart_repair_rewinds_stale_supply_demand_state_when_atlas_outputs_incomplete(
     tmp_path,
 ):
@@ -1017,171 +1051,6 @@ def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_pat
     assert "atlas_static_psid_names.Rdat" not in fallback
 
 
-def test_rehydrate_missing_local_artifacts_from_archive_is_idempotent_and_preserves_existing(
-    tmp_path,
-):
-    local_run_dir = tmp_path / "local-run"
-    archive_run_dir = tmp_path / "archive-run"
-    workspace = DummyWorkspace(str(local_run_dir))
-    state = SimpleNamespace()
-
-    missing = run_module._find_missing_restart_local_artifacts(
-        settings=_restart_settings(),
-        state=state,
-        workspace=workspace,
-    )
-    assert missing
-
-    for artifact in missing:
-        archive_path = run_module._map_local_path_to_archive(
-            local_path=artifact["path"],
-            local_run_dir=str(local_run_dir),
-            archive_run_dir=str(archive_run_dir),
-        )
-        assert archive_path is not None
-        archive_file = Path(archive_path)
-        archive_file.parent.mkdir(parents=True, exist_ok=True)
-        archive_file.write_text(f"archive-{artifact['key']}", encoding="utf-8")
-
-    first_summary = run_module._rehydrate_missing_local_artifacts_from_archive(
-        missing_artifacts=missing,
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-    assert first_summary["copied"] == len(missing)
-    assert first_summary["copy_errors"] == 0
-
-    config_settings = next(
-        item["path"]
-        for item in missing
-        if item["key"] == "activitysim_config_settings_yaml_configs"
-    )
-    Path(config_settings).write_text("local-only", encoding="utf-8")
-
-    second_summary = run_module._rehydrate_missing_local_artifacts_from_archive(
-        missing_artifacts=missing,
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-    assert second_summary["copied"] == 0
-    assert second_summary["skipped_existing"] >= len(missing)
-    assert Path(config_settings).read_text(encoding="utf-8") == "local-only"
-
-
-def test_rehydrate_missing_local_artifacts_from_archive_partial_archive_missing_counts(
-    tmp_path,
-):
-    local_run_dir = tmp_path / "local-run"
-    archive_run_dir = tmp_path / "archive-run"
-    workspace = DummyWorkspace(str(local_run_dir))
-    state = SimpleNamespace()
-
-    missing = run_module._find_missing_restart_local_artifacts(
-        settings=_restart_settings(),
-        state=state,
-        workspace=workspace,
-    )
-    assert missing
-
-    missing_archive_key = "activitysim_config_settings_yaml_configs_mp"
-    for artifact in missing:
-        if artifact["key"] == missing_archive_key:
-            continue
-        archive_path = run_module._map_local_path_to_archive(
-            local_path=artifact["path"],
-            local_run_dir=str(local_run_dir),
-            archive_run_dir=str(archive_run_dir),
-        )
-        assert archive_path is not None
-        archive_file = Path(archive_path)
-        archive_file.parent.mkdir(parents=True, exist_ok=True)
-        archive_file.write_text(f"archive-{artifact['key']}", encoding="utf-8")
-
-    summary = run_module._rehydrate_missing_local_artifacts_from_archive(
-        missing_artifacts=missing,
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert summary["copied"] == len(missing) - 1
-    assert summary["skipped_missing_archive"] == 1
-    assert summary["skipped_unmapped"] == 0
-    assert summary["copy_errors"] == 0
-
-    remaining = run_module._find_missing_restart_local_artifacts(
-        settings=_restart_settings(),
-        state=state,
-        workspace=workspace,
-    )
-    assert {item["key"] for item in remaining} == {missing_archive_key}
-    assert bool(remaining) is True
-
-
-def test_bundle_rehydrate_mode_copies_manifest_listed_artifact(tmp_path):
-    local_run_dir = tmp_path / "local-run"
-    archive_run_dir = tmp_path / "archive-run"
-    rel_path = os.path.join("activitysim", "data", "households.csv")
-
-    archive_file = archive_run_dir / rel_path
-    archive_file.parent.mkdir(parents=True, exist_ok=True)
-    archive_file.write_text("archive-households", encoding="utf-8")
-
-    summary = run_module._rehydrate_bundle_local_artifacts_from_archive(
-        bundle_manifest={
-            "schema_version": 1,
-            "artifacts": [
-                {
-                    "key": "activitysim_input_households.csv",
-                    "rel_path": rel_path,
-                    "reason": "test bundle artifact",
-                }
-            ],
-        },
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert summary["copied"] == 1
-    assert summary["copy_errors"] == 0
-    assert (local_run_dir / rel_path).read_text(encoding="utf-8") == "archive-households"
-
-
-def test_bundle_rehydrate_mode_repairs_existing_directory_from_manifest(tmp_path):
-    local_run_dir = tmp_path / "local-run"
-    archive_run_dir = tmp_path / "archive-run"
-    rel_dir = os.path.join("activitysim", "configs", "configs_mp")
-
-    local_dir = local_run_dir / rel_dir
-    local_dir.mkdir(parents=True, exist_ok=True)
-    (local_dir / "settings.yaml").write_text("local-settings", encoding="utf-8")
-
-    archive_dir = archive_run_dir / rel_dir
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    (archive_dir / "settings.yaml").write_text("archive-settings", encoding="utf-8")
-    (archive_dir / "constants.yaml").write_text("archive-constants", encoding="utf-8")
-
-    summary = run_module._rehydrate_bundle_local_artifacts_from_archive(
-        bundle_manifest={
-            "schema_version": 1,
-            "artifacts": [
-                {
-                    "key": "activitysim_config_dir_configs_mp",
-                    "rel_path": rel_dir,
-                    "reason": "test bundle config dir",
-                    "kind": "dir",
-                }
-            ],
-        },
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert summary["copied"] == 1
-    assert summary["skipped_existing"] >= 1
-    assert (local_dir / "settings.yaml").read_text(encoding="utf-8") == "local-settings"
-    assert (local_dir / "constants.yaml").read_text(encoding="utf-8") == "archive-constants"
-
-
 def test_resume_rewind_guardrail_blocks_by_default_and_allows_override(tmp_path):
     archive_state_path = tmp_path / "archive-run" / "run_state.yaml"
     archive_state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1203,195 +1072,6 @@ def test_resume_rewind_guardrail_blocks_by_default_and_allows_override(tmp_path)
         archive_state_path=str(archive_state_path),
         allow_rewind_resume=True,
     )
-
-
-def test_main_strict_restart_preflight_fails_on_missing_artifacts(tmp_path, monkeypatch):
-    class StateStub:
-        def __init__(self, run_info_path: str):
-            self.run_info_path = run_info_path
-            self.data_initialized = True
-            self.current_year = 2018
-            self.current_inner_iter = 0
-            self.file_loc = None
-            self.mirror_file_loc = None
-
-        def set_run_info_path(self, path: str) -> None:
-            self.run_info_path = path
-
-        def set_data_initialized(self, initialized: bool) -> None:
-            self.data_initialized = initialized
-
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
-    archive_root = tmp_path / "archive-root"
-    local_root = tmp_path / "local-root"
-    run_name = "restart-run-002"
-    state = StateStub(str(archive_root / run_name / "run_state.yaml"))
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            output_directory=str(archive_root),
-            local_workspace_root=str(local_root),
-            enable_archive_copy=False,
-            output_run_name="unused",
-            restart_rehydrate_mode="off",
-            restart_strict=True,
-        ),
-        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
-        allow_rewind_resume=False,
-    )
-
-    missing_artifact = {
-        "key": "usim_datastore_base_h5",
-        "path": str(local_root / run_name / "urbansim" / "data" / "usim_000.h5"),
-        "reason": "required for restart",
-    }
-    missing_responses = [[missing_artifact], [missing_artifact]]
-    bootstrap_calls = []
-
-    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
-    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
-    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
-    monkeypatch.setattr(
-        run_module,
-        "resolve_consist_db_paths",
-        lambda **_kwargs: (None, None),
-    )
-    monkeypatch.setattr(
-        run_module,
-        "restore_local_consist_db_from_snapshot",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        run_module,
-        "seed_local_consist_db_from_shared",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
-    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
-    monkeypatch.setattr(
-        run_module,
-        "_find_missing_restart_local_artifacts",
-        lambda **_kwargs: missing_responses.pop(0),
-    )
-    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(
-        run_module,
-        "run_bootstrap_phase",
-        lambda **kwargs: bootstrap_calls.append(kwargs),
-    )
-
-    with pytest.raises(RuntimeError, match="Strict restart preflight failed"):
-        run_module.main()
-
-    assert bootstrap_calls == []
-
-
-def test_main_forces_bootstrap_when_restart_artifacts_remain_missing(
-    tmp_path, monkeypatch
-):
-    class StopAfterBootstrap(RuntimeError):
-        pass
-
-    class StateStub:
-        def __init__(self, run_info_path: str):
-            self.run_info_path = run_info_path
-            self.data_initialized = True
-            self.current_year = 2018
-            self.current_inner_iter = 0
-            self.file_loc = None
-            self.mirror_file_loc = None
-
-        def set_run_info_path(self, path: str) -> None:
-            self.run_info_path = path
-
-        def set_data_initialized(self, initialized: bool) -> None:
-            self.data_initialized = initialized
-
-    class WorkspaceStub:
-        def __init__(self, _settings, local_root: str, folder_name: str):
-            self.full_path = os.path.join(local_root, folder_name)
-            os.makedirs(self.full_path, exist_ok=True)
-
-    archive_root = tmp_path / "archive-root"
-    local_root = tmp_path / "local-root"
-    run_name = "restart-run-001"
-    state = StateStub(str(archive_root / run_name / "run_state.yaml"))
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            output_directory=str(archive_root),
-            local_workspace_root=str(local_root),
-            enable_archive_copy=False,
-            output_run_name="unused",
-        ),
-        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
-    )
-
-    missing_artifact = {
-        "key": "usim_datastore_base_h5",
-        "path": str(local_root / run_name / "urbansim" / "data" / "usim_000.h5"),
-        "reason": "required for restart",
-    }
-    missing_responses = [[missing_artifact], [missing_artifact]]
-    bootstrap_calls = []
-
-    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
-    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
-    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
-    monkeypatch.setattr(
-        run_module,
-        "resolve_consist_db_paths",
-        lambda **_kwargs: (None, None),
-    )
-    monkeypatch.setattr(
-        run_module,
-        "restore_local_consist_db_from_snapshot",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        run_module,
-        "seed_local_consist_db_from_shared",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
-    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
-    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
-    monkeypatch.setattr(
-        run_module,
-        "_find_missing_restart_local_artifacts",
-        lambda **_kwargs: missing_responses.pop(0),
-    )
-    monkeypatch.setattr(
-        run_module,
-        "_rehydrate_missing_local_artifacts_from_archive",
-        lambda **_kwargs: {
-            "copied": 0,
-            "skipped_existing": 0,
-            "skipped_missing_archive": 1,
-            "skipped_unmapped": 0,
-            "copy_errors": 0,
-        },
-    )
-    monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", lambda **_kwargs: None)
-    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-
-    def _fake_run_bootstrap_phase(**kwargs):
-        bootstrap_calls.append(kwargs)
-        raise StopAfterBootstrap("stop after bootstrap decision")
-
-    monkeypatch.setattr(run_module, "run_bootstrap_phase", _fake_run_bootstrap_phase)
-
-    with pytest.raises(StopAfterBootstrap, match="stop after bootstrap decision"):
-        run_module.main()
-
-    assert len(bootstrap_calls) == 1
 
 
 def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
@@ -1459,16 +1139,6 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     monkeypatch.setattr(run_module.cr, "create_tracker", _capture_create_tracker)
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
-    monkeypatch.setattr(
-        run_module,
-        "build_restart_bundle_manifest",
-        lambda **_kwargs: {"artifacts": []},
-    )
-    monkeypatch.setattr(
-        run_module,
-        "write_restart_bundle_manifest",
-        lambda **_kwargs: str(tmp_path / "archive-root" / "manifest.yaml"),
-    )
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
     def _stop_after_bootstrap(**_kwargs):

@@ -2,13 +2,21 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+
+import yaml
+from consist import MaterializationResult
 
 from pilates.utils.io import get_traffic_assignment_model
 
 logger = logging.getLogger(__name__)
+
+_ACTIVITYSIM_MANIFEST_STEPS = (
+    "activitysim_preprocess",
+    "activitysim_run",
+    "activitysim_postprocess",
+)
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -290,13 +298,15 @@ def resolve_restart_rehydrate_mode(settings: Any) -> str:
     run_cfg = getattr(settings, "run", None)
     raw = getattr(run_cfg, "restart_rehydrate_mode", "bundle")
     mode = str(raw).strip().lower() if raw is not None else "bundle"
-    if mode in {"bundle", "full", "off"}:
+    if mode in {"native", "off"}:
         return mode
+    if mode in {"bundle", "full"}:
+        return "native"
     logger.warning(
-        "Unknown run.restart_rehydrate_mode=%r; defaulting to 'bundle'.",
+        "Unknown run.restart_rehydrate_mode=%r; defaulting to 'native'.",
         raw,
     )
-    return "bundle"
+    return "native"
 
 
 def is_restart_strict(settings: Any) -> bool:
@@ -307,7 +317,7 @@ def is_restart_strict(settings: Any) -> bool:
 def read_archive_run_state_year(
     state_path: str,
     *,
-    read_current_stage_fn: Callable[[str], tuple[Any, ...]],
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
 ) -> Optional[int]:
     if not state_path:
         return None
@@ -403,193 +413,216 @@ def repair_restart_state_for_incomplete_atlas_outputs(
     return True
 
 
-def map_local_path_to_archive(
+def _supply_demand_manifest_path(
     *,
-    local_path: str,
-    local_run_dir: str,
-    archive_run_dir: str,
-) -> Optional[str]:
-    local_abs = os.path.realpath(local_path)
-    local_root = os.path.realpath(local_run_dir)
-    archive_root = os.path.realpath(archive_run_dir)
+    run_dir: str,
+    year: int,
+    iteration: int,
+) -> Path:
+    return Path(os.path.realpath(run_dir)) / ".workflow" / f"year_{year}_iteration_{iteration}.yaml"
+
+
+def _restart_manifest_targets(
+    *,
+    state: Any,
+    total_iters: int,
+    workflow_stage: Any,
+) -> List[Dict[str, Any]]:
+    targets: List[Dict[str, Any]] = []
+    current_stage = getattr(state, "current_major_stage", None)
+    current_sub_stage = getattr(state, "current_sub_stage", None)
+    resume_iter = max(_coerce_int(getattr(state, "current_inner_iter", 0)) or 0, 0)
+
+    if current_stage == workflow_stage.supply_demand_loop:
+        for iteration in range(0, resume_iter):
+            targets.append({"iteration": iteration, "steps": None})
+        if current_sub_stage == workflow_stage.traffic_assignment:
+            targets.append(
+                {
+                    "iteration": resume_iter,
+                    "steps": set(_ACTIVITYSIM_MANIFEST_STEPS),
+                }
+            )
+    elif current_stage == workflow_stage.postprocessing:
+        for iteration in range(0, max(total_iters, 0)):
+            targets.append({"iteration": iteration, "steps": None})
+    return targets
+
+
+def _load_manifest_run_ids(
+    *,
+    manifest_path: Path,
+    step_filter: Optional[Set[str]],
+) -> Tuple[List[str], List[Tuple[str, str]]]:
+    issues: List[Tuple[str, str]] = []
+    if not manifest_path.exists():
+        issues.append((str(manifest_path), "workflow manifest is missing"))
+        return [], issues
     try:
-        if os.path.commonpath([local_abs, local_root]) != local_root:
-            return None
-    except ValueError:
-        return None
-    rel = os.path.relpath(local_abs, local_root)
-    return os.path.join(archive_root, rel)
-
-
-def copy_archive_entry_preserve_existing(
-    *,
-    archive_path: str,
-    local_path: str,
-) -> Tuple[int, int]:
-    copied = 0
-    skipped_existing = 0
-
-    if os.path.isdir(archive_path):
-        for root, _, files in os.walk(archive_path):
-            rel_root = os.path.relpath(root, archive_path)
-            dest_root = local_path if rel_root == "." else os.path.join(local_path, rel_root)
-            os.makedirs(dest_root, exist_ok=True)
-            for filename in files:
-                src = os.path.join(root, filename)
-                dest = os.path.join(dest_root, filename)
-                if os.path.exists(dest):
-                    skipped_existing += 1
-                    continue
-                shutil.copy2(src, dest)
-                copied += 1
-        return copied, skipped_existing
-
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    if os.path.exists(local_path):
-        return 0, 1
-    shutil.copy2(archive_path, local_path)
-    return 1, 0
-
-
-def rehydrate_missing_local_artifacts_from_archive(
-    *,
-    missing_artifacts: List[Dict[str, str]],
-    local_run_dir: str,
-    archive_run_dir: str,
-    map_local_path_to_archive_fn: Callable[..., Optional[str]] = map_local_path_to_archive,
-    copy_archive_entry_fn: Callable[..., Tuple[int, int]] = copy_archive_entry_preserve_existing,
-) -> Dict[str, int]:
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    for artifact in missing_artifacts:
-        local_path = os.path.realpath(artifact["path"])
-        key = artifact.get("key", "unknown")
-        kind = artifact.get("kind", "file")
-
-        if os.path.exists(local_path) and not (kind == "dir" and os.path.isdir(local_path)):
-            summary["skipped_existing"] += 1
-            logger.info("[RestartRehydrate] Skip existing local artifact key=%s path=%s", key, local_path)
-            continue
-
-        archive_path = map_local_path_to_archive_fn(
-            local_path=local_path,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
-        if archive_path is None:
-            summary["skipped_unmapped"] += 1
-            logger.warning("[RestartRehydrate] Cannot map local path to archive key=%s path=%s", key, local_path)
-            continue
-        archive_path = os.path.realpath(archive_path)
-        if not os.path.exists(archive_path):
-            summary["skipped_missing_archive"] += 1
-            logger.warning("[RestartRehydrate] Archive source missing key=%s archive_path=%s", key, archive_path)
-            continue
-
-        try:
-            copied, skipped_existing = copy_archive_entry_fn(
-                archive_path=archive_path,
-                local_path=local_path,
-            )
-            summary["copied"] += copied
-            summary["skipped_existing"] += skipped_existing
-            logger.info(
-                "[RestartRehydrate] key=%s copied=%s skipped_existing=%s source=%s dest=%s",
-                key,
-                copied,
-                skipped_existing,
-                archive_path,
-                local_path,
-            )
-        except Exception as exc:
-            summary["copy_errors"] += 1
-            logger.warning(
-                "[RestartRehydrate] Failed copy key=%s source=%s dest=%s error=%s",
-                key,
-                archive_path,
-                local_path,
-                exc,
-            )
-
-    logger.info(
-        "[RestartRehydrate] Summary copied=%s skipped_existing=%s skipped_missing_archive=%s skipped_unmapped=%s copy_errors=%s",
-        summary["copied"],
-        summary["skipped_existing"],
-        summary["skipped_missing_archive"],
-        summary["skipped_unmapped"],
-        summary["copy_errors"],
-    )
-    return summary
-
-
-def rehydrate_full_local_run_from_archive(
-    *,
-    local_run_dir: str,
-    archive_run_dir: str,
-    copy_archive_entry_fn: Callable[..., Tuple[int, int]] = copy_archive_entry_preserve_existing,
-) -> Dict[str, int]:
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    archive_root = os.path.realpath(archive_run_dir)
-    if not os.path.exists(archive_root):
-        summary["skipped_missing_archive"] = 1
-        logger.warning("[RestartRehydrate] Full mode archive root missing: %s", archive_root)
-        return summary
-
-    try:
-        copied, skipped_existing = copy_archive_entry_fn(
-            archive_path=archive_root,
-            local_path=os.path.realpath(local_run_dir),
-        )
-        summary["copied"] = copied
-        summary["skipped_existing"] = skipped_existing
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            manifest_data = yaml.safe_load(handle) or {}
     except Exception as exc:
-        summary["copy_errors"] = 1
-        logger.warning(
-            "[RestartRehydrate] Full mode copy failed source=%s dest=%s error=%s",
-            archive_root,
-            os.path.realpath(local_run_dir),
-            exc,
-        )
-    return summary
+        issues.append((str(manifest_path), f"failed reading workflow manifest: {exc}"))
+        return [], issues
+    if not isinstance(manifest_data, dict):
+        issues.append((str(manifest_path), "workflow manifest is not a mapping"))
+        return [], issues
+
+    run_ids: List[str] = []
+    seen: Set[str] = set()
+    for step_name, step_info in manifest_data.items():
+        if step_filter and step_name not in step_filter:
+            continue
+        if not isinstance(step_info, dict):
+            continue
+        raw_run_id = step_info.get("run_id")
+        run_id = str(raw_run_id).strip() if raw_run_id is not None else ""
+        if not run_id or run_id in seen:
+            continue
+        seen.add(run_id)
+        run_ids.append(run_id)
+
+    if step_filter:
+        for step_name in sorted(step_filter):
+            step_info = manifest_data.get(step_name)
+            run_id = (
+                str(step_info.get("run_id")).strip()
+                if isinstance(step_info, dict) and step_info.get("run_id") is not None
+                else ""
+            )
+            if not run_id:
+                issues.append(
+                    (
+                        str(manifest_path),
+                        f"required step '{step_name}' is missing a run_id",
+                    )
+                )
+    return run_ids, issues
 
 
-def rehydrate_bundle_local_artifacts_from_archive(
+def collect_restart_completed_run_ids(
     *,
-    bundle_manifest: Optional[Dict[str, Any]],
+    state: Any,
+    archive_run_dir: str,
+    workflow_stage: Any,
+) -> Dict[str, Any]:
+    year = _coerce_int(getattr(state, "current_year", None))
+    if year is None:
+        return {"run_ids": [], "issues": [("state.current_year", "missing year")], "manifest_paths": []}
+
+    state_settings = getattr(state, "_settings", {})
+    total_iters_raw = (
+        state_settings.get("supply_demand_iters", 1)
+        if isinstance(state_settings, dict)
+        else 1
+    )
+    total_iters = _coerce_int(total_iters_raw)
+    if total_iters is None or total_iters < 0:
+        total_iters = 1
+
+    targets = _restart_manifest_targets(
+        state=state,
+        total_iters=total_iters,
+        workflow_stage=workflow_stage,
+    )
+
+    all_run_ids: List[str] = []
+    seen: Set[str] = set()
+    issues: List[Tuple[str, str]] = []
+    manifest_paths: List[str] = []
+    for target in targets:
+        iteration = target["iteration"]
+        step_filter = target["steps"]
+        manifest_path = _supply_demand_manifest_path(
+            run_dir=archive_run_dir,
+            year=year,
+            iteration=iteration,
+        )
+        manifest_paths.append(str(manifest_path))
+        run_ids, manifest_issues = _load_manifest_run_ids(
+            manifest_path=manifest_path,
+            step_filter=step_filter,
+        )
+        issues.extend(manifest_issues)
+        for run_id in run_ids:
+            if run_id in seen:
+                continue
+            seen.add(run_id)
+            all_run_ids.append(run_id)
+
+    return {
+        "run_ids": all_run_ids,
+        "issues": issues,
+        "manifest_paths": manifest_paths,
+    }
+
+
+def reconstruct_restart_completed_run_outputs(
+    *,
+    tracker: Any,
+    state: Any,
     local_run_dir: str,
     archive_run_dir: str,
-    manifest_entries_to_local_artifacts_fn: Callable[..., List[Dict[str, str]]],
-    rehydrate_missing_local_artifacts_fn: Callable[..., Dict[str, int]] = rehydrate_missing_local_artifacts_from_archive,
-) -> Dict[str, int]:
-    bundle_artifacts = manifest_entries_to_local_artifacts_fn(
-        manifest=bundle_manifest,
-        local_run_dir=local_run_dir,
-    )
-    if not bundle_artifacts:
-        logger.warning("[RestartRehydrate] Bundle mode found no manifest artifacts to hydrate.")
-        return {
-            "copied": 0,
-            "skipped_existing": 0,
-            "skipped_missing_archive": 0,
-            "skipped_unmapped": 0,
-            "copy_errors": 0,
-        }
-    return rehydrate_missing_local_artifacts_fn(
-        missing_artifacts=bundle_artifacts,
-        local_run_dir=local_run_dir,
+    workflow_stage: Any,
+) -> Dict[str, Any]:
+    discovery = collect_restart_completed_run_ids(
+        state=state,
         archive_run_dir=archive_run_dir,
+        workflow_stage=workflow_stage,
     )
+    run_ids = list(discovery["run_ids"])
+    issues = list(discovery["issues"])
+    source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
+    target_root = os.path.realpath(local_run_dir)
+
+    aggregate = MaterializationResult()
+    aggregate.failed.extend(issues)
+
+    materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
+    if run_ids and not callable(materialize_run_outputs_fn):
+        aggregate.failed.append(
+            (
+                "restart_reconstruction",
+                "tracker does not expose materialize_run_outputs",
+            )
+        )
+    elif callable(materialize_run_outputs_fn):
+        for run_id in run_ids:
+            try:
+                result = materialize_run_outputs_fn(
+                    run_id=run_id,
+                    target_root=target_root,
+                    source_root=source_root,
+                    preserve_existing=True,
+                )
+            except Exception as exc:
+                result = MaterializationResult(
+                    failed=[(run_id, f"materialize_run_outputs raised: {exc}")]
+                )
+            aggregate.materialized_from_filesystem.update(
+                dict(getattr(result, "materialized_from_filesystem", {}) or {})
+            )
+            aggregate.materialized_from_db.update(
+                dict(getattr(result, "materialized_from_db", {}) or {})
+            )
+            aggregate.skipped_existing.extend(
+                list(getattr(result, "skipped_existing", []) or [])
+            )
+            aggregate.skipped_unmapped.extend(
+                list(getattr(result, "skipped_unmapped", []) or [])
+            )
+            aggregate.skipped_missing_source.extend(
+                list(getattr(result, "skipped_missing_source", []) or [])
+            )
+            aggregate.failed.extend(list(getattr(result, "failed", []) or []))
+
+    return {
+        "run_ids": run_ids,
+        "source_root": source_root,
+        "target_root": target_root,
+        "manifest_paths": list(discovery["manifest_paths"]),
+        "materialization_result": aggregate,
+    }
 
 
 def log_resume_doctor_check(
@@ -613,12 +646,12 @@ def run_resume_doctor_diagnostics(
     local_state_path: str,
     local_consist_db_path: Optional[str],
     restart_missing_artifacts_initial: List[Dict[str, str]],
-    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
+    restart_missing_artifacts_after_recovery: List[Dict[str, str]],
     snapshot_latest_dir_fn: Callable[[str], Path],
     build_manifest_path_fn: Callable[..., Path],
-    map_local_path_to_archive_fn: Callable[..., Optional[str]] = map_local_path_to_archive,
     format_missing_artifact_summary_fn: Callable[[List[Dict[str, str]]], str] = format_missing_artifact_summary,
     log_resume_doctor_check_fn: Callable[..., None] = log_resume_doctor_check,
+    restart_reconstruction: Optional[Dict[str, Any]] = None,
 ) -> None:
     degraded_checks: List[str] = []
 
@@ -651,13 +684,13 @@ def run_resume_doctor_diagnostics(
         record("archive_latest_consist_db_snapshot", True, "path=none reason=disabled_or_unconfigured", required=False)
 
     if state.data_initialized:
-        missing_summary = format_missing_artifact_summary_fn(restart_missing_artifacts_after_rehydrate)
+        missing_summary = format_missing_artifact_summary_fn(restart_missing_artifacts_after_recovery)
         record(
             "required_restart_local_artifacts",
-            not restart_missing_artifacts_after_rehydrate,
+            not restart_missing_artifacts_after_recovery,
             "data_initialized=true "
             f"initial_missing={len(restart_missing_artifacts_initial)} "
-            f"remaining_missing={len(restart_missing_artifacts_after_rehydrate)} "
+            f"remaining_missing={len(restart_missing_artifacts_after_recovery)} "
             f"missing={missing_summary}",
         )
     else:
@@ -665,6 +698,29 @@ def run_resume_doctor_diagnostics(
             "required_restart_local_artifacts",
             True,
             "data_initialized=false reason=bootstrap_required",
+            required=False,
+        )
+
+    if restart_reconstruction:
+        reconstruction_result = restart_reconstruction.get("materialization_result")
+        run_ids = restart_reconstruction.get("run_ids", [])
+        complete = bool(getattr(reconstruction_result, "complete", False))
+        summary = (
+            getattr(reconstruction_result, "summary", "unavailable")
+            if reconstruction_result is not None
+            else "missing result"
+        )
+        record(
+            "completed_run_reconstruction",
+            complete,
+            f"run_ids={len(run_ids)} summary={summary}",
+            required=False,
+        )
+    else:
+        record(
+            "completed_run_reconstruction",
+            True,
+            "disabled_or_not_applicable",
             required=False,
         )
 
@@ -679,7 +735,7 @@ def run_resume_doctor_diagnostics(
         )
     except Exception as exc:
         record("supply_demand_manifest_local", False, f"year={year} iteration={iteration} error={exc}")
-        record("supply_demand_manifest_archive_mapped", False, f"year={year} iteration={iteration} error=local_manifest_path_unavailable")
+        record("supply_demand_manifest_archive", False, f"year={year} iteration={iteration} error=local_manifest_path_unavailable")
 
     if local_manifest_path is not None:
         local_manifest_real = os.path.realpath(str(local_manifest_path))
@@ -688,24 +744,20 @@ def run_resume_doctor_diagnostics(
             os.path.exists(local_manifest_real),
             f"year={year} iteration={iteration} path={local_manifest_real}",
         )
-        archive_manifest_path = map_local_path_to_archive_fn(
-            local_path=local_manifest_real,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
+        archive_manifest_real = os.path.realpath(
+            str(
+                _supply_demand_manifest_path(
+                    run_dir=archive_run_dir,
+                    year=int(year),
+                    iteration=int(iteration),
+                )
+            )
         )
-        if archive_manifest_path is None:
-            record(
-                "supply_demand_manifest_archive_mapped",
-                False,
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path=unmapped",
-            )
-        else:
-            archive_manifest_real = os.path.realpath(archive_manifest_path)
-            record(
-                "supply_demand_manifest_archive_mapped",
-                os.path.exists(archive_manifest_real),
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path={archive_manifest_real}",
-            )
+        record(
+            "supply_demand_manifest_archive",
+            os.path.exists(archive_manifest_real),
+            f"year={year} iteration={iteration} path={archive_manifest_real}",
+        )
 
     if degraded_checks:
         logger.warning(
