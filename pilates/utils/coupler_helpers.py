@@ -13,7 +13,6 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKI
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.catalog import workflow_step_key_match, workflow_step_spec_for_step_name
 from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
@@ -253,6 +252,11 @@ def _warn_for_undeclared_step_output(
 ) -> None:
     if not step_name:
         return
+    from pilates.workflows.catalog import (
+        workflow_step_key_match,
+        workflow_step_spec_for_step_name,
+    )
+
     match = workflow_step_key_match(step_name, key, direction="output")
     if match.declared:
         return
@@ -260,8 +264,9 @@ def _warn_for_undeclared_step_output(
     dynamic_families = tuple(spec.dynamic_output_families) if spec is not None else ()
     if dynamic_families:
         message = (
-            "[%s] Step '%s' published undeclared output key '%s'%s; it matches no "
-            "declared output key and no dynamic output family %s."
+            "[CONTRACT-ENFORCEMENT][%s] Step '%s' published undeclared output "
+            "key '%s'%s; it matches no declared output key and no dynamic "
+            "output family %s."
         )
         args = (
             step_name,
@@ -272,8 +277,8 @@ def _warn_for_undeclared_step_output(
         )
     else:
         message = (
-            "[%s] Step '%s' published undeclared output key '%s'%s; the step "
-            "declares no dynamic output families."
+            "[CONTRACT-ENFORCEMENT][%s] Step '%s' published undeclared output "
+            "key '%s'%s; the step declares no dynamic output families."
         )
         args = (
             step_name,

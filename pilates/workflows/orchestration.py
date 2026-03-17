@@ -118,9 +118,9 @@ def _warn_for_undeclared_step_inputs(
             continue
         if dynamic_families:
             message = (
-                "[%s] Step '%s' received undeclared input key '%s'%s from step "
-                "resolution; it matches no declared input key and no dynamic input "
-                "family %s."
+                "[CONTRACT-ENFORCEMENT][%s] Step '%s' received undeclared input "
+                "key '%s'%s from step resolution; it matches no declared input "
+                "key and no dynamic input family %s."
             )
             args = (
                 step_name,
@@ -131,8 +131,9 @@ def _warn_for_undeclared_step_inputs(
             )
         else:
             message = (
-                "[%s] Step '%s' received undeclared input key '%s'%s from step "
-                "resolution; the step declares no dynamic input families."
+                "[CONTRACT-ENFORCEMENT][%s] Step '%s' received undeclared input "
+                "key '%s'%s from step resolution; the step declares no dynamic "
+                "input families."
             )
             args = (
                 step_name,
