@@ -186,6 +186,49 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         assert spec.upstream_step_inputs == contract["upstream_step_inputs"]
 
 
+def test_workflow_step_contract_export_is_serializable_and_aligned():
+    contracts = catalog.workflow_step_contracts_by_name()
+
+    assert contracts["activitysim_run"] == {
+        "step_name": "activitysim_run",
+        "stage_name": "activity_demand",
+        "phase": "run",
+        "depends_on": ["activitysim_preprocess"],
+        "input_keys": [ZARR_SKIMS],
+        "optional_input_keys": [],
+        "upstream_step_inputs": ["activitysim_preprocess"],
+        "output_keys": [
+            ASIM_OUTPUT_DIR,
+            *ActivitySimRunOutputs.declared_output_keys(),
+        ],
+        "dynamic_output_families": [],
+        "optional": False,
+    }
+    assert contracts["beam_postprocess"] == {
+        "step_name": "beam_postprocess",
+        "stage_name": "traffic_assignment",
+        "phase": "postprocess",
+        "depends_on": ["beam_run"],
+        "input_keys": [],
+        "optional_input_keys": [],
+        "upstream_step_inputs": ["beam_run"],
+        "output_keys": [
+            BEAM_OUTPUT_DIR,
+            *BeamRunOutputs.declared_output_keys(),
+            BEAM_OUTPUT_PLANS_XML,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            BEAM_EXPERIENCED_PLANS_XML,
+            ZARR_SKIMS,
+            FINAL_SKIMS_OMX,
+        ],
+        "dynamic_output_families": [
+            "events_parquet_{year}_{iteration}",
+            "path_traversal_links_{year}_{iteration}",
+        ],
+        "optional": False,
+    }
+
+
 def test_catalog_output_keys_cover_declared_step_output_contracts():
     covered_steps = {
         "activitysim_preprocess",

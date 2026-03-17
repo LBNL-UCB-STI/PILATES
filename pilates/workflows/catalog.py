@@ -67,6 +67,20 @@ class WorkflowStepProvenanceSpec:
 
 @dataclass(frozen=True)
 class WorkflowStepSpec:
+    """
+    Static catalog entry for a workflow step.
+
+    Contract fields are intentionally split by meaning:
+    - ``input_keys`` and ``optional_input_keys`` describe direct artifact reads.
+    - ``upstream_step_inputs`` describes semantic upstream step dependencies.
+    - ``holder_inputs`` describes the current in-process wiring mechanism.
+    - ``output_keys`` describes stable workflow-facing outputs.
+    - ``dynamic_output_families`` documents open-ended output namespaces.
+
+    This metadata is for static inspection/planning only. Runtime execution
+    still uses the step implementations and holder/coupler wiring.
+    """
+
     step_name: str
     model_name: str
     phase: str
@@ -402,6 +416,31 @@ def workflow_step_spec_for_step_name(step_name: str) -> Optional[WorkflowStepSpe
 
 def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepSpec]:
     return _STEP_SPECS_BY_MODEL_NAME.get(model_name)
+
+
+def workflow_step_contracts_by_name() -> Dict[str, Dict[str, Any]]:
+    """
+    Return a plain serializable catalog view for static inspection tools.
+
+    The returned payload is intentionally shallow and JSON-friendly so callers
+    do not need to understand the ``WorkflowStepSpec`` dataclass.
+    """
+
+    contracts: Dict[str, Dict[str, Any]] = {}
+    for spec in WORKFLOW_STEP_SPECS:
+        contracts[spec.step_name] = {
+            "step_name": spec.step_name,
+            "stage_name": spec.stage_name,
+            "phase": spec.phase,
+            "depends_on": list(spec.depends_on),
+            "input_keys": list(spec.input_keys),
+            "optional_input_keys": list(spec.optional_input_keys),
+            "upstream_step_inputs": list(spec.upstream_step_inputs),
+            "output_keys": list(spec.output_keys),
+            "dynamic_output_families": list(spec.dynamic_output_families),
+            "optional": spec.optional,
+        }
+    return contracts
 
 
 def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
