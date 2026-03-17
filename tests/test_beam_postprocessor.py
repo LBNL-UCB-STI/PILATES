@@ -9,6 +9,7 @@ import pandas as pd
 from pilates.beam.postprocessor import (
     _merge_beam_skims_to_zarr,
     split_events_parquet_by_type,
+    write_zarr_skim_as_omx_new,
 )
 from pilates.beam.outputs import BeamPostprocessOutputs
 from pilates.generic.records import RecordStore, FileRecord
@@ -18,6 +19,32 @@ from pilates.config.models import load_config
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
 NUM_ZONES = len(CANONICAL_GEOID_ORDER)
 TIME_PERIODS = ["EA", "AM", "MD", "PM", "EV"]
+
+
+class _FakeOmxMatrix:
+    def __init__(self, data):
+        self.data = data
+        self.attrs = {}
+
+
+class _FakeOmxFile:
+    def __init__(self, path: str):
+        self.path = path
+        self.mapping = None
+        self.matrices = {}
+        self.closed = False
+
+    def create_mapping(self, name, values, overwrite=False):
+        self.mapping = (name, list(values), overwrite)
+
+    def __setitem__(self, key, value):
+        self.matrices[key] = _FakeOmxMatrix(np.array(value))
+
+    def __getitem__(self, key):
+        return self.matrices[key]
+
+    def close(self):
+        self.closed = True
 
 
 @pytest.fixture
@@ -299,6 +326,117 @@ def test_split_events_parquet_by_type_filtered(tmp_path):
     assert "events_parquet_2018_1_type_EventA" in outputs.split_events
     assert "events_parquet_2018_1_type_EventB" in outputs.split_events
     assert "path_traversal_links_2018_1" in outputs.split_event_links
+
+
+def test_write_zarr_skim_as_omx_new_uses_workspace_path_and_descales_transit(
+    tmp_path, mock_settings
+):
+    zarr_path = tmp_path / "skims.zarr"
+    target_root = tmp_path / "workspace" / "beam" / "input"
+    opened = {}
+
+    ds = xr.Dataset(
+        {
+            "WLK_LOC_WLK_TOTIVT": (
+                ("otaz", "dtaz", "time_period"),
+                np.array(
+                    [
+                        [[100.0, 200.0], [300.0, 400.0]],
+                        [[500.0, 600.0], [700.0, 800.0]],
+                    ],
+                    dtype=np.float32,
+                ),
+            )
+        },
+        coords={
+            "otaz": np.arange(2),
+            "dtaz": np.arange(2),
+            "time_period": ["EA", "AM"],
+        },
+        attrs={"original_zone_ids": [101, 205]},
+    )
+    ds.to_zarr(zarr_path, mode="w", consolidated=True, zarr_format=2)
+
+    def _fake_open_file(path, mode):
+        assert mode == "w"
+        fake = _FakeOmxFile(path)
+        opened["file"] = fake
+        return fake
+
+    workspace = MagicMock()
+    workspace.get_beam_mutable_data_dir.return_value = str(target_root)
+
+    with patch("pilates.beam.postprocessor.omx.open_file", side_effect=_fake_open_file):
+        out = write_zarr_skim_as_omx_new(
+            str(zarr_path),
+            mock_settings,
+            "final_skims.omx",
+            workspace=workspace,
+        )
+
+    assert out == str(target_root / "seattle" / "final_skims.omx")
+    assert (target_root / "seattle").is_dir()
+
+    fake = opened["file"]
+    assert fake.mapping == ("zone_id", [101, 205], False)
+    np.testing.assert_array_equal(
+        fake["WLK_LOC_WLK_TOTIVT__EA"].data,
+        np.array([[1.0, 3.0], [5.0, 7.0]], dtype=np.float32),
+    )
+    assert fake["WLK_LOC_WLK_TOTIVT__EA"].attrs["mode"] == "WLK_LOC_WLK"
+    assert fake["WLK_LOC_WLK_TOTIVT__EA"].attrs["measure"] == "TOTIVT"
+    assert fake["WLK_LOC_WLK_TOTIVT__EA"].attrs["timePeriod"] == "EA"
+    assert fake.closed is True
+
+
+@patch("pilates.utils.zone_utils.load_canonical_zones")
+def test_write_zarr_skim_as_omx_new_reconstructs_zone_ids_from_workspace(
+    mock_load_canonical_zones, tmp_path, mock_settings
+):
+    zarr_path = tmp_path / "skims.zarr"
+    target_root = tmp_path / "workspace" / "beam" / "input"
+    opened = {}
+
+    ds = xr.Dataset(
+        {
+            "SOV_TIME": (
+                ("otaz", "dtaz"),
+                np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            )
+        },
+        coords={"otaz": np.arange(2), "dtaz": np.arange(2)},
+    )
+    ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
+    ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
+    ds.to_zarr(zarr_path, mode="w", consolidated=True, zarr_format=2)
+
+    mock_load_canonical_zones.return_value = pd.DataFrame(
+        {"zone_key": [9001, 9002]}, index=[9001, 9002]
+    )
+
+    def _fake_open_file(path, mode):
+        fake = _FakeOmxFile(path)
+        opened["file"] = fake
+        return fake
+
+    workspace = MagicMock()
+    workspace.get_beam_mutable_data_dir.return_value = str(target_root)
+
+    with patch("pilates.beam.postprocessor.omx.open_file", side_effect=_fake_open_file):
+        out = write_zarr_skim_as_omx_new(
+            str(zarr_path),
+            mock_settings,
+            "final_skims.omx",
+            workspace=workspace,
+        )
+
+    assert out == str(target_root / "seattle" / "final_skims.omx")
+    assert opened["file"].mapping == ("zone_id", [9001, 9002], False)
+    np.testing.assert_array_equal(
+        opened["file"]["SOV_TIME"].data,
+        np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+    )
+    mock_load_canonical_zones.assert_called_once_with(mock_settings, workspace)
 
 
 @pytest.fixture

@@ -31,6 +31,9 @@ from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -231,6 +234,12 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
     phys_sim.write_text("phys", encoding="utf-8")
     plans_iter = tmp_path / "plans.xml.gz"
     plans_iter.write_text("plans", encoding="utf-8")
+    output_plans = tmp_path / "output_plans.xml.gz"
+    output_plans.write_text("output-plans", encoding="utf-8")
+    experienced_plans = tmp_path / "experienced_plans.xml.gz"
+    experienced_plans.write_text("experienced", encoding="utf-8")
+    output_experienced_plans = tmp_path / "output_experienced_plans.xml.gz"
+    output_experienced_plans.write_text("output-experienced", encoding="utf-8")
     split_event = tmp_path / "event.parquet"
     split_event.write_text("event", encoding="utf-8")
     split_links = tmp_path / "links.parquet"
@@ -243,6 +252,9 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
             "linkstats_parquet_2018_0_sub1": linkstats_sub,
             "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3": phys_sim,
             "beam_plans_out_2018_0": plans_iter,
+            "beam_output_plans_xml_2018_0": output_plans,
+            "beam_experienced_plans_xml_2018_0": experienced_plans,
+            "beam_output_experienced_plans_xml_2018_0": output_experienced_plans,
         },
     )
     outputs = BeamPostprocessOutputs(
@@ -268,6 +280,12 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
     assert by_key[LINKSTATS][0] == str(linkstats_iter)
     assert by_key[LINKSTATS_WARMSTART][0] == str(linkstats_iter)
     assert by_key[BEAM_PLANS_OUT][0] == str(plans_iter)
+    assert by_key[BEAM_OUTPUT_PLANS_XML][0] == str(output_plans)
+    assert by_key[BEAM_EXPERIENCED_PLANS_XML][0] == str(experienced_plans)
+    assert (
+        by_key[BEAM_OUTPUT_EXPERIENCED_PLANS_XML][0]
+        == str(output_experienced_plans)
+    )
     assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][0] == str(
         phys_sim
     )

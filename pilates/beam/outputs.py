@@ -15,6 +15,9 @@ from pilates.workflows.outputs_base import (
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     BEAM_PERSONS_IN,
@@ -266,6 +269,23 @@ class BeamRunOutputs(StepOutputsBase):
 
     def promoted_plans_for_publication(self) -> Optional[Tuple[str, Path]]:
         return self._latest_publication_output_for_prefix(BEAM_PLANS_OUT)
+
+    def promoted_output_plans_xml_for_publication(self) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(BEAM_OUTPUT_PLANS_XML)
+
+    def promoted_output_experienced_plans_xml_for_publication(
+        self,
+    ) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+        )
+
+    def promoted_experienced_plans_xml_for_publication(
+        self,
+    ) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(
+            BEAM_EXPERIENCED_PLANS_XML
+        )
 
     def iter_linkstats_parquet_outputs(self) -> Iterable[Tuple[str, Path]]:
         for key, path in self.raw_outputs.items():

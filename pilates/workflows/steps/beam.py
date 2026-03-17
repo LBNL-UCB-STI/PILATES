@@ -202,6 +202,45 @@ def _publish_beam_run_outputs(
             profile_file_schema=True,
         )
 
+    promoted_output_plans_xml = outputs.promoted_output_plans_xml_for_publication()
+    if promoted_output_plans_xml is not None:
+        _, path = promoted_output_plans_xml
+        log_and_set_output(
+            key=BEAM_OUTPUT_PLANS_XML,
+            path=str(path),
+            description="BEAM output plans XML for downstream warm-start reuse",
+            coupler=coupler,
+            profile_file_schema=True,
+        )
+
+    promoted_output_experienced_plans_xml = (
+        outputs.promoted_output_experienced_plans_xml_for_publication()
+    )
+    if promoted_output_experienced_plans_xml is not None:
+        _, path = promoted_output_experienced_plans_xml
+        log_and_set_output(
+            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            path=str(path),
+            description=(
+                "BEAM output experienced plans XML for downstream warm-start reuse"
+            ),
+            coupler=coupler,
+            profile_file_schema=True,
+        )
+
+    promoted_experienced_plans_xml = (
+        outputs.promoted_experienced_plans_xml_for_publication()
+    )
+    if promoted_experienced_plans_xml is not None:
+        _, path = promoted_experienced_plans_xml
+        log_and_set_output(
+            key=BEAM_EXPERIENCED_PLANS_XML,
+            path=str(path),
+            description="BEAM experienced plans XML for downstream warm-start reuse",
+            coupler=coupler,
+            profile_file_schema=True,
+        )
+
 
 def _execute_beam_preprocess(
     preprocessor: Any,
@@ -657,28 +696,66 @@ def make_beam_run_step(
                 description=description,
             )
 
+        def _resolved_existing_coupler_input(key: str) -> Optional[tuple[str, str]]:
+            get_value = getattr(coupler, "get", None)
+            if not callable(get_value):
+                return None
+            resolved_path = artifact_to_existing_path(
+                get_value(key),
+                workspace=workspace,
+                materialize_from_archive=True,
+            )
+            if resolved_path is None:
+                return None
+            return key, resolved_path
+
+        plans_match = (
+            _resolved_existing_coupler_input(BEAM_OUTPUT_PLANS_XML)
+            or _resolved_existing_coupler_input(BEAM_PLANS_OUT)
+        )
+        experienced_match = (
+            _resolved_existing_coupler_input(BEAM_OUTPUT_EXPERIENCED_PLANS_XML)
+            or _resolved_existing_coupler_input(BEAM_EXPERIENCED_PLANS_XML)
+        )
+
         output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-        plans_path, experienced_path = find_last_run_output_plans(output_root, "year-")
-        if plans_path is not None and plans_path.exists():
-            if plans_path.name == "output_plans.xml.gz":
-                plans_key = BEAM_OUTPUT_PLANS_XML
-            else:
-                plans_key = BEAM_PLANS_OUT
+        if plans_match is None or experienced_match is None:
+            scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
+                output_root, "year-"
+            )
+            if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
+                scanned_plans_key = (
+                    BEAM_OUTPUT_PLANS_XML
+                    if scanned_plans_path.name == "output_plans.xml.gz"
+                    else BEAM_PLANS_OUT
+                )
+                plans_match = (scanned_plans_key, str(scanned_plans_path))
+            if (
+                experienced_match is None
+                and scanned_experienced_path is not None
+                and scanned_experienced_path.exists()
+            ):
+                scanned_experienced_key = (
+                    BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+                    if scanned_experienced_path.name == "output_experienced_plans.xml.gz"
+                    else BEAM_EXPERIENCED_PLANS_XML
+                )
+                experienced_match = (
+                    scanned_experienced_key,
+                    str(scanned_experienced_path),
+                )
+        if plans_match is not None and Path(plans_match[1]).exists():
             log_input_only(
-                key=plans_key,
-                path=str(plans_path),
+                key=plans_match[0],
+                path=plans_match[1],
                 description=(
                     "BEAM warm-start plans (selected by BEAM from previous outputs)"
                 ),
             )
-        if experienced_path is not None and experienced_path.exists():
-            if experienced_path.name == "output_experienced_plans.xml.gz":
-                experienced_key = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
-            else:
-                experienced_key = BEAM_EXPERIENCED_PLANS_XML
+        if experienced_match is not None and Path(experienced_match[1]).exists():
             log_input_only(
-                key=experienced_key,
-                path=str(experienced_path),
+                key=experienced_match[0],
+                path=experienced_match[1],
                 description=(
                     "BEAM warm-start experienced plans (selected by BEAM from previous outputs)"
                 ),

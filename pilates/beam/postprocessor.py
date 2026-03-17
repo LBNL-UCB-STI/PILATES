@@ -2054,7 +2054,11 @@ def _transfer_tnc_provider_data_zarr(
 
 
 def write_zarr_skim_as_omx_new(
-    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
+    all_skims_path,
+    settings: PilatesConfig,
+    new_skim_name,
+    exclude_tables=None,
+    workspace: Optional[Workspace] = None,
 ):
     """
     Write the skims from the Zarr format to an OMX format.
@@ -2079,7 +2083,11 @@ def write_zarr_skim_as_omx_new(
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
     region = settings.run.region
-    beam_input_dir = settings.beam.local_mutable_data_folder
+    beam_input_dir = (
+        workspace.get_beam_mutable_data_dir()
+        if workspace is not None
+        else settings.beam.local_mutable_data_folder
+    )
 
     if not region or not beam_input_dir:
         logger.error(
@@ -2102,22 +2110,44 @@ def write_zarr_skim_as_omx_new(
         skims_ds = skims_ds.load()
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
 
-        # Get zone IDs - simplified logic
-        if "taz_ids" in skims_ds.attrs:
-            # BEAM stores actual TAZ IDs in attributes
+        zone_ids = None
+        if "original_zone_ids" in skims_ds.attrs:
+            zone_ids = skims_ds.attrs["original_zone_ids"]
+            logger.info(
+                "Using original zone IDs from Zarr attributes: %d zones",
+                len(zone_ids),
+            )
+        elif "taz_ids" in skims_ds.attrs:
             zone_ids = skims_ds.attrs["taz_ids"]
             logger.info(f"Using TAZ IDs from attributes: {len(zone_ids)} zones")
+        elif "otaz" in skims_ds.coords:
+            if skims_ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
+                zone_ids = skims_ds.coords["otaz"].values
+                logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+            elif workspace is not None:
+                canonical_zones_df = zone_utils.load_canonical_zones(
+                    settings, workspace
+                )
+                zone_ids = canonical_zones_df.index.tolist()
+                logger.warning(
+                    "Reconstructed zone IDs from canonical zones after zero-based preprocessing: %d zones",
+                    len(zone_ids),
+                )
+            else:
+                zone_ids = skims_ds.coords["otaz"].values
+                logger.warning(
+                    "Zarr uses zero-based coordinates and no canonical workspace was provided; "
+                    "falling back to coordinate values for OMX mapping."
+                )
         else:
-            # Fall back to coordinate values
-            zone_ids = skims_ds.coords["otaz"].values
-            logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+            logger.warning("No zone coordinate found in Zarr file.")
 
         # Ensure zone_ids are integers if they represent numbers
-        try:
-            zone_ids = [int(z) for z in zone_ids]
-        except ValueError:
-            # Keep as strings if they can't be converted to int
-            zone_ids = [str(z) for z in zone_ids]
+        if zone_ids is not None:
+            try:
+                zone_ids = [int(z) for z in zone_ids]
+            except (TypeError, ValueError):
+                zone_ids = [str(z) for z in zone_ids]
 
         # Get time periods
         time_periods = []
@@ -2127,6 +2157,7 @@ def write_zarr_skim_as_omx_new(
 
         # Prepare output file
         logger.info(f"Target output OMX path: {target_skims_path}")
+        os.makedirs(os.path.dirname(target_skims_path), exist_ok=True)
         if os.path.exists(target_skims_path):
             logger.info(f"Deleting existing file: {target_skims_path}")
             os.remove(target_skims_path)
@@ -2135,11 +2166,24 @@ def write_zarr_skim_as_omx_new(
         new_omx_file = omx.open_file(target_skims_path, "w")
         logger.info(f"Created new OMX file: {target_skims_path}")
 
-        # Add zone mapping
-        new_omx_file.create_mapping("zone_id", zone_ids)
-        logger.info(f"Created 'zone_id' mapping with {len(zone_ids)} zones")
+        if zone_ids is not None and len(zone_ids) > 0:
+            new_omx_file.create_mapping("zone_id", zone_ids)
+            logger.info(f"Created 'zone_id' mapping with {len(zone_ids)} zones")
 
-        # Write matrices - NO SCALING CHANGES
+        scaled_measures = {
+            "TOTIVT",
+            "IVT",
+            "WACC",
+            "IWAIT",
+            "XWAIT",
+            "WAUX",
+            "WEGR",
+            "DTIM",
+            "FERRYIVT",
+            "KEYIVT",
+            "FAR",
+        }
+
         logger.info("Writing matrices to OMX file...")
         written_count = 0
 
@@ -2151,20 +2195,27 @@ def write_zarr_skim_as_omx_new(
             try:
                 data_array = skims_ds[key]
                 data = data_array.values
+                measure_name = key.split("_")[-1] if "_" in key else key
+                needs_descaling = (
+                    measure_name in scaled_measures
+                    and not key.startswith(("TNC_", "RH_"))
+                )
 
                 if data_array.ndim == 2:
-                    # Write 2D matrix directly
                     data_to_write = np.nan_to_num(data).astype(np.float32)
+                    if needs_descaling:
+                        data_to_write = data_to_write / 100.0
                     new_omx_file[key] = data_to_write
                     written_count += 1
                     logger.debug(f"Wrote 2D matrix '{key}'")
 
                 elif data_array.ndim == 3:
-                    # Write slices for each time period
                     for t_idx, tp in enumerate(time_periods):
                         new_key = f"{key}__{tp}"
                         slice_data = data[:, :, t_idx]
                         data_to_write = np.nan_to_num(slice_data).astype(np.float32)
+                        if needs_descaling:
+                            data_to_write = data_to_write / 100.0
                         new_omx_file[new_key] = data_to_write
 
                         # Add attributes
@@ -3896,6 +3947,7 @@ class BeamPostprocessor(GenericPostprocessor):
                         settings,
                         get_setting(settings, "shared.skims.fname"),
                         exclude_tables=vars_to_exclude,
+                        workspace=workspace,
                     )
 
                     if final_omx_path:
