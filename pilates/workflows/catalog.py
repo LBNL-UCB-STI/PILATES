@@ -24,6 +24,40 @@ from pilates.urbansim.outputs import (
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
 )
+from pilates.activitysim.outputs import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+)
+from pilates.workflows.artifact_keys import (
+    ASIM_MUTABLE_DATA_DIR,
+    ASIM_OUTPUT_DIR,
+    BEAM_CONFIG_FILE,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_FULL_SKIMS,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_OUTPUT_DIR,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    FINAL_SKIMS_OMX,
+    ATLAS_OUTPUT_DIR,
+    ASIM_SHARROW_CACHE_DIR,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
+    USIM_INPUT_NEXT,
+    USIM_MUTABLE_DATA_DIR,
+    ZARR_SKIMS,
+)
 
 
 @dataclass(frozen=True)
@@ -39,11 +73,16 @@ class WorkflowStepSpec:
     stage_name: str
     order: int
     outputs_class: Optional[Type[Any]] = None
+    input_keys: Tuple[str, ...] = ()
+    output_keys: Tuple[str, ...] = ()
+    optional_input_keys: Tuple[str, ...] = ()
+    dynamic_output_families: Tuple[str, ...] = ()
     optional: bool = False
     tracked: bool = True
     include_in_schema: bool = True
     depends_on: Tuple[str, ...] = ()
     holder_inputs: Tuple[str, ...] = ()
+    upstream_step_inputs: Tuple[str, ...] = ()
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
@@ -53,6 +92,22 @@ _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
 _ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
 _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
 _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
+
+
+def _ordered_unique(*groups: Sequence[str]) -> Tuple[str, ...]:
+    return tuple(dict.fromkeys(key for group in groups for key in group))
+
+
+_ACTIVITYSIM_RUN_OUTPUT_KEYS = ActivitySimRunOutputs.declared_output_keys()
+_BEAM_RUN_OUTPUT_KEYS = BeamRunOutputs.declared_output_keys()
+_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
+    _ACTIVITYSIM_RUN_OUTPUT_KEYS,
+    (USIM_INPUT_NEXT, USIM_DATASTORE_H5),
+)
+_BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
+    _BEAM_RUN_OUTPUT_KEYS,
+    (BEAM_OUTPUT_PLANS_XML, BEAM_OUTPUT_EXPERIENCED_PLANS_XML, BEAM_EXPERIENCED_PLANS_XML, ZARR_SKIMS, FINAL_SKIMS_OMX),
+)
 
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
@@ -141,8 +196,18 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=70,
         outputs_class=ActivitySimPreprocessOutputs,
+        input_keys=(USIM_H5_UPDATED,),
+        optional_input_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
+        output_keys=(
+            ASIM_MUTABLE_DATA_DIR,
+            ASIM_LAND_USE_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ASIM_OMX_SKIMS,
+        ),
         depends_on=(),
         holder_inputs=(),
+        upstream_step_inputs=(),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -154,9 +219,12 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=80,
         outputs_class=None,
+        input_keys=(),
+        output_keys=(ZARR_SKIMS, ASIM_SHARROW_CACHE_DIR),
         tracked=False,
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
+        upstream_step_inputs=("activitysim_preprocess",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
     ),
@@ -167,8 +235,14 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=90,
         outputs_class=ActivitySimRunOutputs,
+        input_keys=(ZARR_SKIMS,),
+        output_keys=(
+            ASIM_OUTPUT_DIR,
+            *_ACTIVITYSIM_RUN_OUTPUT_KEYS,
+        ),
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
+        upstream_step_inputs=("activitysim_preprocess",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -180,8 +254,22 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=100,
         outputs_class=ActivitySimPostprocessOutputs,
+        input_keys=(
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ASIM_LAND_USE_IN,
+            ASIM_OMX_SKIMS,
+            ZARR_SKIMS,
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_FORECAST_OUTPUT,
+        ),
+        output_keys=(
+            ASIM_OUTPUT_DIR,
+            *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
+        ),
         depends_on=("activitysim_run",),
         holder_inputs=("activitysim_run",),
+        upstream_step_inputs=("activitysim_run",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -193,8 +281,15 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=110,
         outputs_class=BeamPreprocessOutputs,
+        input_keys=(BEAM_CONFIG_FILE,),
+        output_keys=(
+            BEAM_MUTABLE_DATA_DIR,
+            *BeamPreprocessOutputs.declared_output_keys(),
+            LINKSTATS_WARMSTART,
+        ),
         depends_on=("activitysim_postprocess",),
         holder_inputs=("activitysim_postprocess",),
+        upstream_step_inputs=("activitysim_postprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -206,8 +301,36 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=120,
         outputs_class=BeamRunOutputs,
+        input_keys=(BEAM_CONFIG_FILE,),
+        optional_input_keys=(
+            LINKSTATS_WARMSTART,
+            BEAM_OUTPUT_PLANS_XML,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            BEAM_EXPERIENCED_PLANS_XML,
+        ),
+        output_keys=(
+            BEAM_OUTPUT_DIR,
+            *_BEAM_RUN_OUTPUT_KEYS,
+            BEAM_OUTPUT_PLANS_XML,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            BEAM_EXPERIENCED_PLANS_XML,
+        ),
+        dynamic_output_families=(
+            "linkstats_{year}_{iteration}",
+            "linkstats_parquet_{year}_{iteration}",
+            "linkstats_unmodified_{year}_{iteration}",
+            "linkstats_unmodified_parquet_{year}_{iteration}",
+            "events_{year}_{iteration}",
+            "events_parquet_{year}_{iteration}",
+            "raw_od_skims_{year}_{iteration}",
+            "raw_od_skims_zarr_{year}_{iteration}",
+            "beam_plans_{year}_{iteration}",
+            "beam_experienced_plans_{year}_{iteration}",
+            "beam_output_*",
+        ),
         depends_on=("beam_preprocess",),
         holder_inputs=("beam_preprocess",),
+        upstream_step_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -219,8 +342,18 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=130,
         outputs_class=BeamPostprocessOutputs,
+        input_keys=(),
+        output_keys=(
+            BEAM_OUTPUT_DIR,
+            *_BEAM_POSTPROCESS_OUTPUT_KEYS,
+        ),
+        dynamic_output_families=(
+            "events_parquet_{year}_{iteration}",
+            "path_traversal_links_{year}_{iteration}",
+        ),
         depends_on=("beam_run",),
         holder_inputs=("beam_run",),
+        upstream_step_inputs=("beam_run",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -232,9 +365,12 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=140,
         outputs_class=BeamFullSkimOutputs,
+        input_keys=(),
+        output_keys=(BEAM_FULL_SKIMS,),
         optional=True,
         depends_on=("beam_preprocess",),
         holder_inputs=("beam_preprocess",),
+        upstream_step_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
