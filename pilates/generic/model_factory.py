@@ -9,6 +9,9 @@ from pilates.beam.postprocessor import BeamPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
 from pilates.atlas.postprocessor import AtlasPostprocessor
+from pilates.impacts.postprocessor import ImpactsPostprocessor
+from pilates.impacts.preprocessor import ImpactsPreprocessor
+from pilates.impacts.runner import ImpactsRunner
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
@@ -51,6 +54,11 @@ class ModelFactory:
             "preprocessor": UrbansimPreprocessor,
             "runner": UrbansimRunner,
             "postprocessor": UrbansimPostprocessor,
+        },
+        "impacts": {
+            "preprocessor": ImpactsPreprocessor,
+            "runner": ImpactsRunner,
+            "postprocessor": ImpactsPostprocessor,
         },
     }
 

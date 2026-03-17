@@ -92,3 +92,15 @@ class Workspace:
         return os.path.join(
             self.full_path, get_setting(self.settings, "atlas.host_output_folder")
         )
+
+    def get_impacts_input_dir(self) -> str:
+        return os.path.join(
+            self.full_path,
+            get_setting(self.settings, "impacts.local_input_folder"),
+        )
+
+    def get_impacts_output_dir(self) -> str:
+        return os.path.join(
+            self.full_path,
+            get_setting(self.settings, "impacts.local_output_folder"),
+        )

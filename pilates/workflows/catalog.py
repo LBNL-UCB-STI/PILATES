@@ -19,6 +19,11 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
+from pilates.impacts.outputs import (
+    ImpactsPostprocessOutputs,
+    ImpactsPreprocessOutputs,
+    ImpactsRunOutputs,
+)
 from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
@@ -53,6 +58,7 @@ _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
 _ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
 _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
 _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
+_IMPACTS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="impacts")
 
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
@@ -238,6 +244,45 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
+    ),
+    WorkflowStepSpec(
+        step_name="impacts_preprocess",
+        model_name="impacts_preprocess",
+        phase="preprocess",
+        stage_name="postprocessing",
+        order=145,
+        outputs_class=ImpactsPreprocessOutputs,
+        depends_on=(),
+        holder_inputs=(),
+        enabled_flag_attr="impacts_enabled",
+        enabled_model_attr="impacts",
+        provenance=_IMPACTS_PROVENANCE,
+    ),
+    WorkflowStepSpec(
+        step_name="impacts_run",
+        model_name="impacts_run",
+        phase="run",
+        stage_name="postprocessing",
+        order=146,
+        outputs_class=ImpactsRunOutputs,
+        depends_on=("impacts_preprocess",),
+        holder_inputs=("impacts_preprocess",),
+        enabled_flag_attr="impacts_enabled",
+        enabled_model_attr="impacts",
+        provenance=_IMPACTS_PROVENANCE,
+    ),
+    WorkflowStepSpec(
+        step_name="impacts_postprocess",
+        model_name="impacts_postprocess",
+        phase="postprocess",
+        stage_name="postprocessing",
+        order=147,
+        outputs_class=ImpactsPostprocessOutputs,
+        depends_on=("impacts_run",),
+        holder_inputs=("impacts_run",),
+        enabled_flag_attr="impacts_enabled",
+        enabled_model_attr="impacts",
+        provenance=_IMPACTS_PROVENANCE,
     ),
     WorkflowStepSpec(
         step_name="postprocessing",

@@ -156,6 +156,10 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "model_conditional",
         "description": "Complete BEAM configuration",
     },
+    "impacts": {
+        "hash_scope": "model_conditional",
+        "description": "Complete impacts configuration",
+    },
     # -------------------------------------------------------------------------
     # POSTPROCESSING
     # -------------------------------------------------------------------------
@@ -187,7 +191,7 @@ def get_dependency_graph() -> ModelDependencyGraph:
     Get the PILATES model dependency graph.
 
     PILATES uses a linear execution order:
-    urbansim → atlas → activitysim → beam
+    urbansim → atlas → activitysim → beam → impacts
 
     Returns:
         Configured ModelDependencyGraph
@@ -196,7 +200,9 @@ def get_dependency_graph() -> ModelDependencyGraph:
 
     # Define linear execution order
     # Each model depends on all previous models
-    graph.set_linear_execution_order(["urbansim", "atlas", "activitysim", "beam"])
+    graph.set_linear_execution_order(
+        ["urbansim", "atlas", "activitysim", "beam", "impacts"]
+    )
 
     return graph
 

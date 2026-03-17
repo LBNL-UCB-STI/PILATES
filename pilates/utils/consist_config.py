@@ -172,11 +172,38 @@ class PostprocessingConfigBuilder:
         return "postprocessing_v1"
 
 
+class ImpactsConfigBuilder:
+    @property
+    def requires_workspace_path(self) -> bool:
+        return False
+
+    def build_identity_config(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_impacts_identity_config(settings)
+
+    def build_facet(self, settings: PilatesConfig) -> Dict[str, Any]:
+        return build_impacts_facet(settings)
+
+    def build_identity_inputs(
+        self, settings: PilatesConfig, workspace_path: str
+    ) -> List[IdentityInput]:
+        del settings
+        del workspace_path
+        return []
+
+    def get_facet_schema_version(self, model: str) -> str:
+        return {
+            "impacts_preprocess": "impacts_preprocess_v1",
+            "impacts_run": "impacts_run_v1",
+            "impacts_postprocess": "impacts_postprocess_v1",
+        }.get(model, "impacts_v1")
+
+
 _CONFIG_BUILDERS: Dict[str, ConsistConfigBuilder] = {
     "activitysim": ActivitySimConfigBuilder(),
     "beam": BeamConfigBuilder(),
     "urbansim": UrbanSimConfigBuilder(),
     "atlas": AtlasConfigBuilder(),
+    "impacts": ImpactsConfigBuilder(),
     "postprocessing": PostprocessingConfigBuilder(),
 }
 
@@ -450,3 +477,34 @@ def build_postprocessing_identity_config(settings: PilatesConfig) -> Dict[str, A
 
 def build_postprocessing_facet(settings: PilatesConfig) -> Dict[str, Any]:
     return build_postprocessing_identity_config(settings)
+
+
+def build_impacts_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
+    cfg = getattr(settings, "impacts", None)
+    if cfg is None:
+        return {}
+    if hasattr(cfg, "model_dump"):
+        dumped = cfg.model_dump()
+        return {
+            key: dumped.get(key)
+            for key in (
+                "command_template",
+                "exposure_output_filename",
+                "raw_exposure_output_filename",
+                "input_manifest_filename",
+                "run_manifest_filename",
+                "postprocess_manifest_filename",
+            )
+        }
+    return {}
+
+
+def build_impacts_facet(settings: PilatesConfig) -> Dict[str, Any]:
+    cfg = getattr(settings, "impacts", None)
+    if cfg is None:
+        return {}
+    if hasattr(cfg, "to_consist_facet") and callable(cfg.to_consist_facet):
+        return cfg.to_consist_facet()
+    if hasattr(cfg, "model_dump"):
+        return cfg.model_dump()
+    return {}

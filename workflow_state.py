@@ -34,6 +34,7 @@ class WorkflowState:
         vehicle_ownership_model_enabled: bool,
         activity_demand_enabled: bool,
         traffic_assignment_enabled: bool,
+        impacts_enabled: bool,
         year: int | None,
         major_stage: Stage | None,
         inner_iter: int,
@@ -72,6 +73,7 @@ class WorkflowState:
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
             "activity_demand_enabled": activity_demand_enabled,
             "traffic_assignment_enabled": traffic_assignment_enabled,
+            "impacts_enabled": impacts_enabled,
         }
         self.full_settings = full_settings or {}
 
@@ -88,6 +90,8 @@ class WorkflowState:
             self.enabled_stages.add(self.Stage.activity_demand_directly_from_land_use)
         if traffic_assignment_enabled:
             self.enabled_stages.add(self.Stage.traffic_assignment)
+        if impacts_enabled or getattr(full_settings, "postprocessing", None) is not None:
+            self.enabled_stages.add(self.Stage.postprocessing)
 
         # Define the order of major stages
         self.major_stage_order = [
@@ -235,6 +239,7 @@ class WorkflowState:
         traffic_assignment_enabled = getattr(
             settings, "traffic_assignment_enabled", False
         )
+        impacts_enabled = getattr(settings, "impacts_enabled", False)
         file_loc = getattr(settings, "state_file_loc", None)
 
         if file_loc:
@@ -277,6 +282,7 @@ class WorkflowState:
             vehicle_ownership_model_enabled,
             activity_demand_enabled,
             traffic_assignment_enabled,
+            impacts_enabled,
             year,
             resume_major_stage,
             iteration,

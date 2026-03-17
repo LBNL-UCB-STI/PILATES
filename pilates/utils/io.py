@@ -79,6 +79,11 @@ def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
         "run.models.activity_demand",
         default=get_setting(settings, "activity_demand_model"),
     )
+    impacts_model = get_setting(
+        settings,
+        "run.models.impacts",
+        default=get_setting(settings, "impacts_model"),
+    )
     travel_model = get_traffic_assignment_model(settings)
 
     # Retrieve flags related to skim processing and replanning iterations.
@@ -102,6 +107,7 @@ def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
 
     # Traffic assignment is enabled if a travel model is specified and static skims are not used.
     traffic_assignment_enabled = bool(travel_model) and (not static_skims)
+    impacts_enabled = bool(impacts_model)
 
     # Replanning is enabled if replan_iters is greater than 0.
     replanning_enabled = replan_iters > 0
@@ -116,6 +122,7 @@ def compute_model_enabled_flags(settings: Any) -> Dict[str, bool]:
         "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
         "activity_demand_enabled": activity_demand_enabled,
         "traffic_assignment_enabled": traffic_assignment_enabled,
+        "impacts_enabled": impacts_enabled,
         "replanning_enabled": replanning_enabled,
     }
 
@@ -186,6 +193,7 @@ def parse_args_and_settings(settings_file: str = "settings.yaml") -> PilatesConf
     ]
     settings.activity_demand_enabled = enabled_flags["activity_demand_enabled"]
     settings.traffic_assignment_enabled = enabled_flags["traffic_assignment_enabled"]
+    settings.impacts_enabled = enabled_flags["impacts_enabled"]
     settings.replanning_enabled = enabled_flags["replanning_enabled"]
 
     # Raise errors/warnings for conflicting settings to ensure valid simulation configurations.

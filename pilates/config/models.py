@@ -35,6 +35,9 @@ class ModelSelection(BaseModel):
     vehicle_ownership: Optional[str] = Field(
         None, description="Vehicle ownership model (atlas, or null to disable)"
     )
+    impacts: Optional[str] = Field(
+        None, description="Downstream impacts model (impacts, or null to disable)"
+    )
 
 
 class RunConfig(BaseModel):
@@ -606,6 +609,54 @@ class BeamConfig(BaseModel):
     )
 
 
+class ImpactsConfig(BaseModel):
+    """Downstream exposure/impacts model configuration."""
+
+    local_input_folder: str = Field(
+        ..., description="Workspace-relative staged input folder"
+    )
+    local_output_folder: str = Field(
+        ..., description="Workspace-relative impacts output folder"
+    )
+    container_input_folder: str = Field(
+        ..., description="Container-visible input folder"
+    )
+    container_output_folder: str = Field(
+        ..., description="Container-visible output folder"
+    )
+    command_template: str = Field(
+        ...,
+        description=(
+            "Docker command template. May reference {container_input_dir}, "
+            "{container_output_dir}, {container_input_manifest}, "
+            "{container_output_manifest}, and {container_exposure_output}."
+        ),
+    )
+    exposure_output_filename: str = Field(
+        "exposure_table.csv",
+        description="Final impacts exposure table filename",
+    )
+    raw_exposure_output_filename: str = Field(
+        "exposure_raw.csv",
+        description="Raw impacts exposure table filename emitted by the runner",
+    )
+    input_manifest_filename: str = Field(
+        "inputs_manifest.yaml",
+        description="Preprocess manifest filename describing staged inputs",
+    )
+    run_manifest_filename: str = Field(
+        "run_manifest.yaml",
+        description="Runner manifest filename describing the Docker invocation",
+    )
+    postprocess_manifest_filename: str = Field(
+        "postprocess_manifest.yaml",
+        description="Postprocess manifest filename describing finalized outputs",
+    )
+
+    def to_consist_facet(self) -> Dict[str, Any]:
+        return self.model_dump()
+
+
 # =============================================================================
 # POSTPROCESSING CONFIGURATION
 # =============================================================================
@@ -652,6 +703,7 @@ class PilatesConfig(BaseModel):
     atlas: Optional[AtlasConfig] = None
     activitysim: Optional[ActivitySimConfig] = None
     beam: Optional[BeamConfig] = None
+    impacts: Optional[ImpactsConfig] = None
     postprocessing: Optional[PostprocessingConfig] = None
 
     @model_validator(mode="after")
@@ -669,6 +721,8 @@ class PilatesConfig(BaseModel):
             )
         if self.run.models.travel and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
+        if self.run.models.impacts and not self.impacts:
+            raise ValueError("impacts model is enabled but impacts config is missing")
         return self
 
     def get_enabled_models(self) -> List[str]:
@@ -682,6 +736,8 @@ class PilatesConfig(BaseModel):
             enabled.append(self.run.models.activity_demand)
         if self.run.models.travel:
             enabled.append(self.run.models.travel)
+        if self.run.models.impacts:
+            enabled.append(self.run.models.impacts)
         return enabled
 
     def get_initialization_signature(self) -> Dict[str, Any]:

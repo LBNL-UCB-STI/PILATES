@@ -33,6 +33,11 @@ from .beam import (
     make_beam_preprocess_step as make_beam_preprocess_step,
     make_beam_run_step as make_beam_run_step,
 )
+from .impacts import (
+    make_impacts_postprocess_step as make_impacts_postprocess_step,
+    make_impacts_preprocess_step as make_impacts_preprocess_step,
+    make_impacts_run_step as make_impacts_run_step,
+)
 from .postprocessing import (
     make_postprocessing_step as make_postprocessing_step,
 )
@@ -49,6 +54,7 @@ from .urbansim_atlas import (
 from . import (
     activitysim as activitysim,
     beam as beam,
+    impacts as impacts,
     postprocessing as postprocessing,
     shared as shared,
     urbansim_atlas as urbansim_atlas,

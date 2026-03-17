@@ -62,11 +62,26 @@ def _make_settings():
     postprocessing.model_dump.return_value = {"enabled": True}
     settings.postprocessing = postprocessing
 
+    impacts = MagicMock()
+    impacts.model_dump.return_value = {
+        "command_template": "python -m impacts",
+        "exposure_output_filename": "exposure.csv",
+    }
+    impacts.to_consist_facet.return_value = impacts.model_dump.return_value
+    settings.impacts = impacts
+
     return settings
 
 
 def test_all_models_registered():
-    expected = {"activitysim", "beam", "urbansim", "atlas", "postprocessing"}
+    expected = {
+        "activitysim",
+        "beam",
+        "urbansim",
+        "atlas",
+        "impacts",
+        "postprocessing",
+    }
     assert set(_CONFIG_BUILDERS.keys()) == expected
 
 
@@ -88,6 +103,7 @@ def test_workspace_path_requirement_flags():
     assert _CONFIG_BUILDERS["beam"].requires_workspace_path is True
     assert _CONFIG_BUILDERS["urbansim"].requires_workspace_path is False
     assert _CONFIG_BUILDERS["atlas"].requires_workspace_path is False
+    assert _CONFIG_BUILDERS["impacts"].requires_workspace_path is False
     assert _CONFIG_BUILDERS["postprocessing"].requires_workspace_path is False
 
 

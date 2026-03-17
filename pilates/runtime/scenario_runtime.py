@@ -17,6 +17,9 @@ from pilates.workflows.steps import (
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
+    make_impacts_postprocess_step,
+    make_impacts_preprocess_step,
+    make_impacts_run_step,
     make_urbansim_postprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
@@ -318,6 +321,9 @@ def build_schema_steps() -> List[Callable[..., Any]]:
         "beam_run": make_beam_run_step,
         "beam_postprocess": make_beam_postprocess_step,
         "beam_full_skim": make_beam_full_skim_step,
+        "impacts_preprocess": make_impacts_preprocess_step,
+        "impacts_run": make_impacts_run_step,
+        "impacts_postprocess": make_impacts_postprocess_step,
     }
     ordered_steps = schema_step_names()
     missing_factories = [name for name in ordered_steps if name not in step_factories]

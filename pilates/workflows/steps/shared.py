@@ -231,6 +231,10 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_PLANS_XML as BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_OUT as BEAM_PLANS_OUT,
     BEAM_R5_OSM_FILE,
+    IMPACTS_EXPOSURE_TABLE as IMPACTS_EXPOSURE_TABLE,
+    IMPACTS_INPUT_MANIFEST as IMPACTS_INPUT_MANIFEST,
+    IMPACTS_POSTPROCESS_MANIFEST as IMPACTS_POSTPROCESS_MANIFEST,
+    IMPACTS_RUN_MANIFEST as IMPACTS_RUN_MANIFEST,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5 as USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
@@ -264,6 +268,11 @@ from pilates.atlas.outputs import (
     AtlasPostprocessOutputs,
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
+)
+from pilates.impacts.outputs import (
+    ImpactsPostprocessOutputs,
+    ImpactsPreprocessOutputs,
+    ImpactsRunOutputs,
 )
 from pilates.workflows.catalog import (
     WORKFLOW_STEP_SPECS,
@@ -820,6 +829,12 @@ class StepOutputsHolder:
         Run outputs.
     atlas_postprocess : AtlasPostprocessOutputs, optional
         Postprocess outputs.
+    impacts_preprocess : ImpactsPreprocessOutputs, optional
+        Preprocess outputs.
+    impacts_run : ImpactsRunOutputs, optional
+        Run outputs.
+    impacts_postprocess : ImpactsPostprocessOutputs, optional
+        Postprocess outputs.
     """
 
     activitysim_preprocess: Optional[ActivitySimPreprocessOutputs] = None
@@ -835,6 +850,9 @@ class StepOutputsHolder:
     atlas_preprocess: Optional[AtlasPreprocessOutputs] = None
     atlas_run: Optional[AtlasRunOutputs] = None
     atlas_postprocess: Optional[AtlasPostprocessOutputs] = None
+    impacts_preprocess: Optional[ImpactsPreprocessOutputs] = None
+    impacts_run: Optional[ImpactsRunOutputs] = None
+    impacts_postprocess: Optional[ImpactsPostprocessOutputs] = None
 
     def set_attribute(self, step_name: str, outputs: Any) -> None:
         """
