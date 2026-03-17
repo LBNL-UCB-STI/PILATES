@@ -2142,12 +2142,11 @@ def write_zarr_skim_as_omx_new(
         else:
             logger.warning("No zone coordinate found in Zarr file.")
 
-        # Ensure zone_ids are integers if they represent numbers
-        if zone_ids is not None:
-            try:
-                zone_ids = [int(z) for z in zone_ids]
-            except (TypeError, ValueError):
-                zone_ids = [str(z) for z in zone_ids]
+        # PILATES' original ActivitySim OMX builder uses a sequential 1..N lookup.
+        # Preserve canonical/original IDs in Zarr metadata, but emit the original
+        # OMX lookup convention here so the exported file is interchangeable with
+        # the pre-BEAM ActivitySim input OMXs.
+        omx_zone_ids = list(range(1, int(skims_ds.sizes["otaz"]) + 1))
 
         # Get time periods
         time_periods = []
@@ -2166,9 +2165,12 @@ def write_zarr_skim_as_omx_new(
         new_omx_file = omx.open_file(target_skims_path, "w")
         logger.info(f"Created new OMX file: {target_skims_path}")
 
-        if zone_ids is not None and len(zone_ids) > 0:
-            new_omx_file.create_mapping("zone_id", zone_ids)
-            logger.info(f"Created 'zone_id' mapping with {len(zone_ids)} zones")
+        if omx_zone_ids:
+            new_omx_file.create_mapping("zone_id", omx_zone_ids)
+            logger.info(
+                "Created 'zone_id' mapping with sequential 1-based IDs for %d zones",
+                len(omx_zone_ids),
+            )
 
         scaled_measures = {
             "TOTIVT",
@@ -2362,14 +2364,14 @@ def write_zarr_skim_as_omx(
         new_omx_file = omx.open_file(target_skims_path, "w")
         logger.info(f"Created new OMX file: {target_skims_path}")
 
-        # --- Add Zone Mapping FIRST ---
-        if zone_ids is not None and len(zone_ids) > 0:
+        # Export the original PILATES ActivitySim OMX lookup convention: 1..N.
+        omx_zone_ids = np.arange(1, int(skims_ds.sizes["otaz"]) + 1, dtype=int)
+        if len(omx_zone_ids) > 0:
             try:
-                # Ensure zone_ids are integers
-                zone_ids = np.array(zone_ids, dtype=int)
-                new_omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
+                new_omx_file.create_mapping("zone_id", omx_zone_ids, overwrite=True)
                 logger.info(
-                    f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones."
+                    "Created 'zone_id' mapping in OMX file with sequential 1-based IDs for %d zones.",
+                    len(omx_zone_ids),
                 )
             except Exception as e:
                 logger.error(f"Error creating zone mapping in OMX file: {e}.")

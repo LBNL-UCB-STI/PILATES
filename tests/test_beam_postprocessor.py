@@ -328,7 +328,7 @@ def test_split_events_parquet_by_type_filtered(tmp_path):
     assert "path_traversal_links_2018_1" in outputs.split_event_links
 
 
-def test_write_zarr_skim_as_omx_new_uses_workspace_path_and_descales_transit(
+def test_write_zarr_skim_as_omx_new_uses_workspace_path_descales_transit_and_writes_original_lookup(
     tmp_path, mock_settings
 ):
     zarr_path = tmp_path / "skims.zarr"
@@ -378,7 +378,7 @@ def test_write_zarr_skim_as_omx_new_uses_workspace_path_and_descales_transit(
     assert (target_root / "seattle").is_dir()
 
     fake = opened["file"]
-    assert fake.mapping == ("zone_id", [101, 205], False)
+    assert fake.mapping == ("zone_id", [1, 2], False)
     np.testing.assert_array_equal(
         fake["WLK_LOC_WLK_TOTIVT__EA"].data,
         np.array([[1.0, 3.0], [5.0, 7.0]], dtype=np.float32),
@@ -431,7 +431,7 @@ def test_write_zarr_skim_as_omx_new_reconstructs_zone_ids_from_workspace(
         )
 
     assert out == str(target_root / "seattle" / "final_skims.omx")
-    assert opened["file"].mapping == ("zone_id", [9001, 9002], False)
+    assert opened["file"].mapping == ("zone_id", [1, 2], False)
     np.testing.assert_array_equal(
         opened["file"]["SOV_TIME"].data,
         np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
