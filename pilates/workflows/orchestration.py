@@ -427,34 +427,42 @@ def run_manifested_steps(
             state=state,
             default_iteration=iteration,
         )
+        expects_outputs = STEP_OUTPUTS_CLASSES.get(spec.name) is not None
         if spec.name in manifest:
-            logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
-            outputs = outputs_holder.get_attribute(spec.name)
-            if outputs is None:
-                outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
+            if expects_outputs:
+                logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
+                outputs = outputs_holder.get_attribute(spec.name)
+                if outputs is None:
+                    outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
+                    if outputs is not None:
+                        outputs_holder.set_attribute(spec.name, outputs)
                 if outputs is not None:
-                    outputs_holder.set_attribute(spec.name, outputs)
-            if outputs is not None:
-                _publish_recovered_outputs(
-                    step_func=spec.step_func,
-                    outputs=outputs,
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                    coupler=coupler,
-                    outputs_holder=outputs_holder,
+                    _publish_recovered_outputs(
+                        step_func=spec.step_func,
+                        outputs=outputs,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        coupler=coupler,
+                        outputs_holder=outputs_holder,
+                    )
+                remember_restored_run_id = getattr(
+                    scenario, "remember_restored_run_id", None
                 )
-            remember_restored_run_id = getattr(
-                scenario, "remember_restored_run_id", None
+                if callable(remember_restored_run_id):
+                    remember_restored_run_id(
+                        model_name=model_name,
+                        year=resolved_year,
+                        iteration=resolved_iteration,
+                        run_id=manifest.get(spec.name, {}).get("run_id"),
+                    )
+                continue
+            logger.info(
+                "[%s] %s has a manifest run_id but no declared outputs; rerunning "
+                "instead of trusting manifest-only completion",
+                stage_name,
+                spec.name,
             )
-            if callable(remember_restored_run_id):
-                remember_restored_run_id(
-                    model_name=model_name,
-                    year=resolved_year,
-                    iteration=resolved_iteration,
-                    run_id=manifest.get(spec.name, {}).get("run_id"),
-                )
-            continue
 
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
@@ -465,6 +473,7 @@ def run_manifested_steps(
             stage_name=stage_name,
             default_iteration=iteration,
         )
+
         def _run_step(cache_options: Optional[CacheOptions]) -> Any:
             step_kwargs = dict(run_kwargs)
             if cache_options is not None:
@@ -486,20 +495,28 @@ def run_manifested_steps(
                 publish_outputs=True,
             )
 
-        result, outputs = run_with_cache_recovery(
-            stage_name=stage_name,
-            step_name=spec.name,
-            run_step=_run_step,
-            read_outputs=lambda: outputs_holder.get_attribute(spec.name),
-            recover_outputs=_recover_outputs,
-        )
-        if outputs is None:
-            raise RuntimeError(f"{spec.name} did not populate outputs_holder")
+        if expects_outputs:
+            result, outputs = run_with_cache_recovery(
+                stage_name=stage_name,
+                step_name=spec.name,
+                run_step=_run_step,
+                read_outputs=lambda: outputs_holder.get_attribute(spec.name),
+                recover_outputs=_recover_outputs,
+            )
+            if outputs is None:
+                raise RuntimeError(f"{spec.name} did not populate outputs_holder")
+            serialized_outputs = serialize_step_outputs(outputs)
+        else:
+            # Steps without declared outputs can still be checkpointed. We record the
+            # run id so restart reconstruction can re-materialize completed runs, but
+            # do not force an outputs_holder hydration loop.
+            result = _run_step(None)
+            serialized_outputs = {}
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
             "cache_hit": bool(getattr(result, "cache_hit", False)),
             "run_id": getattr(getattr(result, "run", None), "id", None),
-            "outputs": serialize_step_outputs(outputs),
+            "outputs": serialized_outputs,
         }
         save_step_manifest(manifest, manifest_config.path)
 

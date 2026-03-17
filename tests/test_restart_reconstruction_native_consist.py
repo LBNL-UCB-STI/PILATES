@@ -229,11 +229,37 @@ def test_collect_restart_completed_run_ids_for_supply_demand_resume_merges_land_
     assert len(discovery["manifest_paths"]) == 6
 
 
-def test_collect_restart_completed_run_ids_defers_top_level_postprocessing(tmp_path):
+def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_completed_run_ids(
+    tmp_path,
+):
     archive_run_dir = tmp_path / "archive-run"
     _write_manifest(
-        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
-        {"activitysim_run": {"run_id": "asim-run-0"}},
+        archive_run_dir / ".workflow" / "land_use_year_2018.yaml",
+        {
+            "urbansim_preprocess": {"run_id": "usim-pre-2018"},
+            "urbansim_run": {"run_id": "usim-run-2018"},
+            "urbansim_postprocess": {"run_id": "usim-post-2018"},
+        },
+    )
+    _write_manifest(
+        archive_run_dir
+        / ".workflow"
+        / "vehicle_ownership"
+        / "forecast_year_2018_subyear_2018.yaml",
+        {
+            "atlas_preprocess": {"run_id": "atlas-pre-2018"},
+            "atlas_run": {"run_id": "atlas-run-2018"},
+            "atlas_postprocess": {"run_id": "atlas-post-2018"},
+        },
+    )
+    for iteration in range(0, 3):
+        _write_manifest(
+            archive_run_dir / ".workflow" / f"year_2018_iteration_{iteration}.yaml",
+            {"activitysim_run": {"run_id": f"asim-run-{iteration}"}},
+        )
+    _write_manifest(
+        archive_run_dir / ".workflow" / "postprocessing_year_2018.yaml",
+        {"postprocessing": {"run_id": "post-2018"}},
     )
     state = _restart_state(
         iteration=0,
@@ -253,9 +279,20 @@ def test_collect_restart_completed_run_ids_defers_top_level_postprocessing(tmp_p
         workflow_stage=WorkflowState.Stage,
     )
 
-    assert discovery["run_ids"] == []
     assert discovery["issues"] == []
-    assert discovery["manifest_paths"] == []
+    assert set(discovery["run_ids"]) == {
+        "usim-pre-2018",
+        "usim-run-2018",
+        "usim-post-2018",
+        "atlas-pre-2018",
+        "atlas-run-2018",
+        "atlas-post-2018",
+        "asim-run-0",
+        "asim-run-1",
+        "asim-run-2",
+        "post-2018",
+    }
+    assert len(discovery["manifest_paths"]) == 6
 
 
 def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(tmp_path):

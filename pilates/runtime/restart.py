@@ -24,6 +24,7 @@ _LAND_USE_MANIFEST_STEPS = (
     "urbansim_run",
     "urbansim_postprocess",
 )
+_POSTPROCESSING_MANIFEST_STEPS = ("postprocessing",)
 _ATLAS_MANIFEST_STEPS = (
     "atlas_preprocess",
     "atlas_run",
@@ -457,6 +458,14 @@ def _atlas_subyear_manifest_path(
     )
 
 
+def _postprocessing_manifest_path(
+    *,
+    run_dir: str,
+    year: int,
+) -> Path:
+    return Path(os.path.realpath(run_dir)) / ".workflow" / f"postprocessing_year_{year}.yaml"
+
+
 def _is_stage_explicitly_enabled(
     *,
     state: Any,
@@ -559,6 +568,7 @@ def _restart_manifest_targets(
     if current_stage in {
         workflow_stage.vehicle_ownership_model,
         workflow_stage.supply_demand_loop,
+        workflow_stage.postprocessing,
     }:
         land_use_manifest_path = _land_use_manifest_path(
             run_dir=archive_run_dir,
@@ -579,7 +589,12 @@ def _restart_manifest_targets(
         stage=workflow_stage.vehicle_ownership_model,
     )
     if (
-        current_stage in {workflow_stage.vehicle_ownership_model, workflow_stage.supply_demand_loop}
+        current_stage
+        in {
+            workflow_stage.vehicle_ownership_model,
+            workflow_stage.supply_demand_loop,
+            workflow_stage.postprocessing,
+        }
         and vehicle_enabled is not False
     ):
         atlas_targets, atlas_issues = _atlas_manifest_targets(
@@ -587,37 +602,74 @@ def _restart_manifest_targets(
             year=year,
             forecast_year=forecast_year,
             require_all_subyears=(
-                current_stage == workflow_stage.supply_demand_loop
+                current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}
                 and vehicle_enabled is True
             ),
-            require_complete_steps=current_stage == workflow_stage.supply_demand_loop,
+            require_complete_steps=current_stage
+            in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing},
         )
         targets.extend(atlas_targets)
         issues.extend(atlas_issues)
 
-    if current_stage == workflow_stage.supply_demand_loop:
-        for iteration in range(0, resume_iter):
-            targets.append(
-                {
-                    "path": _supply_demand_manifest_path(
-                        run_dir=archive_run_dir,
-                        year=year,
-                        iteration=iteration,
-                    ),
-                    "steps": None,
-                }
+    if current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}:
+        total_iters = max(
+            _coerce_int(getattr(state, "_settings", {}).get("supply_demand_iters", None))
+            or 0,
+            0,
+        )
+        if current_stage == workflow_stage.postprocessing and total_iters > 0:
+            for iteration in range(0, total_iters):
+                targets.append(
+                    {
+                        "path": _supply_demand_manifest_path(
+                            run_dir=archive_run_dir,
+                            year=year,
+                            iteration=iteration,
+                        ),
+                        "steps": None,
+                    }
+                )
+        else:
+            for iteration in range(0, resume_iter):
+                targets.append(
+                    {
+                        "path": _supply_demand_manifest_path(
+                            run_dir=archive_run_dir,
+                            year=year,
+                            iteration=iteration,
+                        ),
+                        "steps": None,
+                    }
+                )
+            if current_sub_stage == workflow_stage.traffic_assignment:
+                targets.append(
+                    {
+                        "path": _supply_demand_manifest_path(
+                            run_dir=archive_run_dir,
+                            year=year,
+                            iteration=resume_iter,
+                        ),
+                        "steps": set(_ACTIVITYSIM_MANIFEST_STEPS),
+                    }
+                )
+        if current_stage == workflow_stage.postprocessing:
+            postprocessing_enabled = _is_stage_explicitly_enabled(
+                state=state,
+                stage=workflow_stage.postprocessing,
             )
-        if current_sub_stage == workflow_stage.traffic_assignment:
-            targets.append(
-                {
-                    "path": _supply_demand_manifest_path(
-                        run_dir=archive_run_dir,
-                        year=year,
-                        iteration=resume_iter,
-                    ),
-                    "steps": set(_ACTIVITYSIM_MANIFEST_STEPS),
-                }
+            manifest_path = _postprocessing_manifest_path(
+                run_dir=archive_run_dir,
+                year=year,
             )
+            if postprocessing_enabled is not False and (
+                postprocessing_enabled is True or manifest_path.exists()
+            ):
+                targets.append(
+                    {
+                        "path": manifest_path,
+                        "steps": set(_POSTPROCESSING_MANIFEST_STEPS),
+                    }
+                )
 
     return targets, issues
 
