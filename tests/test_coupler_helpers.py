@@ -100,6 +100,34 @@ def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatc
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
+def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    archived = []
+    artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: artifact,
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="linkstats_warmstart",
+        path="/tmp/linkstats.parquet",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert archived == [("linkstats_warmstart", "/tmp/linkstats.parquet")]
+    assert ("set_from_artifact", "linkstats_warmstart", artifact) in coupler.calls
+
+
 def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch) -> None:
     coupler = CouplerWithSetOnly()
     logged = {"called": False}
@@ -120,3 +148,128 @@ def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch
 
     assert logged["called"] is False
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_and_set_input_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: artifact,
+    )
+
+    coupler_helpers.log_and_set_input(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
+def test_log_output_only_logs_and_enqueues_archive_with_active_run(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_output_only_logs_and_enqueues_archive_without_active_run(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_input_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == []
+
+
+def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_input_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == []

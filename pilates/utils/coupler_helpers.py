@@ -991,6 +991,45 @@ def _log_with_optional_h5_container(
     return cr.log_input(path, key=key, description=description, **meta)
 
 
+def _log_and_maybe_publish_artifact(
+    *,
+    direction: str,
+    key: str,
+    path: str,
+    description: str,
+    meta: Dict[str, Any],
+    coupler: Optional[CouplerProtocol] = None,
+    publish_to_coupler: bool,
+    enqueue_archive_copy: bool,
+    skip_logging_without_active_run: bool,
+) -> None:
+    """
+    Shared primitive for the coupler helper logging functions.
+
+    This centralizes active-run vs no-active-run behavior so the public wrappers
+    cannot diverge.
+    """
+    has_active_run = cr.current_run() is not None
+    artifact: Optional[Any] = None
+
+    if has_active_run or not skip_logging_without_active_run:
+        artifact = _log_with_optional_h5_container(
+            direction=direction,
+            key=key,
+            path=path,
+            description=description,
+            meta=dict(meta),
+        )
+
+    if enqueue_archive_copy:
+        _enqueue_archive_copy(key, path)
+
+    if publish_to_coupler:
+        if coupler is None:
+            raise TypeError("coupler must be provided when publish_to_coupler=True")
+        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+
 def log_and_set_output(
     *,
     key: str,
@@ -1013,19 +1052,17 @@ def log_and_set_output(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    if cr.current_run() is None:
-        _enqueue_archive_copy(key, path)
-        set_coupler_from_artifact(coupler, key, None, fallback=path)
-        return
-
-    artifact = _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        coupler=coupler,
+        publish_to_coupler=True,
+        enqueue_archive_copy=True,
+        skip_logging_without_active_run=True,
     )
-    _enqueue_archive_copy(key, path)
 
 
 def log_output_only(
@@ -1047,14 +1084,16 @@ def log_output_only(
     description : str
         Description used in provenance logging.
     """
-    _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        publish_to_coupler=False,
+        enqueue_archive_copy=True,
+        skip_logging_without_active_run=False,
     )
-    _enqueue_archive_copy(key, path)
 
 
 def log_and_set_input(
@@ -1079,16 +1118,16 @@ def log_and_set_input(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    if cr.current_run() is None:
-        set_coupler_from_artifact(coupler, key, None, fallback=path)
-        return
-
-    artifact = _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="input",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        coupler=coupler,
+        publish_to_coupler=True,
+        enqueue_archive_copy=False,
+        skip_logging_without_active_run=True,
     )
 
 
@@ -1111,10 +1150,13 @@ def log_input_only(
     description : str
         Description used in provenance logging.
     """
-    _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="input",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        publish_to_coupler=False,
+        enqueue_archive_copy=False,
+        skip_logging_without_active_run=False,
     )
