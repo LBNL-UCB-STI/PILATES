@@ -852,19 +852,11 @@ def main(
             if restart_missing_artifacts_after_recovery:
                 logger.warning(
                     "Restart diagnostic still sees missing local workspace inputs "
-                    "after completed-run reconstruction: %s",
+                    "after completed-run reconstruction, before bootstrap: %s",
                     _format_missing_artifact_summary(
                         restart_missing_artifacts_after_recovery
                     ),
                 )
-                if restart_strict:
-                    raise RuntimeError(
-                        "Strict restart preflight failed; required restart artifacts are "
-                        "still missing after completed-run reconstruction. missing="
-                        + _format_missing_artifact_summary(
-                            restart_missing_artifacts_after_recovery
-                        )
-                    )
     if is_restart_run and _repair_restart_beam_inputs_from_source(
         settings=settings,
         state=state,
@@ -874,19 +866,6 @@ def main(
             settings=settings,
             state=state,
             workspace=workspace,
-        )
-    if is_restart_run:
-        _run_resume_doctor_diagnostics(
-            state=state,
-            workspace=workspace,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-            archive_state_path=archive_state_path,
-            local_state_path=local_state_path,
-            local_consist_db_path=local_consist_db_path,
-            restart_missing_artifacts_initial=restart_missing_artifacts_initial,
-            restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
-            restart_reconstruction=restart_reconstruction,
         )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
@@ -924,6 +903,40 @@ def main(
             bootstrap_result.get("run_reference"),
             bootstrap_result.get("staged_artifact_summary"),
         )
+    if is_restart_run:
+        restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        if restart_missing_artifacts_after_recovery:
+            logger.warning(
+                "Restart diagnostic still sees missing local workspace inputs "
+                "after restart bootstrap: %s",
+                _format_missing_artifact_summary(
+                    restart_missing_artifacts_after_recovery
+                ),
+            )
+        _run_resume_doctor_diagnostics(
+            state=state,
+            workspace=workspace,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            archive_state_path=archive_state_path,
+            local_state_path=local_state_path,
+            local_consist_db_path=local_consist_db_path,
+            restart_missing_artifacts_initial=restart_missing_artifacts_initial,
+            restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
+            restart_reconstruction=restart_reconstruction,
+        )
+        if restart_missing_artifacts_after_recovery and restart_strict:
+            raise RuntimeError(
+                "Strict restart preflight failed; required restart artifacts are "
+                "still missing after restart bootstrap. missing="
+                + _format_missing_artifact_summary(
+                    restart_missing_artifacts_after_recovery
+                )
+            )
 
     # 6. START SCENARIO CONTEXT
     # The scenario context is where all model execution happens. Each step runs inside

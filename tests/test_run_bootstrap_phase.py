@@ -1480,11 +1480,15 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     assert tracker_kwargs["allow_external_paths"] is True
 
 
-def test_main_restart_strict_allows_incomplete_reconstruction_when_required_artifacts_exist(
+def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstrap(
     tmp_path, monkeypatch
 ):
     class StopAfterBootstrap(RuntimeError):
         pass
+
+    class SnapshotStub:
+        def final_snapshot(self):
+            return True
 
     class StateStub:
         def __init__(self, run_info_path: str):
@@ -1545,7 +1549,7 @@ def test_main_restart_strict_allows_incomplete_reconstruction_when_required_arti
     monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", lambda **_kwargs: None)
@@ -1563,19 +1567,61 @@ def test_main_restart_strict_allows_incomplete_reconstruction_when_required_arti
             ),
         },
     )
+    missing_before_bootstrap = [
+        {
+            "key": "activitysim_config_settings_yaml_configs",
+            "path": "/missing/settings.yaml",
+            "reason": "test",
+        }
+    ]
+    missing_sequences = [
+        list(missing_before_bootstrap),
+        list(missing_before_bootstrap),
+        [],
+    ]
+
+    def _missing_artifacts(**_kwargs):
+        if not missing_sequences:
+            return []
+        return missing_sequences.pop(0)
+
     monkeypatch.setattr(
         run_module,
         "_find_missing_restart_local_artifacts",
-        lambda **_kwargs: [],
+        _missing_artifacts,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **_kwargs: {
+            "bootstrap_cache_hit": False,
+            "run_reference": {"probe_run_id": "bootstrap-run"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        },
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StopAfterBootstrap("reached scenario")
+        ),
     )
 
-    def _stop_after_bootstrap(**_kwargs):
-        raise StopAfterBootstrap("bootstrap reached")
-
-    monkeypatch.setattr(run_module, "run_bootstrap_phase", _stop_after_bootstrap)
-
-    with pytest.raises(StopAfterBootstrap, match="bootstrap reached"):
+    with pytest.raises(StopAfterBootstrap, match="reached scenario"):
         run_module.main()
+
+    assert missing_sequences == []
 
 
 def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
@@ -1662,10 +1708,19 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         "_find_missing_restart_local_artifacts",
         lambda **_kwargs: list(missing),
     )
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **_kwargs: {
+            "bootstrap_cache_hit": False,
+            "run_reference": {"probe_run_id": "bootstrap-run"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        },
+    )
 
     with pytest.raises(
         RuntimeError,
-        match="Strict restart preflight failed; required restart artifacts are still missing",
+        match="Strict restart preflight failed; required restart artifacts are still missing after restart bootstrap",
     ):
         run_module.main()
 
