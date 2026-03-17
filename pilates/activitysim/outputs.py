@@ -77,6 +77,18 @@ def _record_path(record: Any, workspace: "Workspace") -> Optional[Path]:
     return Path(path)
 
 
+def _normalize_activitysim_run_output_key(key: str) -> str:
+    """
+    Normalize raw ActivitySim runner keys into canonical workflow keys.
+
+    The runner emits ``*_asim_out_temp`` filenames; the stable contract uses
+    the normalized ``*_asim_out`` names.
+    """
+    if key.endswith("_asim_out_temp"):
+        key = key[: -len("_temp")]
+    return normalize_asim_output_key(key)
+
+
 def _asim_run_marker_filename(year: int, iteration: int) -> str:
     return f".pilates_asim_run_success_year_{year}_iter_{iteration}.json"
 
@@ -292,6 +304,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
     ----------
     output_dir : Path
         ActivitySim output directory.
+    declared_outputs : tuple[str, ...]
+        Canonical workflow-facing outputs derived from ``ASIM_OUTPUT_KEY_MAP``.
     raw_outputs : dict
         Mapping of short_name to output path.
     raw_output_hashes : dict
@@ -299,8 +313,12 @@ class ActivitySimRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "output_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = tuple(
+        dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
+    validators: ClassVar[Tuple[OutputValidator, ...]] = ()
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
@@ -367,6 +385,48 @@ class ActivitySimRunOutputs(StepOutputsBase):
                 )
             )
         return RecordStore(recordList=records)
+
+
+class _ActivitySimRunOutputsValidator:
+    """
+    Warn when raw outputs drift away from the canonical ActivitySim contract.
+
+    The validator is advisory only. It keeps legacy or exploratory outputs
+    visible without failing runs that already succeeded.
+    """
+
+    name = "activitysim_run_output_contract"
+    level = "warning"
+
+    def validate(
+        self,
+        outputs: "ActivitySimRunOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        declared = set(outputs.declared_output_keys())
+        results: list[ValidationResult] = []
+        for raw_key in outputs.raw_outputs:
+            normalized_key = _normalize_activitysim_run_output_key(raw_key)
+            if normalized_key in declared:
+                continue
+            results.append(
+                ValidationResult(
+                    message=(
+                        f"Unrecognized ActivitySim run output key '{raw_key}'. "
+                        "It will remain in raw_outputs, but it is not part of the "
+                        "stable canonical contract."
+                    ),
+                    metadata={
+                        "raw_key": raw_key,
+                        "normalized_key": normalized_key,
+                        "declared_outputs": tuple(sorted(declared)),
+                    },
+                )
+            )
+        return results
+
+
+ActivitySimRunOutputs.validators = (_ActivitySimRunOutputsValidator(),)
 
 
 @dataclass
