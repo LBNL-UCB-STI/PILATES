@@ -825,12 +825,6 @@ def main(
                     reconstruction_result.skipped_missing_source,
                     reconstruction_result.failed,
                 )
-                if restart_strict:
-                    raise RuntimeError(
-                        "Strict restart preflight failed; completed-run reconstruction "
-                        "was incomplete. "
-                        + reconstruction_result.summary
-                    )
 
     if state.data_initialized:
         restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(

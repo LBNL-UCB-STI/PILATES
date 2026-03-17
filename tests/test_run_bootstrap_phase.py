@@ -1480,6 +1480,196 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     assert tracker_kwargs["allow_external_paths"] is True
 
 
+def test_main_restart_strict_allows_incomplete_reconstruction_when_required_artifacts_exist(
+    tmp_path, monkeypatch
+):
+    class StopAfterBootstrap(RuntimeError):
+        pass
+
+    class StateStub:
+        def __init__(self, run_info_path: str):
+            self.run_info_path = run_info_path
+            self.data_initialized = True
+            self.file_loc = None
+            self.mirror_file_loc = None
+
+        def set_run_info_path(self, path: str) -> None:
+            self.run_info_path = path
+
+        def set_data_initialized(self, initialized: bool) -> None:
+            self.data_initialized = initialized
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-strict-test"
+    archive_run_dir = archive_root / run_name
+    archive_run_dir.mkdir(parents=True, exist_ok=True)
+    run_state_path = archive_run_dir / "run_state.yaml"
+    run_state_path.write_text("state", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused-on-restart",
+            restart_strict=True,
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = StateStub(str(run_state_path))
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", lambda **_kwargs: None)
+    monkeypatch.setattr(run_module, "_repair_restart_beam_inputs_from_source", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        run_module,
+        "_reconstruct_restart_completed_run_outputs",
+        lambda **_kwargs: {
+            "run_ids": ["run-1"],
+            "source_root": str(archive_run_dir),
+            "target_root": str(local_root / run_name),
+            "materialization_result": MaterializationResult(
+                materialized_from_filesystem={"run-1": "/restored/run-1"},
+                skipped_missing_source=["households_asim_out_temp"],
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_find_missing_restart_local_artifacts",
+        lambda **_kwargs: [],
+    )
+
+    def _stop_after_bootstrap(**_kwargs):
+        raise StopAfterBootstrap("bootstrap reached")
+
+    monkeypatch.setattr(run_module, "run_bootstrap_phase", _stop_after_bootstrap)
+
+    with pytest.raises(StopAfterBootstrap, match="bootstrap reached"):
+        run_module.main()
+
+
+def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
+    tmp_path, monkeypatch
+):
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-strict-missing"
+    archive_run_dir = archive_root / run_name
+    archive_run_dir.mkdir(parents=True, exist_ok=True)
+    run_state_path = archive_run_dir / "run_state.yaml"
+    run_state_path.write_text("state", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused-on-restart",
+            restart_strict=True,
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = SimpleNamespace(
+        run_info_path=str(run_state_path),
+        data_initialized=True,
+        file_loc=None,
+        mirror_file_loc=None,
+    )
+    state.set_run_info_path = lambda path: setattr(state, "run_info_path", path)
+    state.set_data_initialized = lambda initialized: setattr(
+        state, "data_initialized", initialized
+    )
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", lambda **_kwargs: None)
+    monkeypatch.setattr(run_module, "_repair_restart_beam_inputs_from_source", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        run_module,
+        "_reconstruct_restart_completed_run_outputs",
+        lambda **_kwargs: {
+            "run_ids": ["run-1"],
+            "source_root": str(archive_run_dir),
+            "target_root": str(local_root / run_name),
+            "materialization_result": MaterializationResult(
+                materialized_from_filesystem={"run-1": "/restored/run-1"},
+                skipped_missing_source=["households_asim_out_temp"],
+            ),
+        },
+    )
+
+    missing = [{"key": "usim_datastore_base_h5", "path": "/missing/base.h5", "reason": "test"}]
+
+    monkeypatch.setattr(
+        run_module,
+        "_find_missing_restart_local_artifacts",
+        lambda **_kwargs: list(missing),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="Strict restart preflight failed; required restart artifacts are still missing",
+    ):
+        run_module.main()
+
+
 def test_resolve_consist_db_paths_uses_local_run_dir_by_default():
     settings = SimpleNamespace(
         run=SimpleNamespace(),
