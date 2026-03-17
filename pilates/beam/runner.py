@@ -229,11 +229,28 @@ class BeamRunner(GenericRunner):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this runner expects from the workflow.
+        Declare the input paths/artifacts this runner expects without disk checks.
+        """
+        zarr_path = None
+        if getattr(settings, "activitysim", None) is not None:
+            zarr_path = os.path.join(
+                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            )
+        return {
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+            "zarr_skims": zarr_path,
+        }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
         """
         zarr_path = None
         if getattr(settings, "activitysim", None) is not None:
@@ -246,6 +263,12 @@ class BeamRunner(GenericRunner):
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
             "zarr_skims": zarr_path,
         }
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return BeamRunner.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(

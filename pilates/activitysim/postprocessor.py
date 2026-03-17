@@ -16,6 +16,7 @@ from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
 )
+from pilates.workflows.artifact_keys import USIM_INPUT_NEXT
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -723,7 +724,7 @@ def create_usim_input_data(
         file_path=input_store_path,
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
-        short_name=f"usim_input_{forecast_year}",
+        short_name=USIM_INPUT_NEXT,
     )
 
     return input_store_path, output_record

@@ -5,8 +5,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING, Union
 import json
-import re
-
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
@@ -14,6 +12,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    USIM_INPUT_NEXT,
 )
 from pilates.workflows.outputs_base import (
     OutputValidator,
@@ -446,9 +445,13 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         Mapping of short_name to known content hashes for copied outputs.
     usim_datastore_key : str, optional
         Canonical coupler key for the next-iteration UrbanSim input datastore.
+        Legacy manifests may record a year-derived ``usim_input_<year>`` key;
+        this class normalizes that to the stable ``usim_input_next`` contract
+        when re-publishing or reconstructing typed outputs.
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_INPUT_NEXT,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "usim_datastore_h5",
@@ -462,14 +465,9 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     usim_datastore_key: Optional[str] = None
 
     def _resolved_usim_datastore_key(self) -> Optional[str]:
-        if self.usim_datastore_key:
-            return self.usim_datastore_key
         if self.usim_datastore_h5 is None:
             return None
-        match = re.search(r"(\d{4})", self.usim_datastore_h5.name)
-        if match:
-            return f"usim_input_{match.group(1)}"
-        return None
+        return USIM_INPUT_NEXT
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -515,7 +513,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
             for record in record_store.all_records():
                 short_name = getattr(record, "short_name", "") or ""
                 if short_name.startswith("usim_input_"):
-                    usim_key = short_name
+                    usim_key = USIM_INPUT_NEXT
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
                 normalized_name = normalize_asim_output_key(short_name)

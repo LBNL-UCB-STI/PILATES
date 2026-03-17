@@ -8,6 +8,7 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.artifact_keys import USIM_INPUT_NEXT
 from pilates.workflows import steps
 from pilates.workflows.steps import activitysim as steps_activitysim
 
@@ -195,6 +196,31 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
 
     with pytest.raises(TypeError, match="ActivitySimRunOutputs"):
         step_fn(settings=settings, state=state, workspace=workspace)
+
+
+def test_activitysim_postprocess_normalizes_legacy_usim_input_key(
+    tmp_path,
+) -> None:
+    record_store = RecordStore(
+        recordList=[
+            FileRecord(
+                file_path=str(tmp_path / "usim_2018.h5"),
+                short_name="usim_input_2018",
+            )
+        ]
+    )
+
+    outputs = ActivitySimPostprocessOutputs.from_record_store(
+        record_store,
+        workspace=SimpleNamespace(
+            full_path=str(tmp_path),
+            get_asim_output_dir=lambda: str(tmp_path / "asim" / "output"),
+        ),
+    )
+
+    assert outputs.usim_datastore_h5 == tmp_path / "usim_2018.h5"
+    assert outputs.usim_datastore_key == USIM_INPUT_NEXT
+    assert list(outputs.to_record_store().to_mapping()) == [USIM_INPUT_NEXT]
 
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:

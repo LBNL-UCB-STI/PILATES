@@ -299,11 +299,31 @@ class UrbansimPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
+        """
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_input_fname = settings.urbansim.input_file_template.format(
+            region_id=region_id
+        )
+        return {
+            "usim_source_data_dir": settings.urbansim.local_data_input_folder,
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+            "usim_datastore_h5": os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            ),
+        }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
         """
         project_root = find_project_root(start_path=os.path.dirname(__file__))
         if not project_root:
@@ -328,6 +348,12 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 usim_input_path if os.path.exists(usim_input_path) else None
             ),
         }
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        return UrbansimPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(

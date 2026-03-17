@@ -19,7 +19,7 @@ from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
+from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR, USIM_INPUT_NEXT
 from pilates.workflows.outputs_base import (
     StepOutputsBase,
     ValidationContext,
@@ -611,9 +611,7 @@ def _recover_activitysim_postprocess_outputs(
         asim_output_dir=asim_output_dir,
         processed_outputs=processed_outputs,
         processed_output_hashes=processed_output_hashes,
-        usim_datastore_key=f"usim_input_{state.forecast_year}"
-        if usim_existing
-        else None,
+        usim_datastore_key=USIM_INPUT_NEXT if usim_existing else None,
     )
 
 
@@ -1276,6 +1274,7 @@ def make_activitysim_postprocess_step(
             "households_asim_out",
             "linkstats",
             "persons_asim_out",
+            USIM_INPUT_NEXT,
         }
         profile_schema_keys = {
             "persons_asim_out",

@@ -1987,26 +1987,47 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Union[str, None]]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
         """
         region = settings.run.region
         region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
         usim_input_fname = settings.urbansim.input_file_template.format(
             region_id=region_id
         )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
         return {
             "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
+            "usim_datastore_h5": os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
             ),
         }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Union[str, None]]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimPreprocessor.declared_expected_inputs(
+            settings, state, workspace
+        )
+        usim_input_path = inputs["usim_datastore_h5"]
+        inputs["usim_datastore_h5"] = (
+            usim_input_path if os.path.exists(usim_input_path) else None
+        )
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Union[str, None]]:
+        return ActivitysimPreprocessor.runtime_expected_inputs(
+            settings, state, workspace
+        )
 
     @staticmethod
     def expected_outputs(

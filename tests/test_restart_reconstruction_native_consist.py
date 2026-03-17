@@ -395,6 +395,45 @@ def test_reconstruct_restart_completed_run_outputs_reports_missing_manifest(tmp_
     assert "workflow manifest is missing" in result.failed[0][1]
 
 
+def test_reconstruct_restart_completed_run_outputs_ignores_optional_asim_temp_missing_sources(
+    tmp_path,
+):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_run": {"run_id": "asim-run-0"},
+        },
+    )
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.activity_demand,
+    )
+
+    class TrackerStub:
+        def materialize_run_outputs(self, **kwargs):
+            return MaterializationResult(
+                materialized_from_filesystem={"asim-run-0": "/restored/asim-run-0"},
+                skipped_missing_source=[
+                    "households_asim_out_temp",
+                    "persons_asim_out_temp",
+                ],
+            )
+
+    reconstruction = restart_runtime.reconstruct_restart_completed_run_outputs(
+        tracker=TrackerStub(),
+        state=state,
+        local_run_dir=str(local_run_dir),
+        archive_run_dir=str(archive_run_dir),
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    result = reconstruction["materialization_result"]
+    assert result.complete is True
+    assert result.skipped_missing_source == []
+
+
 def test_collect_restart_completed_run_ids_for_vehicle_ownership_resume_uses_contiguous_atlas_prefix(
     tmp_path,
 ):

@@ -33,6 +33,7 @@ _ATLAS_MANIFEST_STEPS = (
 _ATLAS_SUBYEAR_MANIFEST_RE = re.compile(
     r"^forecast_year_(?P<forecast_year>-?\d+)_subyear_(?P<sub_year>-?\d+)\.yaml$"
 )
+_OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES = ("_asim_out_temp",)
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -40,6 +41,47 @@ def _coerce_int(value: Any) -> Optional[int]:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _materialization_entry_name(entry: Any) -> str:
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, (tuple, list)) and entry:
+        return str(entry[0])
+    if isinstance(entry, dict):
+        for key in ("key", "name", "short_name"):
+            value = entry.get(key)
+            if value:
+                return str(value)
+    return str(entry)
+
+
+def _is_optional_restart_missing_source(entry: Any) -> bool:
+    name = _materialization_entry_name(entry)
+    return any(
+        name.endswith(suffix) for suffix in _OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES
+    )
+
+
+def _prune_optional_restart_missing_sources(
+    result: MaterializationResult,
+) -> MaterializationResult:
+    tolerated = [
+        entry
+        for entry in list(getattr(result, "skipped_missing_source", []) or [])
+        if _is_optional_restart_missing_source(entry)
+    ]
+    if tolerated:
+        result.skipped_missing_source = [
+            entry
+            for entry in list(getattr(result, "skipped_missing_source", []) or [])
+            if not _is_optional_restart_missing_source(entry)
+        ]
+        logger.info(
+            "Restart reconstruction ignoring optional missing-source artifacts: %s",
+            [_materialization_entry_name(entry) for entry in tolerated],
+        )
+    return result
 
 
 def _activitysim_iteration_output_requirements(
@@ -800,6 +842,7 @@ def reconstruct_restart_completed_run_outputs(
         initial_failures=issues,
         missing_api_context="restart_reconstruction",
     )
+    aggregate = _prune_optional_restart_missing_sources(aggregate)
 
     return {
         "run_ids": run_ids,

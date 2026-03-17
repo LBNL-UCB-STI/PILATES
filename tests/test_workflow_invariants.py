@@ -37,6 +37,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    USIM_INPUT_NEXT,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
@@ -672,7 +673,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
     new_run_path = tmp_path / "run-new" / "households.parquet"
     old_post_path = tmp_path / "post-old" / "households.parquet"
     new_post_path = tmp_path / "post-new" / "households.parquet"
-    usim_h5 = tmp_path / "post-new" / "usim_input_2018.h5"
+    usim_h5 = tmp_path / "post-new" / "usim_input_next.h5"
     for path in (old_run_path, new_run_path, old_post_path, new_post_path, usim_h5):
         _write_file(path)
 
@@ -690,7 +691,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         usim_datastore_h5=usim_h5,
         asim_output_dir=tmp_path / "post-old",
         processed_outputs={"households_asim_out": old_post_path},
-        usim_datastore_key="usim_input_2018",
+        usim_datastore_key=USIM_INPUT_NEXT,
     )
 
     manifest_path = tmp_path / "manifest_split_downstream_stale.yaml"
@@ -736,7 +737,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
             usim_datastore_h5=usim_h5,
             asim_output_dir=tmp_path / "post-new",
             processed_outputs={"households_asim_out": new_post_path},
-            usim_datastore_key="usim_input_2018",
+            usim_datastore_key=USIM_INPUT_NEXT,
         )
 
     for fn, model in (

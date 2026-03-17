@@ -378,11 +378,30 @@ class AtlasPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
+        """
+        usim_input_fname = _get_usim_datastore_fname(
+            settings,
+            io="input" if state.is_start_year() else "output",
+            year=state.forecast_year,
+        )
+        return {
+            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
+            "usim_datastore_h5": os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            ),
+        }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
         """
         usim_input_fname = _get_usim_datastore_fname(
             settings,
@@ -398,6 +417,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                 usim_input_path if os.path.exists(usim_input_path) else None
             ),
         }
+
+    @staticmethod
+    def expected_inputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        return AtlasPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
