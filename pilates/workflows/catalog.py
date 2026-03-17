@@ -71,10 +71,15 @@ class WorkflowStepSpec:
     Static catalog entry for a workflow step.
 
     Contract fields are intentionally split by meaning:
-    - ``input_keys`` and ``optional_input_keys`` describe direct artifact reads.
+    - ``input_keys`` and ``optional_input_keys`` describe artifact keys
+      consumed by the step during execution, including keys satisfied through
+      holder-fed upstream outputs when those are part of the artifact-level
+      contract.
     - ``upstream_step_inputs`` describes semantic upstream step dependencies.
     - ``holder_inputs`` describes the current in-process wiring mechanism.
     - ``output_keys`` describes stable workflow-facing outputs.
+    - ``optional_output_keys`` describes conditional outputs that may be absent.
+    - ``dynamic_input_families`` documents open-ended inbound namespaces.
     - ``dynamic_output_families`` documents open-ended output namespaces.
 
     This metadata is for static inspection/planning only. Runtime execution
@@ -88,8 +93,10 @@ class WorkflowStepSpec:
     order: int
     outputs_class: Optional[Type[Any]] = None
     input_keys: Tuple[str, ...] = ()
-    output_keys: Tuple[str, ...] = ()
     optional_input_keys: Tuple[str, ...] = ()
+    output_keys: Tuple[str, ...] = ()
+    optional_output_keys: Tuple[str, ...] = ()
+    dynamic_input_families: Tuple[str, ...] = ()
     dynamic_output_families: Tuple[str, ...] = ()
     optional: bool = False
     tracked: bool = True
@@ -234,7 +241,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=80,
         outputs_class=None,
         input_keys=(),
-        output_keys=(ZARR_SKIMS, ASIM_SHARROW_CACHE_DIR),
+        output_keys=(ZARR_SKIMS,),
+        optional_output_keys=(ASIM_SHARROW_CACHE_DIR,),
         tracked=False,
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
@@ -249,7 +257,12 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=90,
         outputs_class=ActivitySimRunOutputs,
-        input_keys=(ZARR_SKIMS,),
+        input_keys=(
+            ASIM_LAND_USE_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ZARR_SKIMS,
+        ),
         output_keys=(
             ASIM_OUTPUT_DIR,
             *_ACTIVITYSIM_RUN_OUTPUT_KEYS,
@@ -315,7 +328,12 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=120,
         outputs_class=BeamRunOutputs,
-        input_keys=(BEAM_CONFIG_FILE,),
+        input_keys=(
+            BEAM_CONFIG_FILE,
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        ),
         optional_input_keys=(
             LINKSTATS_WARMSTART,
             BEAM_OUTPUT_PLANS_XML,
@@ -357,9 +375,15 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=130,
         outputs_class=BeamPostprocessOutputs,
         input_keys=(),
+        optional_input_keys=(ZARR_SKIMS,),
         output_keys=(
-            BEAM_OUTPUT_DIR,
-            *_BEAM_POSTPROCESS_OUTPUT_KEYS,
+            ZARR_SKIMS,
+        ),
+        optional_output_keys=(FINAL_SKIMS_OMX,),
+        dynamic_input_families=(
+            "events_parquet_{year}_{iteration}",
+            "raw_od_skims_{year}_{iteration}",
+            "raw_od_skims_zarr_{year}_{iteration}",
         ),
         dynamic_output_families=(
             "events_parquet_{year}_{iteration}",
@@ -379,7 +403,12 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="traffic_assignment",
         order=140,
         outputs_class=BeamFullSkimOutputs,
-        input_keys=(),
+        input_keys=(
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+        ),
         output_keys=(BEAM_FULL_SKIMS,),
         optional=True,
         depends_on=("beam_preprocess",),
@@ -437,6 +466,8 @@ def workflow_step_contracts_by_name() -> Dict[str, Dict[str, Any]]:
             "optional_input_keys": list(spec.optional_input_keys),
             "upstream_step_inputs": list(spec.upstream_step_inputs),
             "output_keys": list(spec.output_keys),
+            "optional_output_keys": list(spec.optional_output_keys),
+            "dynamic_input_families": list(spec.dynamic_input_families),
             "dynamic_output_families": list(spec.dynamic_output_families),
             "optional": spec.optional,
         }

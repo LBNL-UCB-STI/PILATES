@@ -52,6 +52,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 USIM_DATASTORE_CURRENT_H5,
                 USIM_DATASTORE_BASE_H5,
             ),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (
                 ASIM_MUTABLE_DATA_DIR,
                 ASIM_LAND_USE_IN,
@@ -66,14 +68,23 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         "activitysim_compile": {
             "input_keys": (),
             "optional_input_keys": (),
-            "output_keys": (ZARR_SKIMS, ASIM_SHARROW_CACHE_DIR),
+            "output_keys": (ZARR_SKIMS,),
+            "optional_output_keys": (ASIM_SHARROW_CACHE_DIR,),
+            "dynamic_input_families": (),
             "dynamic_output_families": (),
             "holder_inputs": ("activitysim_preprocess",),
             "upstream_step_inputs": ("activitysim_preprocess",),
         },
         "activitysim_run": {
-            "input_keys": (ZARR_SKIMS,),
+            "input_keys": (
+                ASIM_LAND_USE_IN,
+                ASIM_HOUSEHOLDS_IN,
+                ASIM_PERSONS_IN,
+                ZARR_SKIMS,
+            ),
             "optional_input_keys": (),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (
                 ASIM_OUTPUT_DIR,
                 *ActivitySimRunOutputs.declared_output_keys(),
@@ -93,6 +104,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 USIM_FORECAST_OUTPUT,
             ),
             "optional_input_keys": (),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (
                 ASIM_OUTPUT_DIR,
                 *ActivitySimRunOutputs.declared_output_keys(),
@@ -106,6 +119,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         "beam_preprocess": {
             "input_keys": (BEAM_CONFIG_FILE,),
             "optional_input_keys": (),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (
                 BEAM_MUTABLE_DATA_DIR,
                 *BeamPreprocessOutputs.declared_output_keys(),
@@ -116,13 +131,20 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "upstream_step_inputs": ("activitysim_postprocess",),
         },
         "beam_run": {
-            "input_keys": (BEAM_CONFIG_FILE,),
+            "input_keys": (
+                BEAM_CONFIG_FILE,
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+            ),
             "optional_input_keys": (
                 LINKSTATS_WARMSTART,
                 BEAM_OUTPUT_PLANS_XML,
                 BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
                 BEAM_EXPERIENCED_PLANS_XML,
             ),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (
                 BEAM_OUTPUT_DIR,
                 *BeamRunOutputs.declared_output_keys(),
@@ -148,15 +170,15 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         },
         "beam_postprocess": {
             "input_keys": (),
-            "optional_input_keys": (),
+            "optional_input_keys": (ZARR_SKIMS,),
+            "optional_output_keys": (FINAL_SKIMS_OMX,),
+            "dynamic_input_families": (
+                "events_parquet_{year}_{iteration}",
+                "raw_od_skims_{year}_{iteration}",
+                "raw_od_skims_zarr_{year}_{iteration}",
+            ),
             "output_keys": (
-                BEAM_OUTPUT_DIR,
-                *BeamRunOutputs.declared_output_keys(),
-                BEAM_OUTPUT_PLANS_XML,
-                BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-                BEAM_EXPERIENCED_PLANS_XML,
                 ZARR_SKIMS,
-                FINAL_SKIMS_OMX,
             ),
             "dynamic_output_families": (
                 "events_parquet_{year}_{iteration}",
@@ -166,8 +188,15 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "upstream_step_inputs": ("beam_run",),
         },
         "beam_full_skim": {
-            "input_keys": (),
+            "input_keys": (
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+                LINKSTATS_WARMSTART,
+            ),
             "optional_input_keys": (),
+            "optional_output_keys": (),
+            "dynamic_input_families": (),
             "output_keys": (BEAM_FULL_SKIMS,),
             "dynamic_output_families": (),
             "holder_inputs": ("beam_preprocess",),
@@ -181,6 +210,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         assert spec.input_keys == contract["input_keys"]
         assert spec.optional_input_keys == contract["optional_input_keys"]
         assert spec.output_keys == contract["output_keys"]
+        assert spec.optional_output_keys == contract["optional_output_keys"]
+        assert spec.dynamic_input_families == contract["dynamic_input_families"]
         assert spec.dynamic_output_families == contract["dynamic_output_families"]
         assert spec.holder_inputs == contract["holder_inputs"]
         assert spec.upstream_step_inputs == contract["upstream_step_inputs"]
@@ -194,8 +225,15 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "stage_name": "activity_demand",
         "phase": "run",
         "depends_on": ["activitysim_preprocess"],
-        "input_keys": [ZARR_SKIMS],
+        "input_keys": [
+            ASIM_LAND_USE_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ZARR_SKIMS,
+        ],
         "optional_input_keys": [],
+        "optional_output_keys": [],
+        "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_preprocess"],
         "output_keys": [
             ASIM_OUTPUT_DIR,
@@ -210,17 +248,15 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "phase": "postprocess",
         "depends_on": ["beam_run"],
         "input_keys": [],
-        "optional_input_keys": [],
-        "upstream_step_inputs": ["beam_run"],
-        "output_keys": [
-            BEAM_OUTPUT_DIR,
-            *BeamRunOutputs.declared_output_keys(),
-            BEAM_OUTPUT_PLANS_XML,
-            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-            BEAM_EXPERIENCED_PLANS_XML,
-            ZARR_SKIMS,
-            FINAL_SKIMS_OMX,
+        "optional_input_keys": [ZARR_SKIMS],
+        "optional_output_keys": [FINAL_SKIMS_OMX],
+        "dynamic_input_families": [
+            "events_parquet_{year}_{iteration}",
+            "raw_od_skims_{year}_{iteration}",
+            "raw_od_skims_zarr_{year}_{iteration}",
         ],
+        "upstream_step_inputs": ["beam_run"],
+        "output_keys": [ZARR_SKIMS],
         "dynamic_output_families": [
             "events_parquet_{year}_{iteration}",
             "path_traversal_links_{year}_{iteration}",

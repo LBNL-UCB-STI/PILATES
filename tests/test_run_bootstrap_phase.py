@@ -1087,7 +1087,7 @@ def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_pat
     assert any(path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths)
 
 
-def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_demand(
+def test_restart_preflight_does_not_require_zarr_skims_when_resuming_compiled_supply_demand(
     tmp_path,
 ):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
@@ -1103,9 +1103,7 @@ def test_restart_preflight_requires_zarr_skims_when_resuming_compiled_supply_dem
     )
 
     keys = {item["key"] for item in missing}
-    paths = {item["path"] for item in missing}
-    assert "zarr_skims" in keys
-    assert any(path.endswith("activitysim/output/cache/skims.zarr") for path in paths)
+    assert "zarr_skims" not in keys
 
 
 def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(

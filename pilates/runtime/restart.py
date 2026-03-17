@@ -229,37 +229,21 @@ def restart_required_local_artifacts(
                 }
             )
 
-    requires_activitysim_zarr = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and bool(getattr(state, "asim_compiled", False))
-        and current_stage
-        in {
-            workflow_stage.supply_demand_loop,
-            workflow_stage.activity_demand,
-            workflow_stage.activity_demand_directly_from_land_use,
-            workflow_stage.traffic_assignment,
-        }
-    )
     get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    if requires_activitysim_zarr and callable(get_asim_output_dir):
-        required.append(
-            {
-                "key": "zarr_skims",
-                "path": os.path.join(get_asim_output_dir(), "cache", "skims.zarr"),
-                "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
-            }
-        )
-        current_sub_stage = getattr(state, "current_sub_stage", None)
-        if current_stage == workflow_stage.supply_demand_loop and (
-            current_sub_stage == workflow_stage.traffic_assignment
-        ):
-            required.extend(
-                _activitysim_iteration_output_requirements(
-                    asim_output_dir=get_asim_output_dir(),
-                    year=getattr(state, "current_year", "unknown"),
-                    iteration=getattr(state, "current_inner_iter", 0),
-                )
+    requires_activitysim_iteration_outputs = (
+        getattr(model_cfg, "activity_demand", None) == "activitysim"
+        and current_stage == workflow_stage.supply_demand_loop
+        and getattr(state, "current_sub_stage", None) == workflow_stage.traffic_assignment
+        and callable(get_asim_output_dir)
+    )
+    if requires_activitysim_iteration_outputs:
+        required.extend(
+            _activitysim_iteration_output_requirements(
+                asim_output_dir=get_asim_output_dir(),
+                year=getattr(state, "current_year", "unknown"),
+                iteration=getattr(state, "current_inner_iter", 0),
             )
+        )
 
     requires_beam_locals = (
         get_traffic_assignment_model(settings) == "beam"
