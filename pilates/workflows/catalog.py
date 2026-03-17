@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
+from fnmatch import fnmatchcase
 from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple, Type
 
 from pilates.activitysim.outputs import (
@@ -59,6 +61,7 @@ from pilates.workflows.artifact_keys import (
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 
 @dataclass(frozen=True)
@@ -108,6 +111,24 @@ class WorkflowStepSpec:
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
+
+
+@dataclass(frozen=True)
+class WorkflowStepKeyMatch:
+    step_name: str
+    direction: str
+    raw_key: str
+    canonical_key: str
+    declared: bool
+    matched_via: Optional[str] = None
+    matched_family: Optional[str] = None
+    used_alias: bool = False
+
+    @property
+    def alias_note(self) -> str:
+        if not self.used_alias:
+            return ""
+        return f" (canonicalized to '{self.canonical_key}')"
 
 
 _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
@@ -550,6 +571,137 @@ def workflow_step_contracts_by_name() -> Dict[str, Dict[str, Any]]:
             "optional": spec.optional,
         }
     return contracts
+
+
+def workflow_step_declared_input_keys(step_name: str) -> Tuple[str, ...]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        return ()
+    return tuple(dict.fromkeys((*spec.input_keys, *spec.optional_input_keys)))
+
+
+def workflow_step_declared_output_keys(step_name: str) -> Tuple[str, ...]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        return ()
+    return tuple(dict.fromkeys((*spec.output_keys, *spec.optional_output_keys)))
+
+
+def _family_pattern_matches_key(family: str, key: str) -> bool:
+    pattern = re.sub(r"\{[^{}]+\}", "*", family)
+    return bool(pattern) and fnmatchcase(key, pattern)
+
+
+def workflow_step_key_match(
+    step_name: str,
+    key: str,
+    *,
+    direction: str,
+) -> WorkflowStepKeyMatch:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        return WorkflowStepKeyMatch(
+            step_name=step_name,
+            direction=direction,
+            raw_key=key,
+            canonical_key=resolve_artifact_key(key),
+            declared=False,
+            used_alias=resolve_artifact_key(key) != key,
+        )
+    canonical_key = resolve_artifact_key(key)
+    used_alias = canonical_key != key
+    if direction == "input":
+        if canonical_key in spec.input_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="input_keys",
+                used_alias=used_alias,
+            )
+        if canonical_key in spec.optional_input_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="optional_input_keys",
+                used_alias=used_alias,
+            )
+        for family in spec.dynamic_input_families:
+            if _family_pattern_matches_key(family, canonical_key):
+                return WorkflowStepKeyMatch(
+                    step_name=step_name,
+                    direction=direction,
+                    raw_key=key,
+                    canonical_key=canonical_key,
+                    declared=True,
+                    matched_via="dynamic_input_families",
+                    matched_family=family,
+                    used_alias=used_alias,
+                )
+        return WorkflowStepKeyMatch(
+            step_name=step_name,
+            direction=direction,
+            raw_key=key,
+            canonical_key=canonical_key,
+            declared=False,
+            used_alias=used_alias,
+        )
+    if direction == "output":
+        if canonical_key in spec.output_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="output_keys",
+                used_alias=used_alias,
+            )
+        if canonical_key in spec.optional_output_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="optional_output_keys",
+                used_alias=used_alias,
+            )
+        for family in spec.dynamic_output_families:
+            if _family_pattern_matches_key(family, canonical_key):
+                return WorkflowStepKeyMatch(
+                    step_name=step_name,
+                    direction=direction,
+                    raw_key=key,
+                    canonical_key=canonical_key,
+                    declared=True,
+                    matched_via="dynamic_output_families",
+                    matched_family=family,
+                    used_alias=used_alias,
+                )
+        return WorkflowStepKeyMatch(
+            step_name=step_name,
+            direction=direction,
+            raw_key=key,
+            canonical_key=canonical_key,
+            declared=False,
+            used_alias=used_alias,
+        )
+    raise ValueError("direction must be 'input' or 'output'")
+
+
+def workflow_step_key_is_declared(
+    step_name: str,
+    key: str,
+    *,
+    direction: str,
+) -> bool:
+    return workflow_step_key_match(step_name, key, direction=direction).declared
 
 
 def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:

@@ -512,6 +512,7 @@ def make_urbansim_preprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="urbansim_preprocess",
                 **_urbansim_output_facet_meta(short_name, forecast_year=forecast_year),
             )
         usim_data_dir = outputs.usim_mutable_data_dir
@@ -527,6 +528,7 @@ def make_urbansim_preprocess_step(
                 path=str(usim_input_path),
                 description="UrbanSim base datastore for preprocessing",
                 coupler=coupler,
+                step_name="urbansim_preprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
@@ -595,6 +597,7 @@ def make_urbansim_run_step(
                 path=str(outputs.usim_datastore_h5),
                 description=(f"UrbanSim datastore output for year {forecast_year}"),
                 coupler=coupler,
+                step_name="urbansim_run",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
@@ -661,6 +664,7 @@ def make_urbansim_postprocess_step(
                     key=short_name,
                     path=str(path),
                     description=description,
+                    step_name="urbansim_postprocess",
                     profile_file_schema=True,
                     h5_container=True,
                     hash_tables="if_unchanged",
@@ -692,6 +696,7 @@ def make_urbansim_postprocess_step(
                     f"(year {forecast_year})"
                 ),
                 coupler=coupler,
+                step_name="urbansim_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
@@ -773,7 +778,13 @@ def make_atlas_preprocess_step(
         prepared_meta = getattr(outputs, "prepared_input_meta", {})
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_preprocess",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
             extra_meta_fn=lambda key, _path, _description: {
                 **prepared_meta.get(key, {}),
@@ -868,7 +879,13 @@ def make_atlas_run_step(
     ) -> None:
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_run",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
         )
 
@@ -984,7 +1001,13 @@ def make_atlas_postprocess_step(
                 for short_name, path, description in outputs._iter_record_items()
                 if short_name != USIM_H5_UPDATED
             ),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_postprocess",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
         )
         if outputs.usim_datastore_h5 is not None:
@@ -995,6 +1018,7 @@ def make_atlas_postprocess_step(
                     f"UrbanSim datastore updated by ATLAS for year {forecast_year}"
                 ),
                 coupler=coupler,
+                step_name="atlas_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",

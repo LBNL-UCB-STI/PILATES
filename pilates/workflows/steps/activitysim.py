@@ -707,6 +707,7 @@ def make_activitysim_compile_step(
                 path=zarr_output_path,
                 description="ActivitySim compiled zarr skims",
                 coupler=coupler,
+                step_name="activitysim_compile",
                 **_activitysim_output_facet_meta(
                     ZARR_SKIMS,
                     year=forecast_year,
@@ -729,6 +730,7 @@ def make_activitysim_compile_step(
                         "ActivitySim persisted compile cache directory (numba/sharrow)"
                     ),
                     coupler=coupler,
+                    step_name="activitysim_compile",
                     **_activitysim_output_facet_meta(
                         ASIM_SHARROW_CACHE_DIR,
                         year=forecast_year,
@@ -966,6 +968,7 @@ def make_activitysim_preprocess_step(
                 path=path,
                 description=description,
                 coupler=coupler,
+                step_name="activitysim_preprocess",
                 **meta,
             ),
             profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
@@ -1293,7 +1296,13 @@ def make_activitysim_postprocess_step(
 
         _log_step_records(
             record_items=other_items,
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="activitysim_postprocess",
+                **meta,
+            ),
             profile_schema_keys=profile_schema_keys,
             extra_meta_fn=_extra_meta,
         )
@@ -1304,6 +1313,7 @@ def make_activitysim_postprocess_step(
                 path=path,
                 description=description,
                 coupler=coupler,
+                step_name="activitysim_postprocess",
                 **meta,
             ),
             profile_schema_keys=profile_schema_keys,
@@ -1317,6 +1327,7 @@ def make_activitysim_postprocess_step(
                     f"UrbanSim datastore updated by ActivitySim for year {forecast_year}"
                 ),
                 coupler=coupler,
+                step_name="activitysim_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",

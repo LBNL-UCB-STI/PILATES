@@ -19,6 +19,11 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.catalog import (
+    workflow_step_key_is_declared,
+    workflow_step_key_match,
+    workflow_step_spec_for_step_name,
+)
 from pilates.atlas.outputs import (
     AtlasPreprocessOutputs,
 )
@@ -53,6 +58,7 @@ from pilates.workflows.steps import (
 )
 
 logger = logging.getLogger(__name__)
+_STEP_CONTRACT_WARNING_SIGNATURES: set[tuple[Any, ...]] = set()
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,61 @@ def _infer_phase(step_name: str) -> Optional[str]:
     if "_" not in step_name:
         return None
     return step_name.rsplit("_", 1)[-1] or None
+
+
+def _warn_once(signature: tuple[Any, ...], message: str, *args: Any) -> None:
+    if signature in _STEP_CONTRACT_WARNING_SIGNATURES:
+        return
+    _STEP_CONTRACT_WARNING_SIGNATURES.add(signature)
+    logger.warning(message, *args)
+
+
+def _warn_for_undeclared_step_inputs(
+    *,
+    step_name: str,
+    input_keys: Optional[Sequence[str]],
+    inputs: Optional[Mapping[str, Any]],
+) -> None:
+    declared_inputs: list[str] = []
+    if inputs:
+        declared_inputs.extend(str(key) for key in inputs.keys())
+    if input_keys:
+        declared_inputs.extend(str(key) for key in input_keys)
+    spec = workflow_step_spec_for_step_name(step_name)
+    dynamic_families = tuple(spec.dynamic_input_families) if spec is not None else ()
+    for key in dict.fromkeys(declared_inputs):
+        match = workflow_step_key_match(step_name, key, direction="input")
+        if match.declared:
+            continue
+        if dynamic_families:
+            message = (
+                "[%s] Step '%s' received undeclared input key '%s'%s from step "
+                "resolution; it matches no declared input key and no dynamic input "
+                "family %s."
+            )
+            args = (
+                step_name,
+                step_name,
+                key,
+                match.alias_note,
+                dynamic_families,
+            )
+        else:
+            message = (
+                "[%s] Step '%s' received undeclared input key '%s'%s from step "
+                "resolution; the step declares no dynamic input families."
+            )
+            args = (
+                step_name,
+                step_name,
+                key,
+                match.alias_note,
+            )
+        _warn_once(
+            ("undeclared_step_input", step_name, key),
+            message,
+            *args,
+        )
 
 
 def _resolved_step_epoch_identity(
@@ -478,6 +539,11 @@ def run_manifested_steps(
             step_kwargs = dict(run_kwargs)
             if cache_options is not None:
                 step_kwargs["cache_options"] = cache_options
+            _warn_for_undeclared_step_inputs(
+                step_name=spec.name,
+                input_keys=step_kwargs.get("input_keys"),
+                inputs=step_kwargs.get("inputs"),
+            )
             return scenario.run(**step_kwargs)
 
         def _recover_outputs(step_result: Any) -> Optional[Any]:
@@ -602,6 +668,11 @@ def run_workflow(
             step_kwargs = dict(run_kwargs)
             if cache_options is not None:
                 step_kwargs["cache_options"] = cache_options
+            _warn_for_undeclared_step_inputs(
+                step_name=spec.name,
+                input_keys=step_kwargs.get("input_keys"),
+                inputs=step_kwargs.get("inputs"),
+            )
             return scenario.run(**step_kwargs)
 
         def _recover_outputs(step_result: Any) -> Optional[Any]:

@@ -134,6 +134,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM linkstats output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -142,6 +143,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM warm-start linkstats for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -153,6 +155,7 @@ def _publish_beam_run_outputs(
                 key=short_name,
                 path=str(path),
                 description="BEAM linkstats parquet output for downstream runs",
+                step_name="beam_run",
                 profile_file_schema=True,
                 **linkstats_meta,
             )
@@ -162,6 +165,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM linkstats parquet output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -176,6 +180,7 @@ def _publish_beam_run_outputs(
                     "BEAM unmodified linkstats parquet output for phys sim "
                     "sub-iteration"
                 ),
+                step_name="beam_run",
                 profile_file_schema=True,
                 **record_meta,
             )
@@ -187,6 +192,7 @@ def _publish_beam_run_outputs(
                 "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
             ),
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **record_meta,
         )
@@ -199,6 +205,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM plans output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
         )
 
@@ -210,6 +217,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM output plans XML for downstream warm-start reuse",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
         )
 
@@ -225,6 +233,7 @@ def _publish_beam_run_outputs(
                 "BEAM output experienced plans XML for downstream warm-start reuse"
             ),
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
         )
 
@@ -238,6 +247,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM experienced plans XML for downstream warm-start reuse",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
         )
 
@@ -610,6 +620,7 @@ def make_beam_preprocess_step(
                 path=path,
                 description=description,
                 coupler=coupler,
+                step_name="beam_preprocess",
                 **meta,
             ),
             profile_schema_keys={
@@ -799,7 +810,13 @@ def make_beam_run_step(
 
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="beam_run",
+                **meta,
+            ),
             extra_meta_fn=_beam_run_extra_meta,
         )
 
@@ -864,6 +881,7 @@ def make_beam_postprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="beam_postprocess",
             )
         for short_name, path in outputs.split_events.items():
             facet_meta = _beam_postprocess_split_facet_meta(short_name)
@@ -871,6 +889,7 @@ def make_beam_postprocess_step(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events parquet split ({short_name})",
+                step_name="beam_postprocess",
                 profile_file_schema=True,
                 **facet_meta,
             )
@@ -880,6 +899,7 @@ def make_beam_postprocess_step(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events link table ({short_name})",
+                step_name="beam_postprocess",
                 profile_file_schema=True,
                 **facet_meta,
             )
@@ -938,6 +958,7 @@ def make_beam_full_skim_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="beam_full_skim",
             )
 
     return _make_beam_step_function(

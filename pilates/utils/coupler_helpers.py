@@ -13,6 +13,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKI
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.catalog import workflow_step_key_match, workflow_step_spec_for_step_name
 from pilates.workflows.coupler_namespace import namespaced_view_target
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.artifact_keys import (
@@ -20,6 +21,7 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+_STEP_OUTPUT_WARNING_SIGNATURES: set[tuple[Any, ...]] = set()
 
 _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
 _ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
@@ -235,6 +237,55 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
     logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
     if _archive_queue is not None:
         _archive_queue.put((key, path, dest, is_dir, signature))
+
+
+def _warn_once(signature: tuple[Any, ...], message: str, *args: Any) -> None:
+    if signature in _STEP_OUTPUT_WARNING_SIGNATURES:
+        return
+    _STEP_OUTPUT_WARNING_SIGNATURES.add(signature)
+    logger.warning(message, *args)
+
+
+def _warn_for_undeclared_step_output(
+    *,
+    step_name: Optional[str],
+    key: str,
+) -> None:
+    if not step_name:
+        return
+    match = workflow_step_key_match(step_name, key, direction="output")
+    if match.declared:
+        return
+    spec = workflow_step_spec_for_step_name(step_name)
+    dynamic_families = tuple(spec.dynamic_output_families) if spec is not None else ()
+    if dynamic_families:
+        message = (
+            "[%s] Step '%s' published undeclared output key '%s'%s; it matches no "
+            "declared output key and no dynamic output family %s."
+        )
+        args = (
+            step_name,
+            step_name,
+            key,
+            match.alias_note,
+            dynamic_families,
+        )
+    else:
+        message = (
+            "[%s] Step '%s' published undeclared output key '%s'%s; the step "
+            "declares no dynamic output families."
+        )
+        args = (
+            step_name,
+            step_name,
+            key,
+            match.alias_note,
+        )
+    _warn_once(
+        ("undeclared_step_output", step_name, key),
+        message,
+        *args,
+    )
 
 
 def enqueue_archive_copy(
@@ -1036,6 +1087,7 @@ def log_and_set_output(
     path: str,
     description: str,
     coupler: CouplerProtocol,
+    step_name: Optional[str] = None,
     **meta: Any,
 ) -> None:
     """
@@ -1051,7 +1103,10 @@ def log_and_set_output(
         Description used in provenance logging.
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
+    step_name : str, optional
+        Canonical workflow step name used for semantic-contract warnings.
     """
+    _warn_for_undeclared_step_output(step_name=step_name, key=key)
     _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
@@ -1070,6 +1125,7 @@ def log_output_only(
     key: str,
     path: str,
     description: str,
+    step_name: Optional[str] = None,
     **meta: Any,
 ) -> None:
     """
@@ -1083,7 +1139,10 @@ def log_output_only(
         Output path to log.
     description : str
         Description used in provenance logging.
+    step_name : str, optional
+        Canonical workflow step name used for semantic-contract warnings.
     """
+    _warn_for_undeclared_step_output(step_name=step_name, key=key)
     _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
