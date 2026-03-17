@@ -651,11 +651,10 @@ def make_beam_run_step(
                 workspace=workspace,
             )
         for short_name, path, description in upstream._iter_record_items():
-            log_and_set_input(
+            log_input_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
             )
 
         output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
@@ -665,26 +664,24 @@ def make_beam_run_step(
                 plans_key = BEAM_OUTPUT_PLANS_XML
             else:
                 plans_key = BEAM_PLANS_OUT
-            log_and_set_input(
+            log_input_only(
                 key=plans_key,
                 path=str(plans_path),
                 description=(
                     "BEAM warm-start plans (selected by BEAM from previous outputs)"
                 ),
-                coupler=coupler,
             )
         if experienced_path is not None and experienced_path.exists():
             if experienced_path.name == "output_experienced_plans.xml.gz":
                 experienced_key = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
             else:
                 experienced_key = BEAM_EXPERIENCED_PLANS_XML
-            log_and_set_input(
+            log_input_only(
                 key=experienced_key,
                 path=str(experienced_path),
                 description=(
                     "BEAM warm-start experienced plans (selected by BEAM from previous outputs)"
                 ),
-                coupler=coupler,
             )
         return {}
 

@@ -1057,21 +1057,14 @@ def make_activitysim_run_step(
         if zarr_content_hash:
             compile_input_hashes[ZARR_SKIMS] = zarr_content_hash
         zarr_path = artifact_to_path(zarr_value, workspace)
-        if not zarr_path:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
         if zarr_path and os.path.exists(zarr_path):
             extra_inputs[ZARR_SKIMS] = zarr_path
-            log_and_set_input(
+            log_input_only(
                 key=ZARR_SKIMS,
                 path=zarr_path,
                 description=(
                     f"ActivitySim compiled skims for year {state.year}, iter {state.iteration}"
                 ),
-                coupler=coupler,
             )
         return {"extra_inputs": extra_inputs}
 
