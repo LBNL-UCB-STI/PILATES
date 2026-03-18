@@ -84,7 +84,10 @@ def resolve_step_inputs(
         source_by_key[key] = source
         if source == "coupler":
             selected_key = coupler_key or key
-            resolved_input_keys.append(selected_key)
+            # Keep the canonical workflow key on StepRef.input_keys.
+            # Namespace-aware aliases remain internal lookup details and are
+            # tracked separately via coupler_key_by_key for later lazy access.
+            resolved_input_keys.append(key)
             coupler_key_by_key[key] = selected_key
         elif source in {"explicit", "fallback"}:
             resolved_inputs[key] = value

@@ -50,6 +50,46 @@ def expected_inputs_for(
     return expected
 
 
+def expected_inputs_for_step(
+    step_name: str,
+    settings: "PilatesConfig",
+    state: "WorkflowState",
+    workspace: "Workspace",
+) -> Dict[str, Any]:
+    """
+    Collect model/component expected inputs for one workflow step.
+
+    This is intentionally narrower than ``expected_inputs_for(...)`` and is used
+    when workflow contract checks need to distinguish semantic cross-step
+    artifacts from model-local runtime inputs.
+    """
+    if "_" not in step_name:
+        return {}
+    model_name, phase = step_name.rsplit("_", 1)
+    component_name = {
+        "preprocess": "preprocessor",
+        "run": "runner",
+        "postprocess": "postprocessor",
+    }.get(phase)
+    if component_name is None:
+        return {}
+    component_cls = ModelFactory._registry.get(model_name, {}).get(component_name)
+    if component_cls is None:
+        return {}
+    expected_fn = getattr(component_cls, "expected_inputs", None)
+    if not callable(expected_fn):
+        return {}
+    try:
+        return dict(expected_fn(settings, state, workspace) or {})
+    except Exception:
+        logger.debug(
+            "Failed collecting expected_inputs for step '%s'; skipping component-local input suppression.",
+            step_name,
+            exc_info=True,
+        )
+        return {}
+
+
 def expected_outputs_for(
     model_name: str,
     settings: "PilatesConfig",

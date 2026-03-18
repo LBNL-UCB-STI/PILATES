@@ -62,6 +62,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.coupler_namespace import is_namespaced_key
 
 
 @dataclass(frozen=True)
@@ -598,18 +599,19 @@ def workflow_step_key_match(
     *,
     direction: str,
 ) -> WorkflowStepKeyMatch:
+    normalized_key = key.split("/", 1)[-1] if is_namespaced_key(key) else key
+    canonical_key = resolve_artifact_key(normalized_key)
+    used_alias = canonical_key != normalized_key or normalized_key != key
     spec = workflow_step_spec_for_step_name(step_name)
     if spec is None:
         return WorkflowStepKeyMatch(
             step_name=step_name,
             direction=direction,
             raw_key=key,
-            canonical_key=resolve_artifact_key(key),
+            canonical_key=canonical_key,
             declared=False,
-            used_alias=resolve_artifact_key(key) != key,
+            used_alias=used_alias,
         )
-    canonical_key = resolve_artifact_key(key)
-    used_alias = canonical_key != key
     if direction == "input":
         if canonical_key in spec.input_keys:
             return WorkflowStepKeyMatch(

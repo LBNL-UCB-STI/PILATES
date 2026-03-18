@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from consist import define_step
 
 from pilates.utils.coupler_helpers import log_and_set_output, log_output_only
+from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows import catalog
@@ -28,6 +29,23 @@ class _FakeCoupler:
 
     def get(self, key, default=None):
         return self.data.get(key, default)
+
+    def view(self, namespace):
+        parent = self
+
+        class _View:
+            def get(self, key, default=None):
+                return parent.data.get(f"{namespace}/{key}", default)
+
+        return _View()
+
+
+class _FakeWorkspace:
+    def __init__(self, full_path: str) -> None:
+        self.full_path = full_path
+
+    def get_usim_mutable_data_dir(self) -> str:
+        return f"{self.full_path}/usim"
 
 
 def test_catalog_declared_key_matching_covers_dynamic_families():
@@ -64,6 +82,24 @@ def test_catalog_declared_key_matching_accepts_supported_aliases():
         "asim_households_in",
         direction="input",
     )
+    assert catalog.workflow_step_key_is_declared(
+        "urbansim_postprocess",
+        "urbansim/usim_datastore_h5",
+        direction="input",
+    )
+
+
+def test_resolve_step_inputs_preserves_canonical_key_when_coupler_uses_namespace():
+    coupler = _FakeCoupler()
+    coupler.data["urbansim/usim_datastore_h5"] = "/tmp/model_data_2023.h5"
+
+    resolved = resolve_step_inputs(
+        keys=["usim_datastore_h5"],
+        coupler=coupler,
+    )
+
+    assert resolved.input_keys == ["usim_datastore_h5"]
+    assert resolved.coupler_key_by_key["usim_datastore_h5"] == "urbansim/usim_datastore_h5"
 
 
 def test_run_workflow_warns_for_undeclared_input_keys(caplog):
@@ -105,6 +141,53 @@ def test_run_workflow_warns_for_undeclared_input_keys(caplog):
     )
     assert scenario.calls[0]["inputs"] == {"undeclared_input_key": "/tmp/input.csv"}
     assert scenario.calls[0]["input_keys"] == ["undeclared_input_key"]
+
+
+def test_run_workflow_does_not_warn_for_component_local_expected_inputs(caplog):
+    scenario = _FakeScenario()
+    outputs_holder = StepOutputsHolder()
+    workspace = _FakeWorkspace("/tmp/workspace")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test_region"),
+        urbansim=SimpleNamespace(
+            local_data_input_folder="pilates/urbansim/data",
+            region_mappings={"region_to_region_id": {"test_region": "123"}},
+            input_file_template="input_{region_id}.h5",
+        ),
+    )
+    state = SimpleNamespace(year=2020, iteration=0)
+    coupler = _FakeCoupler()
+
+    @define_step(model="urbansim_preprocess")
+    def _dummy_step(settings, state, workspace, **kwargs):
+        return None
+
+    step = StepRef(
+        name="urbansim_preprocess",
+        step_func=_dummy_step,
+        inputs={
+            "usim_source_data_dir": "/tmp/source",
+            "usim_mutable_data_dir": "/tmp/workspace/usim",
+        },
+    )
+
+    with caplog.at_level("WARNING"):
+        run_workflow(
+            stage_name="unit",
+            steps=[step],
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            name_suffix="unit",
+        )
+
+    assert not any(
+        "[CONTRACT-ENFORCEMENT][urbansim_preprocess]" in record.message
+        for record in caplog.records
+    )
 
 
 def test_log_and_set_output_warns_for_undeclared_output_keys(caplog, tmp_path):

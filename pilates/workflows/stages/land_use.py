@@ -132,10 +132,6 @@ def run_land_use_stage(
         raise RuntimeError("UrbanSim preprocess must complete first")
 
     run_inputs = step_output_handoff_mapping(upstream_preprocess, coupler=coupler)
-    for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5):
-        value = usim_inputs.get(key)
-        if value is not None:
-            run_inputs.setdefault(key, value)
     if not run_inputs:
         # Some preprocessors materialize key artifacts via explicit logging rather
         # than RecordStore outputs; fall back to declared UrbanSim inputs so run

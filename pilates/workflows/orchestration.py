@@ -48,6 +48,7 @@ from pilates.workflows.outputs_base import (
     step_output_mapping,
     serialize_step_outputs,
 )
+from pilates.workflows.step_io import expected_inputs_for_step
 from pilates.workflows.step_runner import common_runtime_kwargs
 from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
@@ -104,15 +105,27 @@ def _warn_for_undeclared_step_inputs(
     step_name: str,
     input_keys: Optional[Sequence[str]],
     inputs: Optional[Mapping[str, Any]],
+    settings: Any,
+    state: Any,
+    workspace: Any,
 ) -> None:
     declared_inputs: list[str] = []
     if inputs:
         declared_inputs.extend(str(key) for key in inputs.keys())
     if input_keys:
         declared_inputs.extend(str(key) for key in input_keys)
+    component_expected_inputs = expected_inputs_for_step(
+        step_name,
+        settings,
+        state,
+        workspace,
+    )
+    component_expected_keys = set(str(key) for key in component_expected_inputs.keys())
     spec = workflow_step_spec_for_step_name(step_name)
     dynamic_families = tuple(spec.dynamic_input_families) if spec is not None else ()
     for key in dict.fromkeys(declared_inputs):
+        if key in component_expected_keys:
+            continue
         match = workflow_step_key_match(step_name, key, direction="input")
         if match.declared:
             continue
@@ -544,6 +557,9 @@ def run_manifested_steps(
                 step_name=spec.name,
                 input_keys=step_kwargs.get("input_keys"),
                 inputs=step_kwargs.get("inputs"),
+                settings=settings,
+                state=state,
+                workspace=workspace,
             )
             return scenario.run(**step_kwargs)
 
@@ -673,6 +689,9 @@ def run_workflow(
                 step_name=spec.name,
                 input_keys=step_kwargs.get("input_keys"),
                 inputs=step_kwargs.get("inputs"),
+                settings=settings,
+                state=state,
+                workspace=workspace,
             )
             return scenario.run(**step_kwargs)
 
