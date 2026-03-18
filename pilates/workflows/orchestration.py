@@ -18,7 +18,6 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.catalog import (
     workflow_step_key_is_declared,
     workflow_step_key_match,
@@ -34,6 +33,7 @@ from pilates.urbansim.outputs import (
     UrbanSimPreprocessOutputs,
 )
 from pilates.workflows.coupler_namespace import resolve_coupler_value
+from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -849,9 +849,7 @@ def _recover_cached_outputs(
         for raw_key, value in run_outputs.items():
             if value is None:
                 continue
-            raw_key_str = str(raw_key)
-            local_key = raw_key_str.split("/", 1)[-1]
-            canonical_key = resolve_artifact_key(local_key)
+            canonical_key = canonical_artifact_key_from_raw_key(str(raw_key))
             _cached_run_outputs_by_key[canonical_key] = value
         return _cached_run_outputs_by_key
 
@@ -861,9 +859,7 @@ def _recover_cached_outputs(
             for raw_key, value in cached_outputs.items():
                 if value is None:
                     continue
-                raw_key_str = str(raw_key)
-                local_key = raw_key_str.split("/", 1)[-1]
-                merged[resolve_artifact_key(local_key)] = value
+                merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
         for key, value in _cached_run_outputs().items():
             merged[key] = value
         recovered_paths: Dict[str, Path] = {}
@@ -895,15 +891,13 @@ def _recover_cached_outputs(
             for raw_key, value in cached_outputs.items():
                 if value is None:
                     continue
-                raw_key_str = str(raw_key)
-                local_key = raw_key_str.split("/", 1)[-1]
-                if resolve_artifact_key(local_key) == key:
+                if canonical_artifact_key_from_raw_key(str(raw_key)) == key:
                     return value
         run_outputs = _cached_run_outputs()
         if key in run_outputs:
             return run_outputs[key]
-        resolved, _ = resolve_coupler_value(coupler, key)
-        return resolved
+        resolved = resolve_coupler_value(coupler, key)
+        return resolved.value
 
     def _existing_path(value: Any) -> Optional[str]:
         return artifact_to_existing_path(
@@ -1001,7 +995,7 @@ def _update_coupler_from_mapping(
     if not mapping:
         return
     for key, value in mapping.items():
-        canonical_key = resolve_artifact_key(key)
+        canonical_key = canonical_artifact_key_from_raw_key(str(key))
         resolved = resolve_artifact_from_value(
             value,
             key=canonical_key,

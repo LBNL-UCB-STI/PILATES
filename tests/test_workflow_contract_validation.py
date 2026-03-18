@@ -6,6 +6,10 @@ from consist import define_step
 
 from pilates.utils.coupler_helpers import log_and_set_output, log_output_only
 from pilates.workflows.input_resolution import resolve_step_inputs
+from pilates.workflows.coupler_namespace import (
+    canonical_artifact_key_from_raw_key,
+    resolve_coupler_value,
+)
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows import catalog
@@ -89,6 +93,29 @@ def test_catalog_declared_key_matching_accepts_supported_aliases():
     )
 
 
+def test_canonical_artifact_key_normalizes_namespaced_and_alias_keys():
+    assert (
+        canonical_artifact_key_from_raw_key("urbansim/usim_datastore_h5")
+        == "usim_datastore_h5"
+    )
+    assert (
+        canonical_artifact_key_from_raw_key("usim_datastore_current_h5")
+        == "usim_datastore_h5"
+    )
+
+
+def test_resolve_coupler_value_preserves_canonical_key_and_storage_key():
+    coupler = _FakeCoupler()
+    coupler.data["urbansim/usim_datastore_h5"] = "/tmp/model_data_2023.h5"
+
+    resolved = resolve_coupler_value(coupler, "usim_datastore_h5")
+
+    assert resolved.value == "/tmp/model_data_2023.h5"
+    assert resolved.canonical_key == "usim_datastore_h5"
+    assert resolved.storage_key == "urbansim/usim_datastore_h5"
+    assert resolved.source == "coupler"
+
+
 def test_resolve_step_inputs_preserves_canonical_key_when_coupler_uses_namespace():
     coupler = _FakeCoupler()
     coupler.data["urbansim/usim_datastore_h5"] = "/tmp/model_data_2023.h5"
@@ -100,6 +127,7 @@ def test_resolve_step_inputs_preserves_canonical_key_when_coupler_uses_namespace
 
     assert resolved.input_keys == ["usim_datastore_h5"]
     assert resolved.coupler_key_by_key["usim_datastore_h5"] == "urbansim/usim_datastore_h5"
+    assert resolved.source_by_key["usim_datastore_h5"] == "coupler"
 
 
 def test_run_workflow_warns_for_undeclared_input_keys(caplog):

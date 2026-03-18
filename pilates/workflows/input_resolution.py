@@ -5,6 +5,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import resolve_input_precedence
+from pilates.workflows.coupler_namespace import ResolvedCouplerValue
 
 
 @dataclass(frozen=True)
@@ -45,7 +46,7 @@ def _resolve_single_key(
     coupler: Optional[CouplerProtocol],
     explicit_inputs: Optional[Mapping[str, Any]],
     fallback_inputs: Optional[Mapping[str, Any]],
-) -> tuple[str, Any, Optional[str]]:
+) -> ResolvedCouplerValue:
     """
     Resolve one key using canonical precedence:
     explicit input -> coupler key -> fallback input.
@@ -75,22 +76,22 @@ def resolve_step_inputs(
     coupler_key_by_key: Dict[str, str] = {}
 
     for key in keys:
-        source, value, coupler_key = _resolve_single_key(
+        resolved = _resolve_single_key(
             key=key,
             coupler=coupler,
             explicit_inputs=explicit_inputs,
             fallback_inputs=fallback_inputs,
         )
-        source_by_key[key] = source
-        if source == "coupler":
-            selected_key = coupler_key or key
+        source_by_key[key] = resolved.source
+        if resolved.source == "coupler":
+            selected_key = resolved.storage_key or key
             # Keep the canonical workflow key on StepRef.input_keys.
             # Namespace-aware aliases remain internal lookup details and are
             # tracked separately via coupler_key_by_key for later lazy access.
             resolved_input_keys.append(key)
             coupler_key_by_key[key] = selected_key
-        elif source in {"explicit", "fallback"}:
-            resolved_inputs[key] = value
+        elif resolved.source in {"explicit", "fallback"}:
+            resolved_inputs[key] = resolved.value
 
     required = list(required_keys or [])
     missing_required = [key for key in required if source_by_key.get(key) == "missing"]

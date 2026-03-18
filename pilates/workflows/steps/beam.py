@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
 
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
     BEAM_NETWORK_FINAL,
@@ -294,6 +295,8 @@ def _execute_beam_postprocess(
     postprocessor: Any,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
+    *,
+    zarr_skims: Optional[Any] = None,
     **_: Any,
 ) -> BeamPostprocessOutputs:
     upstream = outputs_holder.beam_run
@@ -301,6 +304,21 @@ def _execute_beam_postprocess(
         raise RuntimeError("BEAM run must complete first")
     if not isinstance(upstream, BeamRunOutputs):
         raise TypeError("beam_postprocess requires BeamRunOutputs from beam_run")
+    if zarr_skims is not None:
+        try:
+            parameters = inspect.signature(postprocessor.postprocess).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        accepts_zarr_skims = "zarr_skims" in parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in parameters.values()
+        )
+        if accepts_zarr_skims:
+            return postprocessor.postprocess(
+                upstream,
+                workspace,
+                zarr_skims=zarr_skims,
+            )
     return postprocessor.postprocess(upstream, workspace)
 
 
@@ -425,9 +443,7 @@ def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
     for raw_key, value in run_outputs.items():
         if value is None:
             continue
-        raw_key_str = str(raw_key)
-        local_key = raw_key_str.split("/", 1)[-1]
-        resolved[resolve_artifact_key(local_key)] = value
+        resolved[canonical_artifact_key_from_raw_key(str(raw_key))] = value
     return resolved
 
 
@@ -442,9 +458,7 @@ def _recovered_cached_paths(
         for raw_key, value in cached_outputs.items():
             if value is None:
                 continue
-            raw_key_str = str(raw_key)
-            local_key = raw_key_str.split("/", 1)[-1]
-            merged[resolve_artifact_key(local_key)] = value
+            merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
     for key, value in _resolve_cached_run_outputs(run_id).items():
         merged[key] = value
     recovered: Dict[str, Path] = {}

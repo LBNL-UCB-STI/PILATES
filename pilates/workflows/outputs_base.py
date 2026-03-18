@@ -23,6 +23,7 @@ from typing import (
 )
 
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
@@ -225,8 +226,7 @@ def step_output_handoff_mapping(
     coupler, the coupler value is preferred over the raw filesystem path string.
     """
     mapping: Dict[str, Any] = {}
-    get_value = getattr(coupler, "get", None)
-    if coupler is None or not callable(get_value):
+    if coupler is None:
         logger.warning(
             "step_output_handoff_mapping(...) called without a readable coupler; "
             "handoff values will fall back to raw paths."
@@ -251,8 +251,10 @@ def step_output_handoff_mapping(
                 sanitized_key,
             )
             continue
-        coupler_value = get_value(sanitized_key) if callable(get_value) else None
-        mapping[sanitized_key] = coupler_value if coupler_value is not None else str(path)
+        resolved = resolve_coupler_value(coupler, sanitized_key)
+        mapping[sanitized_key] = (
+            resolved.value if resolved.value is not None else str(path)
+        )
     return mapping
 
 

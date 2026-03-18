@@ -13,8 +13,12 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKI
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.coupler_namespace import namespaced_view_target
-from pilates.workflows.coupler_namespace import resolve_coupler_value
+from pilates.workflows.coupler_namespace import (
+    ResolvedCouplerValue,
+    canonical_artifact_key_from_raw_key,
+    namespaced_view_target,
+    resolve_coupler_value,
+)
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
 )
@@ -544,33 +548,45 @@ def resolve_input_precedence(
     coupler: Optional[CouplerProtocol],
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
-) -> tuple[str, Any, Optional[str]]:
+) -> ResolvedCouplerValue:
     """
     Resolve one input key using canonical precedence.
 
     Precedence is: explicit input -> coupler value -> fallback input.
-
-    Returns
-    -------
-    tuple
-        ``(source, value, coupler_key)`` where source is one of:
-        ``explicit`` / ``coupler`` / ``fallback`` / ``missing``.
     """
     if explicit_inputs is not None and key in explicit_inputs:
         value = explicit_inputs.get(key)
         if value is not None:
-            return "explicit", value, None
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="explicit",
+            )
 
-    value, resolved_key = resolve_coupler_value(coupler, key)
-    if value is not None:
-        return "coupler", value, resolved_key or key
+    resolved = resolve_coupler_value(coupler, key)
+    if resolved.value is not None:
+        return resolved
 
     if fallback_inputs is not None and key in fallback_inputs:
         value = fallback_inputs.get(key)
         if value is not None:
-            return "fallback", value, None
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="fallback",
+            )
 
-    return "missing", None, None
+    return ResolvedCouplerValue(
+        requested_key=key,
+        canonical_key=canonical_artifact_key_from_raw_key(key),
+        storage_key=None,
+        value=None,
+        source="missing",
+    )
 
 
 def log_coupler_value(

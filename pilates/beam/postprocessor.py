@@ -23,7 +23,7 @@ except Exception:
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -3762,6 +3762,7 @@ class BeamPostprocessor(GenericPostprocessor):
         raw_outputs: RecordStore,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        zarr_skims: Optional[Any] = None,
     ) -> RecordStore:
         """
         Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
@@ -3822,11 +3823,17 @@ class BeamPostprocessor(GenericPostprocessor):
                     "Failed to split events parquet for %s", events_path, exc_info=True
                 )
 
-        all_skims_path = None
-        if _activitysim_skims_target_enabled(settings):
-            all_skims_path = os.path.join(
+        all_skims_path = artifact_to_existing_path(
+            zarr_skims,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if all_skims_path is None and _activitysim_skims_target_enabled(settings):
+            candidate = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
+            if os.path.exists(candidate):
+                all_skims_path = candidate
 
         zarr_skim_name = (
             f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
@@ -3974,6 +3981,7 @@ class BeamPostprocessor(GenericPostprocessor):
         raw_outputs: BeamRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        zarr_skims: Optional[Any] = None,
     ) -> BeamPostprocessOutputs:
         """
         Postprocess typed BEAM run outputs and return typed outputs.
@@ -3991,7 +3999,12 @@ class BeamPostprocessor(GenericPostprocessor):
                 for short_name, path, description in raw_outputs._iter_record_items()
             ]
         )
-        output_store = self._postprocess(input_store, workspace, model_run_hash)
+        output_store = self._postprocess(
+            input_store,
+            workspace,
+            model_run_hash,
+            zarr_skims=zarr_skims,
+        )
         mapping = output_store.to_mapping()
 
         zarr_path = artifact_to_path(mapping.get("zarr_skims"), workspace)

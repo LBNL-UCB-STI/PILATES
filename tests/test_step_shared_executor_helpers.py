@@ -4,13 +4,14 @@ from pathlib import Path
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
 from pilates.atlas.outputs import AtlasPreprocessOutputs
-from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.workflows.steps.activitysim import (
     _execute_activitysim_postprocess,
     _execute_activitysim_preprocess,
 )
 from pilates.workflows.steps.beam import (
+    _execute_beam_postprocess,
     _execute_beam_full_skim,
     _execute_beam_preprocess,
 )
@@ -115,6 +116,50 @@ def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
     )
 
     assert result.mutable_data_dir == tmp_path
+
+
+def test_execute_beam_postprocess_forwards_explicit_zarr_skims_when_supported(
+    tmp_path: Path,
+) -> None:
+    holder = StepOutputsHolder()
+    beam_output_dir = tmp_path / "beam-output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    run_output = beam_output_dir / "events.parquet"
+    run_output.write_text("events", encoding="utf-8")
+    holder.beam_run = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={"events_parquet_2018_0": run_output},
+    )
+
+    captured = {}
+
+    class _Postprocessor:
+        def postprocess(
+            self,
+            raw_outputs,
+            workspace,
+            model_run_hash=None,
+            zarr_skims=None,
+        ):
+            captured["raw_outputs"] = raw_outputs
+            captured["workspace"] = workspace
+            captured["zarr_skims"] = zarr_skims
+            return raw_outputs
+
+    workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
+    resolved_zarr = str(tmp_path / "restored" / "skims.zarr")
+
+    result = _execute_beam_postprocess(
+        postprocessor=_Postprocessor(),
+        workspace=workspace,
+        outputs_holder=holder,
+        zarr_skims=resolved_zarr,
+    )
+
+    assert result is holder.beam_run
+    assert captured["raw_outputs"] is holder.beam_run
+    assert captured["workspace"] is workspace
+    assert captured["zarr_skims"] == resolved_zarr
     assert captured["workspace"] is workspace
 
 

@@ -11,7 +11,7 @@ from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
@@ -219,13 +219,11 @@ def _recovered_cached_paths(
         for raw_key, value in cached_outputs.items():
             if value is None:
                 continue
-            local_key = str(raw_key).split("/", 1)[-1]
-            merged[resolve_artifact_key(local_key)] = value
+            merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
     for raw_key, value in _resolve_cached_run_outputs(run_id).items():
         if value is None:
             continue
-        local_key = str(raw_key).split("/", 1)[-1]
-        merged[resolve_artifact_key(local_key)] = value
+        merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
     recovered: Dict[str, Path] = {}
     for key, value in merged.items():
         path = artifact_to_existing_path(

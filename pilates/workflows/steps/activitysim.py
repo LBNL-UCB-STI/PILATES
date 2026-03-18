@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import logging
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -79,6 +80,19 @@ def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     return filtered
 
 
+def _filter_kwargs_for_callable(
+    func: Callable[..., Any],
+    kwargs: Dict[str, Any],
+) -> Dict[str, Any]:
+    try:
+        parameters = inspect.signature(func).parameters
+    except (TypeError, ValueError):
+        return kwargs
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return kwargs
+    return {key: value for key, value in kwargs.items() if key in parameters}
+
+
 def _artifact_content_hash(value: Any) -> Optional[str]:
     """
     Extract a content hash from an artifact-like value when available.
@@ -98,9 +112,13 @@ def _execute_activitysim_preprocess(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> ActivitySimPreprocessOutputs:
+    filtered_kwargs = _filter_kwargs_for_callable(
+        preprocessor.preprocess,
+        _strip_component_runtime_kwargs(kwargs),
+    )
     return preprocessor.preprocess(
         workspace,
-        **_strip_component_runtime_kwargs(kwargs),
+        **filtered_kwargs,
     )
 
 
@@ -245,9 +263,7 @@ def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
     for raw_key, value in run_outputs.items():
         if value is None:
             continue
-        raw_key_str = str(raw_key)
-        local_key = raw_key_str.split("/", 1)[-1]
-        resolved[resolve_artifact_key(local_key)] = value
+        resolved[canonical_artifact_key_from_raw_key(str(raw_key))] = value
     return resolved
 
 
@@ -262,9 +278,7 @@ def _resolve_cached_value(
         for raw_key, value in cached_outputs.items():
             if value is None:
                 continue
-            raw_key_str = str(raw_key)
-            local_key = raw_key_str.split("/", 1)[-1]
-            if resolve_artifact_key(local_key) == key:
+            if canonical_artifact_key_from_raw_key(str(raw_key)) == key:
                 return value
     run_outputs = _resolve_cached_run_outputs(run_id)
     if key in run_outputs:

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Optional, Tuple
+
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -92,6 +95,21 @@ def infer_namespace_for_key(key: str) -> Optional[str]:
     return None
 
 
+def _namespace_and_local_key_for_key(key: str) -> tuple[Optional[str], str]:
+    if is_namespaced_key(key):
+        namespace, local_key = key.split(NAMESPACE_SEPARATOR, 1)
+        return namespace or None, local_key
+    return infer_namespace_for_key(key), key
+
+
+def canonical_artifact_key_from_raw_key(key: str) -> str:
+    """
+    Canonicalize a raw storage or alias key back to the workflow key surface.
+    """
+    _namespace, local_key = _namespace_and_local_key_for_key(key)
+    return resolve_artifact_key(local_key)
+
+
 def qualify_key(namespace: str, key: str) -> str:
     """
     Build a normalized namespaced key.
@@ -132,7 +150,18 @@ def namespaced_alias_for_key(key: str) -> Optional[str]:
     return alias
 
 
-def resolve_coupler_value(coupler: Any, key: str) -> Tuple[Any, Optional[str]]:
+@dataclass(frozen=True)
+class ResolvedCouplerValue:
+    requested_key: str
+    canonical_key: str
+    storage_key: Optional[str]
+    value: Any
+    source: str
+    lookup_source: Optional[str] = None
+    namespace: Optional[str] = None
+
+
+def resolve_coupler_value(coupler: Any, key: str) -> ResolvedCouplerValue:
     """
     Resolve a key from a coupler using canonical namespace-aware lookup order.
 
@@ -142,37 +171,94 @@ def resolve_coupler_value(coupler: Any, key: str) -> Tuple[Any, Optional[str]]:
     3. namespaced global alias (`coupler.get(namespace/key)`)
     """
     if coupler is None:
-        return None, None
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_artifact_key_from_raw_key(key),
+            storage_key=None,
+            value=None,
+            source="missing",
+        )
 
-    namespace = infer_namespace_for_key(key)
+    namespace, local_key = _namespace_and_local_key_for_key(key)
+    canonical_key = canonical_artifact_key_from_raw_key(key)
     view_fn = getattr(coupler, "view", None)
     if namespace and callable(view_fn):
         try:
             namespaced_view = view_fn(namespace)
             view_get = getattr(namespaced_view, "get", None)
             if callable(view_get):
-                local_key = local_key_for_namespace(key, namespace)
                 value = view_get(local_key)
                 if value is not None:
-                    return value, qualify_key(namespace, local_key)
+                    return ResolvedCouplerValue(
+                        requested_key=key,
+                        canonical_key=canonical_key,
+                        storage_key=qualify_key(namespace, local_key),
+                        value=value,
+                        source="coupler",
+                        lookup_source="namespaced_view",
+                        namespace=namespace,
+                    )
         except Exception:
             pass
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
-        return None, None
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_key,
+            storage_key=None,
+            value=None,
+            source="missing",
+            namespace=namespace,
+        )
 
     value = get_value(key)
     if value is not None:
-        return value, key
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_key,
+            storage_key=key,
+            value=value,
+            source="coupler",
+            lookup_source="legacy",
+            namespace=namespace,
+        )
+
+    if canonical_key != key:
+        value = get_value(canonical_key)
+        if value is not None:
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_key,
+                storage_key=canonical_key,
+                value=value,
+                source="coupler",
+                lookup_source="canonical",
+                namespace=namespace,
+            )
 
     alias = namespaced_alias_for_key(key)
     if alias is not None:
         value = get_value(alias)
         if value is not None:
-            return value, alias
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_key,
+                storage_key=alias,
+                value=value,
+                source="coupler",
+                lookup_source="namespaced_alias",
+                namespace=namespace,
+            )
 
-    return None, None
+    return ResolvedCouplerValue(
+        requested_key=key,
+        canonical_key=canonical_key,
+        storage_key=None,
+        value=None,
+        source="missing",
+        namespace=namespace,
+    )
 
 
 def namespaced_view_target(key: str) -> Optional[Tuple[str, str]]:

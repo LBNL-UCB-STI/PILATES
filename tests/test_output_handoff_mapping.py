@@ -76,6 +76,36 @@ def test_step_output_handoff_mapping_prefers_coupler_artifacts(
     assert mapping["persons_asim_out"] == str(persons)
 
 
+def test_step_output_handoff_mapping_uses_namespace_aware_coupler_lookup(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "usim-preprocess.h5"
+    output_path.write_text("x", encoding="utf-8")
+    outputs = _TrackingOutputs(output_path, "usim_datastore_h5")
+    artifact = SimpleNamespace(
+        key="urbansim/usim_datastore_h5",
+        path=str(output_path),
+        container_uri="workspace://usim-preprocess.h5",
+    )
+
+    class _Coupler:
+        def get(self, key, default=None):
+            return default
+
+        def view(self, namespace):
+            class _View:
+                def get(self, key, default=None):
+                    if namespace == "urbansim" and key == "usim_datastore_h5":
+                        return artifact
+                    return default
+
+            return _View()
+
+    mapping = step_output_handoff_mapping(outputs, coupler=_Coupler())
+
+    assert mapping["usim_datastore_h5"] is artifact
+
+
 def test_step_output_handoff_mapping_warns_without_coupler(
     tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
