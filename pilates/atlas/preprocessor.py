@@ -544,7 +544,14 @@ class AtlasPreprocessor(GenericPreprocessor):
         # --- End Global File Handling ---
 
         # --- Restart Logic for year-specific data ---
-        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+        is_restart_run = getattr(self.state, "is_restart_run", None)
+        if is_restart_run is None:
+            is_restart_run = bool(self.state.run_info_path)
+        if (
+            is_restart_run
+            and self.state.run_info_path
+            and os.path.exists(self.state.run_info_path)
+        ):
             # This is a restarted run
             previous_run_dir = os.path.dirname(self.state.run_info_path)
             logger.info(

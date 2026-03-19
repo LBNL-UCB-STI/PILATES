@@ -1092,6 +1092,11 @@ def _log_and_maybe_publish_artifact(
             description=description,
             meta=dict(meta),
         )
+        # ``cr.log_h5_container(...)`` returns ``(container_artifact, table_artifacts)``.
+        # Only the container artifact is a valid coupler handoff value for later
+        # path/artifact resolution.
+        if isinstance(artifact, tuple):
+            artifact = artifact[0] if artifact else None
 
     if enqueue_archive_copy:
         _enqueue_archive_copy(key, path)

@@ -128,6 +128,32 @@ def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatc
     assert ("set_from_artifact", "linkstats_warmstart", artifact) in coupler.calls
 
 
+def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
+    monkeypatch,
+) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    container_artifact = object()
+    table_artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: (container_artifact, [table_artifact]),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_h5_updated",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [
+        ("set_from_artifact", "usim_h5_updated", container_artifact)
+    ]
+
+
 def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch) -> None:
     coupler = CouplerWithSetOnly()
     logged = {"called": False}

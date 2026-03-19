@@ -60,7 +60,17 @@ def test_catalog_declared_key_matching_covers_dynamic_families():
     )
     assert catalog.workflow_step_key_is_declared(
         "atlas_run",
-        "atlas_static_input_example",
+        "cpi",
+        direction="input",
+    )
+    assert catalog.workflow_step_key_is_declared(
+        "atlas_run",
+        "adopt/zev_mandate/new_vehicles_biannual_values_2023",
+        direction="input",
+    )
+    assert catalog.workflow_step_key_is_declared(
+        "atlas_run",
+        "vehicle_type_mapping_evMandForced2",
         direction="input",
     )
     assert not catalog.workflow_step_key_is_declared(

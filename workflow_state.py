@@ -57,6 +57,9 @@ class WorkflowState:
         self.current_sub_stage = sub_stage
         self.sub_stage_progress = sub_stage_progress
         self.run_info_path = run_info_path  # new
+        # Preserve whether the run *started* as a restart before launcher later
+        # populates ``run_info_path`` for fresh runs too.
+        self.is_restart_run = bool(run_info_path)
         self.data_initialized = data_initialized
 
         self.forecast_year: int | None = None

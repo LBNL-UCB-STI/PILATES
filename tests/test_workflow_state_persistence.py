@@ -123,6 +123,18 @@ def test_state_resume_after_interruption(tmp_path):
     assert resumed.sub_stage_progress == "preprocess"
 
 
+def test_set_run_info_path_does_not_convert_fresh_run_into_restart(tmp_path):
+    settings = _make_settings(tmp_path)
+    state = WorkflowState.from_settings(settings)
+
+    assert state.is_restart_run is False
+
+    state.set_run_info_path(str(tmp_path / "archive-run" / "run_state.yaml"))
+
+    assert state.run_info_path == str(tmp_path / "archive-run" / "run_state.yaml")
+    assert state.is_restart_run is False
+
+
 def test_state_resume_maps_supply_demand_substage_into_major_and_substage(tmp_path):
     settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
     settings.activity_demand_enabled = True

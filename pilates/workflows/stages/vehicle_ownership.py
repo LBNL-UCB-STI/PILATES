@@ -21,7 +21,7 @@ from pilates.utils.input_logging import log_inputs
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
-from pilates.workflows.step_io import merge_model_expected_inputs
+from pilates.workflows.step_io import expected_inputs_for_step, merge_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_atlas_postprocess_step,
@@ -275,8 +275,14 @@ def run_vehicle_ownership_stage(
             atlas_usim_datastore_h5_path,
         )
         log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
-        step_inputs = merge_model_expected_inputs(
-            "atlas", step_inputs, settings, cast(WorkflowState, atlas_state), workspace
+        step_inputs = merge_expected_inputs(
+            step_inputs,
+            expected_inputs_for_step(
+                "atlas_preprocess",
+                settings,
+                cast(WorkflowState, atlas_state),
+                workspace,
+            ),
         )
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path

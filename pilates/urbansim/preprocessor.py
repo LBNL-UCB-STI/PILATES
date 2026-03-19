@@ -608,8 +608,13 @@ class UrbansimPreprocessor(GenericPreprocessor):
                                 "legacy BEAM skims discovery.",
                                 final_skims_omx,
                             )
-                        if self.state.run_info_path and os.path.exists(
-                            self.state.run_info_path
+                        is_restart_run = getattr(self.state, "is_restart_run", None)
+                        if is_restart_run is None:
+                            is_restart_run = bool(self.state.run_info_path)
+                        if (
+                            is_restart_run
+                            and self.state.run_info_path
+                            and os.path.exists(self.state.run_info_path)
                         ):
                             logger.info(
                                 f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"

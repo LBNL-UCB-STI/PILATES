@@ -15,6 +15,10 @@ from pilates.atlas.outputs import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
 )
+from pilates.atlas.static_inputs import (
+    ATLAS_STATIC_INPUTS_BY_SCENARIO,
+    ATLAS_STATIC_INPUTS_COMMON,
+)
 from pilates.beam.outputs import (
     BeamFullSkimOutputs,
     BeamPostprocessOutputs,
@@ -61,6 +65,7 @@ from pilates.workflows.artifact_keys import (
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
+from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 
 
@@ -167,6 +172,27 @@ _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS = (
     "atlas_rdata_accessibility",
     "atlas_accessibility_csv",
 )
+
+
+def _atlas_static_input_catalog_keys() -> Tuple[str, ...]:
+    relpaths = [
+        *ATLAS_STATIC_INPUTS_COMMON,
+        *(
+            relpath
+            for relpaths in ATLAS_STATIC_INPUTS_BY_SCENARIO.values()
+            for relpath in relpaths
+        ),
+    ]
+    keys = []
+    for relpath in relpaths:
+        rel_no_ext = relpath.rsplit(".", 1)[0]
+        raw_key = sanitize_artifact_key(rel_no_ext.replace("\\", "/")) or rel_no_ext
+        key = canonical_artifact_key_from_raw_key(raw_key)
+        keys.append(key)
+    return tuple(dict.fromkeys(keys))
+
+
+_ATLAS_STATIC_INPUT_KEYS = _atlas_static_input_catalog_keys()
 _ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS = tuple(
     key
     for key in _ACTIVITYSIM_RUN_OUTPUT_KEYS
@@ -252,8 +278,10 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         input_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
         optional_input_keys=(FINAL_SKIMS_OMX,),
         output_keys=_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS,
-        optional_output_keys=_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
-        dynamic_output_families=("atlas_static_input_*",),
+        optional_output_keys=_ordered_unique(
+            _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
+            _ATLAS_STATIC_INPUT_KEYS,
+        ),
         depends_on=(),
         holder_inputs=(),
         upstream_step_inputs=(),
@@ -268,10 +296,16 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="vehicle_ownership_model",
         order=50,
         outputs_class=AtlasRunOutputs,
-        input_keys=_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS[1:],
-        optional_input_keys=_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
+        input_keys=(
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_DATASTORE_BASE_H5,
+            *_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS[1:],
+        ),
+        optional_input_keys=_ordered_unique(
+            _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
+            _ATLAS_STATIC_INPUT_KEYS,
+        ),
         output_keys=(ATLAS_OUTPUT_DIR,),
-        dynamic_input_families=("atlas_static_input_*",),
         dynamic_output_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_preprocess",),
         holder_inputs=("atlas_preprocess",),
