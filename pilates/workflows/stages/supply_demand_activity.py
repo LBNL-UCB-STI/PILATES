@@ -48,6 +48,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.activitysim.runner import persist_sharrow_cache_enabled
+from pilates.activitysim.outputs import normalize_asim_output_key
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -511,9 +512,16 @@ def _run_activity_demand_phase(
     upstream_run = outputs_holder.activitysim_run
     if upstream_run is None:
         raise RuntimeError("ActivitySim run must complete first")
-    postprocess_input_keys = [
-        short_name for short_name, _, _ in upstream_run._iter_record_items()
-    ]
+    postprocess_input_keys = list(
+        dict.fromkeys(
+            normalize_asim_output_key(
+                short_name[: -len("_temp")]
+                if short_name.endswith("_asim_out_temp")
+                else short_name
+            )
+            for short_name, _, _ in upstream_run._iter_record_items()
+        )
+    )
     if not postprocess_input_keys:
         postprocess_input_keys = None
 

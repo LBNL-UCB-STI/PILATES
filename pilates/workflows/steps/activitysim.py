@@ -3,6 +3,7 @@ from __future__ import annotations
 import inspect
 import logging
 import os
+import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar, cast
 
@@ -71,6 +72,37 @@ from pilates.workflows.input_resolution import (
 logger = logging.getLogger(__name__)
 
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+
+
+def _canonical_activitysim_run_output_key(short_name: str) -> str:
+    clean_name = re.sub(r"_asim_out_temp$", "", short_name)
+    return normalize_asim_output_key(clean_name)
+
+
+def _resolve_activitysim_run_cached_value(
+    *,
+    key: str,
+    coupler: CouplerProtocol,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Any:
+    value = _resolve_cached_value(
+        key=key,
+        coupler=coupler,
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+    )
+    if value is not None:
+        return value
+    canonical_key = _canonical_activitysim_run_output_key(key)
+    if canonical_key == key:
+        return None
+    return _resolve_cached_value(
+        key=canonical_key,
+        coupler=coupler,
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+    )
 
 
 def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
@@ -413,7 +445,7 @@ def _recover_activitysim_run_outputs(
                 short_name = f"{child.name}_asim_out_temp"
                 raw_outputs[short_name] = fpath
                 content_hash = _resolved_content_hash(
-                    value=_resolve_cached_value(
+                    value=_resolve_activitysim_run_cached_value(
                         key=short_name,
                         coupler=coupler,
                         cached_outputs=cached_outputs,
@@ -445,7 +477,7 @@ def _recover_activitysim_run_outputs(
                 short_name = f"{fpath.stem}_asim_out_temp"
                 raw_outputs[short_name] = fpath
                 content_hash = _resolved_content_hash(
-                    value=_resolve_cached_value(
+                    value=_resolve_activitysim_run_cached_value(
                         key=short_name,
                         coupler=coupler,
                         cached_outputs=cached_outputs,
@@ -1123,12 +1155,13 @@ def make_activitysim_run_step(
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
 
         for short_name, path, description in outputs._iter_record_items():
+            output_key = _canonical_activitysim_run_output_key(short_name)
             artifact = cr.log_output(
                 str(path),
-                key=short_name,
-                description=description,
+                key=output_key,
+                description=description.replace(short_name, output_key),
                 **_activitysim_output_facet_meta(
-                    short_name,
+                    output_key,
                     year=forecast_year,
                     iteration=state.iteration,
                 ),
@@ -1136,6 +1169,7 @@ def make_activitysim_run_step(
             content_hash = _artifact_content_hash(artifact)
             if content_hash:
                 outputs.raw_output_hashes[short_name] = content_hash
+                outputs.raw_output_hashes.setdefault(output_key, content_hash)
 
     return _make_activitysim_typed_step_function(
         coupler=coupler,

@@ -200,10 +200,13 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
         return _RunRunner()
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
+    logged = []
     monkeypatch.setattr(
         activitysim_steps.cr,
         "log_output",
-        lambda *args, **kwargs: SimpleNamespace(hash="hash_households_out"),
+        lambda *args, **kwargs: (
+            logged.append(kwargs["key"]) or SimpleNamespace(hash="hash_households_out")
+        ),
     )
 
     run_step = activitysim_steps.make_activitysim_run_step(
@@ -214,6 +217,7 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
 
     run_outputs = outputs_holder.activitysim_run
     assert isinstance(run_outputs, ActivitySimRunOutputs)
+    assert logged == ["households_asim_out"]
     assert run_outputs.raw_output_hashes["households_asim_out_temp"] == "hash_households_out"
     assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
     assert run_outputs.source_input_paths[ASIM_HOUSEHOLDS_IN] == households
