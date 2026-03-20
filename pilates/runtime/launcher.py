@@ -605,6 +605,21 @@ def _run_resume_doctor_diagnostics(
     )
 
 
+def _hydrate_restart_local_bookkeeping(
+    *,
+    archive_run_dir: str,
+    local_run_dir: str,
+    archive_state_path: str,
+    local_state_path: str,
+) -> Dict[str, Any]:
+    return restart_runtime.hydrate_restart_local_bookkeeping(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        archive_state_path=archive_state_path,
+        local_state_path=local_state_path,
+    )
+
+
 def main(
     *,
     settings: Optional[Any] = None,
@@ -791,6 +806,7 @@ def main(
     restart_rehydrate_mode = _resolve_restart_rehydrate_mode(settings)
     restart_strict = _is_restart_strict(settings)
     restart_reconstruction: Optional[Dict[str, Any]] = None
+    restart_bookkeeping_hydration: Optional[Dict[str, Any]] = None
     restart_missing_artifacts_initial: List[Dict[str, str]] = []
     restart_missing_artifacts_after_recovery: List[Dict[str, str]] = []
 
@@ -825,6 +841,23 @@ def main(
                     reconstruction_result.skipped_missing_source,
                     reconstruction_result.failed,
                 )
+
+    if is_restart_run:
+        restart_bookkeeping_hydration = _hydrate_restart_local_bookkeeping(
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
+            archive_state_path=archive_state_path,
+            local_state_path=local_state_path,
+        )
+        logger.info(
+            "Restart local bookkeeping hydration finished: state_mirror=%s "
+            "workflow_files_copied=%s skipped_existing=%s missing_source=%s failed=%s",
+            restart_bookkeeping_hydration.get("state_mirror"),
+            restart_bookkeeping_hydration.get("workflow_files_copied"),
+            restart_bookkeeping_hydration.get("skipped_existing"),
+            restart_bookkeeping_hydration.get("missing_source"),
+            len(restart_bookkeeping_hydration.get("failed", [])),
+        )
 
     if state.data_initialized:
         restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(

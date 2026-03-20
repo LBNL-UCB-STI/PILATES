@@ -927,6 +927,59 @@ def test_resume_doctor_degraded_summary_reports_missing_checks_and_manifest_chec
     assert "[ResumeDoctor] summary status=degraded reason=missing_checks:" in caplog.text
 
 
+def test_hydrate_restart_local_bookkeeping_copies_state_mirror_and_workflow_tree(
+    tmp_path,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    local_run_dir = tmp_path / "local-run"
+    archive_state_path = archive_run_dir / "run_state.yaml"
+    local_state_path = local_run_dir / "run_state.yaml"
+
+    archive_state_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_state_path.write_text("archive-state", encoding="utf-8")
+
+    archive_manifest = archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml"
+    archive_manifest.parent.mkdir(parents=True, exist_ok=True)
+    archive_manifest.write_text("supply-demand", encoding="utf-8")
+
+    archive_atlas_manifest = (
+        archive_run_dir
+        / ".workflow"
+        / "vehicle_ownership"
+        / "forecast_year_2023_subyear_2017.yaml"
+    )
+    archive_atlas_manifest.parent.mkdir(parents=True, exist_ok=True)
+    archive_atlas_manifest.write_text("atlas-subyear", encoding="utf-8")
+
+    result = run_module._hydrate_restart_local_bookkeeping(
+        archive_run_dir=str(archive_run_dir),
+        local_run_dir=str(local_run_dir),
+        archive_state_path=str(archive_state_path),
+        local_state_path=str(local_state_path),
+    )
+
+    assert local_state_path.read_text(encoding="utf-8") == "archive-state"
+    assert (
+        (local_run_dir / ".workflow" / "year_2018_iteration_0.yaml").read_text(
+            encoding="utf-8"
+        )
+        == "supply-demand"
+    )
+    assert (
+        (
+            local_run_dir
+            / ".workflow"
+            / "vehicle_ownership"
+            / "forecast_year_2023_subyear_2017.yaml"
+        ).read_text(encoding="utf-8")
+        == "atlas-subyear"
+    )
+    assert result["state_mirror"] == "copied"
+    assert result["workflow_files_copied"] == 2
+    assert result["missing_source"] == 0
+    assert result["failed"] == []
+
+
 def test_format_restart_command_uses_config_and_archive_state():
     settings = SimpleNamespace(settings_file="scenarios/settings-seattle.yaml")
 
@@ -1027,6 +1080,152 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
         in caplog.text
     )
     assert "run_state.yaml" in caplog.text
+
+
+def test_main_restart_hydrates_local_bookkeeping_before_resume_doctor(
+    tmp_path, monkeypatch
+):
+    class StopAfterScenario(RuntimeError):
+        pass
+
+    class SnapshotStub:
+        def final_snapshot(self):
+            return True
+
+    class StateStub:
+        def __init__(self, run_info_path: str):
+            self.run_info_path = run_info_path
+            self.data_initialized = True
+            self.file_loc = None
+            self.mirror_file_loc = None
+            self.current_year = 2018
+            self.current_inner_iter = 0
+            self.current_major_stage = WorkflowState.Stage.supply_demand_loop
+            self.current_sub_stage = WorkflowState.Stage.activity_demand
+
+        def set_run_info_path(self, path: str) -> None:
+            self.run_info_path = path
+
+        def set_data_initialized(self, initialized: bool) -> None:
+            self.data_initialized = initialized
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-local-bookkeeping"
+    archive_run_dir = archive_root / run_name
+    archive_run_dir.mkdir(parents=True, exist_ok=True)
+
+    archive_state_path = archive_run_dir / "run_state.yaml"
+    archive_state_path.write_text("archive-state", encoding="utf-8")
+    archive_manifest = archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml"
+    archive_manifest.parent.mkdir(parents=True, exist_ok=True)
+    archive_manifest.write_text("manifest", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused-on-restart",
+            restart_strict=False,
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = StateStub(str(archive_state_path))
+    captured = {}
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(run_module, "_repair_restart_beam_inputs_from_source", lambda **_kwargs: False)
+    monkeypatch.setattr(
+        run_module,
+        "_reconstruct_restart_completed_run_outputs",
+        lambda **_kwargs: {
+            "run_ids": [],
+            "source_root": str(archive_run_dir),
+            "target_root": str(local_root / run_name),
+            "manifest_paths": [],
+            "materialization_result": MaterializationResult(),
+        },
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_find_missing_restart_local_artifacts",
+        lambda **_kwargs: [],
+    )
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **_kwargs: {
+            "bootstrap_cache_hit": False,
+            "run_reference": {"probe_run_id": "bootstrap-run"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        },
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+
+    def _capture_resume_doctor(**kwargs):
+        captured["local_state_exists"] = Path(kwargs["local_state_path"]).exists()
+        local_manifest = run_module.build_manifest_path(
+            workspace=kwargs["workspace"],
+            year=2018,
+            iteration=0,
+        )
+        captured["local_manifest_exists"] = local_manifest.exists()
+
+    monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", _capture_resume_doctor)
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StopAfterScenario("reached scenario")
+        ),
+    )
+
+    with pytest.raises(StopAfterScenario, match="reached scenario"):
+        run_module.main()
+
+    assert captured == {
+        "local_state_exists": True,
+        "local_manifest_exists": True,
+    }
 
 
 def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):

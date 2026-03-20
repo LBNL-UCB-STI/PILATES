@@ -1113,6 +1113,27 @@ def make_activitysim_run_step(
                     f"ActivitySim compiled skims for year {state.year}, iter {state.iteration}"
                 ),
             )
+
+        cache_value = None
+        if callable(get_value):
+            cache_value = resolve_artifact_from_value(
+                get_value(ASIM_SHARROW_CACHE_DIR),
+                key=ASIM_SHARROW_CACHE_DIR,
+                workspace=workspace,
+            )
+        cache_content_hash = _artifact_content_hash(cache_value)
+        if cache_content_hash:
+            compile_input_hashes[ASIM_SHARROW_CACHE_DIR] = cache_content_hash
+        cache_path = artifact_to_path(cache_value, workspace)
+        if cache_path and _is_non_empty_directory(cache_path):
+            extra_inputs[ASIM_SHARROW_CACHE_DIR] = cache_path
+            log_input_only(
+                key=ASIM_SHARROW_CACHE_DIR,
+                path=cache_path,
+                description=(
+                    "ActivitySim persisted compile cache directory (numba/sharrow)"
+                ),
+            )
         return {"extra_inputs": extra_inputs}
 
     def _log_outputs(
@@ -1153,6 +1174,21 @@ def make_activitysim_run_step(
             ) or compile_input_hashes.get(ZARR_SKIMS)
             if content_hash:
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
+
+        cache_value = get_value(ASIM_SHARROW_CACHE_DIR) if callable(get_value) else None
+        runtime_cache_path = asim_sharrow_cache_dir(workspace)
+        cache_path = (
+            runtime_cache_path
+            if _is_non_empty_directory(runtime_cache_path)
+            else artifact_to_path(cache_value, workspace)
+        )
+        if cache_path and _is_non_empty_directory(cache_path):
+            outputs.source_input_paths[ASIM_SHARROW_CACHE_DIR] = Path(cache_path)
+            content_hash = _artifact_content_hash(
+                cache_value
+            ) or compile_input_hashes.get(ASIM_SHARROW_CACHE_DIR)
+            if content_hash:
+                outputs.source_input_hashes[ASIM_SHARROW_CACHE_DIR] = content_hash
 
         for short_name, path, description in outputs._iter_record_items():
             output_key = _canonical_activitysim_run_output_key(short_name)

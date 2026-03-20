@@ -92,6 +92,12 @@ class ActivityDemandPhaseOutputs:
     activity_demand_outputs: Optional[Dict[str, Any]]
 
 
+def _should_force_restart_activitysim_compile(state: WorkflowState) -> bool:
+    if not bool(getattr(state, "is_restart_run", False)):
+        return False
+    return not bool(getattr(state, "_restart_activitysim_compile_done", False))
+
+
 def _run_supply_demand_manifested_steps(
     *,
     stage_name: str,
@@ -346,10 +352,20 @@ def _run_activity_demand_phase(
         and persist_sharrow_cache_enabled(settings)
     )
 
-    # ActivitySim Compilation: run once per year after preprocess.
-    # Restart safety: if state says compiled but zarr skims are missing on local
-    # ephemeral storage, force recompile instead of hard-failing.
-    needs_compile = not state.asim_compiled
+    # ActivitySim compilation is effectively a run-level one-time step because
+    # WorkflowState.asim_compiled is not reset on year advance. On restart, we
+    # intentionally force one recompile before the first resumed ActivitySim run.
+    # If compiled artifacts are missing on local ephemeral storage, also force
+    # recompile instead of hard-failing.
+    force_restart_compile = _should_force_restart_activitysim_compile(state)
+    needs_compile = force_restart_compile or not state.asim_compiled
+    if force_restart_compile:
+        logger.info(
+            "Restart detected; forcing ActivitySim compile before first resumed "
+            "ActivitySim run (year=%s iteration=%s).",
+            state.current_year,
+            state.current_inner_iter,
+        )
     if not needs_compile:
         existing_zarr_path = _resolved_existing_zarr_skims_path()
         existing_cache_path = (
@@ -432,6 +448,7 @@ def _run_activity_demand_phase(
                 "expected_outputs": expected_compile_outputs,
             },
         )
+        setattr(state, "_restart_activitysim_compile_done", True)
     else:
         _republish_existing_compile_artifacts()
     final_zarr_path = _resolved_existing_zarr_skims_path()
@@ -458,6 +475,8 @@ def _run_activity_demand_phase(
     ]
     asim_run_input_keys = [key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS]
     asim_run_input_keys.append(ZARR_SKIMS)
+    if requires_numba_cache:
+        asim_run_input_keys.append(ASIM_SHARROW_CACHE_DIR)
 
     activitysim_postprocess_inputs: Dict[str, str] = {}
     usim_base_fallback = None

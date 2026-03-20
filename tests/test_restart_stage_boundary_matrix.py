@@ -458,8 +458,8 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
+        "expected_inputs_for_step",
+        lambda *_args, **_kwargs: {},
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,

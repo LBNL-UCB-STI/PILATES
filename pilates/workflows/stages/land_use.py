@@ -132,13 +132,13 @@ def run_land_use_stage(
         raise RuntimeError("UrbanSim preprocess must complete first")
 
     run_inputs = step_output_handoff_mapping(upstream_preprocess, coupler=coupler)
-    if not run_inputs:
-        # Some preprocessors materialize key artifacts via explicit logging rather
-        # than RecordStore outputs; fall back to declared UrbanSim inputs so run
-        # identity/provenance still reflects true dependencies.
-        run_inputs = {
-            key: value for key, value in usim_inputs.items() if value is not None
-        }
+    # Some preprocessors materialize key artifacts via explicit logging rather
+    # than RecordStore outputs. Keep those handoff outputs, but also preserve
+    # declared UrbanSim inputs so run identity/provenance still reflects the
+    # restart-critical datastore dependencies.
+    for key, value in usim_inputs.items():
+        if value is not None:
+            run_inputs.setdefault(key, value)
     run_resolution = resolve_step_inputs(
         keys=run_inputs.keys(),
         explicit_inputs=run_inputs,

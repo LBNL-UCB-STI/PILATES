@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -34,6 +35,20 @@ _ATLAS_SUBYEAR_MANIFEST_RE = re.compile(
     r"^forecast_year_(?P<forecast_year>-?\d+)_subyear_(?P<sub_year>-?\d+)\.yaml$"
 )
 _OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES = ("_asim_out_temp",)
+
+
+def _copy_restart_bookkeeping_file(
+    *,
+    source: Path,
+    target: Path,
+) -> str:
+    if target.exists():
+        return "skipped_existing"
+    if not source.exists():
+        return "missing_source"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    return "copied"
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -835,6 +850,83 @@ def reconstruct_restart_completed_run_outputs(
         "manifest_paths": list(discovery["manifest_paths"]),
         "materialization_result": aggregate,
     }
+
+
+def hydrate_restart_local_bookkeeping(
+    *,
+    archive_run_dir: str,
+    local_run_dir: str,
+    archive_state_path: str,
+    local_state_path: str,
+) -> Dict[str, Any]:
+    summary: Dict[str, Any] = {
+        "state_mirror": "skipped_existing",
+        "workflow_files_copied": 0,
+        "skipped_existing": 0,
+        "missing_source": 0,
+        "failed": [],
+    }
+
+    archive_state = Path(os.path.realpath(archive_state_path))
+    local_state = Path(os.path.realpath(local_state_path))
+    try:
+        summary["state_mirror"] = _copy_restart_bookkeeping_file(
+            source=archive_state,
+            target=local_state,
+        )
+    except Exception as exc:
+        summary["failed"].append(
+            {
+                "source": str(archive_state),
+                "target": str(local_state),
+                "error": str(exc),
+            }
+        )
+        logger.warning(
+            "Restart bookkeeping hydration failed copying local state mirror %s -> %s: %s",
+            archive_state,
+            local_state,
+            exc,
+        )
+
+    workflow_source_root = Path(os.path.realpath(archive_run_dir)) / ".workflow"
+    workflow_target_root = Path(os.path.realpath(local_run_dir)) / ".workflow"
+    if not workflow_source_root.exists():
+        summary["missing_source"] += 1
+        return summary
+
+    for source_path in sorted(workflow_source_root.rglob("*")):
+        if not source_path.is_file():
+            continue
+        target_path = workflow_target_root / source_path.relative_to(workflow_source_root)
+        try:
+            outcome = _copy_restart_bookkeeping_file(
+                source=source_path,
+                target=target_path,
+            )
+        except Exception as exc:
+            summary["failed"].append(
+                {
+                    "source": str(source_path),
+                    "target": str(target_path),
+                    "error": str(exc),
+                }
+            )
+            logger.warning(
+                "Restart bookkeeping hydration failed copying workflow file %s -> %s: %s",
+                source_path,
+                target_path,
+                exc,
+            )
+            continue
+        if outcome == "copied":
+            summary["workflow_files_copied"] += 1
+        elif outcome == "skipped_existing":
+            summary["skipped_existing"] += 1
+        elif outcome == "missing_source":
+            summary["missing_source"] += 1
+
+    return summary
 
 
 def log_resume_doctor_check(
