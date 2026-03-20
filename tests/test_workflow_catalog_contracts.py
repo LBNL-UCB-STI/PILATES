@@ -127,10 +127,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "optional_input_keys": (FINAL_SKIMS_OMX,),
             "optional_output_keys": (
-                "atlas_grave_csv",
-                "beam_skims_input",
-                "atlas_rdata_accessibility",
-                "atlas_accessibility_csv",
+                *catalog._ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
+                *catalog._ATLAS_STATIC_INPUT_KEYS,
             ),
             "dynamic_input_families": (),
             "output_keys": (
@@ -141,12 +139,14 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "atlas_residential_csv",
                 "atlas_jobs_csv",
             ),
-            "dynamic_output_families": ("atlas_static_input_*",),
+            "dynamic_output_families": (),
             "holder_inputs": (),
             "upstream_step_inputs": (),
         },
         "atlas_run": {
             "input_keys": (
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
                 "atlas_households_csv",
                 "atlas_blocks_csv",
                 "atlas_persons_csv",
@@ -154,13 +154,11 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "atlas_jobs_csv",
             ),
             "optional_input_keys": (
-                "atlas_grave_csv",
-                "beam_skims_input",
-                "atlas_rdata_accessibility",
-                "atlas_accessibility_csv",
+                *catalog._ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
+                *catalog._ATLAS_STATIC_INPUT_KEYS,
             ),
             "optional_output_keys": (),
-            "dynamic_input_families": ("atlas_static_input_*",),
+            "dynamic_input_families": (),
             "output_keys": (ATLAS_OUTPUT_DIR,),
             "dynamic_output_families": (
                 "householdv_{year}",
@@ -207,7 +205,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "upstream_step_inputs": (),
         },
         "activitysim_compile": {
-            "input_keys": (),
+            "input_keys": (ASIM_OMX_SKIMS,),
             "optional_input_keys": (),
             "output_keys": (ZARR_SKIMS,),
             "optional_output_keys": (ASIM_SHARROW_CACHE_DIR,),
