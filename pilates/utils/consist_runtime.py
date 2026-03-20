@@ -557,10 +557,12 @@ def _observed_columns_and_families(path: str) -> tuple[list[str], dict[str, str]
         import pyarrow.parquet as pq
 
         schema = pq.ParquetFile(path).schema.to_arrow_schema()
-        names = [str(name) for name in schema.names]
+        ignored_columns = {"__index_level_0__"}
+        names = [str(name) for name in schema.names if str(name) not in ignored_columns]
         families = {
             str(field.name): _arrow_type_family(field.type, pa_module=pa)
             for field in schema
+            if str(field.name) not in ignored_columns
         }
         return names, families
     return [], {}
@@ -597,6 +599,12 @@ def _type_mismatch_columns(
 
 
 def _arrow_type_family(arrow_type: Any, *, pa_module: Any) -> str:
+    if pa_module.types.is_dictionary(arrow_type):
+        try:
+            value_type = arrow_type.value_type
+        except Exception:
+            return "unknown"
+        return _arrow_type_family(value_type, pa_module=pa_module)
     if pa_module.types.is_integer(arrow_type):
         return "integer"
     if pa_module.types.is_floating(arrow_type):
@@ -635,7 +643,7 @@ def _sqlalchemy_type_family(sa_type: Any) -> str:
 
 def _type_families_compatible(expected: str, observed: str) -> bool:
     compatibility = {
-        "integer": {"integer"},
+        "integer": {"integer", "float"},
         "float": {"float", "integer"},
         "numeric": {"numeric", "float", "integer"},
         "boolean": {"boolean", "integer"},

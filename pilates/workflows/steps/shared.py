@@ -243,6 +243,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.step_exec import warm_start_activities as warm_start_activities
 from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
+    required_outputs_for_step_outputs_class,
 )
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -1100,7 +1101,7 @@ def validate_workflow_step_contracts(
             step_func = declared_by_model.get(step_name)
             if outputs_class is None or step_func is None:
                 continue
-            canonical = list(declared_outputs_for_step_outputs_class(outputs_class))
+            canonical = list(required_outputs_for_step_outputs_class(outputs_class))
             step_meta = getattr(step_func, "__consist_step__", None)
             metadata_outputs = _normalize_output_keys(
                 getattr(step_meta, "outputs", None)
@@ -1166,10 +1167,10 @@ def _declared_outputs_from_class(
     Return strict output contract keys for a step outputs class when available.
 
     Precedence:
-    1. Explicit ``declared_outputs`` class attribute.
-    2. Fallback to required ``record_keys`` fields only.
+    1. Explicit ``required_outputs`` class attribute.
+    2. Fallback to all declared outputs for the class.
     """
-    declared = list(declared_outputs_for_step_outputs_class(outputs_class))
+    declared = list(required_outputs_for_step_outputs_class(outputs_class))
     if not declared:
         return None
     return declared

@@ -6,6 +6,8 @@ from fnmatch import fnmatchcase
 from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple, Type
 
 from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -199,7 +201,7 @@ _ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS = tuple(
     if key in {"beam_plans_asim_out", "households_asim_out", "persons_asim_out"}
 )
 _ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
-    _ACTIVITYSIM_RUN_OUTPUT_KEYS,
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     (USIM_INPUT_NEXT, USIM_DATASTORE_H5),
 )
 _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
@@ -392,8 +394,9 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         optional_input_keys=(ASIM_SHARROW_CACHE_DIR,),
         output_keys=(
             ASIM_OUTPUT_DIR,
-            *_ACTIVITYSIM_RUN_OUTPUT_KEYS,
+            *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
+        optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
         upstream_step_inputs=("activitysim_preprocess",),
@@ -416,12 +419,14 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ZARR_SKIMS,
             USIM_DATASTORE_CURRENT_H5,
             USIM_FORECAST_OUTPUT,
-            *_ACTIVITYSIM_RUN_OUTPUT_KEYS,
+            *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
         output_keys=(
             ASIM_OUTPUT_DIR,
             *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
         ),
+        optional_input_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+        optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         depends_on=("activitysim_run",),
         holder_inputs=("activitysim_run",),
         upstream_step_inputs=("activitysim_run",),

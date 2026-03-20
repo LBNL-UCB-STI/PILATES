@@ -41,6 +41,7 @@ from pilates.workflows.artifact_keys import (
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
+from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 
 
 PILATES_COUPLER_SCHEMA: Dict[str, str] = {
@@ -86,6 +87,12 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "canonical_zones": "Canonical zones file copied into ActivitySim workspace.",
     "clipped_geoms": "Clipped geometry inputs for ActivitySim if available.",
 }
+
+for key in ASIM_OPTIONAL_RUN_OUTPUT_KEYS:
+    PILATES_COUPLER_SCHEMA.setdefault(
+        key,
+        "Optional ActivitySim parquet output present only when enabled by model settings.",
+    )
 
 _NAMESPACED_INIT_KEYS = {
     "urbansim": {

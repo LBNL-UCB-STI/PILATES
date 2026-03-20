@@ -13,6 +13,7 @@ from pilates.activitysim.runner import (
     persist_sharrow_cache_enabled,
 )
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
+from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
@@ -201,6 +202,8 @@ def _make_activitysim_typed_step_function(
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
+    declared_outputs: Optional[list[str]] = None,
+    schema_outputs: Optional[list[str]] = None,
 ) -> Callable[..., None]:
     @cr.require_runtime_kwargs("settings", "state", "workspace")
     def _step_func(
@@ -266,8 +269,16 @@ def _make_activitysim_typed_step_function(
         step_func=_step_func,
         step_model=f"{model_name}_{phase}",
         description=f"{model_name} {phase} workflow step",
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=_declared_outputs_from_class(outputs_class),
+        schema_outputs=(
+            schema_outputs
+            if schema_outputs is not None
+            else _schema_outputs_from_class(outputs_class)
+        ),
+        outputs=(
+            declared_outputs
+            if declared_outputs is not None
+            else _declared_outputs_from_class(outputs_class)
+        ),
         tags=[model_name, phase],
     )
 
@@ -1223,6 +1234,8 @@ def make_activitysim_run_step(
         input_logger=_log_inputs,
         output_logger=_log_outputs,
         output_recoverer=_recover_activitysim_run_outputs,
+        declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+        schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
     )
 
 

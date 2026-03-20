@@ -1,5 +1,8 @@
 import types
 
+import pandas as pd
+import pyarrow as pa
+
 from pilates.utils import consist_runtime as cr
 
 
@@ -457,6 +460,27 @@ def test_log_output_warns_on_schema_column_mismatch_without_failing(
     assert meta["schema"].__name__ == "HouseholdVAtlasOut"
     assert "[SCHEMA WARNING]" in caplog.text
     assert "missing_columns" in caplog.text
+
+
+def test_arrow_type_family_treats_dictionary_encoded_strings_as_string():
+    dictionary_type = pa.dictionary(pa.int32(), pa.string())
+
+    assert cr._arrow_type_family(dictionary_type, pa_module=pa) == "string"
+
+
+def test_integer_expected_accepts_float_observed_for_schema_checker():
+    assert cr._type_families_compatible("integer", "float") is True
+
+
+def test_observed_columns_and_families_ignore_pandas_index_parquet_column(tmp_path):
+    parquet_path = tmp_path / "indexed.parquet"
+    pd.DataFrame({"tour_mode": ["drive", "walk"]}).to_parquet(parquet_path, index=True)
+
+    names, families = cr._observed_columns_and_families(str(parquet_path))
+
+    assert "__index_level_0__" not in names
+    assert "__index_level_0__" not in families
+    assert "tour_mode" in names
 
 
 def test_log_output_retries_without_schema_when_schema_logging_fails(

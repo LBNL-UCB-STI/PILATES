@@ -53,6 +53,27 @@ ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
     "workplace_shadow_prices": "workplace_shadow_prices_asim_out",
 }
 
+ASIM_OPTIONAL_RUN_OUTPUT_KEYS: Tuple[str, ...] = (
+    ASIM_OUTPUT_KEY_MAP["person_windows"],
+    ASIM_OUTPUT_KEY_MAP["proto_disaggregate_accessibility"],
+    ASIM_OUTPUT_KEY_MAP["proto_households"],
+    ASIM_OUTPUT_KEY_MAP["proto_persons"],
+    ASIM_OUTPUT_KEY_MAP["proto_persons_merged"],
+    ASIM_OUTPUT_KEY_MAP["proto_tours"],
+    ASIM_OUTPUT_KEY_MAP["school_modeled_size"],
+    ASIM_OUTPUT_KEY_MAP["school_destination_size"],
+    ASIM_OUTPUT_KEY_MAP["school_shadow_prices"],
+    ASIM_OUTPUT_KEY_MAP["workplace_destination_size"],
+    ASIM_OUTPUT_KEY_MAP["workplace_location_accessibility"],
+    ASIM_OUTPUT_KEY_MAP["workplace_modeled_size"],
+    ASIM_OUTPUT_KEY_MAP["workplace_shadow_prices"],
+)
+ASIM_REQUIRED_RUN_OUTPUT_KEYS: Tuple[str, ...] = tuple(
+    key
+    for key in dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
+    if key not in set(ASIM_OPTIONAL_RUN_OUTPUT_KEYS)
+)
+
 
 def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
@@ -315,6 +336,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
     declared_outputs: ClassVar[Tuple[str, ...]] = tuple(
         dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
     )
+    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()

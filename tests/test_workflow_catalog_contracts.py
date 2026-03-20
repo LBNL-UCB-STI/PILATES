@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -222,11 +223,11 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ZARR_SKIMS,
             ),
             "optional_input_keys": (ASIM_SHARROW_CACHE_DIR,),
-            "optional_output_keys": (),
+            "optional_output_keys": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             "dynamic_input_families": (),
             "output_keys": (
                 ASIM_OUTPUT_DIR,
-                *ActivitySimRunOutputs.declared_output_keys(),
+                *ActivitySimRunOutputs.required_output_keys(),
             ),
             "dynamic_output_families": (),
             "holder_inputs": ("activitysim_preprocess",),
@@ -241,14 +242,18 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ZARR_SKIMS,
                 USIM_DATASTORE_CURRENT_H5,
                 USIM_FORECAST_OUTPUT,
-                *ActivitySimRunOutputs.declared_output_keys(),
+                *ActivitySimRunOutputs.required_output_keys(),
             ),
-            "optional_input_keys": (),
-            "optional_output_keys": (),
+            "optional_input_keys": (
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            ),
+            "optional_output_keys": (
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            ),
             "dynamic_input_families": (),
             "output_keys": (
                 ASIM_OUTPUT_DIR,
-                *ActivitySimRunOutputs.declared_output_keys(),
+                *ActivitySimRunOutputs.required_output_keys(),
                 USIM_INPUT_NEXT,
                 USIM_DATASTORE_H5,
             ),
@@ -377,12 +382,12 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ZARR_SKIMS,
         ],
         "optional_input_keys": [ASIM_SHARROW_CACHE_DIR],
-        "optional_output_keys": [],
+        "optional_output_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_preprocess"],
         "output_keys": [
             ASIM_OUTPUT_DIR,
-            *ActivitySimRunOutputs.declared_output_keys(),
+            *ActivitySimRunOutputs.required_output_keys(),
         ],
         "dynamic_output_families": [],
         "optional": False,
@@ -448,15 +453,15 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ZARR_SKIMS,
             USIM_DATASTORE_CURRENT_H5,
             USIM_FORECAST_OUTPUT,
-            *ActivitySimRunOutputs.declared_output_keys(),
+            *ActivitySimRunOutputs.required_output_keys(),
         ],
-        "optional_input_keys": [],
-        "optional_output_keys": [],
+        "optional_input_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
+        "optional_output_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_run"],
         "output_keys": [
             ASIM_OUTPUT_DIR,
-            *ActivitySimRunOutputs.declared_output_keys(),
+            *ActivitySimRunOutputs.required_output_keys(),
             USIM_INPUT_NEXT,
             USIM_DATASTORE_H5,
         ],
@@ -526,7 +531,8 @@ def test_catalog_output_keys_cover_declared_step_output_contracts():
         if spec.outputs_class is None:
             continue
         canonical = tuple(spec.outputs_class.declared_output_keys())
-        assert set(canonical).issubset(set(spec.output_keys))
+        declared_contract = set(spec.output_keys) | set(spec.optional_output_keys)
+        assert set(canonical).issubset(declared_contract)
 
 
 def test_beam_catalog_dynamic_families_capture_runtime_fan_out():

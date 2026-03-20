@@ -374,12 +374,30 @@ def declared_outputs_for_step_outputs_class(
     return tuple(dict.fromkeys(inferred))
 
 
+def required_outputs_for_step_outputs_class(
+    outputs_class: Type[Any],
+) -> Tuple[str, ...]:
+    """
+    Resolve strict required output keys for a ``StepOutputs`` class.
+
+    Precedence:
+    1. Explicit ``required_outputs`` class attribute.
+    2. Fallback to all declared outputs for the class.
+    """
+    explicit = getattr(outputs_class, "required_outputs", None) or ()
+    explicit_keys = [key for key in explicit if isinstance(key, str)]
+    if explicit_keys:
+        return tuple(dict.fromkeys(explicit_keys))
+    return declared_outputs_for_step_outputs_class(outputs_class)
+
+
 class StepOutputsBase:
     """
     Base class for typed step outputs with RecordStore conversion.
     """
 
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
+    required_outputs: ClassVar[Tuple[str, ...]] = ()
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
@@ -394,6 +412,13 @@ class StepOutputsBase:
         Return canonical declared output keys for this ``StepOutputs`` class.
         """
         return declared_outputs_for_step_outputs_class(cls)
+
+    @classmethod
+    def required_output_keys(cls) -> Tuple[str, ...]:
+        """
+        Return strict required output keys for this ``StepOutputs`` class.
+        """
+        return required_outputs_for_step_outputs_class(cls)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
