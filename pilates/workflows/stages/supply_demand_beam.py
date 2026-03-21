@@ -21,7 +21,7 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_INPUT,
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -303,7 +303,7 @@ def _collect_beam_preprocess_inputs(
                 f"vehicles2_{forecast_year - 1}.csv",
             )
         if os.path.exists(atlas_vehicle_path):
-            beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_INPUT, atlas_vehicle_path)
+            beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, atlas_vehicle_path)
 
     return beam_preprocess_inputs
 

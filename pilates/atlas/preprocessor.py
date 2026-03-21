@@ -17,7 +17,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
 from pilates.utils.path_utils import find_project_root
@@ -139,11 +139,8 @@ def _atlas_static_input_metadata(
 ) -> Dict[str, object]:
     normalized_relpath = relpath.replace("\\", "/")
     filename = os.path.basename(normalized_relpath)
-    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
-    scenario_value = str(scenario_name) if scenario_name is not None else None
-
     input_group = "global"
-    selected_scenario = scenario_value.lower() if scenario_value else None
+    selected_scenario = atlas_selected_scenario(settings)
     input_year = None
     compact_key = normalized_relpath.replace("/", "_")
     compact_stem = os.path.splitext(compact_key)[0]
@@ -280,7 +277,8 @@ def _stage_atlas_static_inputs(
 
     scenario = get_setting(settings, "atlas.scenario")
     adscen = get_setting(settings, "atlas.adscen")
-    scenario_key = str(scenario).lower() if scenario else ""
+    selected_scenario = atlas_selected_scenario(settings)
+    scenario_key = selected_scenario or (str(scenario).lower() if scenario else "")
     if scenario and scenario_key not in {"baseline", "ess_cons", "zev_mandate"}:
         logger.warning(
             "[AtlasPreprocessor] Unknown atlas.scenario=%s; using deterministic static input fallback.",
@@ -289,7 +287,7 @@ def _stage_atlas_static_inputs(
     if adscen and scenario and adscen != scenario:
         logger.warning(
             "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
-            "using scenario for input selection.",
+            "using atlas.adscen for input selection to match runner behavior.",
             adscen,
             scenario,
         )

@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 from pilates.atlas.inputs import (
     atlas_run_years,
+    atlas_selected_scenario,
     atlas_static_input_keys,
     atlas_static_input_keys_for_interval,
     atlas_static_input_relpaths,
@@ -32,6 +33,34 @@ def test_atlas_static_input_relpaths_are_deterministic_and_keep_adopt_series():
     assert "adopt/baseline/new_vehicles_biannual_values_2021.csv" in relpaths
     assert "adopt/baseline/new_vehicles_biannual_values_2023.csv" in relpaths
     assert "accessbility_2015.RData" in relpaths
+
+
+def test_atlas_selected_scenario_falls_back_to_adscen_when_scenario_missing():
+    settings = SimpleNamespace(
+        run=SimpleNamespace(start_year=2017, end_year=2021, vehicle_ownership_freq=2),
+        atlas=SimpleNamespace(adscen="zev_mandate"),
+    )
+
+    assert atlas_selected_scenario(settings) == "zev_mandate"
+
+    relpaths = atlas_static_input_relpaths(settings)
+    assert "adopt/zev_mandate/new_vehicles_biannual_values_2021.csv" in relpaths
+    assert "adopt/baseline/new_vehicles_biannual_values_2021.csv" not in relpaths
+    assert "adopt/ess_cons/new_vehicles_biannual_values_2021.csv" not in relpaths
+
+
+def test_atlas_selected_scenario_normalizes_legacy_aliases():
+    settings = SimpleNamespace(
+        run=SimpleNamespace(start_year=2017, end_year=2021, vehicle_ownership_freq=2),
+        atlas=SimpleNamespace(scenario="ESS_const_220_price"),
+    )
+
+    assert atlas_selected_scenario(settings) == "ess_cons"
+
+    relpaths = atlas_static_input_relpaths(settings)
+    assert "vehicle_type_mapping_ESS_const_220_price.csv" in relpaths
+    assert "adopt/ess_cons/new_vehicles_biannual_values_2021.csv" in relpaths
+    assert "adopt/baseline/new_vehicles_biannual_values_2021.csv" not in relpaths
 
 
 def test_atlas_static_input_keys_match_adopt_relpaths():

@@ -17,6 +17,7 @@ from pilates.atlas.outputs import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
 )
+from pilates.atlas.inputs import atlas_static_input_keys
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
     ATLAS_STATIC_INPUTS_COMMON,
@@ -55,6 +56,7 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
+    ATLAS_VEHICLES2_OUTPUT,
     ASIM_SHARROW_CACHE_DIR,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -325,10 +327,10 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=AtlasPostprocessOutputs,
         input_keys=(USIM_DATASTORE_CURRENT_H5,),
         output_keys=(
-            ATLAS_OUTPUT_DIR,
-            USIM_H5_UPDATED,
-            USIM_DATASTORE_H5,
-            "atlas_vehicles2_output",
+                ATLAS_OUTPUT_DIR,
+                USIM_H5_UPDATED,
+                USIM_DATASTORE_H5,
+                ATLAS_VEHICLES2_OUTPUT,
         ),
         dynamic_input_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_run",),
@@ -445,7 +447,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             BEAM_CONFIG_FILE,
             *_ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS,
         ),
-        optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_INPUT),
+        optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
         output_keys=(
             BEAM_MUTABLE_DATA_DIR,
             *BeamPreprocessOutputs.declared_output_keys(),
@@ -472,12 +474,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
-        optional_input_keys=(
-            LINKSTATS_WARMSTART,
-            BEAM_OUTPUT_PLANS_XML,
-            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-            BEAM_EXPERIENCED_PLANS_XML,
-        ),
+        optional_input_keys=(LINKSTATS_WARMSTART,),
         output_keys=(
             BEAM_OUTPUT_DIR,
             *_BEAM_RUN_OUTPUT_KEYS,
@@ -585,17 +582,44 @@ def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepS
     return _STEP_SPECS_BY_MODEL_NAME.get(model_name)
 
 
-def workflow_step_contracts_by_name() -> Dict[str, Dict[str, Any]]:
+def _specialize_contract_for_settings(
+    spec: WorkflowStepSpec,
+    contract: Dict[str, Any],
+    *,
+    settings: Optional[Any],
+) -> Dict[str, Any]:
+    if settings is None:
+        return contract
+
+    if spec.step_name not in {"atlas_preprocess", "atlas_run"}:
+        return contract
+
+    static_keys = list(atlas_static_input_keys(settings))
+    if spec.step_name == "atlas_preprocess":
+        contract["optional_output_keys"] = list(
+            _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
+        )
+        return contract
+
+    contract["optional_input_keys"] = list(
+        _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
+    )
+    return contract
+
+
+def workflow_step_contracts_by_name(
+    settings: Optional[Any] = None,
+) -> Dict[str, Dict[str, Any]]:
     """
     Return a plain serializable catalog view for static inspection tools.
 
-    The returned payload is intentionally shallow and JSON-friendly so callers
-    do not need to understand the ``WorkflowStepSpec`` dataclass.
+    When ``settings`` are provided, contracts may be narrowed to match
+    configuration-dependent workflow behavior such as ATLAS scenario-specific
+    static inputs.
     """
-
     contracts: Dict[str, Dict[str, Any]] = {}
     for spec in WORKFLOW_STEP_SPECS:
-        contracts[spec.step_name] = {
+        contract = {
             "step_name": spec.step_name,
             "stage_name": spec.stage_name,
             "phase": spec.phase,
@@ -609,6 +633,11 @@ def workflow_step_contracts_by_name() -> Dict[str, Dict[str, Any]]:
             "dynamic_output_families": list(spec.dynamic_output_families),
             "optional": spec.optional,
         }
+        contracts[spec.step_name] = _specialize_contract_for_settings(
+            spec,
+            contract,
+            settings=settings,
+        )
     return contracts
 
 

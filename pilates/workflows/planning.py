@@ -268,7 +268,7 @@ class _PlanBuilder:
         self.settings = settings
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
-        self.contracts = workflow_step_contracts_by_name()
+        self.contracts = workflow_step_contracts_by_name(settings=self.settings)
         self.plan = StaticExecutionPlan(
             config_path=config_path,
             step_contracts=self.contracts,

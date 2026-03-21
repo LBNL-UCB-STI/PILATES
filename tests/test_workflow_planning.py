@@ -7,6 +7,7 @@ from pilates.workflows.lineage_render import (
     render_plan_mermaid,
 )
 from pilates.workflows.planning import (
+    _atlas_sub_years,
     build_static_execution_plan,
     build_static_execution_plan_from_file,
 )
@@ -64,10 +65,35 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
         for step in first_year_steps
         if step.step_name == "atlas_preprocess"
     ]
-    assert [step.atlas_year for step in atlas_preprocess_runs] == [2017, 2019, 2021, 2023]
+    assert [step.atlas_year for step in atlas_preprocess_runs] == _atlas_sub_years(
+        2017,
+        plan.metadata["years"][0]["forecast_year"],
+    )
 
 
-def test_static_execution_plan_marks_underdeclared_contracts_and_renders_mermaid():
+def test_static_execution_plan_uses_settings_aware_atlas_scenario_contracts():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = False
+    settings.traffic_assignment_enabled = False
+    settings.atlas.scenario = "zev_mandate"
+    settings.atlas.adscen = "zev_mandate"
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    atlas_static_artifacts = {
+        artifact.canonical_key
+        for artifact in plan.artifacts
+        if artifact.canonical_key.startswith("adopt/")
+    }
+
+    assert any(key.startswith("adopt/zev_mandate/") for key in atlas_static_artifacts)
+    assert all(not key.startswith("adopt/baseline/") for key in atlas_static_artifacts)
+    assert all(not key.startswith("adopt/ess_cons/") for key in atlas_static_artifacts)
+
+
+def test_static_execution_plan_threads_atlas_vehicles2_from_atlas_postprocess():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = True
@@ -76,13 +102,29 @@ def test_static_execution_plan_marks_underdeclared_contracts_and_renders_mermaid
 
     plan = build_static_execution_plan(settings, include_postprocessing=False)
 
-    gap_kinds = {(gap.kind, gap.message) for gap in plan.contract_gaps}
-    assert any(kind == "underdeclared_inputs" for kind, _message in gap_kinds)
+    vehicles2_artifacts = [
+        artifact for artifact in plan.artifacts if artifact.canonical_key == "atlas_vehicles2_output"
+    ]
+    assert vehicles2_artifacts
+    assert all(artifact.producer_step_run_id is not None for artifact in vehicles2_artifacts)
+    assert all("external" not in artifact.instance_key for artifact in vehicles2_artifacts)
+
+
+def test_static_execution_plan_renders_mermaid_without_contract_gaps():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    assert plan.contract_gaps == []
 
     mermaid = render_plan_mermaid(plan)
     assert mermaid.startswith("flowchart TD")
     assert "urbansim_preprocess" in mermaid
-    assert "No declared input contract is available for this step." in mermaid
+    assert "atlas_run" in mermaid
 
 
 def test_static_execution_plan_renders_html_wrapper():

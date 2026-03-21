@@ -24,7 +24,7 @@ from pilates.atlas.outputs import (
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
-    ATLAS_VEHICLES2_INPUT,
+    ATLAS_VEHICLES2_OUTPUT,
     ASIM_MUTABLE_DATA_DIR,
     ASIM_OUTPUT_DIR,
     ASIM_HOUSEHOLDS_IN,
@@ -180,7 +180,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ATLAS_OUTPUT_DIR,
                 USIM_H5_UPDATED,
                 USIM_DATASTORE_H5,
-                "atlas_vehicles2_output",
+                ATLAS_VEHICLES2_OUTPUT,
             ),
             "dynamic_output_families": (),
             "holder_inputs": ("atlas_run",),
@@ -268,7 +268,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "households_asim_out",
                 "persons_asim_out",
             ),
-            "optional_input_keys": (LINKSTATS_WARMSTART, ATLAS_VEHICLES2_INPUT),
+            "optional_input_keys": (LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
             "optional_output_keys": ("vehicles_beam_in",),
             "dynamic_input_families": (),
             "output_keys": (
@@ -287,12 +287,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
             ),
-            "optional_input_keys": (
-                LINKSTATS_WARMSTART,
-                BEAM_OUTPUT_PLANS_XML,
-                BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-                BEAM_EXPERIENCED_PLANS_XML,
-            ),
+            "optional_input_keys": (LINKSTATS_WARMSTART,),
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (
@@ -435,7 +430,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ATLAS_OUTPUT_DIR,
             USIM_H5_UPDATED,
             USIM_DATASTORE_H5,
-            "atlas_vehicles2_output",
+            ATLAS_VEHICLES2_OUTPUT,
         ],
         "dynamic_output_families": [],
         "optional": False,
@@ -479,7 +474,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             "households_asim_out",
             "persons_asim_out",
         ],
-        "optional_input_keys": [LINKSTATS_WARMSTART, ATLAS_VEHICLES2_INPUT],
+        "optional_input_keys": [LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT],
         "optional_output_keys": ["vehicles_beam_in"],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_postprocess"],

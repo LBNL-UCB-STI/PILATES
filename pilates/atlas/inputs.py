@@ -127,6 +127,40 @@ def build_atlas_inputs(
 
 
 _YEAR_SUFFIX = re.compile(r"_(\d{4})$")
+_ATLAS_SCENARIO_ALIASES = {
+    "baseline": "baseline",
+    "ess_cons": "ess_cons",
+    "ess_const_220_price": "ess_cons",
+    "zev_mandate": "zev_mandate",
+    "evmandforced2": "zev_mandate",
+}
+
+
+def _atlas_config_value(settings: Any, field_name: str) -> Optional[Any]:
+    atlas_cfg = getattr(settings, "atlas", None)
+    if atlas_cfg is None and isinstance(settings, dict):
+        atlas_cfg = settings.get("atlas")
+    if atlas_cfg is None:
+        return None
+    if isinstance(atlas_cfg, dict):
+        return atlas_cfg.get(field_name)
+    return getattr(atlas_cfg, field_name, None)
+
+
+def atlas_selected_scenario(settings: Any) -> Optional[str]:
+    """
+    Resolve the effective ATLAS scenario used for static input selection.
+
+    Prefer ``atlas.adscen`` because that is the scenario argument passed to the
+    ATLAS container. Fall back to ``atlas.scenario`` for configs that do not
+    populate ``adscen``.
+    """
+    adscen = _atlas_config_value(settings, "adscen")
+    scenario = _atlas_config_value(settings, "scenario")
+    raw_value = adscen if adscen not in (None, "") else scenario
+    if raw_value in (None, ""):
+        return None
+    return _ATLAS_SCENARIO_ALIASES.get(str(raw_value).strip().lower())
 
 
 def atlas_run_years(settings: PilatesConfig) -> Set[int]:
@@ -157,8 +191,7 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
     - unknown/no scenario falls back to all mapping files
     - year-stamped non-ADOPT files may be limited to configured ATLAS run years
     """
-    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
-    scenario_key = str(scenario_name).lower() if scenario_name else None
+    scenario_key = atlas_selected_scenario(settings)
 
     vehicle_type_mapping_by_scenario = {
         "baseline": "vehicle_type_mapping_baseline.csv",
