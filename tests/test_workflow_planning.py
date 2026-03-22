@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pilates.config.models import FullSkimsCreatorConfig, load_config
+from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
 from pilates.workflows.lineage_render import (
     render_plan_html,
     render_plan_json,
@@ -108,6 +109,37 @@ def test_static_execution_plan_threads_atlas_vehicles2_from_atlas_postprocess():
     assert vehicles2_artifacts
     assert all(artifact.producer_step_run_id is not None for artifact in vehicles2_artifacts)
     assert all("external" not in artifact.instance_key for artifact in vehicles2_artifacts)
+
+
+def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    final_skims_artifacts = [
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == FINAL_SKIMS_OMX and artifact.external
+    ]
+
+    assert len(final_skims_artifacts) == 1
+    artifact = final_skims_artifacts[0]
+    assert artifact.instance_key == f"external:{FINAL_SKIMS_OMX}"
+    assert artifact.year is None
+    assert artifact.forecast_year is None
+
+    consuming_edges = [
+        edge for edge in plan.edges if edge.source == artifact.id and edge.kind == "consumes"
+    ]
+    consuming_step_names = {
+        next(step.step_name for step in plan.step_runs if step.id == edge.target)
+        for edge in consuming_edges
+    }
+    assert {"urbansim_preprocess", "atlas_preprocess"} <= consuming_step_names
 
 
 def test_static_execution_plan_renders_mermaid_without_contract_gaps():

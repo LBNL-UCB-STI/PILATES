@@ -18,6 +18,7 @@ integration drift is caught and what the expected startup failure looks like.
 from __future__ import annotations
 
 import re
+from types import SimpleNamespace
 import pytest
 from consist import define_step
 
@@ -31,7 +32,9 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
+from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
+from pilates.workflows.outputs_base import required_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -261,3 +264,35 @@ def test_validate_workflow_step_contracts_accepts_rationalized_required_outputs_
             )
         ]
     )
+
+
+def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
+    """Runtime step launches must enforce required outputs, not the full declared schema."""
+
+    step_funcs = {
+        step.__consist_step__.model: step for step in _declared_schema_steps()
+    }
+
+    for step_name, outputs_class in step_shared.STEP_OUTPUTS_CLASSES.items():
+        declared = tuple(declared_outputs_for_step_outputs_class(outputs_class))
+        required = tuple(required_outputs_for_step_outputs_class(outputs_class))
+        if declared == required:
+            continue
+
+        step_func = step_funcs[step_name]
+        run_kwargs = _build_step_run_kwargs(
+            step=StepRef(
+                name=step_name,
+                step_func=step_func,
+                year=2023,
+                iteration=0,
+            ),
+            settings=SimpleNamespace(run=None),
+            state=SimpleNamespace(),
+            runtime_kwargs={},
+            stage_name="test_stage",
+            default_iteration=0,
+        )
+
+        assert tuple(run_kwargs["outputs"]) == required
+        assert set(declared) - set(run_kwargs["outputs"]) == set(declared) - set(required)

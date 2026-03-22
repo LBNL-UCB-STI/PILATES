@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 from pilates.activitysim.outputs import ActivitySimRunOutputs
 from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.runtime.scenario_runtime import SchemaCoupler
+from pilates.workflows.orchestration import StepRef
+from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
+from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps import make_activitysim_run_step
 
 
 def test_activitysim_run_outputs_expose_canonical_declared_outputs():
@@ -46,3 +52,29 @@ def test_activitysim_run_outputs_expose_required_output_subset():
     assert set(required) | set(ASIM_OPTIONAL_RUN_OUTPUT_KEYS) == set(
         ActivitySimRunOutputs.declared_output_keys()
     )
+
+
+def test_activitysim_run_stepref_uses_required_outputs_for_runtime_contract():
+    step_func = make_activitysim_run_step(
+        coupler=SchemaCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    step = StepRef(
+        name="activitysim_run",
+        step_func=step_func,
+        year=2023,
+        iteration=0,
+    )
+
+    run_kwargs = _build_step_run_kwargs(
+        step=step,
+        settings=SimpleNamespace(run=None),
+        state=SimpleNamespace(),
+        runtime_kwargs={},
+        stage_name="activity_demand_run",
+        default_iteration=0,
+    )
+
+    assert tuple(run_kwargs["outputs"]) == ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    assert "school_shadow_prices_asim_out" not in run_kwargs["outputs"]
+    assert "workplace_shadow_prices_asim_out" not in run_kwargs["outputs"]

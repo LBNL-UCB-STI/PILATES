@@ -7,10 +7,16 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from pilates.config.models import PilatesConfig, load_config
 from pilates.utils.io import compute_model_enabled_flags
+from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
+
+
+_RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS = {
+    FINAL_SKIMS_OMX,
+}
 
 
 def _slugify(value: str) -> str:
@@ -223,10 +229,15 @@ def _artifact_instance_key(
     *,
     step_run: Optional[PlannedStepRun],
     external: bool,
+    scope_external: bool = True,
 ) -> str:
     if external or step_run is None:
         prefix = "external"
-        suffix = _scope_suffix(step_run) if step_run is not None else ""
+        suffix = (
+            _scope_suffix(step_run)
+            if step_run is not None and scope_external
+            else ""
+        )
     else:
         prefix = step_run.step_name
         suffix = _scope_suffix(step_run)
@@ -242,9 +253,10 @@ def _artifact_label(
     external: bool,
     dynamic: bool,
     family: Optional[str],
+    scope_external: bool = True,
 ) -> str:
     parts = [canonical_key]
-    if step_run is not None:
+    if step_run is not None and (not external or scope_external):
         scope = _scope_suffix(step_run)
         if scope:
             parts.append(scope)
@@ -284,6 +296,11 @@ class _PlanBuilder:
         self._latest_artifact_by_dynamic_label: Dict[str, str] = {}
         self._artifacts_by_id: Dict[str, PlannedArtifact] = {}
         self._external_artifact_ids: Dict[str, str] = {}
+
+    def _scope_external_artifact(self, artifact_key: str, *, dynamic: bool) -> bool:
+        if dynamic:
+            return True
+        return artifact_key not in _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS
 
     def _build_metadata(self) -> Dict[str, Any]:
         years = _iter_planning_years(self.settings)
@@ -522,14 +539,17 @@ class _PlanBuilder:
         family: Optional[str],
         step_run: PlannedStepRun,
     ) -> str:
-        scope_parts = [
-            artifact_key,
-            str(step_run.year),
-            str(step_run.forecast_year),
-            str(step_run.iteration),
-            str(step_run.atlas_year),
-            str(dynamic),
-        ]
+        scope_external = self._scope_external_artifact(artifact_key, dynamic=dynamic)
+        scope_parts = [artifact_key, str(dynamic)]
+        if scope_external:
+            scope_parts.extend(
+                [
+                    str(step_run.year),
+                    str(step_run.forecast_year),
+                    str(step_run.iteration),
+                    str(step_run.atlas_year),
+                ]
+            )
         external_key = "|".join(scope_parts)
         artifact_id = self._external_artifact_ids.get(external_key)
         if artifact_id is not None:
@@ -539,6 +559,7 @@ class _PlanBuilder:
             artifact_key,
             step_run=step_run,
             external=True,
+            scope_external=scope_external,
         )
         artifact_id = self._artifact_id()
         artifact = PlannedArtifact(
@@ -550,15 +571,16 @@ class _PlanBuilder:
                 external=True,
                 dynamic=dynamic,
                 family=family,
+                scope_external=scope_external,
             ),
             instance_key=instance_key,
             artifact_key=artifact_key,
             canonical_key=artifact_key,
             producer_step_run_id=None,
-            year=step_run.year,
-            forecast_year=step_run.forecast_year,
-            iteration=step_run.iteration,
-            atlas_year=step_run.atlas_year,
+            year=step_run.year if scope_external else None,
+            forecast_year=step_run.forecast_year if scope_external else None,
+            iteration=step_run.iteration if scope_external else None,
+            atlas_year=step_run.atlas_year if scope_external else None,
             optional=optional,
             external=True,
             dynamic=dynamic,

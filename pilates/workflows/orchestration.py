@@ -43,8 +43,8 @@ from pilates.workflows.artifact_keys import (
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
-    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
+    required_outputs_for_step_outputs_class,
     step_output_mapping,
     serialize_step_outputs,
 )
@@ -245,9 +245,9 @@ def _build_step_run_kwargs(
         return [output for output in values if isinstance(output, str)]
 
     outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
-    canonical_outputs: list[str] = []
+    required_outputs: list[str] = []
     if outputs_class is not None:
-        canonical_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
+        required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
 
     resolved_required_outputs: Optional[Sequence[str]] = None
     if step.required_outputs is not None:
@@ -265,8 +265,10 @@ def _build_step_run_kwargs(
         )
         resolved_required_outputs = _normalize_output_keys(step.required_outputs)
     elif outputs_class is not None:
-        # Tracked steps use StepOutputs declarations as the canonical source.
-        resolved_required_outputs = canonical_outputs or None
+        # Tracked steps use StepOutputs required_outputs as the strict runtime
+        # output contract. declared_outputs remains available for schema/catalog
+        # publication without forcing every optional artifact to materialize.
+        resolved_required_outputs = required_outputs or None
     elif step_meta is not None:
         # Metadata-only steps remain supported for non-catalog call sites.
         resolved_required_outputs = _normalize_output_keys(
