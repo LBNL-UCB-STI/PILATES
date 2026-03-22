@@ -270,12 +270,16 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
     logged = []
+
+    def _capture_log_and_set_output(**kwargs):
+        logged.append(kwargs["key"])
+        coupler.set(kwargs["key"], SimpleNamespace(path=kwargs["path"]))
+        return SimpleNamespace(hash="hash_households_out")
+
     monkeypatch.setattr(
-        activitysim_steps.cr,
-        "log_output",
-        lambda *args, **kwargs: (
-            logged.append(kwargs["key"]) or SimpleNamespace(hash="hash_households_out")
-        ),
+        activitysim_steps,
+        "log_and_set_output",
+        _capture_log_and_set_output,
     )
 
     run_step = activitysim_steps.make_activitysim_run_step(
@@ -287,6 +291,10 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
     run_outputs = outputs_holder.activitysim_run
     assert isinstance(run_outputs, ActivitySimRunOutputs)
     assert logged == ["households_asim_out"]
+    assert (
+        artifact_to_path(coupler.get("households_asim_out"), workspace)
+        == str(asim_output_dir / "households.parquet")
+    )
     assert run_outputs.raw_output_hashes["households_asim_out_temp"] == "hash_households_out"
     assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
     assert run_outputs.source_input_paths[ASIM_HOUSEHOLDS_IN] == households
@@ -300,6 +308,76 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
         ZARR_SKIMS: "hash_zarr_compile",
         ASIM_SHARROW_CACHE_DIR: "hash_numba_cache",
     }
+
+
+def test_activitysim_run_publishes_optional_outputs_to_coupler(
+    monkeypatch, tmp_path: Path
+) -> None:
+    asim_output_dir = tmp_path / "asim_output"
+    asim_output_dir.mkdir(parents=True)
+
+    asim_mutable_dir = tmp_path / "asim_mutable"
+    asim_mutable_dir.mkdir(parents=True)
+    land_use = asim_mutable_dir / "land_use.csv"
+    households = asim_mutable_dir / "households.csv"
+    persons = asim_mutable_dir / "persons.csv"
+    for path in (land_use, households, persons):
+        path.write_text("dummy")
+
+    workspace = _DummyWorkspace(tmp_path, asim_output_dir)
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, forecast_year=2020, iteration=0)
+    coupler = _DummyCoupler()
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_mutable_dir,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+    )
+
+    class _RunRunner:
+        def run(self, inputs, workspace, *, extra_inputs=None):
+            output_path = workspace.get_asim_output_dir() + "/school_destination_size.parquet"
+            Path(output_path).write_text("out")
+            return ActivitySimRunOutputs(
+                output_dir=Path(workspace.get_asim_output_dir()),
+                raw_outputs={
+                    "school_destination_size_asim_out_temp": Path(output_path),
+                },
+            )
+
+    def _get_runner(self, model_name, state=None, *_args, **_kwargs):
+        if model_name != "activitysim":
+            raise AssertionError(f"Unexpected model_name: {model_name}")
+        return _RunRunner()
+
+    monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
+
+    logged = []
+
+    def _capture_log_and_set_output(**kwargs):
+        logged.append(kwargs["key"])
+        coupler.set(kwargs["key"], SimpleNamespace(path=kwargs["path"]))
+        return SimpleNamespace(hash="hash_school_destination")
+
+    monkeypatch.setattr(
+        activitysim_steps,
+        "log_and_set_output",
+        _capture_log_and_set_output,
+    )
+
+    run_step = activitysim_steps.make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+    )
+    run_step(settings=settings, state=state, workspace=workspace)
+
+    assert logged == ["school_destination_size_asim_out"]
+    assert (
+        artifact_to_path(coupler.get("school_destination_size_asim_out"), workspace)
+        == str(asim_output_dir / "school_destination_size.parquet")
+    )
 
 
 def test_activitysim_compile_passes_typed_preprocess_outputs_to_runner(

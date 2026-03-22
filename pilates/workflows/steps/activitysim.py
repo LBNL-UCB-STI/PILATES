@@ -1203,10 +1203,12 @@ def make_activitysim_run_step(
 
         for short_name, path, description in outputs._iter_record_items():
             output_key = _canonical_activitysim_run_output_key(short_name)
-            artifact = cr.log_output(
-                str(path),
+            artifact = log_and_set_output(
                 key=output_key,
+                path=str(path),
                 description=description.replace(short_name, output_key),
+                coupler=coupler,
+                step_name="activitysim_run",
                 **_activitysim_output_facet_meta(
                     output_key,
                     year=forecast_year,

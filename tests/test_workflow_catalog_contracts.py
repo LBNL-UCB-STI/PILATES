@@ -246,6 +246,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "optional_input_keys": (
                 *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+                USIM_DATASTORE_BASE_H5,
             ),
             "optional_output_keys": (
                 *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
@@ -450,7 +451,10 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             USIM_FORECAST_OUTPUT,
             *ActivitySimRunOutputs.required_output_keys(),
         ],
-        "optional_input_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
+        "optional_input_keys": [
+            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            USIM_DATASTORE_BASE_H5,
+        ],
         "optional_output_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_run"],

@@ -427,7 +427,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ASIM_OUTPUT_DIR,
             *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
         ),
-        optional_input_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+        optional_input_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, USIM_DATASTORE_BASE_H5),
         optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         depends_on=("activitysim_run",),
         holder_inputs=("activitysim_run",),
