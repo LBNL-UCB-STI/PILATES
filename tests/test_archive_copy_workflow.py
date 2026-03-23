@@ -255,6 +255,23 @@ def test_archive_copy_dedupes_same_signature(monkeypatch, tmp_path):
     assert len(copy_calls) == 1
 
 
+def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / ".workflow" / "year_2018_iteration_0.yaml"
+    _write_file(source, "manifest")
+
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+
+    archived = archive_root / ".workflow" / "year_2018_iteration_0.yaml"
+    assert archived.exists()
+    assert archived.read_text() == "manifest"
+
+
 def test_flush_archive_queue_can_fail_on_timeout():
     ch._archive_queue = queue.Queue()
     ch._archive_queue.put(("pending",))

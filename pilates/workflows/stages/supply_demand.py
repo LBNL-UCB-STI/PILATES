@@ -8,7 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import enqueue_archive_copy, flush_archive_queue
+from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.orchestration import ManifestConfig
 from pilates.workflows.steps import StepOutputsHolder
@@ -192,12 +192,12 @@ def run_supply_demand_stage(
             ).previous_beam_outputs
 
         if os.path.exists(manifest_path):
-            enqueue_archive_copy(
+            archive_copy_now(
                 key="workflow_manifest",
                 path=manifest_path,
             )
         # Year/iteration boundary durability checkpoint for restart artifacts.
-        flush_archive_queue(timeout=300, fail_on_timeout=True)
+        flush_archive_queue(timeout=300, fail_on_timeout=False)
 
         if on_iteration_boundary is not None:
             on_iteration_boundary(i)

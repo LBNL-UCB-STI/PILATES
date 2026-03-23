@@ -144,6 +144,27 @@ def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int,
     return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
 
 
+def _copy_archive_payload(
+    *,
+    key: str,
+    src: str,
+    dest: str,
+    is_dir: bool,
+    signature: Optional[tuple[int, int, bool]],
+) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if is_dir:
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dest)
+    if signature is not None:
+        with _archive_lock:
+            if _archive_inflight_signature.get(dest) == signature:
+                _archive_inflight_signature.pop(dest, None)
+            _archive_last_copied_signature[dest] = signature
+    logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+
+
 def _archive_worker() -> None:
     while True:
         task = _archive_queue.get() if _archive_queue is not None else None
@@ -153,17 +174,13 @@ def _archive_worker() -> None:
             break
         key, src, dest, is_dir, signature = task
         try:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if is_dir:
-                shutil.copytree(src, dest, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dest)
-            if signature is not None:
-                with _archive_lock:
-                    if _archive_inflight_signature.get(dest) == signature:
-                        _archive_inflight_signature.pop(dest, None)
-                    _archive_last_copied_signature[dest] = signature
-            logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+            _copy_archive_payload(
+                key=key,
+                src=src,
+                dest=dest,
+                is_dir=is_dir,
+                signature=signature,
+            )
         except Exception as exc:
             if signature is not None:
                 with _archive_lock:
@@ -321,6 +338,65 @@ def enqueue_archive_copy(
     if not resolved:
         return
     _enqueue_archive_copy(key, resolved)
+
+
+def archive_copy_now(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> bool:
+    """
+    Synchronously mirror a restart-critical artifact into the archive run dir.
+    """
+    if not _archive_enabled():
+        return False
+    if path is None:
+        return False
+
+    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
+    if not resolved or "://" in resolved:
+        return False
+    if not os.path.exists(resolved):
+        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
+        return False
+
+    is_dir = os.path.isdir(resolved)
+    if is_dir and not _archive_dir_allowed(key):
+        logger.warning(
+            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
+            resolved,
+            key,
+        )
+        return False
+
+    roots = _archive_roots()
+    if roots is None:
+        return False
+    local_root, archive_root = roots
+    dest = _resolve_archive_path(resolved, local_root, archive_root)
+    if dest is None or dest == resolved:
+        return False
+
+    signature = _archive_path_signature(resolved, is_dir)
+    if signature is not None:
+        with _archive_lock:
+            if _archive_last_copied_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping synchronous copy (already copied): %s (key=%s)",
+                    resolved,
+                    key,
+                )
+                return True
+
+    _copy_archive_payload(
+        key=key,
+        src=resolved,
+        dest=dest,
+        is_dir=is_dir,
+        signature=signature,
+    )
+    return True
 
 
 def flush_archive_queue(

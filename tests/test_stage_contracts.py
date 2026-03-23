@@ -472,12 +472,12 @@ def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch
     from pilates.workflows.stages import land_use as land_use_stage
     from pilates.workflows.steps import StepOutputsHolder
 
-    enqueue_calls = []
+    archive_now_calls = []
     flush_calls = []
     monkeypatch.setattr(
         land_use_stage,
-        "enqueue_archive_copy",
-        lambda **kwargs: enqueue_calls.append(kwargs),
+        "archive_copy_now",
+        lambda **kwargs: archive_now_calls.append(kwargs),
     )
     monkeypatch.setattr(
         land_use_stage,
@@ -496,7 +496,7 @@ def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch
         outputs_holder_year=outputs_holder,
     )
 
-    keys = {call["key"] for call in enqueue_calls}
+    keys = {call["key"] for call in archive_now_calls}
     assert USIM_DATASTORE_BASE_H5 in keys
     assert USIM_DATASTORE_CURRENT_H5 in keys
     assert any(key.startswith("usim_year_output_h5_") for key in keys)
@@ -511,11 +511,11 @@ def test_land_use_stage_archives_forecast_output_using_state_forecast_year(
     from pilates.workflows.stages import land_use as land_use_stage
     from pilates.workflows.steps import StepOutputsHolder
 
-    enqueue_calls = []
+    archive_now_calls = []
     monkeypatch.setattr(
         land_use_stage,
-        "enqueue_archive_copy",
-        lambda **kwargs: enqueue_calls.append(kwargs),
+        "archive_copy_now",
+        lambda **kwargs: archive_now_calls.append(kwargs),
     )
     monkeypatch.setattr(
         land_use_stage,
@@ -545,7 +545,7 @@ def test_land_use_stage_archives_forecast_output_using_state_forecast_year(
 
     forecast_archive = next(
         call
-        for call in enqueue_calls
+        for call in archive_now_calls
         if call["key"] == f"usim_year_output_h5_{stage_env['state'].forecast_year}"
     )
     assert forecast_archive["path"] == str(forecast_path)
@@ -599,7 +599,7 @@ def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_pa
     monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)
     monkeypatch.setattr(
         land_use_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -689,12 +689,12 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
         year_dir.mkdir(parents=True, exist_ok=True)
         _write_file(year_dir / "vehicles_output.RData")
 
-    enqueue_calls = []
+    archive_now_calls = []
     flush_calls = []
     monkeypatch.setattr(
         vo_stage,
-        "enqueue_archive_copy",
-        lambda **kwargs: enqueue_calls.append(kwargs),
+        "archive_copy_now",
+        lambda **kwargs: archive_now_calls.append(kwargs),
     )
     monkeypatch.setattr(
         vo_stage,
@@ -717,12 +717,12 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
         assert any(
             call["key"] == f"atlas_input_year_dir_{atlas_year}"
             and str(call["path"]).endswith(f"year{atlas_year}")
-            for call in enqueue_calls
+            for call in archive_now_calls
         )
         assert any(
             call["key"] == f"atlas_rdata_{atlas_year}"
             and str(call["path"]).endswith("vehicles_output.RData")
-            for call in enqueue_calls
+            for call in archive_now_calls
         )
 
 
@@ -774,7 +774,7 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     state.forecast_year = state.year + 4  # 2017, 2019, 2021
     coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
-    monkeypatch.setattr(vo_stage, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
     monkeypatch.setattr(
         vo_stage,
         "flush_archive_queue",
@@ -1147,12 +1147,12 @@ def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatc
 
     manifest_path = tmp_path / "manifest_boundary.yaml"
 
-    enqueue_calls = []
+    archive_now_calls = []
     flush_calls = []
     monkeypatch.setattr(
         sd_stage,
-        "enqueue_archive_copy",
-        lambda **kwargs: enqueue_calls.append(kwargs),
+        "archive_copy_now",
+        lambda **kwargs: archive_now_calls.append(kwargs),
     )
     monkeypatch.setattr(
         sd_stage,
@@ -1174,7 +1174,7 @@ def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatc
     assert manifest_path.exists()
     assert any(
         call["key"] == "workflow_manifest" and Path(call["path"]) == manifest_path
-        for call in enqueue_calls
+        for call in archive_now_calls
     )
     assert flush_calls == [300]
 

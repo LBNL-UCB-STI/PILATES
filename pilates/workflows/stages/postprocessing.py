@@ -77,4 +77,4 @@ def run_postprocessing_stage(
         iteration=getattr(state, "iteration", 0),
         manifest_config=manifest_config,
     )
-    flush_archive_queue(timeout=300, fail_on_timeout=True)
+    flush_archive_queue(timeout=300, fail_on_timeout=False)

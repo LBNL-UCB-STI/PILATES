@@ -10,7 +10,7 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
-    enqueue_archive_copy,
+    archive_copy_now,
     flush_archive_queue,
 )
 from pilates.atlas.inputs import (
@@ -421,7 +421,7 @@ def run_vehicle_ownership_stage(
 
             atlas_input_root = workspace.get_atlas_mutable_input_dir()
             atlas_year_input_dir = os.path.join(atlas_input_root, f"year{atlas_year}")
-            enqueue_archive_copy(
+            archive_copy_now(
                 key=f"atlas_input_year_dir_{atlas_year}",
                 path=atlas_year_input_dir,
             )
@@ -431,12 +431,12 @@ def run_vehicle_ownership_stage(
                 workspace.get_atlas_output_dir(),
             ):
                 for filename in ("vehicles_output.RData", "households_output.RData"):
-                    enqueue_archive_copy(
+                    archive_copy_now(
                         key=f"atlas_rdata_{atlas_year}",
                         path=os.path.join(base_dir, filename),
                     )
             # Ensure year N artifacts are durable before year N+1 consumes them.
-            flush_archive_queue(timeout=300, fail_on_timeout=True)
+            flush_archive_queue(timeout=300, fail_on_timeout=False)
         except Exception:
             from pilates.utils.failure_handling import persist_state_on_error
 
