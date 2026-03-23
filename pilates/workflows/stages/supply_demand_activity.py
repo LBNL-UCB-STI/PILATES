@@ -21,9 +21,9 @@ from pilates.workflows.binding import (
 )
 from pilates.workflows.orchestration import (
     ManifestConfig,
+    StageRunner,
     StepRef,
     run_workflow,
-    run_manifested_steps,
 )
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.step_io import build_outputs
@@ -91,36 +91,6 @@ def _should_force_restart_activitysim_compile(state: WorkflowState) -> bool:
     return not bool(getattr(state, "_restart_activitysim_compile_done", False))
 
 
-def _run_supply_demand_manifested_steps(
-    *,
-    stage_name: str,
-    steps: list[StepRef],
-    outputs_holder: StepOutputsHolder,
-    manifest_config: ManifestConfig,
-    scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    year: int,
-    iteration: int,
-) -> None:
-    """Run manifest-backed steps with shared supply-demand stage context."""
-    run_manifested_steps(
-        stage_name=stage_name,
-        steps=steps,
-        outputs_holder=outputs_holder,
-        manifest_config=manifest_config,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        name_suffix=f"{year}_iter{iteration}",
-        iteration=iteration,
-    )
-
-
 def _run_activity_demand_phase(
     *,
     scenario: ScenarioWithCoupler,
@@ -141,6 +111,31 @@ def _run_activity_demand_phase(
     when resuming after compilation.
     """
     formatted_print("ACTIVITY DEMAND MODEL")
+    stage_runner = StageRunner(
+        stage_name="activity_demand",
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix=f"{inputs.year}_iter{inputs.iteration}",
+        iteration=inputs.iteration,
+        manifest_config=manifest_config,
+        run_workflow_fn=run_workflow,
+    )
+    compile_runner = StageRunner(
+        stage_name="activity_demand_compile",
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix=str(inputs.year),
+        iteration=-1,
+        run_workflow_fn=run_workflow,
+    )
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
@@ -162,8 +157,9 @@ def _run_activity_demand_phase(
             "(explicit, coupler, or fallback), but none were available."
         )
 
-    preprocess_specs = [
-        StepRef(
+    stage_runner.run_step(
+        stage_name="activity_demand_preprocess",
+        step=StepRef(
             name="activitysim_preprocess",
             step_func=make_activitysim_preprocess_step(
                 coupler=coupler,
@@ -171,20 +167,7 @@ def _run_activity_demand_phase(
             ),
             binding=preprocess_binding,
             year=state.forecast_year,
-        )
-    ]
-    _run_supply_demand_manifested_steps(
-        stage_name="activity_demand_preprocess",
-        steps=preprocess_specs,
-        outputs_holder=outputs_holder,
-        manifest_config=manifest_config,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        year=inputs.year,
-        iteration=inputs.iteration,
+        ),
     )
 
     def _resolved_existing_zarr_skims_path() -> Optional[str]:
@@ -335,30 +318,20 @@ def _run_activity_demand_phase(
             coupler=coupler,
             outputs_holder=outputs_holder,
         )
-        run_workflow(
+        compile_runner.run_step(
             stage_name="activity_demand_compile",
-            steps=[
-            StepRef(
+            step=StepRef(
                 name="activitysim_compile",
                 step_func=activitysim_compile_step,
                 binding=compile_binding,
                 output_paths=expected_compile_outputs or None,
                 cache_mode="overwrite",
                 load_inputs=False,
-                    phase="compile",
-                    model="activitysim_compile",
-                    year=state.forecast_year,
-                    iteration=-1,
-                )
-            ],
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            name_suffix=str(inputs.year),
-            iteration=-1,
+                phase="compile",
+                model="activitysim_compile",
+                year=state.forecast_year,
+                iteration=-1,
+            ),
             runtime_kwargs_extra={
                 "expected_outputs": expected_compile_outputs,
             },
@@ -395,8 +368,9 @@ def _run_activity_demand_phase(
 
     optional_run_keys = [ASIM_SHARROW_CACHE_DIR] if requires_numba_cache else []
 
-    activitysim_run_specs = [
-        StepRef(
+    stage_runner.run_step(
+        stage_name="activity_demand_run",
+        step=StepRef(
             name="activitysim_run",
             step_func=make_activitysim_run_step(
                 coupler=coupler,
@@ -414,19 +388,6 @@ def _run_activity_demand_phase(
             ),
             year=state.forecast_year,
         ),
-    ]
-    _run_supply_demand_manifested_steps(
-        stage_name="activity_demand_run",
-        steps=activitysim_run_specs,
-        outputs_holder=outputs_holder,
-        manifest_config=manifest_config,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        year=inputs.year,
-        iteration=inputs.iteration,
     )
 
     upstream_run = outputs_holder.activitysim_run
@@ -456,8 +417,9 @@ def _run_activity_demand_phase(
         year=inputs.year,
     )
 
-    activitysim_postprocess_specs = [
-        StepRef(
+    stage_runner.run_step(
+        stage_name="activity_demand_postprocess",
+        step=StepRef(
             name="activitysim_postprocess",
             step_func=make_activitysim_postprocess_step(
                 coupler=coupler,
@@ -465,20 +427,7 @@ def _run_activity_demand_phase(
             ),
             binding=activitysim_postprocess_binding,
             year=state.forecast_year,
-        )
-    ]
-    _run_supply_demand_manifested_steps(
-        stage_name="activity_demand_postprocess",
-        steps=activitysim_postprocess_specs,
-        outputs_holder=outputs_holder,
-        manifest_config=manifest_config,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        year=inputs.year,
-        iteration=inputs.iteration,
+        ),
     )
 
     state.complete_step(

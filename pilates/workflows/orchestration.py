@@ -383,6 +383,75 @@ class ManifestConfig:
     path: Path
 
 
+@dataclass(frozen=True)
+class StageRunner:
+    """
+    Thin helper for running multiple step slices inside one stage context.
+
+    This keeps stage modules focused on sequencing and binding decisions while
+    preserving their existing `run_workflow(...)` patch points.
+    """
+
+    stage_name: str
+    scenario: Any
+    state: Any
+    settings: Any
+    workspace: Any
+    coupler: CouplerProtocol
+    outputs_holder: StepOutputsHolder
+    name_suffix: str
+    iteration: int = 0
+    manifest_config: Optional[ManifestConfig] = None
+    runtime_kwargs_extra: Optional[Mapping[str, Any]] = None
+    run_workflow_fn: Optional[Callable[..., None]] = None
+
+    def run(
+        self,
+        *,
+        steps: Sequence[StepRef],
+        stage_name: Optional[str] = None,
+        runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        merged_runtime_kwargs: Dict[str, Any] = dict(self.runtime_kwargs_extra or {})
+        if runtime_kwargs_extra:
+            merged_runtime_kwargs.update(runtime_kwargs_extra)
+        runner = self.run_workflow_fn or run_workflow
+        runner(
+            stage_name=stage_name or self.stage_name,
+            steps=steps,
+            scenario=self.scenario,
+            state=self.state,
+            settings=self.settings,
+            workspace=self.workspace,
+            coupler=self.coupler,
+            outputs_holder=self.outputs_holder,
+            name_suffix=self.name_suffix,
+            iteration=self.iteration,
+            runtime_kwargs_extra=merged_runtime_kwargs or None,
+            manifest_config=self.manifest_config,
+        )
+
+    def run_step(
+        self,
+        *,
+        step: StepRef,
+        stage_name: Optional[str] = None,
+        runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
+    ) -> None:
+        """Execute one step without an intermediate single-item steps list."""
+        self.run(
+            steps=[step],
+            stage_name=stage_name,
+            runtime_kwargs_extra=runtime_kwargs_extra,
+        )
+
+
+def _resolved_step_inputs(step: StepRef) -> Optional[Mapping[str, Any]]:
+    if step.binding is not None:
+        return getattr(step.binding, "inputs", None)
+    return step.inputs
+
+
 def _publish_recovered_outputs(
     *,
     step_func: Callable[..., Any],
@@ -612,9 +681,7 @@ def run_manifested_steps(
                 state=state,
                 workspace=workspace,
                 coupler=coupler,
-                step_inputs=(
-                    spec.binding.inputs if spec.binding is not None else spec.inputs
-                ),
+                step_inputs=_resolved_step_inputs(spec),
                 cached_outputs=getattr(step_result, "outputs", None),
                 run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
@@ -747,7 +814,7 @@ def run_workflow(
                 state=state,
                 workspace=workspace,
                 coupler=coupler,
-                step_inputs=spec.inputs,
+                step_inputs=_resolved_step_inputs(spec),
                 cached_outputs=getattr(step_result, "outputs", None),
                 run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,

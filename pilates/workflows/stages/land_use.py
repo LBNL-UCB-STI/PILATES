@@ -20,7 +20,12 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
-from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
+from pilates.workflows.orchestration import (
+    ManifestConfig,
+    StageRunner,
+    StepRef,
+    run_workflow,
+)
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
@@ -87,6 +92,18 @@ def run_land_use_stage(
     manifest_config = ManifestConfig(
         path=_build_land_use_manifest_path(workspace=workspace, year=year)
     )
+    stage_runner = StageRunner(
+        stage_name="land_use",
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder_year,
+        name_suffix=str(year),
+        manifest_config=manifest_config,
+        run_workflow_fn=run_workflow,
+    )
     preprocess_inputs = dict(usim_inputs)
     if preprocess_inputs.get(USIM_DATASTORE_BASE_H5) == preprocess_inputs.get(
         USIM_DATASTORE_CURRENT_H5
@@ -106,25 +123,12 @@ def run_land_use_stage(
         coupler=coupler,
         outputs_holder=outputs_holder_year,
     )
-    preprocess_steps = [
-        StepRef(
+    stage_runner.run_step(
+        step=StepRef(
             name="urbansim_preprocess",
             step_func=preprocess_step,
             binding=preprocess_binding,
-        ),
-    ]
-
-    run_workflow(
-        stage_name="land_use",
-        steps=preprocess_steps,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder_year,
-        name_suffix=str(year),
-        manifest_config=manifest_config,
+        )
     )
 
     upstream_preprocess = outputs_holder_year.urbansim_preprocess
@@ -176,18 +180,7 @@ def run_land_use_stage(
         ),
     ]
 
-    run_workflow(
-        stage_name="land_use",
-        steps=run_steps,
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder_year,
-        name_suffix=str(year),
-        manifest_config=manifest_config,
-    )
+    stage_runner.run(steps=run_steps)
 
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
     run_outputs = outputs_holder_year.urbansim_run

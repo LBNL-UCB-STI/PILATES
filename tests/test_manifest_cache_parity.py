@@ -3,6 +3,8 @@ from types import SimpleNamespace
 
 import yaml
 import pytest
+from consist import define_step
+from consist.types import BindingResult
 
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -35,6 +37,7 @@ from pilates.workflows.orchestration import (
     _recover_step_outputs,
     _update_coupler_from_outputs,
     run_manifested_steps,
+    run_workflow,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import (
@@ -95,6 +98,14 @@ class DummyScenario:
         runtime_kwargs = kwargs["execution_options"].runtime_kwargs
         fn(**runtime_kwargs)
         return SimpleNamespace(cache_hit=False)
+
+
+class _BindingEnvelope:
+    def __init__(self, inputs):
+        self.inputs = inputs
+
+    def to_binding_result(self) -> BindingResult:
+        return BindingResult(inputs=self.inputs)
 
 
 def _write_file(path: Path) -> None:
@@ -236,6 +247,45 @@ def _run_step_mode(
             coupler_keys=coupler_keys,
         ),
     }
+
+
+def test_run_workflow_cache_recovery_uses_binding_inputs_for_non_manifested_steps(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    @define_step(model="dummy_binding_step")
+    def _dummy_step(settings, state, workspace):
+        return None
+
+    def _fake_recover_step_outputs(*, step_inputs=None, **_kwargs):
+        captured["step_inputs"] = step_inputs
+        return object()
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_step_outputs",
+        _fake_recover_step_outputs,
+    )
+
+    run_workflow(
+        stage_name="dummy_stage",
+        steps=[
+            StepRef(
+                name="dummy_binding_step",
+                step_func=_dummy_step,
+                binding=_BindingEnvelope({"artifact_a": "value-a"}),
+            )
+        ],
+        scenario=DummyScenario(cache_hit=True),
+        state=SimpleNamespace(year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=DummyWorkspace(tmp_path),
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="dummy",
+    )
+
+    assert captured["step_inputs"] == {"artifact_a": "value-a"}
 
 
 def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_manifest(

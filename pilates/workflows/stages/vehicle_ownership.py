@@ -20,7 +20,12 @@ from pilates.atlas.inputs import (
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
+from pilates.workflows.orchestration import (
+    ManifestConfig,
+    StageRunner,
+    StepRef,
+    run_workflow,
+)
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_atlas_postprocess_step,
@@ -368,45 +373,34 @@ def run_vehicle_ownership_stage(
                 atlas_year=atlas_year,
             )
         )
+        atlas_stage_runner = StageRunner(
+            stage_name="atlas",
+            scenario=scenario,
+            state=atlas_state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            outputs_holder=outputs_holder_atlas,
+            name_suffix=str(atlas_year),
+            manifest_config=atlas_manifest_config,
+            run_workflow_fn=run_workflow,
+        )
 
         try:
-            run_workflow(
-                stage_name="atlas",
-                steps=preprocess_steps,
-                scenario=scenario,
-                state=atlas_state,
-                settings=settings,
-                workspace=workspace,
-                coupler=coupler,
-                outputs_holder=outputs_holder_atlas,
-                name_suffix=str(atlas_year),
-                manifest_config=atlas_manifest_config,
-            )
+            atlas_stage_runner.run(steps=preprocess_steps)
 
             upstream_run = outputs_holder_atlas.atlas_run
             if upstream_run is None:
                 raise RuntimeError("ATLAS run must complete before postprocess")
 
-            postprocess_steps = [
-                StepRef(
+            atlas_stage_runner.run_step(
+                step=StepRef(
                     name="atlas_postprocess",
                     step_func=make_atlas_postprocess_step(
                         coupler=coupler,
                         outputs_holder=outputs_holder_atlas,
                     ),
                 )
-            ]
-            run_workflow(
-                stage_name="atlas",
-                steps=postprocess_steps,
-                scenario=scenario,
-                state=atlas_state,
-                settings=settings,
-                workspace=workspace,
-                coupler=coupler,
-                outputs_holder=outputs_holder_atlas,
-                name_suffix=str(atlas_year),
-                manifest_config=atlas_manifest_config,
             )
 
             atlas_input_root = workspace.get_atlas_mutable_input_dir()

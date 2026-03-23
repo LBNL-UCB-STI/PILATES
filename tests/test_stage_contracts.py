@@ -70,6 +70,8 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workspace import Workspace
+from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
+from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.supply_demand import (
@@ -181,6 +183,43 @@ def _build_settings(tmp_path: Path):
     with config_path.open("w") as handle:
         yaml.safe_dump(config, handle)
     return load_config(str(config_path))
+
+
+def test_stage_runner_run_step_forwards_single_step_context():
+    captured = {}
+    step = StepRef(name="unit_step", step_func=lambda **_kwargs: None)
+    manifest_config = ManifestConfig(path=Path("/tmp/test-stage-runner.yaml"))
+
+    def _fake_run_workflow(**kwargs):
+        captured.update(kwargs)
+
+    runner = StageRunner(
+        stage_name="unit_stage",
+        scenario=object(),
+        state=object(),
+        settings=object(),
+        workspace=object(),
+        coupler=object(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="phase3",
+        iteration=7,
+        manifest_config=manifest_config,
+        runtime_kwargs_extra={"base": "value"},
+        run_workflow_fn=_fake_run_workflow,
+    )
+
+    runner.run_step(
+        step=step,
+        stage_name="override_stage",
+        runtime_kwargs_extra={"extra": "value"},
+    )
+
+    assert captured["stage_name"] == "override_stage"
+    assert captured["steps"] == [step]
+    assert captured["name_suffix"] == "phase3"
+    assert captured["iteration"] == 7
+    assert captured["manifest_config"] == manifest_config
+    assert captured["runtime_kwargs_extra"] == {"base": "value", "extra": "value"}
 
 
 @pytest.fixture
