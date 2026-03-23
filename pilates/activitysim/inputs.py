@@ -18,10 +18,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     ZARR_SKIMS,
 )
+from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
 from pilates.workflows.input_resolution import (
-    first_resolved_key,
-    resolve_preferred_step_input,
     resolved_value_for_key,
+    selected_candidate_key,
 )
 
 if TYPE_CHECKING:
@@ -108,19 +108,30 @@ def build_activitysim_inputs(
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 
-    usim_resolution = resolve_preferred_step_input(
-        preferred_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+    usim_resolution = build_binding_plan(
+        step_name="activitysim_input_selection",
         coupler=coupler,
         explicit_inputs=usim_inputs,
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
+                required=True,
+                preferred_keys=(
+                    USIM_DATASTORE_CURRENT_H5,
+                    USIM_DATASTORE_BASE_H5,
+                ),
+            ),
+        ),
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
     )
-    selected_usim_key = first_resolved_key(
+    selected_usim_key = selected_candidate_key(
         usim_resolution,
-        [USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        USIM_DATASTORE_CURRENT_H5,
     )
     if selected_usim_key is not None:
         usim_value = resolved_value_for_key(
             resolved=usim_resolution,
-            key=selected_usim_key,
+            key=USIM_DATASTORE_CURRENT_H5,
             coupler=coupler,
         )
         if usim_value is not None:

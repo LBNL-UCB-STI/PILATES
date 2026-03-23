@@ -446,6 +446,7 @@ def build_binding_plan(
     coupler: Optional[CouplerProtocol] = None,
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
+    artifact_rules: Optional[Iterable[ArtifactBindingRule]] = None,
     required_keys: Optional[Iterable[str]] = None,
     optional_keys: Optional[Iterable[str]] = None,
     output_paths: Optional[Mapping[str, Any]] = None,
@@ -457,6 +458,8 @@ def build_binding_plan(
 ) -> BindingPlan:
     spec = binding_spec_for_step_name(step_name)
     rule_lookup = _binding_rule_lookup(spec)
+    for rule in artifact_rules or ():
+        rule_lookup[rule.semantic_key] = rule
     if year is None and state is not None:
         year = getattr(state, "year", None)
 
@@ -465,7 +468,7 @@ def build_binding_plan(
         if required_keys is not None
         else (
             rule.semantic_key
-            for rule in (spec.artifact_rules if spec is not None else ())
+            for rule in rule_lookup.values()
             if rule.required
         )
     )
@@ -474,7 +477,7 @@ def build_binding_plan(
         if optional_keys is not None
         else (
             rule.semantic_key
-            for rule in (spec.artifact_rules if spec is not None else ())
+            for rule in rule_lookup.values()
             if not rule.required
         )
     )

@@ -19,6 +19,7 @@ from pilates.workflows.artifact_keys import (
     USIM_H5_UPDATED,
 )
 from pilates.workflows.binding import (
+    ArtifactBindingRule,
     BindingPlan,
     binding_spec_for_step_name,
     build_binding_plan,
@@ -142,6 +143,31 @@ def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider
     assert plan.input_keys == ["asim_land_use_in"]
     assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/input.h5"
     assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
+    assert not plan.missing_required
+
+
+def test_build_binding_plan_supports_ad_hoc_preferred_key_rules():
+    plan = build_binding_plan(
+        step_name="activitysim_input_selection",
+        explicit_inputs={USIM_DATASTORE_BASE_H5: "/tmp/base.h5"},
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
+                required=True,
+                preferred_keys=(
+                    USIM_DATASTORE_CURRENT_H5,
+                    USIM_DATASTORE_BASE_H5,
+                ),
+            ),
+        ),
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+    )
+
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/base.h5"
+    assert (
+        plan.metadata["selected_key_by_semantic_key"][USIM_DATASTORE_CURRENT_H5]
+        == USIM_DATASTORE_BASE_H5
+    )
     assert not plan.missing_required
 
 
