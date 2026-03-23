@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 """
 Workflow binding-layer data structures.
@@ -207,6 +208,80 @@ class BindingPlan:
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 
 
+def _archive_fallback_path(
+    *,
+    state: Any,
+    workspace: Any,
+    local_path: Path,
+) -> Optional[Path]:
+    run_info_path = getattr(state, "run_info_path", None)
+    full_path = getattr(workspace, "full_path", None)
+    if not run_info_path or full_path is None:
+        return None
+    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
+    local_root = Path(full_path).expanduser().resolve()
+    try:
+        rel = local_path.expanduser().resolve().relative_to(local_root)
+    except Exception:
+        return None
+    return archive_run_dir / rel
+
+
+def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
+    for path in paths:
+        if path is not None and path.exists():
+            return path
+    return None
+
+
+def _urbansim_datastore_candidates_for_year(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    year: Optional[int],
+) -> Optional[Mapping[str, Any]]:
+    if settings is None or state is None or workspace is None or year is None:
+        return None
+    get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    is_start_year = getattr(state, "is_start_year", None)
+    if not callable(get_usim_dir) or not callable(is_start_year):
+        return None
+
+    from pilates.urbansim import postprocessor as usim_post
+
+    usim_data_dir = Path(get_usim_dir())
+    input_path = usim_data_dir / usim_post.get_usim_datastore_fname(settings, io="input")
+    input_archive_path = _archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=input_path,
+    )
+    base_path = _first_existing_path(input_path, input_archive_path)
+
+    mapping: Dict[str, Any] = {}
+    if base_path is not None:
+        mapping[USIM_DATASTORE_BASE_H5] = str(base_path)
+
+    if is_start_year():
+        if base_path is not None:
+            mapping[USIM_DATASTORE_CURRENT_H5] = str(base_path)
+        return mapping or None
+
+    output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
+        settings, io="output", year=year
+    )
+    output_archive_path = _archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=output_path,
+    )
+    current_path = _first_existing_path(output_path, output_archive_path)
+    if current_path is not None:
+        mapping[USIM_DATASTORE_CURRENT_H5] = str(current_path)
+    return mapping or None
+
+
 def _urbansim_inputs_for_year(
     *,
     settings: Any,
@@ -215,12 +290,12 @@ def _urbansim_inputs_for_year(
     year: Optional[int],
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
-    if settings is None or state is None or workspace is None or year is None:
-        return None
-    from pilates.urbansim.inputs import build_urbansim_inputs
-
-    inputs, _ = build_urbansim_inputs(settings, state, workspace, year)
-    return inputs
+    return _urbansim_datastore_candidates_for_year(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+    )
 
 
 def _activitysim_input_datastore(

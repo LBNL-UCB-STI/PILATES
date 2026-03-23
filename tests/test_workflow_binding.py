@@ -171,6 +171,53 @@ def test_build_binding_plan_supports_ad_hoc_preferred_key_rules():
     assert not plan.missing_required
 
 
+def test_build_binding_plan_centralizes_urbansim_input_selection_fallbacks(monkeypatch):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setitem(
+        binding_module._FALLBACK_PROVIDERS,
+        "urbansim_inputs_for_year",
+        lambda **_: {USIM_DATASTORE_BASE_H5: "/tmp/base.h5"},
+    )
+
+    plan = build_binding_plan(
+        step_name="urbansim_input_selection",
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_BASE_H5,
+                required=True,
+                allow_fallback=True,
+                preferred_keys=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
+                fallback_provider="urbansim_inputs_for_year",
+            ),
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
+                required=True,
+                allow_fallback=True,
+                preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
+                fallback_provider="urbansim_inputs_for_year",
+            ),
+        ),
+        required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
+    )
+
+    assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/base.h5"
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/base.h5"
+    assert (
+        plan.metadata["selected_key_by_semantic_key"][USIM_DATASTORE_BASE_H5]
+        == USIM_DATASTORE_BASE_H5
+    )
+    assert (
+        plan.metadata["selected_key_by_semantic_key"][USIM_DATASTORE_CURRENT_H5]
+        == USIM_DATASTORE_BASE_H5
+    )
+    assert not plan.missing_required
+
+
 def test_build_binding_plan_centralizes_atlas_preprocess_usim_precedence():
     plan = build_binding_plan(
         step_name="atlas_preprocess",

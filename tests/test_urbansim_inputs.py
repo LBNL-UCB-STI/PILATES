@@ -50,6 +50,25 @@ def test_build_urbansim_inputs_prefers_output_for_non_start_year(tmp_path: Path)
     assert inputs[USIM_DATASTORE_CURRENT_H5] == str(output_h5)
 
 
+def test_build_urbansim_inputs_uses_base_for_current_on_start_year(tmp_path: Path):
+    settings = _settings_stub()
+    workspace = _WorkspaceStub(tmp_path, tmp_path)
+    state = SimpleNamespace(is_start_year=lambda: True)
+
+    base_h5 = tmp_path / "usim_000.h5"
+    base_h5.write_text("base")
+
+    inputs, _ = build_urbansim_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=2018,
+    )
+
+    assert inputs[USIM_DATASTORE_BASE_H5] == str(base_h5)
+    assert inputs[USIM_DATASTORE_CURRENT_H5] == str(base_h5)
+
+
 def test_build_urbansim_inputs_falls_back_to_base_when_output_missing(
     tmp_path: Path,
 ):
