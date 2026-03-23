@@ -18,7 +18,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
+from pilates.workflows.binding import (
+    activitysim_datastore_selection_rules,
+    build_binding_plan,
+)
 from pilates.workflows.input_resolution import (
     resolved_value_for_key,
     selected_candidate_key,
@@ -112,16 +115,7 @@ def build_activitysim_inputs(
         step_name="activitysim_input_selection",
         coupler=coupler,
         explicit_inputs=usim_inputs,
-        artifact_rules=(
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=True,
-                preferred_keys=(
-                    USIM_DATASTORE_CURRENT_H5,
-                    USIM_DATASTORE_BASE_H5,
-                ),
-            ),
-        ),
+        artifact_rules=activitysim_datastore_selection_rules(),
         required_keys=[USIM_DATASTORE_CURRENT_H5],
     )
     selected_usim_key = selected_candidate_key(

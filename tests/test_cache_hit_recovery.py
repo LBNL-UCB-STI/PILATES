@@ -3,11 +3,13 @@ from types import SimpleNamespace
 import yaml
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
     BEAM_PLANS_OUT,
     BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
@@ -29,6 +31,7 @@ from pilates.workflows.orchestration import (
 )
 from pilates.workflows.orchestration import run_manifested_steps, run_workflow
 from pilates.workflows.orchestration import StepRef
+from pilates.workflows.binding import build_key_only_binding_plan
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_preprocess_step,
@@ -1031,6 +1034,74 @@ def test_run_workflow_cache_hit_prefers_step_local_recoverer(tmp_path, monkeypat
     assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
 
 
+def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = output_dir / "year-2018-iteration-0"
+    cache_dir = output_dir / "cache" / "numba"
+    for path in (
+        asim_dir / "households.csv",
+        asim_dir / "persons.csv",
+        asim_dir / "land_use.csv",
+        asim_dir / "skims.omx",
+        iter_dir / "households.parquet",
+        output_dir / "cache" / "skims.zarr",
+        cache_dir / "cache.bin",
+    ):
+        _write_file(path)
+
+    coupler = DummyCoupler()
+    coupler.set(ASIM_HOUSEHOLDS_IN, str(asim_dir / "households.csv"))
+    coupler.set(ASIM_PERSONS_IN, str(asim_dir / "persons.csv"))
+    coupler.set(ASIM_LAND_USE_IN, str(asim_dir / "land_use.csv"))
+    coupler.set(ZARR_SKIMS, str(output_dir / "cache" / "skims.zarr"))
+    coupler.set(ASIM_SHARROW_CACHE_DIR, str(cache_dir))
+
+    holder = StepOutputsHolder()
+    holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=asim_dir / "land_use.csv",
+        households_table=asim_dir / "households.csv",
+        persons_table=asim_dir / "persons.csv",
+        omx_skims=asim_dir / "skims.omx",
+    )
+    step_func = make_activitysim_run_step(coupler=coupler, outputs_holder=holder)
+    scenario = DummyScenario(cache_hit=True)
+    binding = build_key_only_binding_plan(
+        step_name="activitysim_run",
+        input_keys=[
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ASIM_LAND_USE_IN,
+            ZARR_SKIMS,
+            ASIM_SHARROW_CACHE_DIR,
+        ],
+        optional_input_keys=[ASIM_SHARROW_CACHE_DIR],
+        coupler=coupler,
+    )
+
+    run_workflow(
+        stage_name="activity_demand_run",
+        steps=[StepRef(name="activitysim_run", step_func=step_func, binding=binding)],
+        scenario=scenario,
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.activitysim_run is not None
+    step_binding = scenario.calls[0]["binding"]
+    assert ASIM_SHARROW_CACHE_DIR not in (step_binding.input_keys or [])
+    assert ASIM_SHARROW_CACHE_DIR in (step_binding.optional_input_keys or [])
+
+
 def test_run_workflow_cache_hit_beam_postprocess_replays_promoted_outputs(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()
@@ -1174,6 +1245,86 @@ def test_run_workflow_cache_hit_prefers_beam_step_local_recoverer(tmp_path, monk
     assert holder.beam_postprocess is not None
     assert coupler.get(ZARR_SKIMS) is not None
     assert coupler.get(LINKSTATS) is not None
+
+
+def test_run_workflow_cache_hit_beam_run_preserves_optional_warmstart_binding(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    beam_dir = Path(workspace.get_beam_mutable_data_dir())
+    plans = beam_dir / "plans.csv"
+    households = beam_dir / "households.csv"
+    persons = beam_dir / "persons.csv"
+    warmstart = beam_dir / "linkstats.csv.gz"
+    for path in (plans, households, persons, warmstart):
+        _write_file(path)
+
+    output_dir = Path(workspace.get_beam_output_dir())
+    cached_outputs = {
+        "linkstats_parquet_2018_0": output_dir / "linkstats.parquet",
+        "beam_plans_out_2018_0": output_dir / "plans.csv.gz",
+        "events_parquet_2018_0": output_dir / "events.parquet",
+    }
+    for path in cached_outputs.values():
+        _write_file(path)
+
+    coupler.set(BEAM_PLANS_IN, str(plans))
+    coupler.set(BEAM_HOUSEHOLDS_IN, str(households))
+    coupler.set(BEAM_PERSONS_IN, str(persons))
+    coupler.set(LINKSTATS_WARMSTART, str(warmstart))
+    holder.beam_preprocess = BeamPreprocessOutputs(
+        beam_mutable_data_dir=beam_dir,
+        prepared_inputs={
+            BEAM_PLANS_IN: plans,
+            BEAM_HOUSEHOLDS_IN: households,
+            BEAM_PERSONS_IN: persons,
+            LINKSTATS_WARMSTART: warmstart,
+        },
+    )
+
+    step_func = make_beam_run_step(coupler=coupler, outputs_holder=holder)
+    binding = build_key_only_binding_plan(
+        step_name="beam_run",
+        input_keys=[
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+        ],
+        optional_input_keys=[LINKSTATS_WARMSTART],
+        coupler=coupler,
+    )
+
+    class CacheHitScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs={key: str(path) for key, path in cached_outputs.items()},
+            )
+
+    scenario = CacheHitScenario()
+    run_workflow(
+        stage_name="beam_run",
+        steps=[StepRef(name="beam_run", step_func=step_func, binding=binding)],
+        scenario=scenario,
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.beam_run is not None
+    step_binding = scenario.calls[0]["binding"]
+    assert LINKSTATS_WARMSTART not in (step_binding.input_keys or [])
+    assert LINKSTATS_WARMSTART in (step_binding.optional_input_keys or [])
 
 
 def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(

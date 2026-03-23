@@ -208,6 +208,53 @@ class BindingPlan:
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 
 
+def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
+    """
+    Shared current-vs-base datastore preference for ActivitySim input selection.
+    """
+    return (
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=True,
+            preferred_keys=(
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            ),
+        ),
+    )
+
+
+def urbansim_datastore_selection_rules(
+    *,
+    fallback_provider: str = "urbansim_inputs_for_year",
+) -> tuple[ArtifactBindingRule, ...]:
+    """
+    Shared current/base datastore selection policy for UrbanSim input assembly.
+    """
+    return (
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(
+                USIM_DATASTORE_BASE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+            ),
+            fallback_provider=fallback_provider,
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            ),
+            fallback_provider=fallback_provider,
+        ),
+    )
+
+
 def _archive_fallback_path(
     *,
     state: Any,

@@ -1,7 +1,10 @@
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
-from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
+from pilates.workflows.binding import (
+    build_binding_plan,
+    urbansim_datastore_selection_rules,
+)
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -64,28 +67,7 @@ def build_urbansim_inputs(
         state=state,
         workspace=workspace,
         year=year,
-        artifact_rules=(
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(
-                    USIM_DATASTORE_BASE_H5,
-                    USIM_DATASTORE_CURRENT_H5,
-                ),
-                fallback_provider="urbansim_inputs_for_year",
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(
-                    USIM_DATASTORE_CURRENT_H5,
-                    USIM_DATASTORE_BASE_H5,
-                ),
-                fallback_provider="urbansim_inputs_for_year",
-            ),
-        ),
+        artifact_rules=urbansim_datastore_selection_rules(),
         required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )
 

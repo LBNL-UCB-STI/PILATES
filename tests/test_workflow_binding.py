@@ -21,9 +21,11 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.binding import (
     ArtifactBindingRule,
     BindingPlan,
+    activitysim_datastore_selection_rules,
     binding_spec_for_step_name,
     build_binding_plan,
     build_key_only_binding_plan,
+    urbansim_datastore_selection_rules,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
@@ -171,6 +173,22 @@ def test_build_binding_plan_supports_ad_hoc_preferred_key_rules():
     assert not plan.missing_required
 
 
+def test_activitysim_datastore_selection_rules_centralize_current_base_fallback():
+    plan = build_binding_plan(
+        step_name="activitysim_input_selection",
+        explicit_inputs={USIM_DATASTORE_BASE_H5: "/tmp/base.h5"},
+        artifact_rules=activitysim_datastore_selection_rules(),
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+    )
+
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/base.h5"
+    assert (
+        plan.metadata["selected_key_by_semantic_key"][USIM_DATASTORE_CURRENT_H5]
+        == USIM_DATASTORE_BASE_H5
+    )
+    assert not plan.missing_required
+
+
 def test_build_binding_plan_centralizes_urbansim_input_selection_fallbacks(monkeypatch):
     from pilates.workflows import binding as binding_module
 
@@ -186,22 +204,7 @@ def test_build_binding_plan_centralizes_urbansim_input_selection_fallbacks(monke
         state=SimpleNamespace(year=2030),
         workspace=SimpleNamespace(),
         year=2030,
-        artifact_rules=(
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_BASE_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
-                fallback_provider="urbansim_inputs_for_year",
-            ),
-            ArtifactBindingRule(
-                semantic_key=USIM_DATASTORE_CURRENT_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
-                fallback_provider="urbansim_inputs_for_year",
-            ),
-        ),
+        artifact_rules=urbansim_datastore_selection_rules(),
         required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )
 

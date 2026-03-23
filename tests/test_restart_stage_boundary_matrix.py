@@ -514,6 +514,10 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
     coupler.set(USIM_DATASTORE_BASE_H5, restart_stage_env["usim_input_path"])
     coupler.set(ZARR_SKIMS, restart_stage_env["zarr_path"])
     coupler.set(ASIM_SHARROW_CACHE_DIR, restart_stage_env["numba_cache_dir"])
+    settings.run.models.land_use = None
+    settings.land_use_enabled = False
+    state._settings["land_use_enabled"] = False
+    state.enabled_stages.discard(state.Stage.land_use)
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
@@ -546,6 +550,10 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
         and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
     ]
     assert asim_run_calls, "Expected ActivitySim run to start from restored compile outputs."
+    assert ASIM_SHARROW_CACHE_DIR not in (asim_run_calls[0].get("input_keys") or [])
+    assert ASIM_SHARROW_CACHE_DIR in (
+        asim_run_calls[0].get("optional_input_keys") or []
+    )
 
 
 def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
@@ -611,6 +619,10 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
     assert beam_run_calls, (
         "Expected BEAM-only restart to reach beam_run with the canonical trio "
         "resolved from staged default scenario inputs."
+    )
+    assert LINKSTATS_WARMSTART not in (beam_run_calls[0].get("input_keys") or [])
+    assert LINKSTATS_WARMSTART in (
+        beam_run_calls[0].get("optional_input_keys") or []
     )
 
 
@@ -815,10 +827,17 @@ def test_restart_mid_iteration_traffic_assignment_preserves_promoted_warmstart(
     )
 
     beam_preprocess_calls = [
-        call for call in scenario.calls if LINKSTATS in call.get("inputs", {})
+        call
+        for call in scenario.calls
+        if LINKSTATS_WARMSTART in call.get("inputs", {})
     ]
-    assert beam_preprocess_calls, "Expected resumed BEAM preprocess to receive prior linkstats."
-    assert beam_preprocess_calls[0]["inputs"][LINKSTATS] == str(restored_linkstats)
+    assert beam_preprocess_calls, (
+        "Expected resumed BEAM preprocess to remap promoted prior linkstats "
+        "onto the canonical warmstart input."
+    )
+    assert beam_preprocess_calls[0]["inputs"][LINKSTATS_WARMSTART] == str(
+        restored_linkstats
+    )
     beam_run_calls = [
         call
         for call in scenario.calls
@@ -827,3 +846,7 @@ def test_restart_mid_iteration_traffic_assignment_preserves_promoted_warmstart(
         and BEAM_PERSONS_IN in (call.get("input_keys") or [])
     ]
     assert beam_run_calls, "Expected resumed mid-loop traffic assignment to reach BEAM run."
+    assert LINKSTATS_WARMSTART not in (beam_run_calls[0].get("input_keys") or [])
+    assert LINKSTATS_WARMSTART in (
+        beam_run_calls[0].get("optional_input_keys") or []
+    )
