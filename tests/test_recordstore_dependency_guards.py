@@ -49,19 +49,6 @@ class _DuplicateKeyOutputs:
         yield "linkstats", self.second, "duplicate linkstats"
 
 
-class _ResolvedInputs:
-    def __init__(self, *, inputs=None, input_keys=None, missing_required=None) -> None:
-        self._inputs = inputs
-        self._input_keys = input_keys
-        self.missing_required = list(missing_required or [])
-
-    def stepref_inputs(self):
-        return self._inputs
-
-    def stepref_input_keys(self):
-        return self._input_keys
-
-
 def _store_with_record(path: Path, key: str) -> RecordStore:
     path.write_text(key, encoding="utf-8")
     return RecordStore(
@@ -179,18 +166,18 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     resolution_calls = []
     workflow_call_count = {"count": 0}
 
-    def _fake_resolve_step_inputs(
-        *, keys, explicit_inputs=None, coupler=None, fallback_inputs=None, required_keys=None
-    ):
+    original_build_binding_plan = land_use_stage.build_binding_plan
+
+    def _capturing_build_binding_plan(**kwargs):
         resolution_calls.append(
             {
-                "keys": list(keys),
-                "explicit_inputs": explicit_inputs,
-                "fallback_inputs": fallback_inputs,
-                "required_keys": list(required_keys or []),
+                "step_name": kwargs["step_name"],
+                "explicit_inputs": kwargs.get("explicit_inputs"),
+                "fallback_inputs": kwargs.get("fallback_inputs"),
+                "required_keys": list(kwargs.get("required_keys") or []),
             }
         )
-        return _ResolvedInputs(inputs=explicit_inputs, input_keys=list(keys))
+        return original_build_binding_plan(**kwargs)
 
     def _fake_run_workflow(**kwargs) -> None:
         workflow_call_count["count"] += 1
@@ -223,7 +210,9 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     monkeypatch.setattr(
         land_use_stage, "merge_model_expected_inputs", lambda *args: args[1]
     )
-    monkeypatch.setattr(land_use_stage, "resolve_step_inputs", _fake_resolve_step_inputs)
+    monkeypatch.setattr(
+        land_use_stage, "build_binding_plan", _capturing_build_binding_plan
+    )
     monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)
     monkeypatch.setattr(
         land_use_stage, "make_urbansim_preprocess_step", lambda **kwargs: object()
@@ -234,9 +223,7 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     monkeypatch.setattr(
         land_use_stage, "make_urbansim_postprocess_step", lambda **kwargs: object()
     )
-    monkeypatch.setattr(
-        land_use_stage, "enqueue_archive_copy", lambda *args, **kwargs: None
-    )
+    monkeypatch.setattr(land_use_stage, "archive_copy_now", lambda **kwargs: None)
     monkeypatch.setattr(
         land_use_stage, "flush_archive_queue", lambda *args, **kwargs: None
     )
@@ -263,7 +250,10 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
 
     assert upstream.iter_record_item_calls == 1
     assert workflow_call_count["count"] == 2
-    assert resolution_calls[1]["explicit_inputs"] == {
+    run_binding_call = next(
+        call for call in resolution_calls if call["step_name"] == "urbansim_run"
+    )
+    assert run_binding_call["explicit_inputs"] == {
         **preprocess_store.to_mapping(),
         USIM_DATASTORE_BASE_H5: str(usim_base),
         USIM_DATASTORE_CURRENT_H5: str(usim_current),

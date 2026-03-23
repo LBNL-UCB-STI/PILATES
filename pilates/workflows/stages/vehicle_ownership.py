@@ -18,10 +18,9 @@ from pilates.atlas.inputs import (
     atlas_static_input_keys_for_interval,
 )
 from pilates.utils.input_logging import log_inputs
-from pilates.workflows.input_resolution import resolve_step_inputs
+from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
-from pilates.workflows.step_io import expected_inputs_for_step, merge_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_atlas_postprocess_step,
@@ -29,7 +28,6 @@ from pilates.workflows.steps import (
     make_atlas_run_step,
 )
 from pilates.workflows.artifact_keys import (
-    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
@@ -275,15 +273,6 @@ def run_vehicle_ownership_stage(
             atlas_usim_datastore_h5_path,
         )
         log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
-        step_inputs = merge_expected_inputs(
-            step_inputs,
-            expected_inputs_for_step(
-                "atlas_preprocess",
-                settings,
-                cast(WorkflowState, atlas_state),
-                workspace,
-            ),
-        )
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path
         # Keep ATLAS preprocessor H5 selection artifact-driven.
@@ -295,17 +284,14 @@ def run_vehicle_ownership_stage(
             step_inputs.get(USIM_DATASTORE_BASE_H5),
             workspace,
         )
-        atlas_preprocess_inputs = dict(step_inputs)
-        atlas_preprocess_keys = list(atlas_preprocess_inputs.keys())
-        if FINAL_SKIMS_OMX not in atlas_preprocess_keys:
-            atlas_preprocess_keys.append(FINAL_SKIMS_OMX)
-        atlas_preprocess_resolution = resolve_step_inputs(
-            keys=atlas_preprocess_keys,
+        atlas_preprocess_binding = build_binding_plan(
+            step_name="atlas_preprocess",
             coupler=coupler,
-            explicit_inputs=atlas_preprocess_inputs,
-        )
-        atlas_run_inputs: Dict[str, Any] = dict(
-            build_atlas_static_inputs_fallback(workspace)
+            explicit_inputs=step_inputs,
+            settings=settings,
+            state=atlas_state,
+            workspace=workspace,
+            year=atlas_year,
         )
 
         atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
@@ -322,7 +308,15 @@ def run_vehicle_ownership_stage(
             atlas_interval_end_year,
             len(atlas_static_keys),
         )
-        atlas_run_fallbacks = dict(atlas_run_inputs)
+        atlas_run_fallbacks: Dict[str, Any] = {
+            key: value
+            for key, value in build_atlas_static_inputs_fallback(workspace).items()
+            if key in atlas_static_keys
+        }
+        atlas_run_explicit_inputs = {
+            USIM_DATASTORE_CURRENT_H5: step_inputs.get(USIM_DATASTORE_CURRENT_H5),
+            USIM_DATASTORE_BASE_H5: step_inputs.get(USIM_DATASTORE_BASE_H5),
+        }
         atlas_run_fallbacks.setdefault(
             USIM_DATASTORE_CURRENT_H5,
             step_inputs.get(USIM_DATASTORE_CURRENT_H5),
@@ -331,21 +325,19 @@ def run_vehicle_ownership_stage(
             USIM_DATASTORE_BASE_H5,
             step_inputs.get(USIM_DATASTORE_BASE_H5),
         )
-        atlas_run_resolution = resolve_step_inputs(
-            keys=[
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-                *atlas_static_keys,
-            ],
+        atlas_run_binding = build_binding_plan(
+            step_name="atlas_run",
             coupler=coupler,
-            explicit_inputs={
-                USIM_DATASTORE_CURRENT_H5: step_inputs.get(USIM_DATASTORE_CURRENT_H5),
-                USIM_DATASTORE_BASE_H5: step_inputs.get(USIM_DATASTORE_BASE_H5),
-            },
+            explicit_inputs=atlas_run_explicit_inputs,
             fallback_inputs=atlas_run_fallbacks,
             required_keys=[USIM_DATASTORE_CURRENT_H5],
+            optional_keys=[USIM_DATASTORE_BASE_H5, *atlas_static_keys],
+            settings=settings,
+            state=atlas_state,
+            workspace=workspace,
+            year=atlas_year,
         )
-        if atlas_run_resolution.missing_required:
+        if atlas_run_binding.missing_required:
             raise RuntimeError(
                 "ATLAS run requires usim_datastore_h5 but it could not be resolved "
                 "from explicit inputs, coupler, or fallback static inputs."
@@ -358,8 +350,7 @@ def run_vehicle_ownership_stage(
                     coupler=coupler,
                     outputs_holder=outputs_holder_atlas,
                 ),
-                inputs=atlas_preprocess_resolution.stepref_inputs(),
-                input_keys=atlas_preprocess_resolution.stepref_input_keys(),
+                binding=atlas_preprocess_binding,
             ),
             StepRef(
                 name="atlas_run",
@@ -367,8 +358,7 @@ def run_vehicle_ownership_stage(
                     coupler=coupler,
                     outputs_holder=outputs_holder_atlas,
                 ),
-                input_keys=atlas_run_resolution.stepref_input_keys(),
-                inputs=atlas_run_resolution.stepref_inputs(),
+                binding=atlas_run_binding,
             ),
         ]
         atlas_manifest_config = ManifestConfig(

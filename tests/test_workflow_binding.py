@@ -14,6 +14,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
 )
 from pilates.workflows.binding import BindingPlan, binding_spec_for_step_name, build_binding_plan
@@ -106,6 +107,47 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
 
     assert plan.inputs[USIM_H5_UPDATED] == "/tmp/base.h5"
     assert plan.source_by_key[USIM_H5_UPDATED] == "fallback"
+    assert not plan.missing_required
+
+
+def test_build_binding_plan_preserves_atlas_linear_stage_inputs():
+    plan = build_binding_plan(
+        step_name="atlas_run",
+        explicit_inputs={
+            USIM_DATASTORE_CURRENT_H5: "/tmp/current.h5",
+            USIM_DATASTORE_BASE_H5: "/tmp/base.h5",
+            "psid_names": "/tmp/psid_names.Rdat",
+        },
+        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        optional_keys=["psid_names"],
+    )
+
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/current.h5"
+    assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/base.h5"
+    assert plan.inputs["psid_names"] == "/tmp/psid_names.Rdat"
+    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "explicit"
+    assert plan.source_by_key["psid_names"] == "explicit"
+    assert not plan.missing_required
+
+
+def test_build_binding_plan_uses_caller_scoped_fallback_inputs_for_explicit_key_sets():
+    plan = build_binding_plan(
+        step_name="atlas_run",
+        explicit_inputs={USIM_DATASTORE_CURRENT_H5: "/tmp/current.h5"},
+        fallback_inputs={
+            USIM_DATASTORE_BASE_H5: "/tmp/base.h5",
+            "psid_names": "/tmp/psid_names.Rdat",
+        },
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+        optional_keys=[USIM_DATASTORE_BASE_H5, "psid_names"],
+    )
+
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/current.h5"
+    assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/base.h5"
+    assert plan.inputs["psid_names"] == "/tmp/psid_names.Rdat"
+    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "explicit"
+    assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
+    assert plan.source_by_key["psid_names"] == "fallback"
     assert not plan.missing_required
 
 

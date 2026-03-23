@@ -464,8 +464,10 @@ def test_land_use_stage_prefers_explicit_beam_skims_artifact(stage_env):
         for call in stage_env["scenario"].calls
         if call["model"] == "urbansim_preprocess"
     )
-    assert FINAL_SKIMS_OMX in preprocess_call["input_keys"]
-    assert FINAL_SKIMS_OMX not in preprocess_call["inputs"]
+    preprocess_binding = preprocess_call["binding"]
+    assert isinstance(preprocess_binding, BindingResult)
+    assert FINAL_SKIMS_OMX in (preprocess_binding.input_keys or [])
+    assert FINAL_SKIMS_OMX not in (preprocess_binding.inputs or {})
 
 
 def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch):
@@ -590,8 +592,10 @@ def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_pa
             return
 
         run_step = next(step for step in steps if step.name == "urbansim_run")
-        captured["inputs"] = dict(run_step.inputs or {})
-        captured["input_keys"] = list(run_step.input_keys or [])
+        captured["inputs"] = dict(getattr(run_step.binding, "inputs", {}) or {})
+        captured["input_keys"] = list(
+            getattr(run_step.binding, "input_keys", None) or []
+        )
         outputs_holder.urbansim_run = SimpleNamespace(
             usim_datastore_h5=Path(stage_env["usim_input_path"])
         )

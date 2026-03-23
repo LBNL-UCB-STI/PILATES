@@ -12,7 +12,7 @@ from workflow_state import WorkflowState
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.input_logging import log_inputs
-from pilates.workflows.input_resolution import resolve_step_inputs
+from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -95,10 +95,11 @@ def run_land_use_stage(
     preprocess_keys = list(preprocess_inputs.keys())
     if FINAL_SKIMS_OMX not in preprocess_keys:
         preprocess_keys.append(FINAL_SKIMS_OMX)
-    preprocess_resolution = resolve_step_inputs(
-        keys=preprocess_keys,
+    preprocess_binding = build_binding_plan(
+        step_name="urbansim_preprocess",
         coupler=coupler,
         explicit_inputs=preprocess_inputs,
+        optional_keys=preprocess_keys,
     )
 
     preprocess_step = make_urbansim_preprocess_step(
@@ -109,8 +110,7 @@ def run_land_use_stage(
         StepRef(
             name="urbansim_preprocess",
             step_func=preprocess_step,
-            inputs=preprocess_resolution.stepref_inputs(),
-            input_keys=preprocess_resolution.stepref_input_keys(),
+            binding=preprocess_binding,
         ),
     ]
 
@@ -139,17 +139,19 @@ def run_land_use_stage(
     for key, value in usim_inputs.items():
         if value is not None:
             run_inputs.setdefault(key, value)
-    run_resolution = resolve_step_inputs(
-        keys=run_inputs.keys(),
+    run_binding = build_binding_plan(
+        step_name="urbansim_run",
         explicit_inputs=run_inputs,
+        optional_keys=list(run_inputs.keys()),
     )
-    postprocess_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_CURRENT_H5],
+    postprocess_binding = build_binding_plan(
+        step_name="urbansim_postprocess",
         coupler=coupler,
+        explicit_inputs={USIM_DATASTORE_CURRENT_H5: usim_inputs.get(USIM_DATASTORE_CURRENT_H5)},
         fallback_inputs=usim_inputs,
         required_keys=[USIM_DATASTORE_CURRENT_H5],
     )
-    if postprocess_resolution.missing_required:
+    if postprocess_binding.missing_required:
         raise RuntimeError(
             "UrbanSim postprocess requires usim_datastore_h5 but it could not be "
             "resolved from explicit inputs, coupler, or fallback inputs."
@@ -162,8 +164,7 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=run_resolution.stepref_inputs(),
-            input_keys=run_resolution.stepref_input_keys(),
+            binding=run_binding,
         ),
         StepRef(
             name="urbansim_postprocess",
@@ -171,8 +172,7 @@ def run_land_use_stage(
                 coupler=coupler,
                 outputs_holder=outputs_holder_year,
             ),
-            inputs=postprocess_resolution.stepref_inputs(),
-            input_keys=postprocess_resolution.stepref_input_keys(),
+            binding=postprocess_binding,
         ),
     ]
 

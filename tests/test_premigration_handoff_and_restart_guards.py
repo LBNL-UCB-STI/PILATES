@@ -327,12 +327,7 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -367,14 +362,19 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
     )
 
     preprocess_calls = [
-        (year, next(step for step in steps if step.name == "atlas_preprocess"))
+        (
+            year,
+            next(step for step in steps if step.name == "atlas_preprocess").binding,
+        )
         for year, steps in captured_calls
         if any(step.name == "atlas_preprocess" for step in steps)
     ]
     assert [year for year, _ in preprocess_calls] == [2020, 2022, 2024]
+    assert preprocess_calls[0][1] is not None
     assert preprocess_calls[0][1].inputs[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
     assert preprocess_calls[0][1].inputs[USIM_DATASTORE_BASE_H5] == str(current_h5)
     for _, step in preprocess_calls[1:]:
+        assert step is not None
         assert step.inputs[USIM_DATASTORE_CURRENT_H5] == str(forecast_h5)
         assert step.inputs[USIM_DATASTORE_BASE_H5] == str(forecast_h5)
 
@@ -415,12 +415,7 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -433,8 +428,8 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
         atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
-        if atlas_run_step is not None:
-            captured_run_inputs[state.year] = dict(atlas_run_step.inputs or {})
+        if atlas_run_step is not None and atlas_run_step.binding is not None:
+            captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
                 Path(workspace.get_atlas_output_dir()) / f"households_{state.year}.csv"
             )
@@ -503,12 +498,7 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -521,8 +511,8 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
         atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
-        if atlas_run_step is not None:
-            captured_run_inputs[state.year] = dict(atlas_run_step.inputs or {})
+        if atlas_run_step is not None and atlas_run_step.binding is not None:
+            captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
                 Path(workspace.get_atlas_output_dir()) / f"households_{state.year}.csv"
             )

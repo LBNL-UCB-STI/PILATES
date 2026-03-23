@@ -424,6 +424,9 @@ def build_binding_plan(
             if not rule.required
         )
     )
+    caller_scoped_fallback_inputs = fallback_inputs is not None and (
+        required_keys is not None or optional_keys is not None
+    )
 
     plan_inputs: Dict[str, Any] = {}
     plan_input_keys: list[str] = []
@@ -442,6 +445,17 @@ def build_binding_plan(
         rule = rule_lookup.get(semantic_key) or _default_rule(
             semantic_key, required=is_required
         )
+        if caller_scoped_fallback_inputs and not rule.allow_fallback:
+            rule = ArtifactBindingRule(
+                semantic_key=rule.semantic_key,
+                required=rule.required,
+                allow_explicit=rule.allow_explicit,
+                allow_coupler=rule.allow_coupler,
+                allow_fallback=True,
+                preferred_keys=rule.preferred_keys,
+                fallback_provider=rule.fallback_provider,
+                pass_mode=rule.pass_mode,
+            )
         source, selected_key, value, matched_candidate = _resolve_rule_binding(
             rule=rule,
             coupler=coupler,

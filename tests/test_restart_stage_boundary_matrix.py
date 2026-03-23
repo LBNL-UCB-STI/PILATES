@@ -393,14 +393,14 @@ def test_restart_land_use_boundary_preserves_required_datastores(
             return
 
         run_step = next(step for step in steps if step.name == "urbansim_run")
-        captured["inputs"] = dict(run_step.inputs or {})
+        captured["inputs"] = dict(getattr(run_step.binding, "inputs", {}) or {})
         outputs_holder.urbansim_run = SimpleNamespace(
             usim_datastore_h5=Path(restart_stage_env["usim_input_path"])
         )
         outputs_holder.urbansim_postprocess = None
 
     monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)
-    monkeypatch.setattr(land_use_stage, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr(land_use_stage, "archive_copy_now", lambda **_kwargs: None)
     monkeypatch.setattr(land_use_stage, "flush_archive_queue", lambda **_kwargs: None)
 
     outputs_holder = StepOutputsHolder()
@@ -458,12 +458,7 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "expected_inputs_for_step",
-        lambda *_args, **_kwargs: {},
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -476,8 +471,8 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
         atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
-        if atlas_run_step is not None:
-            captured[state.year] = dict(atlas_run_step.inputs or {})
+        if atlas_run_step is not None and atlas_run_step.binding is not None:
+            captured[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
                 Path(workspace.get_atlas_output_dir()) / f"households_{state.year}.csv"
             )
