@@ -189,6 +189,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, fields
+from pathlib import Path
 from typing import (
     Any,
     Callable,
@@ -242,6 +243,8 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.step_exec import warm_start_activities as warm_start_activities
 from pilates.workflows.outputs_base import (
+    StepOutputsBase,
+    ValidationContext,
     declared_outputs_for_step_outputs_class,
     required_outputs_for_step_outputs_class,
 )
@@ -773,7 +776,7 @@ def _log_beam_r5_osm_input(
         )
 
 
-StepOutputsT = TypeVar("StepOutputsT")
+StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 InputLogger = Callable[
     ["PilatesConfig", WorkflowState, "Workspace", "StepOutputsHolder"],
     Mapping[str, Any],
@@ -1149,6 +1152,133 @@ def require_common_runtime(
         Decorator that enforces the runtime kwargs.
     """
     return cr.require_runtime_kwargs("settings", "state", "workspace", *names)
+
+
+def _make_typed_step_function(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    model_name: str,
+    phase: str,
+    outputs_class: Type[StepOutputsT],
+    component_getter: Callable[[Any, WorkflowState], Any],
+    component_executor: Callable[..., StepOutputsT],
+    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
+    input_logger: Optional[Callable[..., Mapping[str, Any]]] = None,
+    output_logger: Optional[Callable[..., None]] = None,
+    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
+    declared_outputs: Optional[list[str]] = None,
+    schema_outputs: Optional[list[str]] = None,
+    log_start_message: bool = False,
+    log_completion_message: bool = False,
+    step_description: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    step_logger: Optional[logging.Logger] = None,
+) -> Callable[..., Any]:
+    from pilates.generic.model_factory import ModelFactory
+
+    step_name = f"{model_name}_{phase}"
+    description = step_description or f"{step_name} workflow step"
+    step_tags = tags or [model_name, phase]
+    step_logger = step_logger or logger
+
+    @cr.require_runtime_kwargs("settings", "state", "workspace")
+    def _step_func(
+        settings: "PilatesConfig",
+        state: WorkflowState,
+        workspace: "Workspace",
+        **kwargs: Any,
+    ) -> None:
+        if log_start_message:
+            step_logger.debug("Starting %s %s step", model_name, phase)
+        factory = ModelFactory()
+        component = component_getter(factory, state)
+
+        extra_kwargs: Dict[str, Any] = {}
+        if input_logger is not None:
+            extra_kwargs = dict(input_logger(settings, state, workspace, outputs_holder) or {})
+
+        step_outputs = component_executor(
+            component,
+            workspace,
+            outputs_holder,
+            coupler=coupler,
+            context=step_name,
+            **extra_kwargs,
+            **kwargs,
+        )
+        if not isinstance(step_outputs, outputs_class):
+            from pilates.generic.records import RecordStore
+
+            from_record_store = getattr(outputs_class, "from_record_store", None)
+            if isinstance(step_outputs, RecordStore) and callable(from_record_store):
+                step_outputs = from_record_store(step_outputs, workspace)
+            elif isinstance(step_outputs, RecordStore):
+                record_keys = getattr(outputs_class, "record_keys", None) or {}
+                if record_keys:
+                    mapping = step_outputs.to_mapping()
+                    init_kwargs: Dict[str, Any] = {}
+                    for field_name, record_key in record_keys.items():
+                        value = mapping.get(record_key)
+                        if value is None:
+                            continue
+                        init_kwargs[field_name] = Path(str(value))
+                    if init_kwargs:
+                        try:
+                            step_outputs = outputs_class(**init_kwargs)
+                        except TypeError:
+                            pass
+        if not isinstance(step_outputs, outputs_class):
+            raise TypeError(
+                f"{step_name} must return {outputs_class.__name__}, "
+                f"got {type(step_outputs).__name__}"
+            )
+
+        step_outputs.validate(
+            context=ValidationContext(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                step_name=step_name,
+                upstream_outputs=_upstream_outputs_view(
+                    outputs_holder,
+                    current_step_name=step_name,
+                ),
+            )
+        )
+        outputs_holder_setter(outputs_holder, step_outputs)
+
+        if output_logger is not None:
+            output_logger(step_outputs, settings, state, workspace, outputs_holder)
+
+        if log_completion_message:
+            step_logger.info("%s %s completed successfully", model_name, phase)
+
+    if output_logger is not None:
+        setattr(
+            _step_func,
+            "__pilates_output_replayer__",
+            lambda outputs, settings, state, workspace, holder: output_logger(
+                outputs, settings, state, workspace, holder
+            ),
+        )
+    if output_recoverer is not None:
+        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
+
+    return _decorate_step_with_consist(
+        step_func=_step_func,
+        step_model=step_name,
+        description=description,
+        schema_outputs=(
+            schema_outputs if schema_outputs is not None else _schema_outputs_from_class(outputs_class)
+        ),
+        outputs=(
+            declared_outputs
+            if declared_outputs is not None
+            else _declared_outputs_from_class(outputs_class)
+        ),
+        tags=step_tags,
+    )
 
 
 def _schema_outputs_from_class(

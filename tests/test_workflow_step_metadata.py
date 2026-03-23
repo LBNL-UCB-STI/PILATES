@@ -9,6 +9,14 @@ from consist.types import CacheOptions, OutputPolicyOptions
 from pilates.runtime import launcher as run_module
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.artifact_keys import ASIM_LAND_USE_IN, ASIM_PERSONS_IN
+from pilates.workflows.artifact_keys import (
+    BEAM_FULL_SKIMS,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS,
+)
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import StepRef, WorkflowStage
@@ -16,6 +24,9 @@ from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
     make_beam_postprocess_step,
+    make_beam_preprocess_step,
+    make_beam_run_step,
+    make_beam_full_skim_step,
     make_activitysim_preprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
@@ -595,3 +606,24 @@ def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
     meta = step.__consist_step__
 
     assert meta.outputs == ["zarr_skims"]
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_outputs"),
+    [
+        (make_beam_preprocess_step, [BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN]),
+        (make_beam_run_step, [LINKSTATS, BEAM_PLANS_OUT]),
+        (make_beam_full_skim_step, [BEAM_FULL_SKIMS]),
+    ],
+)
+def test_other_beam_step_metadata_keeps_model_specific_output_contracts(
+    factory,
+    expected_outputs,
+):
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    step = factory(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    assert meta.outputs == expected_outputs

@@ -13,8 +13,9 @@ from pilates.workflows.artifact_keys import (
     BEAM_NETWORK_FINAL,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
 )
-from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
+from pilates.workflows.outputs_base import StepOutputsBase
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -33,11 +34,10 @@ from .shared import (
     WorkflowState,
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
-    _decorate_step_with_consist,
     _log_beam_r5_osm_input,
     _log_step_records,
+    _make_typed_step_function,
     _schema_outputs_from_class,
-    _upstream_outputs_view,
     cr,
     find_last_run_output_plans,
     log_and_set_input,
@@ -357,72 +357,22 @@ def _make_beam_step_function(
     input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
+    declared_outputs: Optional[list[str]] = None,
 ) -> Callable[..., None]:
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        factory = ModelFactory()
-        component = component_getter(factory, state)
-
-        extra_kwargs = (
-            dict(input_logger(settings, state, workspace, outputs_holder) or {})
-            if input_logger is not None
-            else {}
-        )
-        step_outputs = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if not isinstance(step_outputs, outputs_class):
-            raise TypeError(
-                f"{model_name}_{phase} must return {outputs_class.__name__}, "
-                f"got {type(step_outputs).__name__}"
-            )
-        step_outputs.validate(
-            context=ValidationContext(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name=f"{model_name}_{phase}",
-                upstream_outputs=_upstream_outputs_view(
-                    outputs_holder,
-                    current_step_name=f"{model_name}_{phase}",
-                ),
-            )
-        )
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-    if output_logger is not None:
-        setattr(
-            _step_func,
-            "__pilates_output_replayer__",
-            lambda outputs, settings, state, workspace, holder: output_logger(
-                outputs, settings, state, workspace, holder
-            ),
-        )
-    if output_recoverer is not None:
-        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
-
-    step_model = f"{model_name}_{phase}"
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=step_model,
-        description=f"{step_model} workflow step",
+    return _make_typed_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name=model_name,
+        phase=phase,
+        outputs_class=outputs_class,
+        component_getter=component_getter,
+        component_executor=component_executor,
+        outputs_holder_setter=outputs_holder_setter,
+        input_logger=input_logger,
+        output_logger=output_logger,
+        output_recoverer=output_recoverer,
+        declared_outputs=declared_outputs,
         schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=list(outputs_class.declared_output_keys()) or None,
-        tags=[model_name, phase],
     )
 
 
@@ -942,6 +892,7 @@ def make_beam_postprocess_step(
         outputs_holder_setter=lambda holder, outputs: setattr(
             holder, "beam_postprocess", outputs
         ),
+        declared_outputs=[ZARR_SKIMS],
         output_logger=_log_outputs,
         output_recoverer=_recover_beam_postprocess_outputs,
     )

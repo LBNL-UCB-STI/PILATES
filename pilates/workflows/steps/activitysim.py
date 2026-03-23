@@ -51,11 +51,9 @@ from .shared import (
     WorkflowState,
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
-    _declared_outputs_from_class,
     _log_named_h5_tables,
     _log_step_records,
-    _schema_outputs_from_class,
-    _upstream_outputs_view,
+    _make_typed_step_function,
     artifact_to_path,
     cr,
     log_and_set_input,
@@ -205,81 +203,23 @@ def _make_activitysim_typed_step_function(
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
 ) -> Callable[..., None]:
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        logger.debug("Starting %s %s step", model_name, phase)
-        factory = ModelFactory()
-        component = component_getter(factory, state)
-
-        extra_kwargs: Dict[str, Any] = {}
-        if input_logger is not None:
-            extra_kwargs = (
-                input_logger(settings, state, workspace, outputs_holder) or {}
-            )
-
-        step_outputs = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if not isinstance(step_outputs, outputs_class):
-            raise TypeError(
-                f"{model_name}_{phase} must return {outputs_class.__name__}, "
-                f"got {type(step_outputs).__name__}"
-            )
-        validation_context = ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name=f"{model_name}_{phase}",
-            upstream_outputs=_upstream_outputs_view(
-                outputs_holder,
-                current_step_name=f"{model_name}_{phase}",
-            ),
-        )
-        step_outputs.validate(context=validation_context)
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-        logger.info("%s %s completed successfully", model_name, phase)
-
-    if output_logger is not None:
-        setattr(
-            _step_func,
-            "__pilates_output_replayer__",
-            lambda outputs, settings, state, workspace, holder: output_logger(
-                outputs, settings, state, workspace, holder
-            ),
-        )
-    if output_recoverer is not None:
-        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
-
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=f"{model_name}_{phase}",
-        description=f"{model_name} {phase} workflow step",
-        schema_outputs=(
-            schema_outputs
-            if schema_outputs is not None
-            else _schema_outputs_from_class(outputs_class)
-        ),
-        outputs=(
-            declared_outputs
-            if declared_outputs is not None
-            else _declared_outputs_from_class(outputs_class)
-        ),
-        tags=[model_name, phase],
+    return _make_typed_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name=model_name,
+        phase=phase,
+        outputs_class=outputs_class,
+        component_getter=component_getter,
+        component_executor=component_executor,
+        outputs_holder_setter=outputs_holder_setter,
+        input_logger=input_logger,
+        output_logger=output_logger,
+        output_recoverer=output_recoverer,
+        declared_outputs=declared_outputs,
+        schema_outputs=schema_outputs,
+        log_start_message=True,
+        log_completion_message=True,
+        step_logger=logger,
     )
 
 
