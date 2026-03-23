@@ -67,9 +67,12 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
 
 
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
+    usim_next = tmp_path / "urbansim" / "data" / "model_data_next.h5"
+    usim_next.parent.mkdir(parents=True, exist_ok=True)
+    usim_next.write_text("x")
     fake_postprocessor = SimpleNamespace(
         postprocess=lambda _raw_outputs, _workspace: ActivitySimPostprocessOutputs(
-            usim_datastore_h5=None,
+            usim_datastore_h5=usim_next,
             asim_output_dir=tmp_path,
             processed_outputs={},
         )
@@ -94,7 +97,7 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     usim_data_dir = tmp_path / "urbansim" / "data"
     (asim_input_dir).mkdir(parents=True)
     (asim_output_dir / "cache").mkdir(parents=True)
-    usim_data_dir.mkdir(parents=True)
+    usim_data_dir.mkdir(parents=True, exist_ok=True)
 
     for rel in ("households.csv", "persons.csv", "land_use.csv", "skims.omx"):
         (asim_input_dir / rel).write_text("x")
@@ -117,6 +120,7 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     )
     state = SimpleNamespace(
         forecast_year=2023,
+        iteration=0,
         is_enabled=lambda stage: True,
         Stage=SimpleNamespace(land_use="land_use"),
     )

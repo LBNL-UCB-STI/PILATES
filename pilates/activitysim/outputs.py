@@ -450,6 +450,63 @@ class _ActivitySimRunOutputsValidator:
 ActivitySimRunOutputs.validators = (_ActivitySimRunOutputsValidator(),)
 
 
+def _activitysim_postprocess_requires_usim_output(context: ValidationContext) -> bool:
+    state = getattr(context, "state", None)
+    if state is not None:
+        stage_enum = getattr(state, "Stage", None)
+        land_use_stage = getattr(stage_enum, "land_use", "land_use")
+        is_enabled = getattr(state, "is_enabled", None)
+        if callable(is_enabled):
+            try:
+                return bool(is_enabled(land_use_stage))
+            except Exception:
+                return False
+
+    settings = getattr(context, "settings", None)
+    if settings is not None:
+        explicit = getattr(settings, "land_use_enabled", None)
+        if explicit is not None:
+            return bool(explicit)
+        run_cfg = getattr(settings, "run", None)
+        model_cfg = getattr(run_cfg, "models", None)
+        if getattr(model_cfg, "land_use", None) == "urbansim":
+            return True
+
+    return False
+
+
+class _ActivitySimPostprocessOutputsValidator:
+    """
+    Require updated UrbanSim datastore outputs only when land use is active.
+    """
+
+    name = "activitysim_postprocess_expected_outputs"
+    level = "error"
+
+    def validate(
+        self,
+        outputs: "ActivitySimPostprocessOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        if not _activitysim_postprocess_requires_usim_output(context):
+            return []
+        if outputs.usim_datastore_h5 is not None:
+            return []
+        return [
+            ValidationResult(
+                message=(
+                    "usim_input_next/usim_datastore_h5 is required when land use is "
+                    "enabled because ActivitySim postprocess must update the "
+                    "UrbanSim datastore for downstream steps."
+                ),
+                metadata={
+                    "land_use_enabled": True,
+                    "step_name": context.step_name,
+                },
+            )
+        ]
+
+
 @dataclass
 class ActivitySimPostprocessOutputs(StepOutputsBase):
     """
@@ -481,6 +538,9 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         "asim_output_dir",
     )
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
+    validators: ClassVar[Tuple[OutputValidator, ...]] = (
+        _ActivitySimPostprocessOutputsValidator(),
+    )
     usim_datastore_h5: Optional[Path]
     asim_output_dir: Optional[Path] = None
     processed_outputs: Dict[str, Path] = field(default_factory=dict)

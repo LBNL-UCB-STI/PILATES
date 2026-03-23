@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
 
 from pilates.activitysim.outputs import ActivitySimRunOutputs
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
@@ -86,3 +89,37 @@ def test_activitysim_postprocess_outputs_require_processed_asim_tables_but_not_u
 
     assert required == ASIM_REQUIRED_RUN_OUTPUT_KEYS
     assert "usim_input_next" not in required
+
+
+def test_activitysim_postprocess_validation_requires_usim_output_when_land_use_enabled():
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path("/tmp/asim"),
+        processed_outputs={},
+    )
+
+    with pytest.raises(
+        AssertionError,
+        match="usim_input_next/usim_datastore_h5 is required",
+    ):
+        outputs.validate(
+            context=ValidationContext(
+                step_name="activitysim_postprocess",
+                settings=SimpleNamespace(land_use_enabled=True),
+            )
+        )
+
+
+def test_activitysim_postprocess_validation_allows_missing_usim_output_when_land_use_disabled():
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=Path("/tmp/asim"),
+        processed_outputs={},
+    )
+
+    outputs.validate(
+        context=ValidationContext(
+            step_name="activitysim_postprocess",
+            settings=SimpleNamespace(land_use_enabled=False),
+        )
+    )

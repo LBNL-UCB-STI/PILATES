@@ -209,14 +209,14 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
     """
     Tracked BEAM steps must keep explicit canonical output contracts.
 
-    Compatibility exceptions should remain rare; keep this allowlist empty
-    unless a BEAM step truly cannot expose stable canonical keys.
+    Compatibility exceptions should remain rare; beam_postprocess is one of
+    them because whether zarr skims are required depends on which downstream
+    models are active.
     """
-    allowed_empty = frozenset()
+    allowed_empty = frozenset({"beam_postprocess"})
     expected = {
         "beam_preprocess": (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
         "beam_run": (LINKSTATS, BEAM_PLANS_OUT),
-        "beam_postprocess": (ZARR_SKIMS,),
         "beam_full_skim": (BEAM_FULL_SKIMS,),
     }
 

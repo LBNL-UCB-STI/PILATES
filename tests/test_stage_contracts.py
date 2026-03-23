@@ -365,8 +365,9 @@ def stage_env(tmp_path, monkeypatch):
                     },
                 )
             if model_name == "activitysim":
+                _write_file(usim_input_path)
                 return ActivitySimPostprocessOutputs(
-                    usim_datastore_h5=None,
+                    usim_datastore_h5=Path(usim_input_path),
                     asim_output_dir=asim_out_dir,
                     processed_outputs={
                         "beam_plans_out": beam_plans_path,
@@ -1518,8 +1519,10 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
 
     outputs_holder = StepOutputsHolder()
+    usim_next = Path(workspace.get_usim_mutable_data_dir()) / "activitysim_next.h5"
+    _write_file(usim_next)
     outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-        usim_datastore_h5=None,
+        usim_datastore_h5=usim_next,
         asim_output_dir=Path(workspace.get_asim_output_dir()),
     )
 
@@ -1619,8 +1622,10 @@ def test_traffic_assignment_publishes_present_linkstats_warmstart(
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
 
     outputs_holder = StepOutputsHolder()
+    usim_next = Path(workspace.get_usim_mutable_data_dir()) / "activitysim_next.h5"
+    _write_file(usim_next)
     outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-        usim_datastore_h5=None,
+        usim_datastore_h5=usim_next,
         asim_output_dir=Path(workspace.get_asim_output_dir()),
     )
 
@@ -1798,8 +1803,10 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
 
     outputs_holder = StepOutputsHolder()
+    usim_next = Path(workspace.get_usim_mutable_data_dir()) / "activitysim_next.h5"
+    _write_file(usim_next)
     outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-        usim_datastore_h5=None,
+        usim_datastore_h5=usim_next,
         asim_output_dir=Path(workspace.get_asim_output_dir()),
     )
 
