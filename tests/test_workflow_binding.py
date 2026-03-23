@@ -7,6 +7,7 @@ from consist import define_step
 
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
+    ASIM_SHARROW_CACHE_DIR,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -17,7 +18,12 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
 )
-from pilates.workflows.binding import BindingPlan, binding_spec_for_step_name, build_binding_plan
+from pilates.workflows.binding import (
+    BindingPlan,
+    binding_spec_for_step_name,
+    build_binding_plan,
+    build_key_only_binding_plan,
+)
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
 
@@ -110,6 +116,34 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
     assert not plan.missing_required
 
 
+def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setitem(
+        binding_module._FALLBACK_PROVIDERS,
+        "activitysim_input_datastore",
+        lambda **_: {USIM_DATASTORE_BASE_H5: "/tmp/input.h5"},
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        coupler=_CouplerStub({"asim_land_use_in": "workspace://land_use.csv"}),
+        required_keys=["asim_land_use_in"],
+        optional_keys=[USIM_DATASTORE_BASE_H5],
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+    )
+
+    assert plan.input_keys == ["asim_land_use_in"]
+    assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/input.h5"
+    assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
+    assert not plan.missing_required
+
+
 def test_build_binding_plan_preserves_atlas_linear_stage_inputs():
     plan = build_binding_plan(
         step_name="atlas_run",
@@ -148,6 +182,35 @@ def test_build_binding_plan_uses_caller_scoped_fallback_inputs_for_explicit_key_
     assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "explicit"
     assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
     assert plan.source_by_key["psid_names"] == "fallback"
+    assert not plan.missing_required
+
+
+def test_build_key_only_binding_plan_preserves_optional_key_split():
+    coupler = _CouplerStub(
+        {
+            "asim_land_use_in": "workspace://land_use.csv",
+            "zarr_skims": "workspace://skims.zarr",
+            ASIM_SHARROW_CACHE_DIR: "workspace://numba",
+        }
+    )
+    plan = build_key_only_binding_plan(
+        step_name="activitysim_run",
+        input_keys=[
+            "asim_land_use_in",
+            "zarr_skims",
+            ASIM_SHARROW_CACHE_DIR,
+        ],
+        optional_input_keys=[ASIM_SHARROW_CACHE_DIR],
+        coupler=coupler,
+    )
+
+    assert plan.inputs == {}
+    assert plan.input_keys == [
+        "asim_land_use_in",
+        "zarr_skims",
+        ASIM_SHARROW_CACHE_DIR,
+    ]
+    assert plan.source_by_key[ASIM_SHARROW_CACHE_DIR] == "coupler"
     assert not plan.missing_required
 
 

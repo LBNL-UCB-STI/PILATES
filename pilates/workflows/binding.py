@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 """
 Workflow binding-layer data structures.
 
@@ -221,8 +223,32 @@ def _urbansim_inputs_for_year(
     return inputs
 
 
+def _activitysim_input_datastore(
+    *,
+    settings: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if settings is None or workspace is None:
+        return None
+    get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    if not callable(get_usim_dir):
+        return None
+
+    from pilates.activitysim.postprocessor import get_usim_datastore_fname
+
+    candidate = os.path.join(
+        get_usim_dir(),
+        get_usim_datastore_fname(settings, io="input"),
+    )
+    if not os.path.exists(candidate):
+        return None
+    return {USIM_DATASTORE_BASE_H5: candidate}
+
+
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
+    "activitysim_input_datastore": _activitysim_input_datastore,
 }
 
 
@@ -249,6 +275,14 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=ASIM_OMX_SKIMS,
                 required=True,
+            ),
+        ),
+        "activitysim_postprocess": (
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_BASE_H5,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="activitysim_input_datastore",
             ),
         ),
         "beam_preprocess": (
@@ -494,4 +528,45 @@ def build_binding_plan(
         missing_required=missing_required,
         output_paths=dict(output_paths) if output_paths is not None else None,
         metadata=plan_metadata or None,
+    )
+
+
+def build_key_only_binding_plan(
+    *,
+    step_name: str,
+    input_keys: Optional[Iterable[str]] = None,
+    optional_input_keys: Optional[Iterable[str]] = None,
+    coupler: Optional[CouplerProtocol] = None,
+    metadata: Optional[Mapping[str, Any]] = None,
+    settings: Any = None,
+    state: Any = None,
+    workspace: Any = None,
+    year: Optional[int] = None,
+) -> BindingPlan:
+    """
+    Build a binding plan for steps that consume coupler-backed keys only.
+
+    This keeps dynamic key lists on the shared binding path so stages no longer
+    need to assemble raw ``BindingPlan(input_keys=...)`` envelopes by hand.
+    """
+    ordered_input_keys = list(dict.fromkeys(input_keys or ()))
+    if not ordered_input_keys:
+        return BindingPlan(
+            step_name=step_name,
+            metadata=dict(metadata) if metadata else None,
+        )
+
+    optional_key_set = set(optional_input_keys or ())
+    required_keys = [key for key in ordered_input_keys if key not in optional_key_set]
+    optional_keys = [key for key in ordered_input_keys if key in optional_key_set]
+    return build_binding_plan(
+        step_name=step_name,
+        coupler=coupler,
+        required_keys=required_keys,
+        optional_keys=optional_keys or None,
+        metadata=metadata,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
     )

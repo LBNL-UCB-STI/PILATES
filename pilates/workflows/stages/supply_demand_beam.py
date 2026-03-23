@@ -10,7 +10,11 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.formatting import formatted_print
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.workflows.binding import BindingPlan, build_binding_plan
+from pilates.workflows.binding import (
+    BindingPlan,
+    build_binding_plan,
+    build_key_only_binding_plan,
+)
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import (
@@ -468,7 +472,16 @@ def _run_beam_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                binding=BindingPlan(input_keys=beam_run_input_keys),
+                binding=build_key_only_binding_plan(
+                    step_name="beam_run",
+                    input_keys=beam_run_input_keys,
+                    optional_input_keys=[LINKSTATS_WARMSTART],
+                    coupler=coupler,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    year=year,
+                ),
                 year=year,
             )
         ],

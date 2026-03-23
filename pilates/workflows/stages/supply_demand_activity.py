@@ -10,17 +10,15 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
-    artifact_to_path,
     clean_expected_outputs,
     resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
-from pilates.workflows.input_resolution import (
-    resolved_value_for_key,
-    resolve_step_inputs,
+from pilates.workflows.binding import (
+    build_binding_plan,
+    build_key_only_binding_plan,
 )
-from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
@@ -43,7 +41,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     ZARR_SKIMS,
 )
-from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.activitysim.runner import persist_sharrow_cache_enabled
 from pilates.activitysim.outputs import normalize_asim_output_key
 from pilates.workspace import Workspace
@@ -396,30 +393,7 @@ def _run_activity_demand_phase(
     if requires_numba_cache:
         asim_run_input_keys.append(ASIM_SHARROW_CACHE_DIR)
 
-    activitysim_postprocess_inputs: Dict[str, str] = {}
-    usim_base_fallback = None
-    usim_input_fname = get_usim_datastore_fname(settings, io="input")
-    usim_input_path = os.path.join(
-        workspace.get_usim_mutable_data_dir(), usim_input_fname
-    )
-    if os.path.exists(usim_input_path):
-        usim_base_fallback = usim_input_path
-    usim_base_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_BASE_H5],
-        coupler=coupler,
-        explicit_inputs=inputs.usim_inputs,
-        fallback_inputs={USIM_DATASTORE_BASE_H5: usim_base_fallback}
-        if usim_base_fallback is not None
-        else None,
-    )
-    usim_base_input = resolved_value_for_key(
-        resolved=usim_base_resolution,
-        key=USIM_DATASTORE_BASE_H5,
-        coupler=coupler,
-    )
-    usim_base_path = artifact_to_path(usim_base_input, workspace)
-    if usim_base_path and os.path.exists(usim_base_path):
-        activitysim_postprocess_inputs[USIM_DATASTORE_BASE_H5] = usim_base_path
+    optional_run_keys = [ASIM_SHARROW_CACHE_DIR] if requires_numba_cache else []
 
     activitysim_run_specs = [
         StepRef(
@@ -428,7 +402,16 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            binding=BindingPlan(input_keys=asim_run_input_keys or None),
+            binding=build_key_only_binding_plan(
+                step_name="activitysim_run",
+                input_keys=asim_run_input_keys,
+                optional_input_keys=optional_run_keys,
+                coupler=coupler,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                year=inputs.year,
+            ),
             year=state.forecast_year,
         ),
     ]
@@ -461,6 +444,17 @@ def _run_activity_demand_phase(
     )
     if not postprocess_input_keys:
         postprocess_input_keys = None
+    activitysim_postprocess_binding = build_binding_plan(
+        step_name="activitysim_postprocess",
+        coupler=coupler,
+        explicit_inputs=inputs.usim_inputs,
+        required_keys=postprocess_input_keys or [],
+        optional_keys=[USIM_DATASTORE_BASE_H5],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=inputs.year,
+    )
 
     activitysim_postprocess_specs = [
         StepRef(
@@ -469,10 +463,7 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            binding=BindingPlan(
-                inputs=activitysim_postprocess_inputs or None,
-                input_keys=postprocess_input_keys,
-            ),
+            binding=activitysim_postprocess_binding,
             year=state.forecast_year,
         )
     ]
