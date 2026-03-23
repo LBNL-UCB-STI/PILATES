@@ -1,43 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import resolve_input_precedence
 from pilates.workflows.coupler_namespace import ResolvedCouplerValue
+from pilates.workflows.binding import BindingPlan
 
-
-@dataclass(frozen=True)
-class ResolvedStepInputs:
-    """
-    Canonical representation of resolved step inputs.
-
-    Attributes
-    ----------
-    inputs : dict
-        Explicit input mapping to pass via ``StepRef.inputs``.
-    input_keys : list
-        Coupler keys to pass via ``StepRef.input_keys``.
-    source_by_key : dict
-        Resolution source per key: ``explicit`` / ``coupler`` / ``fallback`` / ``missing``.
-    coupler_key_by_key : dict
-        Actual coupler key used for each resolved coupler-backed input.
-    missing_required : list
-        Required keys that could not be resolved from any source.
-    """
-
-    inputs: Dict[str, Any]
-    input_keys: list[str]
-    source_by_key: Dict[str, str]
-    coupler_key_by_key: Dict[str, str]
-    missing_required: list[str]
-
-    def stepref_inputs(self) -> Optional[Dict[str, Any]]:
-        return self.inputs or None
-
-    def stepref_input_keys(self) -> Optional[list[str]]:
-        return self.input_keys or None
+ResolvedStepInputs = BindingPlan
 
 
 def _resolve_single_key(
@@ -66,7 +36,7 @@ def resolve_step_inputs(
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
     required_keys: Optional[Sequence[str]] = None,
-) -> ResolvedStepInputs:
+) -> BindingPlan:
     """
     Resolve a set of keys into ``inputs`` and ``input_keys`` for a step.
     """
@@ -95,7 +65,7 @@ def resolve_step_inputs(
 
     required = list(required_keys or [])
     missing_required = [key for key in required if source_by_key.get(key) == "missing"]
-    return ResolvedStepInputs(
+    return BindingPlan(
         inputs=resolved_inputs,
         input_keys=resolved_input_keys,
         source_by_key=source_by_key,
@@ -111,7 +81,7 @@ def resolve_preferred_step_input(
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
     required: bool = False,
-) -> ResolvedStepInputs:
+) -> BindingPlan:
     """
     Resolve at most one key from an ordered preference list.
 
@@ -130,7 +100,7 @@ def resolve_preferred_step_input(
             return resolved
 
     missing_required = [preferred_keys[0]] if required and preferred_keys else []
-    return ResolvedStepInputs(
+    return BindingPlan(
         inputs={},
         input_keys=[],
         source_by_key={key: "missing" for key in preferred_keys},
@@ -140,7 +110,7 @@ def resolve_preferred_step_input(
 
 
 def first_resolved_key(
-    resolved: ResolvedStepInputs,
+    resolved: BindingPlan,
     candidate_keys: Sequence[str],
 ) -> Optional[str]:
     """
@@ -155,14 +125,14 @@ def first_resolved_key(
 
 def resolved_value_for_key(
     *,
-    resolved: ResolvedStepInputs,
+    resolved: BindingPlan,
     key: str,
     coupler: Optional[CouplerProtocol] = None,
 ) -> Any:
     """
     Return the resolved value for ``key`` from a prior resolution result.
 
-    ``ResolvedStepInputs.inputs`` only stores explicit/fallback values. Coupler
+    ``BindingPlan.inputs`` only stores explicit/fallback values. Coupler
     values are fetched lazily from ``coupler`` to preserve source semantics.
     """
     source = resolved.source_by_key.get(key)

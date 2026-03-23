@@ -7,7 +7,7 @@ from pathlib import Path
 import warnings
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
-from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
+from consist.types import BindingResult, CacheOptions, ExecutionOptions, OutputPolicyOptions
 
 from pilates.runtime.cache_recovery import run_with_cache_recovery
 from pilates.utils.coupler_helpers import (
@@ -72,6 +72,7 @@ class StepRef:
     step_func: Callable[..., None]
     input_keys: Optional[Sequence[str]] = None
     inputs: Optional[Dict[str, Any]] = None
+    binding: Optional[Any] = None
     output_paths: Optional[Dict[str, Any]] = None
     cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
@@ -100,20 +101,37 @@ def _warn_once(signature: tuple[Any, ...], message: str, *args: Any) -> None:
     logger.warning(message, *args)
 
 
+def _normalize_key_iter(values: Optional[Any]) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        return [values]
+    return [str(key) for key in values]
+
+
 def _warn_for_undeclared_step_inputs(
     *,
     step_name: str,
     input_keys: Optional[Sequence[str]],
     inputs: Optional[Mapping[str, Any]],
+    binding: Optional[Any],
     settings: Any,
     state: Any,
     workspace: Any,
 ) -> None:
     declared_inputs: list[str] = []
-    if inputs:
-        declared_inputs.extend(str(key) for key in inputs.keys())
-    if input_keys:
-        declared_inputs.extend(str(key) for key in input_keys)
+    if binding is not None:
+        if binding.inputs:
+            declared_inputs.extend(str(key) for key in binding.inputs.keys())
+        declared_inputs.extend(_normalize_key_iter(getattr(binding, "input_keys", None)))
+        declared_inputs.extend(
+            _normalize_key_iter(getattr(binding, "optional_input_keys", None))
+        )
+    else:
+        if inputs:
+            declared_inputs.extend(str(key) for key in inputs.keys())
+        if input_keys:
+            declared_inputs.extend(str(key) for key in input_keys)
     component_expected_inputs = expected_inputs_for_step(
         step_name,
         settings,
@@ -216,9 +234,28 @@ def _build_step_run_kwargs(
         run_kwargs["stage"] = resolved_stage
 
     if step.inputs is not None:
+        if step.binding is not None:
+            raise ValueError(
+                f"Step '{step.name}' cannot set both StepRef.binding and StepRef.inputs."
+            )
         run_kwargs["inputs"] = step.inputs
     if step.input_keys is not None:
+        if step.binding is not None:
+            raise ValueError(
+                f"Step '{step.name}' cannot set both StepRef.binding and StepRef.input_keys."
+            )
         run_kwargs["input_keys"] = step.input_keys
+    if step.binding is not None:
+        binding = step.binding
+        if not isinstance(binding, BindingResult):
+            to_binding_result = getattr(binding, "to_binding_result", None)
+            if callable(to_binding_result):
+                binding = to_binding_result()
+        if not isinstance(binding, BindingResult):
+            raise TypeError(
+                f"Step '{step.name}' binding must be a consist.BindingResult or a plan with to_binding_result()."
+            )
+        run_kwargs["binding"] = binding
     if step.output_paths is not None:
         run_kwargs["output_paths"] = step.output_paths
     run_kwargs["execution_options"] = ExecutionOptions(
@@ -559,6 +596,7 @@ def run_manifested_steps(
                 step_name=spec.name,
                 input_keys=step_kwargs.get("input_keys"),
                 inputs=step_kwargs.get("inputs"),
+                binding=step_kwargs.get("binding"),
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -574,7 +612,9 @@ def run_manifested_steps(
                 state=state,
                 workspace=workspace,
                 coupler=coupler,
-                step_inputs=spec.inputs,
+                step_inputs=(
+                    spec.binding.inputs if spec.binding is not None else spec.inputs
+                ),
                 cached_outputs=getattr(step_result, "outputs", None),
                 run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
@@ -691,6 +731,7 @@ def run_workflow(
                 step_name=spec.name,
                 input_keys=step_kwargs.get("input_keys"),
                 inputs=step_kwargs.get("inputs"),
+                binding=step_kwargs.get("binding"),
                 settings=settings,
                 state=state,
                 workspace=workspace,

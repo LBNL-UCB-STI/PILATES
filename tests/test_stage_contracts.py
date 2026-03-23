@@ -23,6 +23,7 @@ from types import SimpleNamespace
 
 import pytest
 import yaml
+from consist.types import BindingResult
 
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
@@ -1126,8 +1127,10 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
         if call.get("model") == "activitysim_preprocess"
     ]
     assert preprocess_calls, "Expected an ActivitySim preprocess step call."
-    assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("input_keys") or [])
-    assert FINAL_SKIMS_OMX not in (preprocess_calls[0].get("inputs") or {})
+    binding = preprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert FINAL_SKIMS_OMX in (binding.input_keys or [])
+    assert FINAL_SKIMS_OMX not in (binding.inputs or {})
 
 
 def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):
@@ -1241,7 +1244,9 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
         call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
     assert beam_preprocess_calls, "Expected a BEAM preprocess step call."
-    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
+    beam_preprocess_binding = beam_preprocess_calls[0]["binding"]
+    assert isinstance(beam_preprocess_binding, BindingResult)
+    beam_preprocess_inputs = beam_preprocess_binding.inputs or {}
     assert beam_preprocess_inputs[BEAM_PLANS_IN] == str(default_plans)
     assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
     assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
@@ -1315,11 +1320,13 @@ def test_supply_demand_stage_beam_only_clamps_outer_iterations(
         call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
     assert len(beam_preprocess_calls) == 1
-    assert beam_preprocess_calls[0]["inputs"][BEAM_PLANS_IN] == str(plans_path)
-    assert beam_preprocess_calls[0]["inputs"][BEAM_HOUSEHOLDS_IN] == str(
+    beam_preprocess_binding = beam_preprocess_calls[0]["binding"]
+    assert isinstance(beam_preprocess_binding, BindingResult)
+    assert beam_preprocess_binding.inputs[BEAM_PLANS_IN] == str(plans_path)
+    assert beam_preprocess_binding.inputs[BEAM_HOUSEHOLDS_IN] == str(
         households_path
     )
-    assert beam_preprocess_calls[0]["inputs"][BEAM_PERSONS_IN] == str(persons_path)
+    assert beam_preprocess_binding.inputs[BEAM_PERSONS_IN] == str(persons_path)
     assert "Clamping outer supply-demand iterations to 1" in caplog.text
 
 
@@ -1717,7 +1724,7 @@ def test_traffic_assignment_prefers_coupler_warmstart_artifact(
     ]
     assert beam_preprocess_calls, "Expected a BEAM preprocess step call."
     assert (
-        beam_preprocess_calls[0]["inputs"][LINKSTATS_WARMSTART]
+        beam_preprocess_calls[0]["binding"].inputs[LINKSTATS_WARMSTART]
         == str(warmstart_path)
     )
 
@@ -1830,16 +1837,19 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
     ]
     assert beam_postprocess_calls, "Expected BEAM postprocess step to execute."
     postprocess_call = beam_postprocess_calls[0]
-    assert f"events_parquet_{state.forecast_year}_0_sub0" in postprocess_call["inputs"]
+    assert (
+        f"events_parquet_{state.forecast_year}_0_sub0"
+        in postprocess_call["binding"].inputs
+    )
     assert (
         f"raw_od_skims_zarr_{state.forecast_year}_0_sub0"
-        in postprocess_call["inputs"]
+        in postprocess_call["binding"].inputs
     )
     assert f"events_parquet_{state.forecast_year}_0_sub0" not in (
-        postprocess_call["input_keys"] or []
+        postprocess_call["binding"].input_keys or []
     )
     assert f"raw_od_skims_zarr_{state.forecast_year}_0_sub0" not in (
-        postprocess_call["input_keys"] or []
+        postprocess_call["binding"].input_keys or []
     )
 
 

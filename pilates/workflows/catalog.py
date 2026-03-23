@@ -348,7 +348,11 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=70,
         outputs_class=ActivitySimPreprocessOutputs,
         input_keys=(USIM_H5_UPDATED,),
-        optional_input_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
+        optional_input_keys=(
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_DATASTORE_BASE_H5,
+            FINAL_SKIMS_OMX,
+        ),
         output_keys=(
             ASIM_MUTABLE_DATA_DIR,
             ASIM_LAND_USE_IN,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from consist import define_step
+from pilates.workflows.binding import BindingPlan
 
 from pilates.utils.coupler_helpers import log_and_set_output, log_output_only
 from pilates.workflows.input_resolution import resolve_step_inputs
@@ -20,6 +21,12 @@ class _FakeScenario:
         self.calls = []
 
     def run(self, **kwargs):
+        binding = kwargs.get("binding")
+        if binding is not None:
+            kwargs = dict(kwargs)
+            kwargs["inputs"] = binding.inputs or {}
+            kwargs["input_keys"] = list(binding.input_keys or [])
+            kwargs["optional_input_keys"] = list(binding.optional_input_keys or [])
         self.calls.append(kwargs)
         return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id="step-run"))
 
@@ -226,6 +233,40 @@ def test_run_workflow_does_not_warn_for_component_local_expected_inputs(caplog):
         "[CONTRACT-ENFORCEMENT][urbansim_preprocess]" in record.message
         for record in caplog.records
     )
+
+
+def test_run_workflow_accepts_binding_result_for_pilot_call_sites():
+    scenario = _FakeScenario()
+    outputs_holder = StepOutputsHolder()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    coupler = _FakeCoupler()
+
+    @define_step(model="dummy_step")
+    def _dummy_step(settings, state, workspace, **kwargs):
+        return None
+
+    binding = BindingPlan()
+    step = StepRef(name="dummy_step", step_func=_dummy_step, binding=binding)
+
+    run_workflow(
+        stage_name="unit",
+        steps=[step],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["binding"] == binding.to_binding_result()
+    assert call["inputs"] == {}
+    assert call["input_keys"] == []
+    assert call["optional_input_keys"] == []
 
 
 def test_log_and_set_output_warns_for_undeclared_output_keys(caplog, tmp_path):

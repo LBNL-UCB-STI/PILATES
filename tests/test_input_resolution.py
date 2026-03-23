@@ -146,11 +146,11 @@ def test_resolved_value_for_key_fetches_coupler_values():
 
 
 def test_resolve_step_inputs_prefers_namespaced_view_key_when_available():
-    """When a coupler view exists, resolution should use the namespaced key."""
+    """When a coupler view exists, the storage key is tracked separately."""
     coupler = _NamespacedCouplerStub({"beam/linkstats_warmstart": "from-namespaced"})
     resolved = resolve_step_inputs(keys=[LINKSTATS_WARMSTART], coupler=coupler)
     assert resolved.inputs == {}
-    assert resolved.input_keys == ["beam/linkstats_warmstart"]
+    assert resolved.input_keys == [LINKSTATS_WARMSTART]
     assert resolved.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert (
         resolved.coupler_key_by_key[LINKSTATS_WARMSTART]

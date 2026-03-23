@@ -46,8 +46,15 @@ class FakeScenario:
         self.calls: list[dict[str, Any]] = []
 
     def run(self, **kwargs: Any) -> dict[str, str]:
-        inputs = kwargs.get("inputs") or {}
-        input_keys = kwargs.get("input_keys") or []
+        binding = kwargs.get("binding")
+        if binding is not None:
+            inputs = binding.inputs or {}
+            input_keys = binding.input_keys or []
+            optional_input_keys = binding.optional_input_keys or []
+        else:
+            inputs = kwargs.get("inputs") or {}
+            input_keys = kwargs.get("input_keys") or []
+            optional_input_keys = kwargs.get("optional_input_keys") or []
         fn = kwargs["fn"]
         model = kwargs.get("model")
         if model is None:
@@ -59,6 +66,8 @@ class FakeScenario:
                 "model": model,
                 "inputs": dict(inputs),
                 "input_keys": list(input_keys),
+                "optional_input_keys": list(optional_input_keys),
+                "binding": binding,
             }
         )
 

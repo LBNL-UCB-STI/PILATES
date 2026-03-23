@@ -17,11 +17,10 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.input_resolution import (
-    ResolvedStepInputs,
     resolved_value_for_key,
-    resolve_preferred_step_input,
     resolve_step_inputs,
 )
+from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
@@ -40,16 +39,13 @@ from pilates.workflows.steps import (
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
     ASIM_OMX_SKIMS,
-    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_H5_UPDATED,
     ZARR_SKIMS,
 )
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.activitysim.runner import persist_sharrow_cache_enabled
 from pilates.activitysim.outputs import normalize_asim_output_key
-from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -153,99 +149,20 @@ def _run_activity_demand_phase(
     # 1) Preprocess (per-iteration) to prepare compile inputs.
     # 2) Compile (per-year) outside manifest checkpointing.
     # 3) Run/Postprocess (per-iteration) for demand outputs.
-    preprocess_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX],
+    preprocess_binding = build_binding_plan(
+        step_name="activitysim_preprocess",
         coupler=coupler,
         explicit_inputs=inputs.usim_inputs,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=inputs.year,
     )
-    if preprocess_resolution.source_by_key.get(USIM_DATASTORE_CURRENT_H5) == "missing":
-        usim_resolution = resolve_preferred_step_input(
-            preferred_keys=[
-                USIM_H5_UPDATED,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ],
-            coupler=coupler,
-            explicit_inputs=inputs.usim_inputs,
-            required=False,
-        )
-        final_skims_resolution = resolve_step_inputs(
-            keys=[FINAL_SKIMS_OMX],
-            coupler=coupler,
-        )
-        preprocess_resolution = ResolvedStepInputs(
-            inputs={
-                **usim_resolution.inputs,
-                **final_skims_resolution.inputs,
-            },
-            input_keys=usim_resolution.input_keys + final_skims_resolution.input_keys,
-            source_by_key={
-                **usim_resolution.source_by_key,
-                **final_skims_resolution.source_by_key,
-            },
-            coupler_key_by_key={
-                **usim_resolution.coupler_key_by_key,
-                **final_skims_resolution.coupler_key_by_key,
-            },
-            missing_required=usim_resolution.missing_required,
-        )
 
-    preferred_sources = {"explicit", "coupler", "fallback"}
-    if not any(
-        source in preferred_sources
-        for source in preprocess_resolution.source_by_key.values()
-    ):
-        fallback_inputs, _ = build_urbansim_inputs(
-            settings, state, workspace, inputs.year
-        )
-        usim_resolution = resolve_preferred_step_input(
-            preferred_keys=[
-                USIM_H5_UPDATED,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ],
-            coupler=coupler,
-            explicit_inputs=inputs.usim_inputs,
-            fallback_inputs=fallback_inputs,
-            required=True,
-        )
-        final_skims_resolution = resolve_step_inputs(
-            keys=[FINAL_SKIMS_OMX],
-            coupler=coupler,
-        )
-        preprocess_resolution = ResolvedStepInputs(
-            inputs={
-                **usim_resolution.inputs,
-                **final_skims_resolution.inputs,
-            },
-            input_keys=usim_resolution.input_keys + final_skims_resolution.input_keys,
-            source_by_key={
-                **usim_resolution.source_by_key,
-                **final_skims_resolution.source_by_key,
-            },
-            coupler_key_by_key={
-                **usim_resolution.coupler_key_by_key,
-                **final_skims_resolution.coupler_key_by_key,
-            },
-            missing_required=usim_resolution.missing_required,
-        )
-
-    if preprocess_resolution.missing_required:
+    if preprocess_binding.missing_required:
         raise RuntimeError(
             "ActivitySim preprocess requires a resolved UrbanSim datastore input "
             "(explicit, coupler, or fallback), but none were available."
-        )
-
-    if not preprocess_resolution.inputs and not preprocess_resolution.input_keys:
-        # Keep existing behavior for provenance/cache identity compatibility:
-        # require the canonical current datastore key when no concrete source
-        # could be selected from the preferred chain.
-        preprocess_resolution = ResolvedStepInputs(
-            inputs={},
-            input_keys=[USIM_DATASTORE_CURRENT_H5],
-            source_by_key={USIM_DATASTORE_CURRENT_H5: "missing"},
-            coupler_key_by_key={},
-            missing_required=[USIM_DATASTORE_CURRENT_H5],
         )
 
     preprocess_specs = [
@@ -255,8 +172,7 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            input_keys=preprocess_resolution.stepref_input_keys(),
-            inputs=preprocess_resolution.stepref_inputs(),
+            binding=preprocess_binding,
             year=state.forecast_year,
         )
     ]
@@ -395,13 +311,16 @@ def _run_activity_demand_phase(
             compile_explicit_inputs[ASIM_OMX_SKIMS] = compile_store_inputs[
                 ASIM_OMX_SKIMS
             ]
-        compile_resolution = resolve_step_inputs(
-            keys=[ASIM_OMX_SKIMS],
+        compile_binding = build_binding_plan(
+            step_name="activitysim_compile",
             coupler=coupler,
             explicit_inputs=compile_explicit_inputs or None,
-            required_keys=[ASIM_OMX_SKIMS],
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=inputs.year,
         )
-        if compile_resolution.missing_required:
+        if compile_binding.missing_required:
             raise RuntimeError(
                 "ActivitySim compile requires omx_skims input, but it could not be "
                 "resolved from explicit preprocess outputs or coupler keys."
@@ -422,14 +341,13 @@ def _run_activity_demand_phase(
         run_workflow(
             stage_name="activity_demand_compile",
             steps=[
-                StepRef(
-                    name="activitysim_compile",
-                    step_func=activitysim_compile_step,
-                    inputs=compile_resolution.stepref_inputs(),
-                    input_keys=compile_resolution.stepref_input_keys(),
-                    output_paths=expected_compile_outputs or None,
-                    cache_mode="overwrite",
-                    load_inputs=False,
+            StepRef(
+                name="activitysim_compile",
+                step_func=activitysim_compile_step,
+                binding=compile_binding,
+                output_paths=expected_compile_outputs or None,
+                cache_mode="overwrite",
+                load_inputs=False,
                     phase="compile",
                     model="activitysim_compile",
                     year=state.forecast_year,
@@ -510,7 +428,7 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            input_keys=asim_run_input_keys or None,
+            binding=BindingPlan(input_keys=asim_run_input_keys or None),
             year=state.forecast_year,
         ),
     ]
@@ -551,8 +469,10 @@ def _run_activity_demand_phase(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            input_keys=postprocess_input_keys,
-            inputs=activitysim_postprocess_inputs or None,
+            binding=BindingPlan(
+                inputs=activitysim_postprocess_inputs or None,
+                input_keys=postprocess_input_keys,
+            ),
             year=state.forecast_year,
         )
     ]

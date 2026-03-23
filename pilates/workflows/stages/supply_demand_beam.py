@@ -10,7 +10,7 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.formatting import formatted_print
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.workflows.input_resolution import resolve_step_inputs
+from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import (
@@ -400,11 +400,15 @@ def _run_beam_preprocess_step(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=None,
-                inputs=resolve_step_inputs(
-                    keys=beam_preprocess_inputs.keys(),
+                binding=build_binding_plan(
+                    step_name="beam_preprocess",
+                    coupler=coupler,
                     explicit_inputs=beam_preprocess_inputs,
-                ).stepref_inputs(),
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    year=year,
+                ),
                 year=year,
             )
         ],
@@ -464,7 +468,7 @@ def _run_beam_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=beam_run_input_keys,
+                binding=BindingPlan(input_keys=beam_run_input_keys),
                 year=year,
             )
         ],
@@ -490,12 +494,22 @@ def _run_beam_steps(
         iteration=iteration,
         include_zarr_skims=include_zarr_skims,
     )
-    beam_postprocess_resolution = None
+    beam_postprocess_binding = None
     if beam_postprocess_input_keys:
-        beam_postprocess_resolution = resolve_step_inputs(
-            keys=beam_postprocess_input_keys,
+        optional_keys = [ZARR_SKIMS] if ZARR_SKIMS in beam_postprocess_input_keys else []
+        required_keys = [
+            key for key in beam_postprocess_input_keys if key not in optional_keys
+        ]
+        beam_postprocess_binding = build_binding_plan(
+            step_name="beam_postprocess",
             coupler=coupler,
             explicit_inputs=step_output_handoff_mapping(upstream_run, coupler=coupler),
+            required_keys=required_keys,
+            optional_keys=optional_keys,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=year,
         )
 
     _run_supply_demand_workflow(
@@ -507,16 +521,7 @@ def _run_beam_steps(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=(
-                    beam_postprocess_resolution.stepref_input_keys()
-                    if beam_postprocess_resolution is not None
-                    else None
-                ),
-                inputs=(
-                    beam_postprocess_resolution.stepref_inputs()
-                    if beam_postprocess_resolution is not None
-                    else None
-                ),
+                binding=beam_postprocess_binding,
                 year=year,
             )
         ],
@@ -577,7 +582,7 @@ def _run_beam_full_skim_step(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
                 ),
-                input_keys=None,
+                binding=BindingPlan(),
                 year=state.forecast_year,
             )
         ],
