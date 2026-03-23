@@ -8,6 +8,7 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.binding import BindingPlan
 from pilates.workflows.artifact_keys import USIM_INPUT_NEXT
 from pilates.workflows import steps
 from pilates.workflows.steps import activitysim as steps_activitysim
@@ -244,26 +245,23 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
     )
     table_calls = []
 
-    monkeypatch.setattr(steps_activitysim, "resolve_preferred_step_input", lambda **_kwargs: {})
     monkeypatch.setattr(
         steps_activitysim,
-        "first_resolved_key",
-        lambda *_args, **_kwargs: "usim_datastore_base_h5",
+        "build_binding_plan",
+        lambda **_kwargs: BindingPlan(
+            source_by_key={"usim_h5_updated": "explicit"},
+            inputs={"usim_h5_updated": str(tmp_path / "model_data.h5")},
+            metadata={
+                "selected_key_by_semantic_key": {
+                    "usim_h5_updated": "usim_datastore_base_h5"
+                }
+            },
+        ),
     )
     monkeypatch.setattr(
         steps_activitysim,
-        "resolved_value_for_key",
-        lambda **_kwargs: str(tmp_path / "model_data.h5"),
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "resolve_artifact_from_value",
-        lambda selected_value, **_kwargs: selected_value,
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "artifact_to_path",
-        lambda value, _workspace=None: str(value),
+        "selected_candidate_key",
+        lambda _resolved, _key: "usim_datastore_base_h5",
     )
     monkeypatch.setattr(steps_activitysim, "log_and_set_input", lambda **_kwargs: None)
     monkeypatch.setattr(

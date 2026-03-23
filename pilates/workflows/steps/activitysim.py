@@ -23,6 +23,7 @@ from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR, USIM_INPUT_NEXT
+from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.outputs_base import (
     StepOutputsBase,
     ValidationContext,
@@ -65,8 +66,7 @@ from .shared import (
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
-    first_resolved_key,
-    resolve_preferred_step_input,
+    selected_candidate_key,
     resolved_value_for_key,
 )
 
@@ -880,22 +880,19 @@ def make_activitysim_preprocess_step(
         dict
             Extra runtime kwargs for the step executor (empty for this helper).
         """
-        resolution = resolve_preferred_step_input(
-            preferred_keys=[
-                USIM_H5_UPDATED,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ],
+        resolution = build_binding_plan(
+            step_name="activitysim_preprocess",
             coupler=coupler,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=state.year,
         )
-        selected_key = first_resolved_key(
-            resolution,
-            [USIM_H5_UPDATED, USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
-        )
+        selected_key = selected_candidate_key(resolution, USIM_H5_UPDATED)
         selected_value = (
             resolved_value_for_key(
                 resolved=resolution,
-                key=selected_key,
+                key=USIM_H5_UPDATED,
                 coupler=coupler,
             )
             if selected_key is not None

@@ -466,7 +466,7 @@ def test_land_use_stage_prefers_explicit_beam_skims_artifact(stage_env):
     )
     preprocess_binding = preprocess_call["binding"]
     assert isinstance(preprocess_binding, BindingResult)
-    assert FINAL_SKIMS_OMX in (preprocess_binding.input_keys or [])
+    assert FINAL_SKIMS_OMX in (preprocess_binding.optional_input_keys or [])
     assert FINAL_SKIMS_OMX not in (preprocess_binding.inputs or {})
 
 
@@ -668,7 +668,7 @@ def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env)
         call for call in stage_env["scenario"].calls if call.get("model") == "atlas_preprocess"
     ]
     assert preprocess_calls, "Expected an ATLAS preprocess step call."
-    assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("input_keys") or [])
+    assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("optional_input_keys") or [])
     assert FINAL_SKIMS_OMX not in (preprocess_calls[0].get("inputs") or {})
 
 
@@ -1133,7 +1133,7 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
     assert preprocess_calls, "Expected an ActivitySim preprocess step call."
     binding = preprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert FINAL_SKIMS_OMX in (binding.input_keys or [])
+    assert FINAL_SKIMS_OMX in (binding.optional_input_keys or [])
     assert FINAL_SKIMS_OMX not in (binding.inputs or {})
 
 
@@ -1599,6 +1599,7 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     ]
     assert beam_run_calls, "Expected BEAM run step to execute."
     assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
+    assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("optional_input_keys", [])
 
 
 def test_traffic_assignment_publishes_present_linkstats_warmstart(
@@ -1701,7 +1702,8 @@ def test_traffic_assignment_publishes_present_linkstats_warmstart(
         and BEAM_PERSONS_IN in (call.get("input_keys") or [])
     ]
     assert beam_run_calls, "Expected BEAM run step to execute."
-    assert LINKSTATS_WARMSTART in beam_run_calls[0].get("input_keys", [])
+    assert LINKSTATS_WARMSTART not in beam_run_calls[0].get("input_keys", [])
+    assert LINKSTATS_WARMSTART in beam_run_calls[0].get("optional_input_keys", [])
 
 
 def test_traffic_assignment_prefers_coupler_warmstart_artifact(

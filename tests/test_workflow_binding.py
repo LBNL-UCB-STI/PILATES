@@ -89,7 +89,8 @@ def test_build_binding_plan_applies_beam_preprocess_preferred_key_overrides():
     assert plan.inputs[BEAM_HOUSEHOLDS_IN] == "/tmp/households.parquet"
     assert plan.inputs[BEAM_PERSONS_IN] == "/tmp/persons.parquet"
     assert plan.inputs[BEAM_CONFIG_FILE] == "/tmp/beam.conf"
-    assert LINKSTATS in plan.input_keys
+    assert plan.input_keys == []
+    assert plan.optional_input_keys == [LINKSTATS]
     assert plan.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert not plan.missing_required
 
@@ -141,6 +142,26 @@ def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider
     assert plan.input_keys == ["asim_land_use_in"]
     assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/input.h5"
     assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
+    assert not plan.missing_required
+
+
+def test_build_binding_plan_centralizes_atlas_preprocess_usim_precedence():
+    plan = build_binding_plan(
+        step_name="atlas_preprocess",
+        coupler=_CouplerStub({USIM_H5_UPDATED: "/tmp/updated.h5"}),
+        fallback_inputs={
+            USIM_DATASTORE_CURRENT_H5: "/tmp/fallback.h5",
+            USIM_DATASTORE_BASE_H5: "/tmp/fallback.h5",
+        },
+        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+    )
+
+    assert plan.input_keys == [USIM_H5_UPDATED]
+    assert plan.optional_input_keys == []
+    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "coupler"
+    assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "coupler"
+    assert plan.coupler_key_by_key[USIM_DATASTORE_CURRENT_H5] == USIM_H5_UPDATED
+    assert plan.coupler_key_by_key[USIM_DATASTORE_BASE_H5] == USIM_H5_UPDATED
     assert not plan.missing_required
 
 
@@ -208,8 +229,8 @@ def test_build_key_only_binding_plan_preserves_optional_key_split():
     assert plan.input_keys == [
         "asim_land_use_in",
         "zarr_skims",
-        ASIM_SHARROW_CACHE_DIR,
     ]
+    assert plan.optional_input_keys == [ASIM_SHARROW_CACHE_DIR]
     assert plan.source_by_key[ASIM_SHARROW_CACHE_DIR] == "coupler"
     assert not plan.missing_required
 

@@ -7,14 +7,9 @@ from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_H5_UPDATED,
 )
-from pilates.workflows.input_resolution import (
-    first_resolved_key,
-    resolve_preferred_step_input,
-    resolve_step_inputs,
-    resolved_value_for_key,
-)
+from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.input_resolution import resolved_value_for_key
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_COMMON,
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
@@ -73,40 +68,31 @@ def build_atlas_inputs(
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}
 
-    atlas_current_resolution = resolve_preferred_step_input(
-        preferred_keys=[USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
-        coupler=coupler,
-    )
-    selected_current_key = first_resolved_key(
-        atlas_current_resolution,
-        [USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
-    )
-    if selected_current_key is None and usim_datastore_h5_path is not None:
-        atlas_current_resolution = resolve_step_inputs(
-            keys=[USIM_DATASTORE_CURRENT_H5],
-            fallback_inputs={USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path},
-        )
-        selected_current_key = USIM_DATASTORE_CURRENT_H5
-
-    atlas_usim_input = (
-        resolved_value_for_key(
-            resolved=atlas_current_resolution,
-            key=selected_current_key,
-            coupler=coupler,
-        )
-        if selected_current_key is not None
+    fallback_inputs = (
+        {
+            USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path,
+            USIM_DATASTORE_BASE_H5: usim_datastore_h5_path,
+        }
+        if usim_datastore_h5_path is not None
         else None
     )
-
-    atlas_base_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_BASE_H5],
+    atlas_resolution = build_binding_plan(
+        step_name="atlas_preprocess",
         coupler=coupler,
-        fallback_inputs={USIM_DATASTORE_BASE_H5: atlas_usim_input}
-        if atlas_usim_input is not None
-        else None,
+        fallback_inputs=fallback_inputs,
+        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+    )
+    atlas_usim_input = resolved_value_for_key(
+        resolved=atlas_resolution,
+        key=USIM_DATASTORE_CURRENT_H5,
+        coupler=coupler,
     )
     atlas_base_input = resolved_value_for_key(
-        resolved=atlas_base_resolution,
+        resolved=atlas_resolution,
         key=USIM_DATASTORE_BASE_H5,
         coupler=coupler,
     )

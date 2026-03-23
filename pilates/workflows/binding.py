@@ -285,6 +285,24 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 fallback_provider="activitysim_input_datastore",
             ),
         ),
+        "atlas_preprocess": (
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
+                required=True,
+                allow_fallback=True,
+                preferred_keys=(USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED),
+            ),
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_BASE_H5,
+                required=True,
+                allow_fallback=True,
+                preferred_keys=(
+                    USIM_DATASTORE_BASE_H5,
+                    USIM_DATASTORE_CURRENT_H5,
+                    USIM_H5_UPDATED,
+                ),
+            ),
+        ),
         "beam_preprocess": (
             ArtifactBindingRule(
                 semantic_key=BEAM_PLANS_IN,
@@ -399,24 +417,26 @@ def _resolve_rule_binding(
     )
     scoped_coupler = coupler if rule.allow_coupler else None
 
-    for candidate in candidates:
-        resolved = resolve_input_precedence(
-            key=candidate,
-            coupler=scoped_coupler,
-            explicit_inputs=explicit_inputs if rule.allow_explicit else None,
-            fallback_inputs=rule_fallback_inputs,
-        )
-        if resolved.source == "missing":
-            continue
-        selected_key = resolved.storage_key or candidate
-        if rule.pass_mode == "explicit_only" and resolved.source == "coupler":
-            continue
-        if rule.pass_mode == "input_key_only" and resolved.source in {
-            "explicit",
-            "fallback",
-        }:
-            continue
-        return resolved.source, selected_key, resolved.value, candidate
+    fallback_passes = (None, rule_fallback_inputs) if rule_fallback_inputs else (None,)
+    for pass_fallback_inputs in fallback_passes:
+        for candidate in candidates:
+            resolved = resolve_input_precedence(
+                key=candidate,
+                coupler=scoped_coupler,
+                explicit_inputs=explicit_inputs if rule.allow_explicit else None,
+                fallback_inputs=pass_fallback_inputs,
+            )
+            if resolved.source == "missing":
+                continue
+            selected_key = resolved.storage_key or candidate
+            if rule.pass_mode == "explicit_only" and resolved.source == "coupler":
+                continue
+            if rule.pass_mode == "input_key_only" and resolved.source in {
+                "explicit",
+                "fallback",
+            }:
+                continue
+            return resolved.source, selected_key, resolved.value, candidate
     return "missing", None, None, None
 
 
@@ -464,6 +484,7 @@ def build_binding_plan(
 
     plan_inputs: Dict[str, Any] = {}
     plan_input_keys: list[str] = []
+    plan_optional_input_keys: list[str] = []
     source_by_key: Dict[str, str] = {}
     coupler_key_by_key: Dict[str, str] = {}
     missing_required: list[str] = []
@@ -505,7 +526,10 @@ def build_binding_plan(
             coupler_key_by_key[semantic_key] = selected_key
             selected_key_by_semantic_key[semantic_key] = matched_candidate or selected_key
         if source == "coupler" and selected_key is not None:
-            plan_input_keys.append(selected_key)
+            if is_required:
+                plan_input_keys.append(selected_key)
+            else:
+                plan_optional_input_keys.append(selected_key)
         elif source in {"explicit", "fallback"}:
             plan_inputs[semantic_key] = value
         elif is_required:
@@ -523,6 +547,7 @@ def build_binding_plan(
         step_name=step_name,
         inputs=plan_inputs,
         input_keys=list(dict.fromkeys(plan_input_keys)),
+        optional_input_keys=list(dict.fromkeys(plan_optional_input_keys)),
         source_by_key=source_by_key,
         coupler_key_by_key=coupler_key_by_key,
         missing_required=missing_required,

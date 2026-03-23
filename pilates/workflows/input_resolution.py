@@ -123,6 +123,26 @@ def first_resolved_key(
     return None
 
 
+def selected_candidate_key(
+    resolved: BindingPlan,
+    key: str,
+) -> Optional[str]:
+    """
+    Return the candidate key that satisfied ``key`` during resolution.
+
+    For plans built through the shared binding layer this reflects the matched
+    preferred-key candidate, not necessarily the semantic workflow key.
+    """
+    metadata = resolved.metadata or {}
+    selected = metadata.get("selected_key_by_semantic_key", {}).get(key)
+    if selected is not None:
+        return str(selected)
+    source = resolved.source_by_key.get(key)
+    if source is not None and source != "missing":
+        return key
+    return None
+
+
 def resolved_value_for_key(
     *,
     resolved: BindingPlan,
