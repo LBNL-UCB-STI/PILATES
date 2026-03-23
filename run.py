@@ -750,8 +750,10 @@ def main():
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
-        partial_run_name = settings.run.output_run_name
-        run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        custom_label = settings.run.output_run_name
+        region = settings.run.region
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_name = f"pilates-run--{region}--{custom_label}--{timestamp}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     scenario_id = _resolve_scenario_id(settings)
     run_seed = _resolve_seed(settings)
