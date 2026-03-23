@@ -474,6 +474,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
     declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_INPUT_NEXT,)
+    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "usim_datastore_h5",

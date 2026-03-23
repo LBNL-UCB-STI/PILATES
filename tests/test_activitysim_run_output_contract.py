@@ -4,6 +4,7 @@ import logging
 from types import SimpleNamespace
 
 from pilates.activitysim.outputs import ActivitySimRunOutputs
+from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
@@ -78,3 +79,10 @@ def test_activitysim_run_stepref_uses_required_outputs_for_runtime_contract():
     assert tuple(run_kwargs["outputs"]) == ASIM_REQUIRED_RUN_OUTPUT_KEYS
     assert "school_shadow_prices_asim_out" not in run_kwargs["outputs"]
     assert "workplace_shadow_prices_asim_out" not in run_kwargs["outputs"]
+
+
+def test_activitysim_postprocess_outputs_require_processed_asim_tables_but_not_usim_next():
+    required = ActivitySimPostprocessOutputs.required_output_keys()
+
+    assert required == ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    assert "usim_input_next" not in required
