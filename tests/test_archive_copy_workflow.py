@@ -6,6 +6,7 @@ import queue
 import pytest
 
 from pilates.utils import coupler_helpers as ch
+from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
@@ -86,6 +87,60 @@ def test_archive_copy_copies_file_and_preserves_relative_path(monkeypatch, tmp_p
     archived = archive_root / "beam" / "output" / "linkstats.csv.gz"
     assert archived.exists()
     assert archived.read_text() == "linkstats"
+
+
+def test_consist_audit_files_are_archived_with_separate_local_and_archive_roots(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    workspace = DummyWorkspace(local_root)
+
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        scenario_id="seattle-baseline",
+        restart_run=False,
+        workspace_root=str(local_root),
+    )
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    local_events = (
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit.jsonl"
+    )
+    local_summary = (
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+    archive_events = (
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit.jsonl"
+    )
+    archive_summary = (
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+
+    assert local_events.exists()
+    assert local_summary.exists()
+    assert archive_events.exists()
+    assert archive_summary.exists()
+    assert archive_events.read_text() == local_events.read_text()
+    assert archive_summary.read_text() == local_summary.read_text()
 
 
 def test_resolve_existing_path_materializes_local_from_archive(

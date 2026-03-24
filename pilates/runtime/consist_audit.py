@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
+from pilates.utils.coupler_helpers import enqueue_archive_copy
+
 
 _AUDIT_LOCK = threading.Lock()
 _AUDIT_STATE_BY_ROOT: Dict[str, Dict[str, Any]] = {}
@@ -148,4 +150,15 @@ def emit_consist_audit_event(
         paths["summary"].write_text(
             json.dumps(_summary_payload(root_key), indent=2, sort_keys=True),
             encoding="utf-8",
+        )
+        # Mirror diagnostics into the archive run dir when local and archive roots
+        # differ, so post-run inspection and restart debugging can use the same
+        # audit bundle.
+        enqueue_archive_copy(
+            key="workflow_diagnostics_consist_restart_audit",
+            path=paths["events"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_consist_restart_audit_summary",
+            path=paths["summary"],
         )
