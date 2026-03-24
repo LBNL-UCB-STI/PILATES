@@ -56,8 +56,17 @@ def run_land_use_stage(
     This stage is responsible for land-use evolution. It prepares UrbanSim
     inputs (including any pre-existing datastore), executes preprocess/run/
     postprocess steps, and then updates the UrbanSim datastore reference for
-    downstream stages. The postprocess output datastore, when present, is
-    preferred; otherwise the run output datastore is used.
+    downstream stages.
+
+    The stage keeps two semantic datastore handles alive:
+    - ``usim_datastore_base_h5`` for the static/exogenous baseline role
+    - ``usim_datastore_h5`` for the current mutable handoff role
+
+    Those roles may resolve to the same physical H5 in some runs, but the
+    distinction is still preserved for restart-sensitive provenance and
+    downstream contract clarity. The postprocess output datastore, when
+    present, is preferred for the current-role handoff; otherwise the run
+    output datastore is used.
 
     Parameters
     ----------
@@ -109,6 +118,8 @@ def run_land_use_stage(
     if preprocess_inputs.get(USIM_DATASTORE_BASE_H5) == preprocess_inputs.get(
         USIM_DATASTORE_CURRENT_H5
     ):
+        # Avoid redundantly passing the same physical H5 twice into preprocess
+        # while still preserving both semantic handles in ``usim_inputs``.
         preprocess_inputs.pop(USIM_DATASTORE_CURRENT_H5, None)
     preprocess_keys = list(preprocess_inputs.keys())
     if FINAL_SKIMS_OMX not in preprocess_keys:
@@ -140,7 +151,9 @@ def run_land_use_stage(
     # Some preprocessors materialize key artifacts via explicit logging rather
     # than RecordStore outputs. Keep those handoff outputs, but also preserve
     # declared UrbanSim inputs so run identity/provenance still reflects the
-    # restart-critical datastore dependencies.
+    # restart-critical datastore dependencies. This includes the semantic
+    # ``base`` and ``current`` datastore roles even when they currently point
+    # at the same file.
     for key, value in usim_inputs.items():
         if value is not None:
             run_inputs.setdefault(key, value)
@@ -193,7 +206,8 @@ def run_land_use_stage(
     elif run_outputs is not None and run_outputs.usim_datastore_h5:
         usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(run_outputs.usim_datastore_h5)
 
-    # Preserve base semantics as the static/exogenous input.
+    # Preserve the base-role handle as the static/exogenous input contract. If
+    # current/base collapsed earlier in the run, keep that role explicit here.
     if (
         USIM_DATASTORE_BASE_H5 not in usim_inputs
         and USIM_DATASTORE_CURRENT_H5 in usim_inputs

@@ -10,6 +10,10 @@ from typing import Dict, List
 # UrbanSim
 USIM_DATASTORE_CURRENT_H5 = "usim_datastore_h5"
 USIM_DATASTORE_BASE_H5 = "usim_datastore_base_h5"
+# ``usim_datastore_h5`` is the canonical "current mutable datastore" handle
+# used across workflow boundaries. ``USIM_DATASTORE_H5`` remains as a
+# compatibility alias for that current-role key, not as a distinct third
+# datastore concept.
 USIM_DATASTORE_H5 = USIM_DATASTORE_CURRENT_H5
 USIM_H5_UPDATED = "usim_h5_updated"
 USIM_MUTABLE_DATA_DIR = "usim_mutable_data_dir"

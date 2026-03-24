@@ -1,13 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import os
 from pathlib import Path
 import re
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from pilates.atlas.inputs import (
+    atlas_run_years,
+    atlas_static_input_keys_for_interval,
+)
 from pilates.config.models import PilatesConfig, load_config
 from pilates.utils.io import compute_model_enabled_flags
-from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
+from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
+)
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
@@ -17,6 +28,7 @@ from pilates.workflows.catalog import (
 _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS = {
     FINAL_SKIMS_OMX,
 }
+_FILTER_ATLAS_LINEAGE_FUTURE_VEHICLE_SERIES = True
 
 
 def _slugify(value: str) -> str:
@@ -62,6 +74,9 @@ class PlannedArtifact:
     external: bool = False
     dynamic: bool = False
     family: Optional[str] = None
+    path_role: Optional[str] = None
+    resolved_path_hint: Optional[str] = None
+    path_notes: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -267,6 +282,179 @@ def _artifact_label(
     if dynamic and family is not None:
         parts.append(family)
     return "\n".join(parts)
+
+
+def _specialize_contract_for_planned_step_run(
+    contract: Mapping[str, Any],
+    *,
+    settings: PilatesConfig,
+    step_name: str,
+    atlas_year: Optional[int],
+) -> Dict[str, Any]:
+    specialized = dict(contract)
+
+    if (
+        not _FILTER_ATLAS_LINEAGE_FUTURE_VEHICLE_SERIES
+        or atlas_year is None
+        or step_name not in {"atlas_preprocess", "atlas_run"}
+    ):
+        return specialized
+
+    run_years = atlas_run_years(settings)
+    interval_start_year = min(run_years) if run_years else int(atlas_year)
+    atlas_static_keys = atlas_static_input_keys_for_interval(
+        settings,
+        interval_start_year=interval_start_year,
+        interval_end_year=int(atlas_year),
+    )
+
+    if step_name == "atlas_preprocess":
+        specialized["optional_output_keys"] = list(
+            dict.fromkeys(
+                [
+                    key
+                    for key in specialized["optional_output_keys"]
+                    if not str(key).startswith("adopt/")
+                ]
+                + list(atlas_static_keys)
+            )
+        )
+        return specialized
+
+    specialized["optional_input_keys"] = list(
+        dict.fromkeys(
+            [
+                key
+                for key in specialized["optional_input_keys"]
+                if not str(key).startswith("adopt/")
+            ]
+            + list(atlas_static_keys)
+        )
+    )
+    return specialized
+
+
+def _planned_workspace_root(settings: PilatesConfig) -> Optional[str]:
+    run_cfg = getattr(settings, "run", None)
+    if run_cfg is None:
+        return None
+    output_dir = getattr(run_cfg, "output_directory", None)
+    if not output_dir:
+        return None
+    run_name = getattr(run_cfg, "output_run_name", None)
+    if run_name:
+        return os.path.join(str(output_dir), str(run_name))
+    return str(output_dir)
+
+
+def _planned_usim_datastore_paths(
+    settings: PilatesConfig,
+    *,
+    forecast_year: Optional[int],
+) -> tuple[Optional[str], Optional[str]]:
+    workspace_root = _planned_workspace_root(settings)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    run_cfg = getattr(settings, "run", None)
+    if workspace_root is None or urbansim_cfg is None or run_cfg is None:
+        return None, None
+
+    region = getattr(run_cfg, "region", None)
+    region_mappings = getattr(urbansim_cfg, "region_mappings", None) or {}
+    region_to_region_id = (
+        region_mappings.get("region_to_region_id", {})
+        if isinstance(region_mappings, Mapping)
+        else getattr(region_mappings, "region_to_region_id", {})
+    )
+    region_id = region_to_region_id.get(region) if region is not None else None
+    mutable_data_folder = getattr(urbansim_cfg, "local_mutable_data_folder", None)
+    input_template = getattr(urbansim_cfg, "input_file_template", None)
+    output_template = getattr(urbansim_cfg, "output_file_template", None)
+    if (
+        region_id is None
+        or not mutable_data_folder
+        or not input_template
+        or not output_template
+    ):
+        return None, None
+
+    usim_dir = os.path.join(workspace_root, str(mutable_data_folder))
+    input_path = os.path.join(usim_dir, input_template.format(region_id=region_id))
+    output_path = (
+        os.path.join(usim_dir, output_template.format(year=forecast_year))
+        if forecast_year is not None
+        else None
+    )
+    return input_path, output_path
+
+
+def _planned_artifact_path_metadata(
+    settings: PilatesConfig,
+    *,
+    artifact_key: str,
+    step_run: Optional[PlannedStepRun],
+    external: bool,
+) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    del external
+    input_path, forecast_output_path = _planned_usim_datastore_paths(
+        settings,
+        forecast_year=step_run.forecast_year if step_run is not None else None,
+    )
+
+    if artifact_key == USIM_DATASTORE_BASE_H5:
+        return (
+            "semantic_base_datastore",
+            input_path,
+            "Static/base UrbanSim datastore handle. It may physically match the current datastore handle in some runs.",
+        )
+
+    if artifact_key == USIM_FORECAST_OUTPUT:
+        return (
+            "forecast_output_datastore",
+            forecast_output_path,
+            "Forecast-year UrbanSim output datastore emitted by the runner before postprocessing merges it back into the mutable input slot.",
+        )
+
+    if artifact_key == USIM_H5_UPDATED:
+        return (
+            "current_mutable_datastore",
+            input_path,
+            "Updated current UrbanSim datastore handle republished onto the mutable input slot for downstream steps.",
+        )
+
+    if artifact_key != USIM_DATASTORE_CURRENT_H5:
+        return None, None, None
+
+    producer_step_name = step_run.step_name if step_run is not None else None
+    if producer_step_name == "urbansim_run":
+        return (
+            "forecast_output_datastore",
+            forecast_output_path,
+            "UrbanSim runner output for the forecast year.",
+        )
+
+    if producer_step_name in {
+        "urbansim_postprocess",
+        "atlas_postprocess",
+        "activitysim_postprocess",
+    }:
+        return (
+            "current_mutable_datastore",
+            input_path,
+            "Current mutable UrbanSim datastore handoff. This often reuses the same physical input-slot path as the base datastore handle.",
+        )
+
+    if producer_step_name == "urbansim_preprocess":
+        return (
+            "current_input_seed",
+            input_path,
+            "Current UrbanSim datastore handle at preprocessing time. This is the seeded mutable input-slot file for the runner.",
+        )
+
+    return (
+        "current_datastore_handle",
+        input_path,
+        "Current UrbanSim datastore handle. Depending on the stage boundary, this may point at the mutable input slot or a forecast output datastore.",
+    )
 
 
 class _PlanBuilder:
@@ -486,7 +674,12 @@ class _PlanBuilder:
         iteration: Optional[int] = None,
         atlas_year: Optional[int] = None,
     ) -> PlannedStepRun:
-        contract = self.contracts[step_name]
+        contract = _specialize_contract_for_planned_step_run(
+            self.contracts[step_name],
+            settings=self.settings,
+            step_name=step_name,
+            atlas_year=atlas_year,
+        )
         self._step_sequence += 1
         step_id = "step_%03d_%s" % (self._step_sequence, _slugify(step_name))
         step_run = PlannedStepRun(
@@ -540,6 +733,12 @@ class _PlanBuilder:
         step_run: PlannedStepRun,
     ) -> str:
         scope_external = self._scope_external_artifact(artifact_key, dynamic=dynamic)
+        path_role, resolved_path_hint, path_notes = _planned_artifact_path_metadata(
+            self.settings,
+            artifact_key=artifact_key,
+            step_run=step_run,
+            external=True,
+        )
         scope_parts = [artifact_key, str(dynamic)]
         if scope_external:
             scope_parts.extend(
@@ -585,6 +784,9 @@ class _PlanBuilder:
             external=True,
             dynamic=dynamic,
             family=family,
+            path_role=path_role,
+            resolved_path_hint=resolved_path_hint,
+            path_notes=path_notes,
         )
         self.plan.artifacts.append(artifact)
         self._artifacts_by_id[artifact_id] = artifact
@@ -600,6 +802,12 @@ class _PlanBuilder:
         dynamic: bool,
         family: Optional[str],
     ) -> str:
+        path_role, resolved_path_hint, path_notes = _planned_artifact_path_metadata(
+            self.settings,
+            artifact_key=artifact_key,
+            step_run=step_run,
+            external=False,
+        )
         instance_key = _artifact_instance_key(
             artifact_key,
             step_run=step_run,
@@ -628,6 +836,9 @@ class _PlanBuilder:
             external=False,
             dynamic=dynamic,
             family=family,
+            path_role=path_role,
+            resolved_path_hint=resolved_path_hint,
+            path_notes=path_notes,
         )
         self.plan.artifacts.append(artifact)
         self._artifacts_by_id[artifact_id] = artifact

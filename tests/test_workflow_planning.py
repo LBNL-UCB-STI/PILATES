@@ -94,6 +94,59 @@ def test_static_execution_plan_uses_settings_aware_atlas_scenario_contracts():
     assert all(not key.startswith("adopt/ess_cons/") for key in atlas_static_artifacts)
 
 
+def test_static_execution_plan_filters_future_atlas_adopt_snapshots_by_subyear():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = False
+    settings.traffic_assignment_enabled = False
+    settings.atlas.scenario = "baseline"
+    settings.atlas.adscen = "baseline"
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    atlas_preprocess_2021 = next(
+        step
+        for step in plan.step_runs
+        if step.step_name == "atlas_preprocess"
+        and step.year == 2017
+        and step.atlas_year == 2021
+    )
+    preprocess_outputs_2021 = {
+        artifact.canonical_key
+        for artifact in plan.artifacts
+        if artifact.producer_step_run_id == atlas_preprocess_2021.id
+    }
+
+    assert "adopt/baseline/new_vehicles_biannual_values_2017" in preprocess_outputs_2021
+    assert "adopt/baseline/new_vehicles_biannual_values_2019" in preprocess_outputs_2021
+    assert "adopt/baseline/new_vehicles_biannual_values_2021" in preprocess_outputs_2021
+    assert "adopt/baseline/new_vehicles_biannual_values_2023" not in preprocess_outputs_2021
+    assert "adopt/baseline/used_vehicles_2023" not in preprocess_outputs_2021
+
+    atlas_run_2021 = next(
+        step
+        for step in plan.step_runs
+        if step.step_name == "atlas_run"
+        and step.year == 2017
+        and step.atlas_year == 2021
+    )
+    consumed_artifact_ids = {
+        edge.source
+        for edge in plan.edges
+        if edge.kind == "consumes" and edge.target == atlas_run_2021.id
+    }
+    run_inputs_2021 = {
+        artifact.canonical_key
+        for artifact in plan.artifacts
+        if artifact.id in consumed_artifact_ids
+    }
+
+    assert "adopt/baseline/new_vehicles_biannual_values_2021" in run_inputs_2021
+    assert "adopt/baseline/new_vehicles_biannual_values_2023" not in run_inputs_2021
+    assert "adopt/baseline/used_vehicles_2023" not in run_inputs_2021
+
+
 def test_static_execution_plan_threads_atlas_vehicles2_from_atlas_postprocess():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True
@@ -140,6 +193,50 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
         for edge in consuming_edges
     }
     assert {"urbansim_preprocess", "atlas_preprocess"} <= consuming_step_names
+
+
+def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = False
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    steps_by_id = {step.id: step for step in plan.step_runs}
+
+    base_artifact = next(
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == "usim_datastore_base_h5"
+        and artifact.producer_step_run_id is not None
+        and steps_by_id[artifact.producer_step_run_id].step_name == "urbansim_preprocess"
+    )
+    current_handoff_artifact = next(
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == "usim_datastore_h5"
+        and artifact.producer_step_run_id is not None
+        and steps_by_id[artifact.producer_step_run_id].step_name == "activitysim_postprocess"
+    )
+    forecast_output_artifact = next(
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == "usim_forecast_output"
+        and artifact.producer_step_run_id is not None
+        and steps_by_id[artifact.producer_step_run_id].step_name == "urbansim_run"
+    )
+
+    assert base_artifact.path_role == "semantic_base_datastore"
+    assert current_handoff_artifact.path_role == "current_mutable_datastore"
+    assert forecast_output_artifact.path_role == "forecast_output_datastore"
+
+    assert base_artifact.resolved_path_hint is not None
+    assert current_handoff_artifact.resolved_path_hint == base_artifact.resolved_path_hint
+    assert forecast_output_artifact.resolved_path_hint is not None
+    assert forecast_output_artifact.resolved_path_hint != base_artifact.resolved_path_hint
+
+    assert "same physical input-slot path" in str(current_handoff_artifact.path_notes)
 
 
 def test_static_execution_plan_renders_mermaid_without_contract_gaps():

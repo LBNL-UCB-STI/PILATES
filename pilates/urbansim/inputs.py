@@ -47,9 +47,13 @@ def build_urbansim_inputs(
     -----
     Input keys
         - ``usim_datastore_base_h5``: UrbanSim datastore treated as static/
-          exogenous baseline input for the run year (H5).
+          exogenous baseline input for the run year (H5). This is a semantic
+          role used at workflow boundaries; in some runs it may resolve to the
+          same physical mutable-input H5 as the current datastore handle.
         - ``usim_datastore_h5``: UrbanSim current mutable datastore used by
-          active workflow steps for this year (H5).
+          active workflow steps for this year (H5). On later-year runs this
+          usually points at the latest handoff datastore, while on start-year
+          or fallback paths it may coincide with ``usim_datastore_base_h5``.
         - ``usim_mutable_data_dir``: UrbanSim mutable data directory used as
           the container input/output mount.
     Related outputs
@@ -71,6 +75,9 @@ def build_urbansim_inputs(
         required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )
 
+    # Keep both semantic handles explicit even when they resolve to the same
+    # physical file. The workflow uses ``base`` and ``current`` as distinct
+    # roles for restart-sensitive provenance and downstream handoffs.
     for semantic_key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
         value = resolved_value_for_key(
             resolved=resolution,

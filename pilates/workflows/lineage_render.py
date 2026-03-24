@@ -370,6 +370,9 @@ def render_plan_html(
                     "dynamic": artifact.dynamic,
                     "family": artifact.family,
                     "producer_step_run_id": artifact.producer_step_run_id,
+                    "path_role": artifact.path_role,
+                    "resolved_path_hint": artifact.resolved_path_hint,
+                    "path_notes": artifact.path_notes,
                 },
             }
             for artifact in plan.artifacts
