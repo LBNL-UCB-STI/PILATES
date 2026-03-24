@@ -53,6 +53,7 @@ from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
+from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
 from pilates.workflows.coupler_schema import build_coupler_schema
@@ -809,6 +810,23 @@ def main(
     restart_bookkeeping_hydration: Optional[Dict[str, Any]] = None
     restart_missing_artifacts_initial: List[Dict[str, str]] = []
     restart_missing_artifacts_after_recovery: List[Dict[str, str]] = []
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        scenario_id=scenario_id,
+        seed=run_seed,
+        settings_file=getattr(settings, "settings_file", None),
+        run_name=run_name,
+        workspace_root=workspace.full_path,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        archive_state_path=archive_state_path if is_restart_run else None,
+        restart_run=is_restart_run,
+        data_initialized=bool(state.data_initialized),
+        restart_rehydrate_mode=restart_rehydrate_mode,
+        restart_strict=restart_strict,
+        bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
+    )
 
     if is_restart_run and state.data_initialized:
         if restart_rehydrate_mode == "off":

@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 from types import SimpleNamespace
 
 import yaml
@@ -127,8 +128,8 @@ def _recover_manifest_outputs(
     holder = holder or StepOutputsHolder()
     coupler = coupler or DummyCoupler()
     return _recover_step_outputs(
+        step=StepRef(name=step_name, step_func=step_func),
         step_name=step_name,
-        step_func=step_func,
         outputs_holder=holder,
         settings=settings,
         state=state,
@@ -286,6 +287,100 @@ def test_run_workflow_cache_recovery_uses_binding_inputs_for_non_manifested_step
     )
 
     assert captured["step_inputs"] == {"artifact_a": "value-a"}
+
+
+def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
+    monkeypatch, tmp_path
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    land_use = asim_dir / "land_use.csv"
+    households = asim_dir / "households.csv"
+    persons = asim_dir / "persons.csv"
+    for path in (land_use, households, persons):
+        _write_file(path)
+
+    recovered_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=land_use,
+        households_table=households,
+        persons_table=persons,
+    )
+
+    @define_step(model="activitysim_preprocess")
+    def _dummy_step(settings, state, workspace):
+        return None
+
+    def _fake_recover_step_outputs(*, outputs_holder, audit_meta=None, **_kwargs):
+        if audit_meta is not None:
+            audit_meta["used_output_recoverer"] = True
+            audit_meta["used_tracker_output_lookup"] = True
+        outputs_holder.activitysim_preprocess = recovered_outputs
+        return recovered_outputs
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration._recover_step_outputs",
+        _fake_recover_step_outputs,
+    )
+
+    run_workflow(
+        stage_name="audit_stage",
+        steps=[StepRef(name="activitysim_preprocess", step_func=_dummy_step)],
+        scenario=DummyScenario(cache_hit=True),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="audit",
+    )
+
+    diagnostics_dir = Path(workspace.full_path) / ".workflow" / "diagnostics"
+    events_path = diagnostics_dir / "consist_restart_audit.jsonl"
+    summary_path = diagnostics_dir / "consist_restart_audit_summary.json"
+
+    assert events_path.exists()
+    assert summary_path.exists()
+
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    step_resolution = next(
+        event for event in events if event["event_type"] == "step_resolution"
+    )
+    hydration_check = next(
+        event for event in events if event["event_type"] == "output_hydration_check"
+    )
+
+    assert step_resolution["step_name"] == "activitysim_preprocess"
+    assert step_resolution["resolution_mode"] == "cache_hit_recoverer"
+    assert step_resolution["used_output_recoverer"] is True
+    assert step_resolution["used_tracker_output_lookup"] is True
+
+    assert hydration_check["step_name"] == "activitysim_preprocess"
+    assert hydration_check["hydration_complete"] is True
+    assert hydration_check["required_outputs"] == [
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_PERSONS_IN,
+    ]
+    assert hydration_check["resolved_outputs"] == [
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_PERSONS_IN,
+    ]
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["event_counts"]["step_resolution"] == 1
+    assert summary["event_counts"]["output_hydration_check"] == 1
+    assert (
+        summary["resolution_mode_counts_by_step"]["activitysim_preprocess"][
+            "cache_hit_recoverer"
+        ]
+        == 1
+    )
 
 
 def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_manifest(

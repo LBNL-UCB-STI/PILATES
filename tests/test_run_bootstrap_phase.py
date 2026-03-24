@@ -205,6 +205,57 @@ def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     ]
 
 
+def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    materialization_result = MaterializationResult(
+        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
+        skipped_existing=["existing-cache"],
+    )
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+        ],
+        materialization_results=[materialization_result],
+    )
+    workspace = DummyWorkspace(full_path=str(tmp_path / "bootstrap-run"))
+
+    result = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    diagnostics_dir = Path(workspace.full_path) / ".workflow" / "diagnostics"
+    events_path = diagnostics_dir / "consist_restart_audit.jsonl"
+    summary_path = diagnostics_dir / "consist_restart_audit_summary.json"
+
+    assert result["bootstrap_cache_hit"] is True
+    assert events_path.exists()
+    assert summary_path.exists()
+
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    bootstrap_event = next(
+        event for event in events if event["event_type"] == "bootstrap_resolution"
+    )
+    assert bootstrap_event["resolution_mode"] == "cache_hit_materialized"
+    assert bootstrap_event["bootstrap_cache_enabled"] is True
+    assert bootstrap_event["bootstrap_cache_hit"] is True
+    assert bootstrap_event["fallback_rerun"] is False
+    assert bootstrap_event["scenario_id"] == "seattle-baseline"
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    assert summary["event_counts"]["bootstrap_resolution"] == 1
+
+
 def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})

@@ -14,6 +14,7 @@ from pilates.generic.initialization import (
     build_bootstrap_artifact_summary,
 )
 from pilates.runtime.cache_recovery import materialize_cached_run
+from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
@@ -127,11 +128,12 @@ def run_bootstrap_phase(
         materialization_run_id: Optional[str] = None,
         materialization_result: Optional[MaterializationResult] = None,
         fallback_rerun: bool = False,
+        resolution_mode: str,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary_fn(workspace)
-        return {
+        result = {
             "bootstrap_cache_hit": cache_hit,
             "staged_artifact_summary": staged_artifact_summary,
             "run_reference": build_bootstrap_run_reference(
@@ -145,6 +147,23 @@ def run_bootstrap_phase(
             ),
             "fallback_rerun": fallback_rerun,
         }
+        emit_consist_audit_event(
+            workspace=workspace,
+            event_type="bootstrap_resolution",
+            scenario_id=scenario_id,
+            seed=seed,
+            year=state.start_year,
+            iteration=0,
+            resolution_mode=resolution_mode,
+            bootstrap_cache_enabled=is_bootstrap_cache_enabled(settings),
+            bootstrap_cache_hit=cache_hit,
+            fallback_rerun=fallback_rerun,
+            probe_run_id=probe_run_id,
+            materialization_run_id=materialization_run_id,
+            materialization=result.get("materialization"),
+            staged_artifact_summary=staged_artifact_summary,
+        )
+        return result
 
     run_kwargs: Dict[str, Any] = {
         "fn": _execute_initialization,
@@ -190,6 +209,7 @@ def run_bootstrap_phase(
         return _finalize_bootstrap_result(
             cache_hit=False,
             probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
+            resolution_mode="cache_disabled_execute",
         )
 
     probe_result = tracker.run(**run_kwargs)
@@ -228,6 +248,7 @@ def run_bootstrap_phase(
                 cache_hit=True,
                 probe_run_id=probe_run_id,
                 materialization_result=materialization_result,
+                resolution_mode="cache_hit_materialized",
             )
 
         logger.warning(
@@ -251,12 +272,14 @@ def run_bootstrap_phase(
             materialization_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
             materialization_result=materialization_result,
             fallback_rerun=True,
+            resolution_mode="cache_hit_incomplete_fallback_rerun",
         )
 
     logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
     return _finalize_bootstrap_result(
         cache_hit=False,
         probe_run_id=probe_run_id,
+        resolution_mode="cache_miss_execute",
     )
 
 

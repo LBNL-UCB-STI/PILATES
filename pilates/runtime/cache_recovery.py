@@ -132,13 +132,19 @@ def run_with_cache_recovery(
     run_step: Callable[[Optional[CacheOptions]], Any],
     read_outputs: Callable[[], Optional[Any]],
     recover_outputs: Callable[[Any], Optional[Any]],
-) -> tuple[Any, Optional[Any]]:
+) -> tuple[Any, Optional[Any], dict[str, Any]]:
     """
     Run a step once, try cache-hit recovery, and rerun with overwrite as fallback.
     """
     result = run_step(None)
+    metadata = {
+        "initial_cache_hit": bool(getattr(result, "cache_hit", False)),
+        "recovery_attempts": 0,
+        "overwrite_rerun": False,
+    }
     outputs = read_outputs()
     if outputs is None and getattr(result, "cache_hit", False):
+        metadata["recovery_attempts"] += 1
         outputs = recover_outputs(result)
     if outputs is None and getattr(result, "cache_hit", False):
         logger.warning(
@@ -146,9 +152,11 @@ def run_with_cache_recovery(
             stage_name,
             step_name,
         )
+        metadata["overwrite_rerun"] = True
         result = run_step(CacheOptions(cache_mode="overwrite"))
         outputs = read_outputs()
         if outputs is None and getattr(result, "cache_hit", False):
+            metadata["recovery_attempts"] += 1
             outputs = recover_outputs(result)
-    return result, outputs
-
+    metadata["final_cache_hit"] = bool(getattr(result, "cache_hit", False))
+    return result, outputs, metadata

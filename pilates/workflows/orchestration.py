@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Se
 from consist.types import BindingResult, CacheOptions, ExecutionOptions, OutputPolicyOptions
 
 from pilates.runtime.cache_recovery import run_with_cache_recovery
+from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
@@ -18,6 +19,7 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.catalog import (
+    workflow_step_declared_output_keys,
     workflow_step_key_is_declared,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
@@ -42,6 +44,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
+    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     required_outputs_for_step_outputs_class,
     step_output_mapping,
@@ -226,6 +229,142 @@ def _resolved_step_epoch_identity(
         year = getattr(state, "year", None)
     iteration = step.iteration if step.iteration is not None else default_iteration
     return model_name, year, iteration
+
+
+def _step_scope_fields(
+    *,
+    stage_name: str,
+    step_name: str,
+    state: Any,
+    run_id: Optional[str] = None,
+    cache_hit: Optional[bool] = None,
+) -> Dict[str, Any]:
+    return {
+        "stage_name": stage_name,
+        "step_name": step_name,
+        "year": getattr(state, "current_year", getattr(state, "year", None)),
+        "forecast_year": getattr(state, "forecast_year", None),
+        "iteration": getattr(
+            state,
+            "current_inner_iter",
+            getattr(state, "iteration", None),
+        ),
+        "atlas_year": getattr(state, "atlas_year", None),
+        "run_id": run_id,
+        "cache_hit": cache_hit,
+    }
+
+
+def _resolved_output_keys(outputs: Any) -> list[str]:
+    if outputs is None:
+        return []
+    try:
+        return sorted(step_output_mapping(outputs, warn_lossy=False).keys())
+    except Exception:
+        return []
+
+
+def _declared_and_required_output_keys(step_name: str) -> tuple[list[str], list[str]]:
+    outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
+    declared = list(workflow_step_declared_output_keys(step_name))
+    if not declared and outputs_class is not None:
+        declared = list(declared_outputs_for_step_outputs_class(outputs_class))
+    required: list[str] = []
+    if outputs_class is not None:
+        required = list(required_outputs_for_step_outputs_class(outputs_class))
+    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required))
+
+
+def _emit_output_hydration_audit(
+    *,
+    workspace: Any,
+    stage_name: str,
+    step_name: str,
+    state: Any,
+    resolution_mode: str,
+    outputs: Any,
+    run_id: Optional[str],
+    cache_hit: Optional[bool],
+    recovery_meta: Optional[Mapping[str, Any]] = None,
+) -> None:
+    if outputs is None:
+        return
+    declared_outputs, required_outputs = _declared_and_required_output_keys(step_name)
+    resolved_outputs = _resolved_output_keys(outputs)
+    missing_required_outputs = [
+        key for key in required_outputs if key not in resolved_outputs
+    ]
+    missing_declared_outputs = [
+        key for key in declared_outputs if key not in resolved_outputs
+    ]
+    recovery_meta = recovery_meta or {}
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="output_hydration_check",
+        **_step_scope_fields(
+            stage_name=stage_name,
+            step_name=step_name,
+            state=state,
+            run_id=run_id,
+            cache_hit=cache_hit,
+        ),
+        resolution_mode=resolution_mode,
+        declared_outputs=declared_outputs,
+        required_outputs=required_outputs,
+        resolved_outputs=resolved_outputs,
+        missing_required_outputs=missing_required_outputs,
+        missing_declared_outputs=missing_declared_outputs,
+        typed_output_rebuilt=bool(outputs is not None),
+        hydration_complete=not missing_required_outputs,
+        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
+        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
+        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
+        used_tracker_output_lookup=bool(
+            recovery_meta.get("used_tracker_output_lookup", False)
+        ),
+        used_cached_artifact_recovery=bool(
+            recovery_meta.get("used_cached_artifact_recovery", False)
+        ),
+        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
+    )
+
+
+def _emit_step_resolution_audit(
+    *,
+    workspace: Any,
+    stage_name: str,
+    step_name: str,
+    state: Any,
+    resolution_mode: str,
+    run_id: Optional[str],
+    cache_hit: Optional[bool],
+    recovery_meta: Optional[Mapping[str, Any]] = None,
+) -> None:
+    recovery_meta = recovery_meta or {}
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="step_resolution",
+        **_step_scope_fields(
+            stage_name=stage_name,
+            step_name=step_name,
+            state=state,
+            run_id=run_id,
+            cache_hit=cache_hit,
+        ),
+        resolution_mode=resolution_mode,
+        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
+        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
+        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
+        used_tracker_output_lookup=bool(
+            recovery_meta.get("used_tracker_output_lookup", False)
+        ),
+        used_cached_artifact_recovery=bool(
+            recovery_meta.get("used_cached_artifact_recovery", False)
+        ),
+        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
+        initial_cache_hit=bool(recovery_meta.get("initial_cache_hit", False)),
+        recovery_attempts=int(recovery_meta.get("recovery_attempts", 0) or 0),
+    )
 
 
 def _build_step_run_kwargs(
@@ -573,7 +712,10 @@ def _recover_step_outputs(
     cached_outputs: Optional[Mapping[str, Any]] = None,
     run_id: Optional[str] = None,
     publish_outputs: bool = True,
+    audit_meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
+    if audit_meta is None:
+        audit_meta = {}
     recoverer = step.output_recoverer
     if recoverer is not None:
         outputs = recoverer(
@@ -587,6 +729,11 @@ def _recover_step_outputs(
             run_id=run_id,
         )
         if outputs is not None:
+            audit_meta["used_output_recoverer"] = True
+            audit_meta["used_tracker_output_lookup"] = True
+            audit_meta["used_output_replayer"] = bool(
+                publish_outputs and step.output_replayer is not None
+            )
             return _finalize_recovered_step_outputs(
                 step=step,
                 step_name=step_name,
@@ -610,8 +757,12 @@ def _recover_step_outputs(
         cached_outputs=cached_outputs,
         run_id=run_id,
         publish_outputs=False,
+        audit_meta=audit_meta,
     )
     if outputs is not None:
+        audit_meta["used_output_replayer"] = bool(
+            publish_outputs and step.output_replayer is not None
+        )
         if publish_outputs:
             _publish_recovered_outputs(
                 step=step,
@@ -677,6 +828,10 @@ def run_manifested_steps(
             if expects_outputs:
                 logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
                 outputs = outputs_holder.get_attribute(spec.name)
+                recovery_meta = {
+                    "used_manifest_restore": True,
+                    "used_output_replayer": bool(spec.output_replayer is not None),
+                }
                 if outputs is None:
                     outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
                     if outputs is not None:
@@ -690,6 +845,27 @@ def run_manifested_steps(
                         workspace=workspace,
                         coupler=coupler,
                         outputs_holder=outputs_holder,
+                    )
+                    _emit_step_resolution_audit(
+                        workspace=workspace,
+                        stage_name=stage_name,
+                        step_name=spec.name,
+                        state=state,
+                        resolution_mode="manifest_restore",
+                        run_id=manifest.get(spec.name, {}).get("run_id"),
+                        cache_hit=bool(manifest.get(spec.name, {}).get("cache_hit", False)),
+                        recovery_meta=recovery_meta,
+                    )
+                    _emit_output_hydration_audit(
+                        workspace=workspace,
+                        stage_name=stage_name,
+                        step_name=spec.name,
+                        state=state,
+                        resolution_mode="manifest_restore",
+                        outputs=outputs,
+                        run_id=manifest.get(spec.name, {}).get("run_id"),
+                        cache_hit=bool(manifest.get(spec.name, {}).get("cache_hit", False)),
+                        recovery_meta=recovery_meta,
                     )
                 remember_restored_run_id = getattr(
                     scenario, "remember_restored_run_id", None
@@ -735,6 +911,8 @@ def run_manifested_steps(
             )
             return scenario.run(**step_kwargs)
 
+        recovery_meta: Dict[str, Any] = {}
+
         def _recover_outputs(step_result: Any) -> Optional[Any]:
             return _recover_step_outputs(
                 step=spec,
@@ -748,25 +926,67 @@ def run_manifested_steps(
                 cached_outputs=getattr(step_result, "outputs", None),
                 run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
+                audit_meta=recovery_meta,
             )
 
         if expects_outputs:
-            result, outputs = run_with_cache_recovery(
+            result, outputs, cache_meta = run_with_cache_recovery(
                 stage_name=stage_name,
                 step_name=spec.name,
                 run_step=_run_step,
                 read_outputs=lambda: outputs_holder.get_attribute(spec.name),
                 recover_outputs=_recover_outputs,
             )
+            recovery_meta.update(cache_meta)
             if outputs is None:
                 raise RuntimeError(f"{spec.name} did not populate outputs_holder")
             serialized_outputs = serialize_step_outputs(outputs)
+            if recovery_meta.get("overwrite_rerun"):
+                resolution_mode = "overwrite_rerun_after_cache_hit"
+            elif recovery_meta.get("used_output_recoverer"):
+                resolution_mode = "cache_hit_recoverer"
+            elif recovery_meta.get("used_cached_artifact_recovery"):
+                resolution_mode = "cache_hit_cached_artifacts"
+            elif recovery_meta.get("initial_cache_hit"):
+                resolution_mode = "cache_hit_direct"
+            else:
+                resolution_mode = "executed"
+            _emit_step_resolution_audit(
+                workspace=workspace,
+                stage_name=stage_name,
+                step_name=spec.name,
+                state=state,
+                resolution_mode=resolution_mode,
+                run_id=getattr(getattr(result, "run", None), "id", None),
+                cache_hit=bool(getattr(result, "cache_hit", False)),
+                recovery_meta=recovery_meta,
+            )
+            _emit_output_hydration_audit(
+                workspace=workspace,
+                stage_name=stage_name,
+                step_name=spec.name,
+                state=state,
+                resolution_mode=resolution_mode,
+                outputs=outputs,
+                run_id=getattr(getattr(result, "run", None), "id", None),
+                cache_hit=bool(getattr(result, "cache_hit", False)),
+                recovery_meta=recovery_meta,
+            )
         else:
             # Steps without declared outputs can still be checkpointed. We record the
             # run id so restart reconstruction can re-materialize completed runs, but
             # do not force an outputs_holder hydration loop.
             result = _run_step(None)
             serialized_outputs = {}
+            _emit_step_resolution_audit(
+                workspace=workspace,
+                stage_name=stage_name,
+                step_name=spec.name,
+                state=state,
+                resolution_mode="executed",
+                run_id=getattr(getattr(result, "run", None), "id", None),
+                cache_hit=bool(getattr(result, "cache_hit", False)),
+            )
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
             "cache_hit": bool(getattr(result, "cache_hit", False)),
@@ -869,6 +1089,8 @@ def run_workflow(
             )
             return scenario.run(**step_kwargs)
 
+        recovery_meta: Dict[str, Any] = {}
+
         def _recover_outputs(step_result: Any) -> Optional[Any]:
             return _recover_step_outputs(
                 step=spec,
@@ -882,14 +1104,47 @@ def run_workflow(
                 cached_outputs=getattr(step_result, "outputs", None),
                 run_id=getattr(getattr(step_result, "run", None), "id", None),
                 publish_outputs=True,
+                audit_meta=recovery_meta,
             )
 
-        result, _outputs = run_with_cache_recovery(
+        result, outputs, cache_meta = run_with_cache_recovery(
             stage_name=stage_name,
             step_name=spec.name,
             run_step=_run_step,
             read_outputs=lambda: outputs_holder.get_attribute(spec.name),
             recover_outputs=_recover_outputs,
+        )
+        recovery_meta.update(cache_meta)
+        if recovery_meta.get("overwrite_rerun"):
+            resolution_mode = "overwrite_rerun_after_cache_hit"
+        elif recovery_meta.get("used_output_recoverer"):
+            resolution_mode = "cache_hit_recoverer"
+        elif recovery_meta.get("used_cached_artifact_recovery"):
+            resolution_mode = "cache_hit_cached_artifacts"
+        elif recovery_meta.get("initial_cache_hit"):
+            resolution_mode = "cache_hit_direct"
+        else:
+            resolution_mode = "executed"
+        _emit_step_resolution_audit(
+            workspace=workspace,
+            stage_name=stage_name,
+            step_name=spec.name,
+            state=state,
+            resolution_mode=resolution_mode,
+            run_id=getattr(getattr(result, "run", None), "id", None),
+            cache_hit=bool(getattr(result, "cache_hit", False)),
+            recovery_meta=recovery_meta,
+        )
+        _emit_output_hydration_audit(
+            workspace=workspace,
+            stage_name=stage_name,
+            step_name=spec.name,
+            state=state,
+            resolution_mode=resolution_mode,
+            outputs=outputs,
+            run_id=getattr(getattr(result, "run", None), "id", None),
+            cache_hit=bool(getattr(result, "cache_hit", False)),
+            recovery_meta=recovery_meta,
         )
 
         if coupler_keys is not None:
@@ -994,16 +1249,20 @@ def _recover_cached_outputs(
     cached_outputs: Optional[Mapping[str, Any]] = None,
     run_id: Optional[str] = None,
     publish_outputs: bool = True,
+    audit_meta: Optional[Dict[str, Any]] = None,
 ) -> Optional[Any]:
     """
     Best-effort output recovery for cache hits that skip step execution.
     """
+    if audit_meta is None:
+        audit_meta = {}
     _cached_run_outputs_by_key: Optional[Dict[str, Any]] = None
 
     def _cached_run_outputs() -> Dict[str, Any]:
         nonlocal _cached_run_outputs_by_key
         if _cached_run_outputs_by_key is not None:
             return _cached_run_outputs_by_key
+        audit_meta["used_tracker_output_lookup"] = True
         _cached_run_outputs_by_key = load_tracker_run_outputs(
             run_id,
             logger=logger,
@@ -1028,6 +1287,7 @@ def _recover_cached_outputs(
         recovered_paths = _recovered_cached_paths()
         if not recovered_paths:
             return None
+        audit_meta["used_cached_artifact_recovery"] = True
         if step_name == "urbansim_preprocess":
             return UrbanSimPreprocessOutputs(
                 usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
