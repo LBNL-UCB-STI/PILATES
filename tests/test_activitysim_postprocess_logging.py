@@ -28,7 +28,7 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
-    output_logger = step_fn.__pilates_output_replayer__
+    output_logger = step_fn.pilates_output_replayer
     calls = []
     h5_table_calls = []
 
@@ -305,7 +305,7 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_pa
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
-    output_logger = step_fn.__pilates_output_replayer__
+    output_logger = step_fn.pilates_output_replayer
     table_calls = []
 
     monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
@@ -347,7 +347,7 @@ def test_activitysim_postprocess_publishes_beam_handoff_outputs_to_coupler(
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
-    output_logger = step_fn.__pilates_output_replayer__
+    output_logger = step_fn.pilates_output_replayer
     output_only_calls = []
     publish_calls = []
 

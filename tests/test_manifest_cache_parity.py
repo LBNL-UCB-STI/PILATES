@@ -318,7 +318,7 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_preprocess", fresh_outputs)
-        fresh_runtime_step.__pilates_output_replayer__(
+        fresh_runtime_step.pilates_output_replayer(
             fresh_outputs,
             settings,
             state,
@@ -568,7 +568,7 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_run", fresh_outputs)
-        fresh_runtime_step.__pilates_output_replayer__(
+        fresh_runtime_step.pilates_output_replayer(
             fresh_outputs,
             settings,
             state,
@@ -736,7 +736,7 @@ def test_activitysim_run_binding_tracks_optional_sharrow_cache_dir(
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_run", fresh_outputs)
-        fresh_runtime_step.__pilates_output_replayer__(
+        fresh_runtime_step.pilates_output_replayer(
             fresh_outputs,
             settings,
             state,
@@ -914,7 +914,7 @@ def test_beam_run_binding_tracks_optional_warmstart(
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("beam_run", fresh_outputs)
-        fresh_runtime_step.__pilates_output_replayer__(
+        fresh_runtime_step.pilates_output_replayer(
             fresh_outputs,
             settings,
             state,
@@ -1045,7 +1045,7 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
 
     def _fresh_step(**_runtime_kwargs):
         fresh_holder.set_attribute("activitysim_postprocess", fresh_outputs)
-        fresh_runtime_step.__pilates_output_replayer__(
+        fresh_runtime_step.pilates_output_replayer(
             fresh_outputs,
             settings,
             state,

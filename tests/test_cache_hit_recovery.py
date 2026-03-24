@@ -121,8 +121,8 @@ def _recover_activitysim_step_outputs(
     run_id=None,
 ):
     return _recover_step_outputs(
+        step=StepRef(name=step_name, step_func=step_func),
         step_name=step_name,
-        step_func=step_func,
         outputs_holder=holder,
         settings=settings or SimpleNamespace(),
         state=state or SimpleNamespace(),
@@ -149,8 +149,8 @@ def _recover_beam_step_outputs(
     run_id=None,
 ):
     return _recover_step_outputs(
+        step=StepRef(name=step_name, step_func=step_func),
         step_name=step_name,
-        step_func=step_func,
         outputs_holder=holder,
         settings=settings or SimpleNamespace(),
         state=state or SimpleNamespace(),
@@ -578,7 +578,7 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
             }
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -617,7 +617,7 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
             return {USIM_FORECAST_OUTPUT: str(usim_output)}
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -626,8 +626,8 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     holder.urbansim_preprocess = object()
     step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="urbansim_run", step_func=step_func),
         step_name="urbansim_run",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
@@ -671,7 +671,7 @@ def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
             }
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -680,8 +680,8 @@ def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
     holder.urbansim_run = object()
     step_func = make_urbansim_postprocess_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="urbansim_postprocess", step_func=step_func),
         step_name="urbansim_postprocess",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
@@ -717,7 +717,7 @@ def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypat
             }
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -726,8 +726,8 @@ def test_recover_atlas_run_outputs_from_cached_run_artifacts(tmp_path, monkeypat
     holder.atlas_preprocess = object()
     step_func = make_atlas_run_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="atlas_run", step_func=step_func),
         step_name="atlas_run",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
@@ -759,7 +759,7 @@ def test_recover_atlas_run_outputs_requires_canonical_current_year_files(
             return {"householdv_2018": str(householdv_path)}
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -768,8 +768,8 @@ def test_recover_atlas_run_outputs_requires_canonical_current_year_files(
     holder.atlas_preprocess = object()
     step_func = make_atlas_run_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="atlas_run", step_func=step_func),
         step_name="atlas_run",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
@@ -803,7 +803,7 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
             }
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -812,8 +812,8 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     holder.atlas_run = object()
     step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="atlas_postprocess", step_func=step_func),
         step_name="atlas_postprocess",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(
@@ -852,7 +852,7 @@ def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
             return {USIM_H5_UPDATED: str(updated_h5)}
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 
@@ -861,8 +861,8 @@ def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
     holder.atlas_run = object()
     step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_step_outputs(
+        step=StepRef(name="atlas_postprocess", step_func=step_func),
         step_name="atlas_postprocess",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(
@@ -894,7 +894,7 @@ def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monk
             return {BEAM_FULL_SKIMS: str(full_skims)}
 
     monkeypatch.setattr(
-        "pilates.workflows.orchestration.cr.current_tracker",
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
         lambda: DummyTracker(),
     )
 

@@ -27,6 +27,7 @@ from pilates.workflows.orchestration import (
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import (
     StepOutputsHolder,
+    activitysim_compile_output_paths,
     make_activitysim_compile_step,
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
@@ -313,6 +314,7 @@ def _run_activity_demand_phase(
                 name="activitysim_compile",
                 step_func=activitysim_compile_step,
                 binding=compile_binding,
+                output_paths_provider=activitysim_compile_output_paths,
                 cache_mode="overwrite",
                 load_inputs=False,
                 phase="compile",

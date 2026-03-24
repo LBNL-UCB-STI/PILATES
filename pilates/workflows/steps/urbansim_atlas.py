@@ -287,7 +287,7 @@ def _execute_urbansim_run_typed(
     return runner.run(upstream, workspace)
 
 
-def _urbansim_run_output_paths(
+def urbansim_run_output_paths(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
@@ -528,7 +528,6 @@ def make_urbansim_run_step(
         output_recoverer=_recover_urbansim_run_outputs,
         step_logger=logger,
     )
-    setattr(step_func, "__pilates_output_paths__", _urbansim_run_output_paths)
     return step_func
 
 

@@ -1257,13 +1257,13 @@ def _make_typed_step_function(
     if output_logger is not None:
         setattr(
             _step_func,
-            "__pilates_output_replayer__",
+            "pilates_output_replayer",
             lambda outputs, settings, state, workspace, holder: output_logger(
                 outputs, settings, state, workspace, holder
             ),
         )
     if output_recoverer is not None:
-        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
+        setattr(_step_func, "pilates_output_recoverer", output_recoverer)
 
     return _decorate_step_with_consist(
         step_func=_step_func,

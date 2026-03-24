@@ -77,6 +77,9 @@ class StepRef:
     inputs: Optional[Dict[str, Any]] = None
     binding: Optional[Any] = None
     output_paths: Optional[Dict[str, Any]] = None
+    output_paths_provider: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None
+    output_replayer: Optional[Callable[..., None]] = None
+    output_recoverer: Optional[Callable[..., Optional[Any]]] = None
     cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
     load_inputs: Optional[bool] = None
@@ -89,6 +92,30 @@ class StepRef:
     iteration: Optional[int] = None
     phase: Optional[str] = None
     stage: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        self._normalize_callable_hook(
+            "output_paths_provider",
+            getattr(self.step_func, "pilates_output_paths_provider", None),
+        )
+        self._normalize_callable_hook(
+            "output_replayer",
+            getattr(self.step_func, "pilates_output_replayer", None),
+        )
+        self._normalize_callable_hook(
+            "output_recoverer",
+            getattr(self.step_func, "pilates_output_recoverer", None),
+        )
+
+    def _normalize_callable_hook(self, field_name: str, fallback: Any) -> None:
+        value = getattr(self, field_name)
+        if value is None:
+            value = fallback
+            object.__setattr__(self, field_name, value)
+        if value is not None and not callable(value):
+            raise TypeError(
+                f"Step '{self.name}' {field_name} must be callable or None."
+            )
 
 
 def _infer_phase(step_name: str) -> Optional[str]:
@@ -471,10 +498,9 @@ def _resolved_step_output_paths(
 ) -> Optional[Mapping[str, Any]]:
     if step.output_paths is not None:
         return step.output_paths
-    output_paths_provider = getattr(step.step_func, "__pilates_output_paths__", None)
-    if not callable(output_paths_provider):
+    if step.output_paths_provider is None:
         return None
-    output_paths = output_paths_provider(
+    output_paths = step.output_paths_provider(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -490,7 +516,7 @@ def _resolved_step_output_paths(
 
 def _publish_recovered_outputs(
     *,
-    step_func: Callable[..., Any],
+    step: StepRef,
     outputs: Any,
     settings: Any,
     state: Any,
@@ -498,8 +524,8 @@ def _publish_recovered_outputs(
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
 ) -> None:
-    replayer = getattr(step_func, "__pilates_output_replayer__", None)
-    if callable(replayer):
+    replayer = step.output_replayer
+    if replayer is not None:
         replayer(outputs, settings, state, workspace, outputs_holder)
         return
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
@@ -507,8 +533,8 @@ def _publish_recovered_outputs(
 
 def _finalize_recovered_step_outputs(
     *,
+    step: StepRef,
     step_name: str,
-    step_func: Callable[..., Any],
     outputs: Any,
     settings: Any,
     state: Any,
@@ -523,7 +549,7 @@ def _finalize_recovered_step_outputs(
     outputs_holder.set_attribute(step_name, outputs)
     if publish_outputs:
         _publish_recovered_outputs(
-            step_func=step_func,
+            step=step,
             outputs=outputs,
             settings=settings,
             state=state,
@@ -536,8 +562,8 @@ def _finalize_recovered_step_outputs(
 
 def _recover_step_outputs(
     *,
+    step: StepRef,
     step_name: str,
-    step_func: Callable[..., Any],
     outputs_holder: StepOutputsHolder,
     settings: Any,
     state: Any,
@@ -548,8 +574,8 @@ def _recover_step_outputs(
     run_id: Optional[str] = None,
     publish_outputs: bool = True,
 ) -> Optional[Any]:
-    recoverer = getattr(step_func, "__pilates_output_recoverer__", None)
-    if callable(recoverer):
+    recoverer = step.output_recoverer
+    if recoverer is not None:
         outputs = recoverer(
             settings=settings,
             state=state,
@@ -562,8 +588,8 @@ def _recover_step_outputs(
         )
         if outputs is not None:
             return _finalize_recovered_step_outputs(
+                step=step,
                 step_name=step_name,
-                step_func=step_func,
                 outputs=outputs,
                 settings=settings,
                 state=state,
@@ -588,7 +614,7 @@ def _recover_step_outputs(
     if outputs is not None:
         if publish_outputs:
             _publish_recovered_outputs(
-                step_func=step_func,
+                step=step,
                 outputs=outputs,
                 settings=settings,
                 state=state,
@@ -657,7 +683,7 @@ def run_manifested_steps(
                         outputs_holder.set_attribute(spec.name, outputs)
                 if outputs is not None:
                     _publish_recovered_outputs(
-                        step_func=spec.step_func,
+                        step=spec,
                         outputs=outputs,
                         settings=settings,
                         state=state,
@@ -711,8 +737,8 @@ def run_manifested_steps(
 
         def _recover_outputs(step_result: Any) -> Optional[Any]:
             return _recover_step_outputs(
+                step=spec,
                 step_name=spec.name,
-                step_func=spec.step_func,
                 outputs_holder=outputs_holder,
                 settings=settings,
                 state=state,
@@ -845,8 +871,8 @@ def run_workflow(
 
         def _recover_outputs(step_result: Any) -> Optional[Any]:
             return _recover_step_outputs(
+                step=spec,
                 step_name=spec.name,
-                step_func=spec.step_func,
                 outputs_holder=outputs_holder,
                 settings=settings,
                 state=state,

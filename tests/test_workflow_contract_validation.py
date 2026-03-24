@@ -12,7 +12,10 @@ from pilates.workflows.coupler_namespace import (
     resolve_coupler_value,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
-from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.steps import (
+    StepOutputsHolder,
+    urbansim_run_output_paths,
+)
 from pilates.workflows import catalog
 from pilates.workflows.steps.urbansim_atlas import make_urbansim_run_step
 from pilates.urbansim.runner import UrbansimRunner
@@ -206,11 +209,10 @@ def test_run_workflow_uses_step_output_path_provider():
     def _output_paths_provider(*, settings, state, workspace):
         return {"zarr_skims": "/tmp/workspace/activitysim/cache/skims.zarr"}
 
-    setattr(_dummy_step, "__pilates_output_paths__", _output_paths_provider)
-
     step = StepRef(
         name="activitysim_compile",
         step_func=_dummy_step,
+        output_paths_provider=_output_paths_provider,
     )
 
     run_workflow(
@@ -253,7 +255,11 @@ def test_run_workflow_uses_urbansim_run_output_path_provider():
     coupler = _FakeCoupler()
 
     run_step = make_urbansim_run_step(coupler=coupler, outputs_holder=outputs_holder)
-    step = StepRef(name="urbansim_run", step_func=run_step)
+    step = StepRef(
+        name="urbansim_run",
+        step_func=run_step,
+        output_paths_provider=urbansim_run_output_paths,
+    )
 
     run_workflow(
         stage_name="unit",

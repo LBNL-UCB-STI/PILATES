@@ -598,7 +598,7 @@ def _compile_step_schema_outputs(ctx: Any) -> list[str]:
     return outputs
 
 
-def _compile_step_output_paths(
+def activitysim_compile_output_paths(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
@@ -669,7 +669,7 @@ def make_activitysim_compile_step(
                 "activitysim_compile requires ActivitySimPreprocessOutputs from activitysim_preprocess"
             )
         if expected_outputs is None:
-            expected_outputs = _compile_step_output_paths(
+            expected_outputs = activitysim_compile_output_paths(
                 settings=settings,
                 state=state,
                 workspace=workspace,
@@ -754,7 +754,6 @@ def make_activitysim_compile_step(
         schema_outputs=_compile_step_schema_outputs,
         tags=["activitysim", "compile"],
     )
-    setattr(step_func, "__pilates_output_paths__", _compile_step_output_paths)
     return step_func
 
 
