@@ -8,15 +8,16 @@ from pilates.utils import consist_runtime as cr
 
 def _install_consist_stub(monkeypatch, calls):
     def _log_input(path, key=None, enabled=None, **meta):
-        calls.append(("input", key, meta))
+        calls.append(("input", key, {"enabled": enabled, **meta}))
         return {"path": path, "key": key}
 
     def _log_output(path, key=None, enabled=None, **meta):
-        calls.append(("output", key, meta))
+        calls.append(("output", key, {"enabled": enabled, **meta}))
         return {"path": path, "key": key}
 
     stub = types.SimpleNamespace(log_input=_log_input, log_output=_log_output)
     monkeypatch.setattr(cr, "consist", stub)
+    monkeypatch.setattr(cr, "current_tracker", lambda: None)
 
 
 def test_log_input_attaches_schema_for_known_key(monkeypatch):
@@ -50,6 +51,61 @@ def test_log_output_does_not_override_explicit_schema(monkeypatch):
     assert calls
     _, _, meta = calls[0]
     assert meta["schema"] is _ExplicitSchema
+
+
+def test_log_h5_table_falls_back_outside_active_run(monkeypatch, tmp_path):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+
+    class _Tracker:
+        def log_h5_table(self, *args, **kwargs):
+            raise RuntimeError("Cannot log artifact outside of a run context.")
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    artifact = cr.log_h5_table(
+        str(h5_path),
+        key="atlas_postprocess_usim_households_table_updated",
+        table_path="/2023/households",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact["key"] == "atlas_postprocess_usim_households_table_updated"
+    assert calls
+    direction, key, meta = calls[0]
+    assert direction == "output"
+    assert key == "atlas_postprocess_usim_households_table_updated"
+    assert meta["enabled"] is False
+
+
+def test_log_h5_container_falls_back_outside_active_run(monkeypatch, tmp_path):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+
+    class _Tracker:
+        def log_h5_container(self, *args, **kwargs):
+            raise RuntimeError("Cannot log artifact outside of a run context.")
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    artifact = cr.log_h5_container(
+        str(h5_path),
+        key="usim_datastore_h5",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact["key"] == "usim_datastore_h5"
+    assert calls
+    direction, key, meta = calls[0]
+    assert direction == "output"
+    assert key == "usim_datastore_h5"
+    assert meta["enabled"] is False
 
 
 def test_log_input_unknown_key_has_no_schema(monkeypatch):

@@ -163,6 +163,41 @@ def test_urbansim_and_atlas_step_factories_attach_consist_metadata():
         assert meta.outputs == expected_outputs[step_name]
 
 
+def test_atlas_step_metadata_config_includes_parent_forecast_year():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    step = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(),
+        activitysim=None,
+        beam=None,
+        urbansim=None,
+        postprocessing=None,
+        atlas=SimpleNamespace(model_dump=lambda: {"max_retries": 1}),
+    )
+    state = SimpleNamespace(year=2023, forecast_year=2023, main_forecast_year=2029)
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+
+    class _Ctx:
+        def __init__(self, runtime):
+            self._runtime = runtime
+
+        def get_runtime(self, name, default=None):
+            return self._runtime.get(name, default)
+
+    ctx = _Ctx({"settings": settings, "state": state, "workspace": workspace})
+
+    config = meta.config(ctx)
+    facet = meta.facet(ctx)
+
+    assert config["atlas_subyear"] == 2023
+    assert config["main_forecast_year"] == 2029
+    assert facet["atlas_subyear"] == 2023
+    assert facet["main_forecast_year"] == 2029
+
+
 def test_urbansim_run_declares_strict_output_contract():
     coupler = _DummyCoupler()
     holder = StepOutputsHolder()

@@ -25,6 +25,9 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
     def _settings(ctx: StepContext) -> Any:
         return _runtime_value(ctx, "settings")
 
+    def _state(ctx: StepContext) -> Any:
+        return _runtime_value(ctx, "state")
+
     def _workspace_path_from_value(value: Any) -> Optional[str]:
         if value is None:
             return None
@@ -183,6 +186,25 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             settings=settings,
             workspace_path=workspace_path,
         )
+        if model.startswith("atlas_"):
+            state = _state(ctx)
+            atlas_runtime_identity: Dict[str, Any] = {}
+            if state is not None:
+                atlas_subyear = getattr(state, "year", None)
+                if atlas_subyear is not None:
+                    atlas_runtime_identity["atlas_subyear"] = atlas_subyear
+                main_forecast_year = getattr(state, "main_forecast_year", None)
+                if main_forecast_year is not None:
+                    atlas_runtime_identity["main_forecast_year"] = main_forecast_year
+            if atlas_runtime_identity:
+                resolved["config"] = {
+                    **dict(resolved.get("config") or {}),
+                    **atlas_runtime_identity,
+                }
+                resolved["facet"] = {
+                    **dict(resolved.get("facet") or {}),
+                    **atlas_runtime_identity,
+                }
         adapter = _adapter(ctx)
         if adapter is not None:
             resolved["adapter"] = adapter

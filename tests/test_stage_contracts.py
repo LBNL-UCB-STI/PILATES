@@ -770,6 +770,20 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
         )
 
 
+def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    state = stage_env["state"]
+    state.forecast_year = state.year + 6
+
+    assert vo_stage._atlas_sub_years(state) == [
+        state.year,
+        state.year + 2,
+        state.year + 4,
+        state.year + 6,
+    ]
+
+
 def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     stage_env, monkeypatch
 ):

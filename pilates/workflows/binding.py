@@ -22,12 +22,13 @@ from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, L
 from consist.types import BindingResult
 
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import resolve_input_precedence
+from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -43,6 +44,8 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CANDIDATE_PATHS_METADATA_KEY = "candidate_paths_by_semantic_key"
 
 
 def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:
@@ -255,6 +258,105 @@ def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
     )
 
 
+def beam_preprocess_binding_plan(
+    *,
+    coupler: Optional[CouplerProtocol],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    year: Optional[int],
+    activity_demand_outputs: Optional[Mapping[str, Any]],
+    previous_beam_outputs: Optional[Mapping[str, Any]],
+) -> BindingPlan:
+    """
+    Build the BEAM preprocess binding plan from explicit upstream artifacts.
+
+    The plan itself owns fallback selection for the BEAM-only exchange inputs,
+    warm-start linkstats, and optional ATLAS vehicles2 resolution.
+    """
+    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
+    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    if activity_demand_model is not None and activity_demand_outputs is None:
+        if previous_beam_outputs is None:
+            raise RuntimeError(
+                "TrafficAssignment iteration 0 requires activity_demand_outputs "
+                "or previous_beam_outputs. Ensure ActivityDemand completed or "
+                "provide warm-start outputs before running BEAM."
+            )
+
+    explicit_inputs: Dict[str, Any] = {}
+    if activity_demand_outputs is not None:
+        activity_keys = {
+            "beam_plans_asim_out",
+            "beam_plans_out",
+            "households_asim_out",
+            "linkstats",
+            "persons_asim_out",
+        }
+        for key, value in activity_demand_outputs.items():
+            if key in activity_keys:
+                explicit_inputs[key] = value
+    if previous_beam_outputs is not None:
+        for key, value in previous_beam_outputs.items():
+            if key.startswith("linkstats"):
+                explicit_inputs[key] = value
+
+    if activity_demand_model is None:
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                value = artifact_to_path(get_value(key), workspace)
+                if value:
+                    explicit_inputs.setdefault(key, value)
+        exchange_inputs = _beam_preprocess_exchange_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        if exchange_inputs:
+            for key, value in exchange_inputs.items():
+                explicit_inputs.setdefault(key, value)
+
+    explicit_linkstats_value = next(
+        (
+            value
+            for key, value in explicit_inputs.items()
+            if key.startswith("linkstats")
+        ),
+        None,
+    )
+    if explicit_linkstats_value is not None:
+        explicit_inputs.setdefault(LINKSTATS_WARMSTART, explicit_linkstats_value)
+    else:
+        warmstart_inputs = _beam_preprocess_warmstart_inputs(
+            settings=settings,
+            coupler=coupler,
+            workspace=workspace,
+        )
+        if warmstart_inputs:
+            for key, value in warmstart_inputs.items():
+                explicit_inputs.setdefault(key, value)
+
+    atlas_inputs = _beam_preprocess_atlas_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if atlas_inputs:
+        for key, value in atlas_inputs.items():
+            explicit_inputs.setdefault(key, value)
+
+    return build_binding_plan(
+        step_name="beam_preprocess",
+        coupler=coupler,
+        explicit_inputs=explicit_inputs,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+    )
+
+
 def urbansim_datastore_selection_rules(
     *,
     fallback_provider: str = "urbansim_inputs_for_year",
@@ -312,6 +414,21 @@ def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
     return None
 
 
+def _candidate_paths_metadata(
+    *paths_by_semantic_key: tuple[str, Sequence[Optional[Path]]],
+) -> Dict[str, list[str]]:
+    metadata: Dict[str, list[str]] = {}
+    for semantic_key, paths in paths_by_semantic_key:
+        ordered_paths = [
+            str(path)
+            for path in paths
+            if path is not None and str(path)
+        ]
+        if ordered_paths:
+            metadata[semantic_key] = list(dict.fromkeys(ordered_paths))
+    return metadata
+
+
 def _urbansim_datastore_candidates_for_year(
     *,
     settings: Any,
@@ -336,14 +453,24 @@ def _urbansim_datastore_candidates_for_year(
         local_path=input_path,
     )
     base_path = _first_existing_path(input_path, input_archive_path)
+    candidate_paths = _candidate_paths_metadata(
+        (USIM_DATASTORE_BASE_H5, (input_path, input_archive_path)),
+    )
 
     mapping: Dict[str, Any] = {}
     if base_path is not None:
         mapping[USIM_DATASTORE_BASE_H5] = str(base_path)
 
     if is_start_year():
+        candidate_paths.update(
+            _candidate_paths_metadata(
+                (USIM_DATASTORE_CURRENT_H5, (input_path, input_archive_path)),
+            )
+        )
         if base_path is not None:
             mapping[USIM_DATASTORE_CURRENT_H5] = str(base_path)
+        if candidate_paths:
+            mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
         return mapping or None
 
     output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
@@ -355,8 +482,15 @@ def _urbansim_datastore_candidates_for_year(
         local_path=output_path,
     )
     current_path = _first_existing_path(output_path, output_archive_path)
+    candidate_paths.update(
+        _candidate_paths_metadata(
+            (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
+        )
+    )
     if current_path is not None:
         mapping[USIM_DATASTORE_CURRENT_H5] = str(current_path)
+    if candidate_paths:
+        mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
     return mapping or None
 
 
@@ -399,9 +533,108 @@ def _activitysim_input_datastore(
     return {USIM_DATASTORE_BASE_H5: candidate}
 
 
+def _beam_preprocess_exchange_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
+    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    if activity_demand_model is not None:
+        return None
+
+    from pilates.beam.beam_exchange import register_existing_beam_exchange_inputs
+
+    try:
+        record_store = register_existing_beam_exchange_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+    except FileNotFoundError as exc:
+        logger.warning(
+            "BEAM preprocess could not seed default exchange inputs: %s",
+            exc,
+        )
+        return None
+
+    artifacts: Dict[str, Any] = {}
+    workspace_root = getattr(workspace, "full_path", None)
+    for record in record_store.all_records():
+        key = getattr(record, "short_name", None)
+        if key not in {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}:
+            continue
+        path = record.get_absolute_path(base_path=workspace_root)
+        if path and os.path.exists(path):
+            artifacts[key] = path
+    return artifacts or None
+
+
+def _beam_preprocess_warmstart_inputs(
+    *,
+    settings: Any,
+    coupler: Optional[CouplerProtocol],
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    get_value = getattr(coupler, "get", None)
+    if callable(get_value):
+        value = get_value(LINKSTATS_WARMSTART)
+        warmstart_path = artifact_to_path(value, workspace)
+        if warmstart_path and os.path.exists(warmstart_path):
+            return {LINKSTATS_WARMSTART: warmstart_path}
+
+    warmstart_path = resolve_initial_linkstats_path(settings, workspace)
+    if warmstart_path:
+        return {LINKSTATS_WARMSTART: warmstart_path}
+    return None
+
+
+def _beam_preprocess_atlas_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+    if not getattr(settings, "vehicle_ownership_model_enabled", False):
+        return None
+
+    current_iter = getattr(state, "current_inner_iter", getattr(state, "iteration", 0))
+    if current_iter != 0:
+        return None
+
+    forecast_year = getattr(state, "forecast_year", None)
+    if forecast_year is None:
+        return None
+
+    atlas_output_dir = workspace.get_atlas_output_dir()
+    candidates = [
+        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
+        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
+    ]
+    for atlas_vehicle_path in candidates:
+        if os.path.exists(atlas_vehicle_path):
+            return {ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_path}
+    return None
+
+
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
+    "beam_preprocess_exchange_inputs": _beam_preprocess_exchange_inputs,
+    "beam_preprocess_warmstart_inputs": _beam_preprocess_warmstart_inputs,
+    "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
 }
 
 
@@ -461,21 +694,35 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 semantic_key=BEAM_PLANS_IN,
                 required=True,
                 preferred_keys=(BEAM_PLANS_IN, "beam_plans_asim_out", BEAM_PLANS_OUT),
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_HOUSEHOLDS_IN,
                 required=True,
                 preferred_keys=(BEAM_HOUSEHOLDS_IN, "households_asim_out"),
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_PERSONS_IN,
                 required=True,
                 preferred_keys=(BEAM_PERSONS_IN, "persons_asim_out"),
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=LINKSTATS_WARMSTART,
                 required=False,
                 preferred_keys=(LINKSTATS_WARMSTART, LINKSTATS),
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_warmstart_inputs",
+            ),
+            ArtifactBindingRule(
+                semantic_key=ATLAS_VEHICLES2_OUTPUT,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_atlas_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_CONFIG_FILE,
@@ -543,6 +790,37 @@ def _lookup_fallback_inputs(
     return combined or None
 
 
+def _split_candidate_paths_metadata(
+    fallback_inputs: Optional[Mapping[str, Any]],
+) -> tuple[Optional[Mapping[str, Any]], Dict[str, list[str]]]:
+    if not fallback_inputs:
+        return None, {}
+    raw_candidate_paths = fallback_inputs.get(_CANDIDATE_PATHS_METADATA_KEY)
+    if not isinstance(raw_candidate_paths, Mapping):
+        return fallback_inputs, {}
+
+    cleaned = dict(fallback_inputs)
+    cleaned.pop(_CANDIDATE_PATHS_METADATA_KEY, None)
+    candidate_paths_by_semantic_key: Dict[str, list[str]] = {}
+    for semantic_key, candidate_paths in raw_candidate_paths.items():
+        if not isinstance(semantic_key, str):
+            continue
+        if not isinstance(candidate_paths, Sequence) or isinstance(
+            candidate_paths, (str, bytes)
+        ):
+            continue
+        ordered_paths = [
+            str(path)
+            for path in candidate_paths
+            if path is not None and str(path)
+        ]
+        if ordered_paths:
+            candidate_paths_by_semantic_key[semantic_key] = list(
+                dict.fromkeys(ordered_paths)
+            )
+    return cleaned or None, candidate_paths_by_semantic_key
+
+
 def _resolve_rule_binding(
     *,
     rule: ArtifactBindingRule,
@@ -553,7 +831,7 @@ def _resolve_rule_binding(
     state: Any,
     workspace: Any,
     year: Optional[int],
-) -> tuple[str, Optional[str], Optional[Any], Optional[str]]:
+) -> tuple[str, Optional[str], Optional[Any], Optional[str], Dict[str, list[str]]]:
     candidates = rule.preferred_keys or (rule.semantic_key,)
     rule_fallback_inputs = (
         _lookup_fallback_inputs(
@@ -567,6 +845,9 @@ def _resolve_rule_binding(
         )
         if rule.allow_fallback or rule.fallback_provider
         else None
+    )
+    rule_fallback_inputs, candidate_paths_by_semantic_key = _split_candidate_paths_metadata(
+        rule_fallback_inputs
     )
     scoped_coupler = coupler if rule.allow_coupler else None
 
@@ -589,8 +870,14 @@ def _resolve_rule_binding(
                 "fallback",
             }:
                 continue
-            return resolved.source, selected_key, resolved.value, candidate
-    return "missing", None, None, None
+            return (
+                resolved.source,
+                selected_key,
+                resolved.value,
+                candidate,
+                candidate_paths_by_semantic_key,
+            )
+    return "missing", None, None, None, candidate_paths_by_semantic_key
 
 
 def build_binding_plan(
@@ -645,6 +932,7 @@ def build_binding_plan(
     coupler_key_by_key: Dict[str, str] = {}
     missing_required: list[str] = []
     selected_key_by_semantic_key: Dict[str, str] = {}
+    candidate_paths_by_semantic_key: Dict[str, list[str]] = {}
 
     def _default_rule(semantic_key: str, *, required: bool) -> ArtifactBindingRule:
         return ArtifactBindingRule(semantic_key=semantic_key, required=required)
@@ -667,7 +955,7 @@ def build_binding_plan(
                 fallback_provider=rule.fallback_provider,
                 pass_mode=rule.pass_mode,
             )
-        source, selected_key, value, matched_candidate = _resolve_rule_binding(
+        source, selected_key, value, matched_candidate, candidate_paths = _resolve_rule_binding(
             rule=rule,
             coupler=coupler,
             explicit_inputs=explicit_inputs,
@@ -678,6 +966,8 @@ def build_binding_plan(
             year=year,
         )
         source_by_key[semantic_key] = source
+        if candidate_paths:
+            candidate_paths_by_semantic_key.update(candidate_paths)
         if selected_key is not None:
             coupler_key_by_key[semantic_key] = selected_key
             selected_key_by_semantic_key[semantic_key] = matched_candidate or selected_key
@@ -695,6 +985,10 @@ def build_binding_plan(
     if selected_key_by_semantic_key:
         plan_metadata.setdefault("selected_key_by_semantic_key", {}).update(
             selected_key_by_semantic_key
+        )
+    if candidate_paths_by_semantic_key:
+        plan_metadata.setdefault(_CANDIDATE_PATHS_METADATA_KEY, {}).update(
+            candidate_paths_by_semantic_key
         )
     if spec is not None and spec.notes and "notes" not in plan_metadata:
         plan_metadata["notes"] = spec.notes

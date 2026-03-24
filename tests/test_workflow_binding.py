@@ -12,6 +12,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    ATLAS_VEHICLES2_OUTPUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
@@ -22,6 +23,7 @@ from pilates.workflows.binding import (
     ArtifactBindingRule,
     BindingPlan,
     activitysim_datastore_selection_rules,
+    beam_preprocess_binding_plan,
     binding_spec_for_step_name,
     build_binding_plan,
     build_key_only_binding_plan,
@@ -96,6 +98,144 @@ def test_build_binding_plan_applies_beam_preprocess_preferred_key_overrides():
     assert plan.optional_input_keys == [LINKSTATS]
     assert plan.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert not plan.missing_required
+
+
+def test_beam_preprocess_binding_plan_seeds_default_exchange_and_atlas_inputs(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: {
+            BEAM_PLANS_IN: "/tmp/plans.parquet",
+            BEAM_HOUSEHOLDS_IN: "/tmp/households.parquet",
+            BEAM_PERSONS_IN: "/tmp/persons.parquet",
+        },
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: {ATLAS_VEHICLES2_OUTPUT: "/tmp/vehicles2.csv"},
+    )
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand=None)),
+            vehicle_ownership_model_enabled=True,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs=None,
+    )
+
+    assert plan.inputs[BEAM_PLANS_IN] == "/tmp/plans.parquet"
+    assert plan.inputs[BEAM_HOUSEHOLDS_IN] == "/tmp/households.parquet"
+    assert plan.inputs[BEAM_PERSONS_IN] == "/tmp/persons.parquet"
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == "/tmp/vehicles2.csv"
+    assert plan.source_by_key[BEAM_PLANS_IN] == "explicit"
+    assert plan.source_by_key[ATLAS_VEHICLES2_OUTPUT] == "explicit"
+
+
+def test_beam_preprocess_binding_plan_prefers_coupler_exchange_inputs_over_defaults(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: {
+            BEAM_PLANS_IN: "/tmp/default-plans.parquet",
+            BEAM_HOUSEHOLDS_IN: "/tmp/default-households.parquet",
+            BEAM_PERSONS_IN: "/tmp/default-persons.parquet",
+        },
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: None,
+    )
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub(
+            {
+                BEAM_PLANS_IN: "/tmp/coupler-plans.parquet",
+                BEAM_HOUSEHOLDS_IN: "/tmp/coupler-households.parquet",
+                BEAM_PERSONS_IN: "/tmp/coupler-persons.parquet",
+            }
+        ),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand=None)),
+            vehicle_ownership_model_enabled=False,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs=None,
+    )
+
+    assert plan.inputs[BEAM_PLANS_IN] == "/tmp/coupler-plans.parquet"
+    assert plan.inputs[BEAM_HOUSEHOLDS_IN] == "/tmp/coupler-households.parquet"
+    assert plan.inputs[BEAM_PERSONS_IN] == "/tmp/coupler-persons.parquet"
+    assert plan.source_by_key[BEAM_PLANS_IN] == "explicit"
+
+
+def test_beam_preprocess_binding_plan_prefers_previous_linkstats_over_coupler_and_initial(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    prev_linkstats = "/tmp/previous-linkstats.csv.gz"
+    coupler_linkstats = "/tmp/coupler-linkstats.csv.gz"
+    initial_linkstats = "/tmp/initial-linkstats.csv.gz"
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: {LINKSTATS_WARMSTART: initial_linkstats},
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: None,
+    )
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({LINKSTATS_WARMSTART: coupler_linkstats}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand="activitysim")),
+            vehicle_ownership_model_enabled=False,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs={LINKSTATS: prev_linkstats},
+    )
+
+    assert plan.inputs[LINKSTATS_WARMSTART] == prev_linkstats
+    assert plan.source_by_key[LINKSTATS_WARMSTART] == "explicit"
 
 
 def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkeypatch):
@@ -219,6 +359,60 @@ def test_build_binding_plan_centralizes_urbansim_input_selection_fallbacks(monke
         == USIM_DATASTORE_BASE_H5
     )
     assert not plan.missing_required
+
+
+def test_build_binding_plan_records_urbansim_candidate_paths_metadata(tmp_path):
+    workspace_root = tmp_path / "workspace"
+    mutable_usim_dir = workspace_root / "usim"
+    archive_root = tmp_path / "archive"
+    mutable_usim_dir.mkdir(parents=True, exist_ok=True)
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="region-a"),
+        urbansim=SimpleNamespace(
+            input_file_template="input_{region_id}.h5",
+            output_file_template="output_{year}.h5",
+            region_mappings={"region_to_region_id": {"region-a": "001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        year=2030,
+        is_start_year=lambda: False,
+        run_info_path=str(archive_root / "workflow.json"),
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_usim_mutable_data_dir=lambda: str(mutable_usim_dir),
+    )
+
+    archive_input = archive_root / "usim" / "input_001.h5"
+    archive_input.parent.mkdir(parents=True, exist_ok=True)
+    archive_input.write_text("input", encoding="utf-8")
+    archive_output = archive_root / "usim" / "output_2030.h5"
+    archive_output.write_text("output", encoding="utf-8")
+
+    plan = build_binding_plan(
+        step_name="urbansim_input_selection",
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=2030,
+        artifact_rules=urbansim_datastore_selection_rules(),
+        required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
+    )
+
+    candidate_paths = plan.metadata["candidate_paths_by_semantic_key"]
+    assert candidate_paths[USIM_DATASTORE_BASE_H5] == [
+        str(mutable_usim_dir / "input_001.h5"),
+        str(archive_input),
+    ]
+    assert candidate_paths[USIM_DATASTORE_CURRENT_H5] == [
+        str(mutable_usim_dir / "output_2030.h5"),
+        str(archive_output),
+    ]
+    assert plan.inputs[USIM_DATASTORE_BASE_H5] == str(archive_input)
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == str(archive_output)
 
 
 def test_build_binding_plan_centralizes_atlas_preprocess_usim_precedence():

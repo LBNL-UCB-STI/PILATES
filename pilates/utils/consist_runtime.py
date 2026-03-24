@@ -221,7 +221,13 @@ def log_h5_container(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    return tracker.log_h5_container(path, key=key, direction=direction, **meta)
+    try:
+        return tracker.log_h5_container(path, key=key, direction=direction, **meta)
+    except RuntimeError:
+        logger.debug("Skipping HDF5 container logging outside active Consist run.")
+        if direction == "output":
+            return log_output(path, key=key, enabled=False, **meta)
+        return log_input(path, key=key, enabled=False, **meta)
 
 
 def log_h5_table(
@@ -256,9 +262,17 @@ def log_h5_table(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    artifact = tracker.log_h5_table(
-        path, key=key, table_path=table_path, direction=direction, **meta
-    )
+    try:
+        artifact = tracker.log_h5_table(
+            path, key=key, table_path=table_path, direction=direction, **meta
+        )
+    except RuntimeError:
+        logger.debug("Skipping HDF5 table logging outside active Consist run.")
+        artifact = (
+            log_output(path, key=key, enabled=False, **meta)
+            if direction == "output"
+            else log_input(path, key=key, enabled=False, **meta)
+        )
     return _ensure_legacy_table_path_meta(artifact, table_path=table_path)
 
 

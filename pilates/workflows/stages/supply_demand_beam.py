@@ -9,9 +9,9 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.formatting import formatted_print
-from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.workflows.binding import (
     BindingPlan,
+    beam_preprocess_binding_plan,
     build_binding_plan,
     build_key_only_binding_plan,
 )
@@ -26,7 +26,6 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -188,101 +187,6 @@ def _collect_previous_beam_outputs(
     return promoted_outputs or None
 
 
-def _collect_beam_preprocess_inputs(
-    *,
-    settings: PilatesConfig,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    state: WorkflowState,
-    iteration: int,
-    activity_demand_outputs: Optional[Dict[str, Any]],
-    previous_beam_outputs: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """
-    Build preprocess inputs for BEAM from available upstream sources.
-
-    Source precedence:
-    1) ActivitySim outputs (when enabled and available)
-    2) Default BEAM scenario files (when ActivitySim is disabled)
-    3) Prior BEAM outputs and warm-start linkstats
-    4) ATLAS vehicles2 (iteration 0 only, when vehicle ownership is enabled)
-    """
-    beam_preprocess_inputs: Dict[str, Any] = {}
-    forecast_year = state.forecast_year
-    if forecast_year is None:
-        raise RuntimeError(
-            "WorkflowState.forecast_year must be set before building BEAM inputs."
-        )
-
-    if activity_demand_outputs is not None:
-        asim_input_keys = {
-            "beam_plans_asim_out",
-            "beam_plans_out",
-            "households_asim_out",
-            "linkstats",
-            "persons_asim_out",
-        }
-        for key, value in activity_demand_outputs.items():
-            if key in asim_input_keys:
-                beam_preprocess_inputs[key] = value
-    elif settings.run.models.activity_demand is None:
-        logger.info("Falling back on default inputs to BEAM")
-        # In BEAM-only mode the copied mutable scenario already contains the
-        # canonical plans/households/persons files. Let beam_preprocess resolve
-        # and publish those inputs from the staged scenario directory instead of
-        # passing filesystem paths through Consist ahead of time.
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
-                value = get_value(key)
-                if value is not None:
-                    beam_preprocess_inputs[key] = value
-    elif previous_beam_outputs is None:
-        raise RuntimeError(
-            "TrafficAssignment iteration 0 requires activity_demand_outputs "
-            "or previous_beam_outputs. Ensure ActivityDemand completed or "
-            "provide warm-start outputs before running BEAM."
-        )
-
-    if previous_beam_outputs is not None:
-        for key, value in previous_beam_outputs.items():
-            if key.startswith("linkstats"):
-                beam_preprocess_inputs[key] = value
-
-    if previous_beam_outputs is None or not any(
-        key.startswith("linkstats") for key in previous_beam_outputs.keys()
-    ):
-        get_value = getattr(coupler, "get", None)
-        coupler_warmstart = None
-        if callable(get_value):
-            value = get_value(LINKSTATS_WARMSTART)
-            coupler_warmstart = (
-                artifact_to_path(value, workspace) if value is not None else None
-            )
-        if coupler_warmstart and os.path.exists(coupler_warmstart):
-            beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, coupler_warmstart)
-        else:
-            warmstart_path = resolve_initial_linkstats_path(settings, workspace)
-            if warmstart_path:
-                beam_preprocess_inputs.setdefault(LINKSTATS_WARMSTART, warmstart_path)
-
-    if getattr(settings, "vehicle_ownership_model_enabled", False) and iteration == 0:
-        atlas_output_dir = workspace.get_atlas_output_dir()
-        atlas_vehicle_path = os.path.join(
-            atlas_output_dir,
-            f"vehicles2_{forecast_year}.csv",
-        )
-        if not os.path.exists(atlas_vehicle_path):
-            atlas_vehicle_path = os.path.join(
-                atlas_output_dir,
-                f"vehicles2_{forecast_year - 1}.csv",
-            )
-        if os.path.exists(atlas_vehicle_path):
-            beam_preprocess_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, atlas_vehicle_path)
-
-    return beam_preprocess_inputs
-
-
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
@@ -384,7 +288,7 @@ def _run_beam_preprocess_step(
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     year: int,
-    beam_preprocess_inputs: Mapping[str, Any],
+    beam_preprocess_binding: BindingPlan,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
@@ -399,15 +303,7 @@ def _run_beam_preprocess_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             ),
-            binding=build_binding_plan(
-                step_name="beam_preprocess",
-                coupler=coupler,
-                explicit_inputs=beam_preprocess_inputs,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                year=year,
-            ),
+            binding=beam_preprocess_binding,
             year=year,
         )
     )
@@ -423,7 +319,7 @@ def _run_beam_steps(
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    beam_preprocess_inputs: Mapping[str, Any],
+    beam_preprocess_binding: BindingPlan,
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
@@ -447,7 +343,7 @@ def _run_beam_steps(
         coupler=coupler,
         outputs_holder=outputs_holder,
         year=year,
-        beam_preprocess_inputs=beam_preprocess_inputs,
+        beam_preprocess_binding=beam_preprocess_binding,
         settings=settings,
         state=state,
         workspace=workspace,
@@ -631,15 +527,16 @@ def _run_traffic_assignment_phase(
         iteration=inputs.iteration,
         previous_beam_outputs=inputs.previous_beam_outputs,
     )
-    beam_preprocess_inputs = _collect_beam_preprocess_inputs(
-        settings=settings,
-        workspace=workspace,
+    beam_preprocess_binding = beam_preprocess_binding_plan(
         coupler=coupler,
+        settings=settings,
         state=state,
-        iteration=inputs.iteration,
+        workspace=workspace,
+        year=inputs.year,
         activity_demand_outputs=inputs.activity_demand_outputs,
         previous_beam_outputs=previous_beam_outputs,
     )
+    beam_preprocess_inputs = dict(beam_preprocess_binding.inputs or {})
     beam_run_input_keys = _derive_beam_run_input_keys(
         beam_preprocess_inputs=beam_preprocess_inputs,
         activity_demand_outputs=inputs.activity_demand_outputs,
@@ -668,7 +565,7 @@ def _run_traffic_assignment_phase(
             coupler=coupler,
             outputs_holder=outputs_holder,
             year=inputs.year,
-            beam_preprocess_inputs=beam_preprocess_inputs,
+            beam_preprocess_binding=beam_preprocess_binding,
             settings=settings,
             state=state,
             workspace=workspace,
@@ -695,7 +592,7 @@ def _run_traffic_assignment_phase(
             outputs_holder=outputs_holder,
             year=inputs.year,
             iteration=inputs.iteration,
-            beam_preprocess_inputs=beam_preprocess_inputs,
+            beam_preprocess_binding=beam_preprocess_binding,
             beam_run_input_keys=beam_run_input_keys,
             include_zarr_skims=bool(inputs.activity_demand_outputs),
             runtime_kwargs_extra=traffic_runtime_kwargs,
