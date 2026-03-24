@@ -143,21 +143,41 @@ def _prepare_beam_zone_shapefile(
             f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
         )
 
-        # Reset index so the ID becomes a column
+        # Reset index so the canonical ActivitySim zone ID becomes a column.
         canonical_zones_gdf = canonical_zones_gdf.reset_index()
 
         if settings.beam is None:
             raise ValueError("Beam settings are not configured")
         sort_col = settings.beam.skim_zone_geoid_col
+        canonical_id_col = settings.shared.geography.zones.activitysim_index_col
         if sort_col in canonical_zones_gdf.columns:
-            # If the specific beam config column exists, verify sort order
-            canonical_zones_gdf = canonical_zones_gdf.sort_values(by=sort_col)
+            canonical_order = canonical_zones_gdf[canonical_id_col].astype(str).tolist()
+            sort_order = (
+                canonical_zones_gdf.sort_values(by=sort_col, kind="stable")[
+                    canonical_id_col
+                ]
+                .astype(str)
+                .tolist()
+            )
+            if sort_order == canonical_order:
+                logger.info(
+                    "Beam sort column '%s' matches canonical zone order; preserving export.",
+                    sort_col,
+                )
+            else:
+                logger.warning(
+                    "Beam sort column '%s' would reorder canonical zones. "
+                    "Preserving canonical order based on '%s' instead.",
+                    sort_col,
+                    canonical_id_col,
+                )
         else:
-            # If column is missing, it was likely renamed during load_canonical_zones.
-            # Since load_canonical_zones guarantees a sorted index, we accept that order.
-            logger.info(
-                f"Beam sort column '{sort_col}' not found (likely renamed to '{canonical_zones_gdf.columns[0]}'). "
-                "Using existing sort order from load_canonical_zones."
+            logger.warning(
+                "Beam sort column '%s' not found in canonical zones export. "
+                "Preserving canonical order based on '%s'. Available columns: %s",
+                sort_col,
+                canonical_id_col,
+                canonical_zones_gdf.columns.tolist(),
             )
 
         canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")

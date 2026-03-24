@@ -1,16 +1,18 @@
 import os
 import pytest
 import pandas as pd
-
-gpd = pytest.importorskip("geopandas")
-pytest.importorskip("shapely.geometry")
-from shapely.geometry import Polygon
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import yaml
 import json
 
+gpd = pytest.importorskip("geopandas")
+pytest.importorskip("shapely.geometry")
+from shapely.geometry import Polygon
+
 from pilates.config.models import load_config
 from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.beam.preprocessor import BeamPreprocessor
 
 # Define a canonical order for GEOIDs that our test will enforce
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
@@ -200,12 +202,6 @@ def mock_settings(tmp_path, mock_h5_datastore, mock_beam_shapefile):
     return load_config(config_path)
 
 
-import pytest
-from types import SimpleNamespace  # Import SimpleNamespace for mocking WorkflowState
-
-from pilates.beam.preprocessor import (
-    BeamPreprocessor,
-)  # Import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -390,6 +386,63 @@ class TestBeamPreprocessor:
 
         # 2. Verify the new shapefile is used in the BEAM config
         assert mock_settings.beam.skim_zone_geoid_col in sorted_gdf.columns
+
+
+def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_missing(
+    mock_settings, mock_workspace, caplog
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
+
+    with caplog.at_level("WARNING"):
+        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+
+    sorted_gdf = gpd.read_file(output_shapefile_path)
+
+    assert sorted_gdf["TAZ"].astype(str).tolist() == CANONICAL_GEOID_ORDER
+    assert "not found in canonical zones export" in caplog.text
+
+
+def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_conflicts(
+    mock_settings, mock_workspace, monkeypatch, caplog
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
+
+    scrambled_geoids = CANONICAL_GEOID_ORDER[::-1]
+    canonical_gdf = gpd.GeoDataFrame(
+        {
+            "district": range(len(CANONICAL_GEOID_ORDER)),
+            "geoid10": scrambled_geoids,
+            "geometry": [None] * len(CANONICAL_GEOID_ORDER),
+        },
+        index=pd.Index(CANONICAL_GEOID_ORDER, name="TAZ"),
+    )
+
+    monkeypatch.setattr(
+        "pilates.utils.zone_utils.load_canonical_zones",
+        lambda settings, workspace: canonical_gdf,
+    )
+
+    with caplog.at_level("WARNING"):
+        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+
+    sorted_gdf = gpd.read_file(output_shapefile_path)
+
+    assert sorted_gdf["TAZ"].astype(str).tolist() == CANONICAL_GEOID_ORDER
+    assert "would reorder canonical zones" in caplog.text
 
 
 def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settings, mock_workspace):
