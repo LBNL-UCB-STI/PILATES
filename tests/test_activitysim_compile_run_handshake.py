@@ -125,12 +125,7 @@ def test_activitysim_compile_run_zarr_handshake(monkeypatch, tmp_path: Path) -> 
         coupler=coupler,
         outputs_holder=outputs_holder,
     )
-    compile_step(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={ZARR_SKIMS: str(zarr_path)},
-    )
+    compile_step(settings=settings, state=state, workspace=workspace)
 
     coupler_zarr_path = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)
     assert coupler_zarr_path == str(zarr_path)

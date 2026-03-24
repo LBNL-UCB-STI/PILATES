@@ -10,7 +10,6 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
-    clean_expected_outputs,
     resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
@@ -26,7 +25,6 @@ from pilates.workflows.orchestration import (
     run_workflow,
 )
 from pilates.workflows.outputs_base import step_output_handoff_mapping
-from pilates.workflows.step_io import build_outputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -305,15 +303,6 @@ def _run_activity_demand_phase(
                 "ActivitySim compile requires omx_skims input, but it could not be "
                 "resolved from explicit preprocess outputs or coupler keys."
             )
-        expected_compile_outputs = clean_expected_outputs(
-            build_outputs(
-                "activitysim_compile",
-                settings,
-                state,
-                workspace,
-                components=("runner",),
-            )
-        )
         activitysim_compile_step = make_activitysim_compile_step(
             coupler=coupler,
             outputs_holder=outputs_holder,
@@ -324,7 +313,6 @@ def _run_activity_demand_phase(
                 name="activitysim_compile",
                 step_func=activitysim_compile_step,
                 binding=compile_binding,
-                output_paths=expected_compile_outputs or None,
                 cache_mode="overwrite",
                 load_inputs=False,
                 phase="compile",
@@ -332,9 +320,6 @@ def _run_activity_demand_phase(
                 year=state.forecast_year,
                 iteration=-1,
             ),
-            runtime_kwargs_extra={
-                "expected_outputs": expected_compile_outputs,
-            },
         )
         setattr(state, "_restart_activitysim_compile_done", True)
     else:

@@ -60,7 +60,6 @@ from .shared import (
     log_and_set_output,
     log_input_only,
     log_output_only,
-    require_common_runtime,
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
@@ -618,6 +617,15 @@ def _compile_step_schema_outputs(ctx: Any) -> list[str]:
     return outputs
 
 
+def _compile_step_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return ActivitysimCompileRunner.expected_outputs(settings, state, workspace)
+
+
 def _is_non_empty_directory(path: str) -> bool:
     if not os.path.isdir(path):
         return False
@@ -649,13 +657,12 @@ def make_activitysim_compile_step(
         Step function for ActivitySim compile.
     """
 
-    @require_common_runtime("expected_outputs")
     def _run_activitysim_compile_step(
         *,
         settings: PilatesConfig,
         state: WorkflowState,
         workspace: Workspace,
-        expected_outputs: Dict[str, Any],
+        expected_outputs: Optional[Dict[str, Any]] = None,
     ) -> None:
         forecast_year = state.forecast_year
         if forecast_year is None:
@@ -679,6 +686,12 @@ def make_activitysim_compile_step(
         if not isinstance(upstream, ActivitySimPreprocessOutputs):
             raise TypeError(
                 "activitysim_compile requires ActivitySimPreprocessOutputs from activitysim_preprocess"
+            )
+        if expected_outputs is None:
+            expected_outputs = _compile_step_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
             )
         omx_path = (
             artifact_to_path(upstream.omx_skims, workspace)
@@ -752,7 +765,7 @@ def make_activitysim_compile_step(
                     cache_path,
                 )
 
-    return _decorate_step_with_consist(
+    step_func = _decorate_step_with_consist(
         step_func=_run_activitysim_compile_step,
         step_model="activitysim_compile",
         description="activitysim compile workflow step",
@@ -760,6 +773,8 @@ def make_activitysim_compile_step(
         schema_outputs=_compile_step_schema_outputs,
         tags=["activitysim", "compile"],
     )
+    setattr(step_func, "__pilates_output_paths__", _compile_step_output_paths)
+    return step_func
 
 
 def make_activitysim_preprocess_step(

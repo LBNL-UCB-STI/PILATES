@@ -203,6 +203,7 @@ def _build_step_run_kwargs(
     step: StepRef,
     settings: Any,
     state: Any,
+    workspace: Any,
     runtime_kwargs: Mapping[str, Any],
     stage_name: str,
     default_iteration: int,
@@ -256,8 +257,14 @@ def _build_step_run_kwargs(
                 f"Step '{step.name}' binding must be a consist.BindingResult or a plan with to_binding_result()."
             )
         run_kwargs["binding"] = binding
-    if step.output_paths is not None:
-        run_kwargs["output_paths"] = step.output_paths
+    resolved_output_paths = _resolved_step_output_paths(
+        step,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if resolved_output_paths is not None:
+        run_kwargs["output_paths"] = dict(resolved_output_paths)
     run_kwargs["execution_options"] = ExecutionOptions(
         runtime_kwargs=runtime_kwargs,
         load_inputs=step.load_inputs,
@@ -450,6 +457,32 @@ def _resolved_step_inputs(step: StepRef) -> Optional[Mapping[str, Any]]:
     if step.binding is not None:
         return getattr(step.binding, "inputs", None)
     return step.inputs
+
+
+def _resolved_step_output_paths(
+    step: StepRef,
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Optional[Mapping[str, Any]]:
+    if step.output_paths is not None:
+        return step.output_paths
+    output_paths_provider = getattr(step.step_func, "__pilates_output_paths__", None)
+    if not callable(output_paths_provider):
+        return None
+    output_paths = output_paths_provider(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if output_paths is None:
+        return None
+    if not isinstance(output_paths, Mapping):
+        raise TypeError(
+            f"Step '{step.name}' output-path provider must return a mapping or None."
+        )
+    return output_paths
 
 
 def _publish_recovered_outputs(
@@ -652,6 +685,7 @@ def run_manifested_steps(
             step=spec,
             settings=settings,
             state=state,
+            workspace=workspace,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
             default_iteration=iteration,
@@ -763,6 +797,7 @@ def run_workflow(
             step=spec,
             settings=settings,
             state=state,
+            workspace=workspace,
             runtime_kwargs=runtime_kwargs,
             stage_name=stage_name,
             default_iteration=iteration,

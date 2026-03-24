@@ -8,6 +8,7 @@ import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
 from pilates.config.models import PilatesConfig
+from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
@@ -299,6 +300,15 @@ def _execute_urbansim_run_typed(
     return runner.run(upstream, workspace)
 
 
+def _urbansim_run_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return UrbansimRunner.expected_outputs(settings, state, workspace)
+
+
 def _execute_urbansim_postprocess_typed(
     postprocessor: Any,
     workspace: Workspace,
@@ -516,7 +526,7 @@ def make_urbansim_run_step(
                 ),
             )
 
-    return _make_logged_typed_step_function(
+    step_func = _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -531,6 +541,8 @@ def make_urbansim_run_step(
         output_recoverer=_recover_urbansim_run_outputs,
         step_logger=logger,
     )
+    setattr(step_func, "__pilates_output_paths__", _urbansim_run_output_paths)
+    return step_func
 
 
 def make_urbansim_postprocess_step(
