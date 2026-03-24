@@ -53,7 +53,7 @@ from .shared import (
     _decorate_step_with_consist,
     _log_named_h5_tables,
     _log_step_records,
-    _make_typed_step_function,
+    _make_logged_typed_step_function,
     artifact_to_path,
     cr,
     log_and_set_input,
@@ -203,7 +203,7 @@ def _make_activitysim_typed_step_function(
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
 ) -> Callable[..., None]:
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name=model_name,
@@ -217,8 +217,6 @@ def _make_activitysim_typed_step_function(
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 

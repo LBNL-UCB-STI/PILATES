@@ -35,7 +35,7 @@ from .shared import (
     _atlas_artifact_facet_meta,
     _log_named_h5_tables,
     _log_step_records,
-    _make_typed_step_function,
+    _make_logged_typed_step_function,
     _urbansim_output_facet_meta,
     log_and_set_output,
     log_input_only,
@@ -446,7 +446,7 @@ def make_urbansim_preprocess_step(
                 ),
             )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -461,8 +461,6 @@ def make_urbansim_preprocess_step(
         ),
         input_logger=_log_inputs,
         output_logger=_log_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 
@@ -518,7 +516,7 @@ def make_urbansim_run_step(
                 ),
             )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -531,8 +529,6 @@ def make_urbansim_run_step(
         ),
         output_logger=_log_outputs,
         output_recoverer=_recover_urbansim_run_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 
@@ -635,7 +631,7 @@ def make_urbansim_postprocess_step(
                     ),
                 )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="urbansim",
@@ -650,8 +646,6 @@ def make_urbansim_postprocess_step(
         ),
         output_logger=_log_outputs,
         output_recoverer=_recover_urbansim_postprocess_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 
@@ -715,7 +709,7 @@ def make_atlas_preprocess_step(
             },
         )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -729,8 +723,6 @@ def make_atlas_preprocess_step(
             holder, "atlas_preprocess", outputs
         ),
         output_logger=_log_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 
@@ -810,7 +802,7 @@ def make_atlas_run_step(
             profile_schema_suffixes=(".csv", ".parquet"),
         )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -824,8 +816,6 @@ def make_atlas_run_step(
         input_logger=_log_inputs,
         output_logger=_log_outputs,
         output_recoverer=_recover_atlas_run_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )
 
@@ -968,7 +958,7 @@ def make_atlas_postprocess_step(
                 },
             )
 
-    return _make_typed_step_function(
+    return _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -984,7 +974,5 @@ def make_atlas_postprocess_step(
         input_logger=_log_inputs,
         output_logger=_log_outputs,
         output_recoverer=_recover_atlas_postprocess_outputs,
-        log_start_message=True,
-        log_completion_message=True,
         step_logger=logger,
     )

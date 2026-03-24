@@ -1281,6 +1281,51 @@ def _make_typed_step_function(
     )
 
 
+def _make_logged_typed_step_function(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    model_name: str,
+    phase: str,
+    outputs_class: Type[StepOutputsT],
+    component_getter: Callable[[Any, WorkflowState], Any],
+    component_executor: Callable[..., StepOutputsT],
+    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
+    input_logger: Optional[Callable[..., Mapping[str, Any]]] = None,
+    output_logger: Optional[Callable[..., None]] = None,
+    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
+    declared_outputs: Optional[list[str]] = None,
+    schema_outputs: Optional[list[str]] = None,
+    step_description: Optional[str] = None,
+    tags: Optional[list[str]] = None,
+    step_logger: Optional[logging.Logger] = None,
+) -> Callable[..., Any]:
+    """
+    Build a typed step function with the standard start/completion logging
+    defaults enabled.
+    """
+    return _make_typed_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name=model_name,
+        phase=phase,
+        outputs_class=outputs_class,
+        component_getter=component_getter,
+        component_executor=component_executor,
+        outputs_holder_setter=outputs_holder_setter,
+        input_logger=input_logger,
+        output_logger=output_logger,
+        output_recoverer=output_recoverer,
+        declared_outputs=declared_outputs,
+        schema_outputs=schema_outputs,
+        log_start_message=True,
+        log_completion_message=True,
+        step_logger=step_logger or logger,
+        step_description=step_description,
+        tags=tags,
+    )
+
+
 def _schema_outputs_from_class(
     outputs_class: Type[StepOutputsT],
 ) -> Optional[list[str]]:
