@@ -392,7 +392,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "zarr_skims"
-    declared_outputs: ClassVar[Tuple[str, ...]] = ()
+    declared_outputs: ClassVar[Tuple[str, ...]] = (ZARR_SKIMS,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("zarr_skims", "final_skims_omx")
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("split_events", "split_event_links")

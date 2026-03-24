@@ -111,9 +111,10 @@ def test_urbansim_preprocess_returns_typed_outputs_and_sets_progress(
     )
     seen = {}
 
-    def _fake_preprocess(workspace, previous_records=None):
+    def _fake_preprocess(workspace, previous_records=None, final_skims_omx=None):
         seen["workspace"] = workspace
         seen["previous_records"] = previous_records
+        seen["final_skims_omx"] = final_skims_omx
         return expected
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
@@ -124,6 +125,7 @@ def test_urbansim_preprocess_returns_typed_outputs_and_sets_progress(
     assert isinstance(outputs, UrbanSimPreprocessOutputs)
     assert state.sub_stage_progress == "preprocessor"
     assert seen["previous_records"] is None
+    assert seen["final_skims_omx"] is None
 
 
 def test_atlas_preprocess_returns_typed_outputs_and_sets_progress(
@@ -137,9 +139,10 @@ def test_atlas_preprocess_returns_typed_outputs_and_sets_progress(
     )
     seen = {}
 
-    def _fake_preprocess(workspace, previous_records=None):
+    def _fake_preprocess(workspace, previous_records=None, final_skims_omx=None):
         seen["workspace"] = workspace
         seen["previous_records"] = previous_records
+        seen["final_skims_omx"] = final_skims_omx
         return expected
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
@@ -150,6 +153,7 @@ def test_atlas_preprocess_returns_typed_outputs_and_sets_progress(
     assert isinstance(outputs, AtlasPreprocessOutputs)
     assert state.sub_stage_progress == "preprocessor"
     assert seen["previous_records"] is None
+    assert seen["final_skims_omx"] is None
 
 
 def test_urbansim_preprocess_accepts_previous_records_compatibility(
@@ -164,8 +168,9 @@ def test_urbansim_preprocess_accepts_previous_records_compatibility(
     )
     seen = {}
 
-    def _fake_preprocess(workspace, previous_records_arg=None):
+    def _fake_preprocess(workspace, previous_records_arg=None, final_skims_omx=None):
         seen["previous_records"] = previous_records_arg
+        seen["final_skims_omx"] = final_skims_omx
         return expected
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
@@ -174,6 +179,7 @@ def test_urbansim_preprocess_accepts_previous_records_compatibility(
 
     assert outputs is expected
     assert seen["previous_records"] is previous_records
+    assert seen["final_skims_omx"] is None
 
 
 def test_atlas_preprocess_accepts_previous_records_compatibility(
@@ -188,8 +194,9 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
     )
     seen = {}
 
-    def _fake_preprocess(workspace, previous_records_arg=None):
+    def _fake_preprocess(workspace, previous_records_arg=None, final_skims_omx=None):
         seen["previous_records"] = previous_records_arg
+        seen["final_skims_omx"] = final_skims_omx
         return expected
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
@@ -198,6 +205,7 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
 
     assert outputs is expected
     assert seen["previous_records"] is previous_records
+    assert seen["final_skims_omx"] is None
 
 
 def test_atlas_postprocess_fails_closed_without_current_year_run_outputs(tmp_path: Path) -> None:

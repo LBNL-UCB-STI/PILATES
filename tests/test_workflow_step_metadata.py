@@ -7,6 +7,11 @@ from consist import define_step
 from consist.types import CacheOptions, OutputPolicyOptions
 
 from pilates.runtime import launcher as run_module
+from pilates.atlas.outputs import (
+    AtlasPostprocessOutputs,
+    AtlasPreprocessOutputs,
+    AtlasRunOutputs,
+)
 from pilates.workflows.artifact_keys import ASIM_HOUSEHOLDS_IN
 from pilates.workflows.artifact_keys import ASIM_LAND_USE_IN, ASIM_PERSONS_IN
 from pilates.workflows.artifact_keys import (
@@ -20,16 +25,26 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import StepRef, WorkflowStage
+from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
+    make_atlas_postprocess_step,
+    make_atlas_preprocess_step,
+    make_atlas_run_step,
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
     make_beam_full_skim_step,
     make_activitysim_preprocess_step,
     make_urbansim_preprocess_step,
+    make_urbansim_postprocess_step,
     make_urbansim_run_step,
+)
+from pilates.urbansim.outputs import (
+    UrbanSimPostprocessOutputs,
+    UrbanSimPreprocessOutputs,
+    UrbanSimRunOutputs,
 )
 
 
@@ -85,6 +100,67 @@ def test_make_step_factories_attach_consist_metadata():
     assert callable(preprocess_meta.config)
     assert callable(preprocess_meta.identity_inputs)
     assert callable(preprocess_meta.facet)
+
+
+def test_urbansim_and_atlas_step_factories_attach_consist_metadata():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    steps = {
+        "urbansim_preprocess": make_urbansim_preprocess_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+        "urbansim_run": make_urbansim_run_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+        "urbansim_postprocess": make_urbansim_postprocess_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+        "atlas_preprocess": make_atlas_preprocess_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+        "atlas_run": make_atlas_run_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+        "atlas_postprocess": make_atlas_postprocess_step(
+            coupler=coupler,
+            outputs_holder=holder,
+        ),
+    }
+    expected_outputs = {
+        "urbansim_preprocess": list(
+            declared_outputs_for_step_outputs_class(UrbanSimPreprocessOutputs)
+        )
+        or None,
+        "urbansim_run": list(
+            declared_outputs_for_step_outputs_class(UrbanSimRunOutputs)
+        )
+        or None,
+        "urbansim_postprocess": list(
+            declared_outputs_for_step_outputs_class(UrbanSimPostprocessOutputs)
+        )
+        or None,
+        "atlas_preprocess": list(
+            declared_outputs_for_step_outputs_class(AtlasPreprocessOutputs)
+        )
+        or None,
+        "atlas_run": list(declared_outputs_for_step_outputs_class(AtlasRunOutputs))
+        or None,
+        "atlas_postprocess": list(
+            declared_outputs_for_step_outputs_class(AtlasPostprocessOutputs)
+        )
+        or None,
+    }
+
+    for step_name, step in steps.items():
+        assert hasattr(step, "__consist_step__")
+        meta = step.__consist_step__
+        assert meta.model == step_name
+        assert meta.outputs == expected_outputs[step_name]
 
 
 def test_urbansim_run_declares_strict_output_contract():
