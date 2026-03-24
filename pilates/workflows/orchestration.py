@@ -17,7 +17,6 @@ from pilates.utils.coupler_helpers import (
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
-from pilates.utils import consist_runtime as cr
 from pilates.workflows.catalog import (
     workflow_step_key_is_declared,
     workflow_step_key_match,
@@ -50,6 +49,10 @@ from pilates.workflows.outputs_base import (
 )
 from pilates.workflows.step_io import expected_inputs_for_step
 from pilates.workflows.step_runner import common_runtime_kwargs
+from pilates.workflows.tracker_outputs import (
+    load_tracker_run_outputs,
+    merge_canonical_output_mappings,
+)
 from pilates.workflows.steps import (
     STEP_OUTPUTS_CLASSES,
     shared as steps_shared,
@@ -975,38 +978,18 @@ def _recover_cached_outputs(
         nonlocal _cached_run_outputs_by_key
         if _cached_run_outputs_by_key is not None:
             return _cached_run_outputs_by_key
-        _cached_run_outputs_by_key = {}
-        if not run_id:
-            return _cached_run_outputs_by_key
-        tracker = cr.current_tracker()
-        if tracker is None:
-            return _cached_run_outputs_by_key
-        get_run_outputs = getattr(tracker, "get_run_outputs", None)
-        if not callable(get_run_outputs):
-            return _cached_run_outputs_by_key
-        try:
-            run_outputs = get_run_outputs(run_id) or {}
-        except Exception:
-            logger.debug(
-                "Failed loading cached run outputs for run_id=%s", run_id, exc_info=True
-            )
-            return _cached_run_outputs_by_key
-        for raw_key, value in run_outputs.items():
-            if value is None:
-                continue
-            canonical_key = canonical_artifact_key_from_raw_key(str(raw_key))
-            _cached_run_outputs_by_key[canonical_key] = value
+        _cached_run_outputs_by_key = load_tracker_run_outputs(
+            run_id,
+            logger=logger,
+            log_context="workflow cache-hit recovery",
+        )
         return _cached_run_outputs_by_key
 
     def _recovered_cached_paths() -> Dict[str, Path]:
-        merged: Dict[str, Any] = {}
-        if cached_outputs:
-            for raw_key, value in cached_outputs.items():
-                if value is None:
-                    continue
-                merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
-        for key, value in _cached_run_outputs().items():
-            merged[key] = value
+        merged = merge_canonical_output_mappings(
+            cached_outputs,
+            _cached_run_outputs(),
+        )
         recovered_paths: Dict[str, Path] = {}
         for key, value in merged.items():
             path = _existing_path(value)
@@ -1032,15 +1015,12 @@ def _recover_cached_outputs(
         return None
 
     def _resolve_cached_value(key: str) -> Any:
-        if cached_outputs:
-            for raw_key, value in cached_outputs.items():
-                if value is None:
-                    continue
-                if canonical_artifact_key_from_raw_key(str(raw_key)) == key:
-                    return value
-        run_outputs = _cached_run_outputs()
-        if key in run_outputs:
-            return run_outputs[key]
+        merged = merge_canonical_output_mappings(
+            cached_outputs,
+            _cached_run_outputs(),
+        )
+        if key in merged:
+            return merged[key]
         resolved = resolve_coupler_value(coupler, key)
         return resolved.value
 

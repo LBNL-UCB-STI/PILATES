@@ -11,7 +11,6 @@ from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.outputs_base import StepOutputsBase
 from pilates.workspace import Workspace
 
@@ -43,6 +42,10 @@ from .shared import (
     log_output_only,
     logger,
     warm_start_activities,
+)
+from pilates.workflows.tracker_outputs import (
+    load_tracker_run_outputs,
+    merge_canonical_output_mappings,
 )
 
 
@@ -103,21 +106,11 @@ def _root_h5_table_descriptions(path: str, *, action: str) -> Dict[str, str]:
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    if not run_id:
-        return {}
-    tracker = cr.current_tracker()
-    if tracker is None:
-        return {}
-    get_run_outputs = getattr(tracker, "get_run_outputs", None)
-    if not callable(get_run_outputs):
-        return {}
-    try:
-        return get_run_outputs(run_id) or {}
-    except Exception:
-        logger.debug(
-            "Failed loading cached run outputs for run_id=%s", run_id, exc_info=True
-        )
-        return {}
+    return load_tracker_run_outputs(
+        run_id,
+        logger=logger,
+        log_context="UrbanSim/ATLAS cached output recovery",
+    )
 
 
 def _recovered_cached_paths(
@@ -126,16 +119,10 @@ def _recovered_cached_paths(
     run_id: Optional[str],
     workspace: Workspace,
 ) -> Dict[str, Path]:
-    merged: Dict[str, Any] = {}
-    if cached_outputs:
-        for raw_key, value in cached_outputs.items():
-            if value is None:
-                continue
-            merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
-    for raw_key, value in _resolve_cached_run_outputs(run_id).items():
-        if value is None:
-            continue
-        merged[canonical_artifact_key_from_raw_key(str(raw_key))] = value
+    merged = merge_canonical_output_mappings(
+        cached_outputs,
+        _resolve_cached_run_outputs(run_id),
+    )
     recovered: Dict[str, Path] = {}
     for key, value in merged.items():
         path = artifact_to_existing_path(

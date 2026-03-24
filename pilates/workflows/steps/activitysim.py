@@ -18,7 +18,6 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
-from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -65,6 +64,10 @@ from .shared import (
 from pilates.workflows.input_resolution import (
     selected_candidate_key,
     resolved_value_for_key,
+)
+from pilates.workflows.tracker_outputs import (
+    load_tracker_run_outputs,
+    merge_canonical_output_mappings,
 )
 
 logger = logging.getLogger(__name__)
@@ -221,30 +224,11 @@ def _make_activitysim_typed_step_function(
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    if not run_id:
-        return {}
-    tracker = cr.current_tracker()
-    if tracker is None:
-        return {}
-    get_run_outputs = getattr(tracker, "get_run_outputs", None)
-    if not callable(get_run_outputs):
-        return {}
-    try:
-        run_outputs = get_run_outputs(run_id) or {}
-    except Exception:
-        logger.debug(
-            "Failed loading cached run outputs for run_id=%s",
-            run_id,
-            exc_info=True,
-        )
-        return {}
-
-    resolved: Dict[str, Any] = {}
-    for raw_key, value in run_outputs.items():
-        if value is None:
-            continue
-        resolved[canonical_artifact_key_from_raw_key(str(raw_key))] = value
-    return resolved
+    return load_tracker_run_outputs(
+        run_id,
+        logger=logger,
+        log_context="ActivitySim cached output recovery",
+    )
 
 
 def _resolve_cached_value(
@@ -254,15 +238,12 @@ def _resolve_cached_value(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Any:
-    if cached_outputs:
-        for raw_key, value in cached_outputs.items():
-            if value is None:
-                continue
-            if canonical_artifact_key_from_raw_key(str(raw_key)) == key:
-                return value
-    run_outputs = _resolve_cached_run_outputs(run_id)
-    if key in run_outputs:
-        return run_outputs[key]
+    merged = merge_canonical_output_mappings(
+        cached_outputs,
+        _resolve_cached_run_outputs(run_id),
+    )
+    if key in merged:
+        return merged[key]
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
         return get_value(key)
