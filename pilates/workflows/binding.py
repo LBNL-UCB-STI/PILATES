@@ -224,6 +224,18 @@ class StageBoundaryDurabilityRule:
     notes: Optional[str] = None
 
 
+@dataclass(frozen=True)
+class RestartArtifactRequirementRule:
+    """
+    Runtime policy for artifacts that restart preflight should keep present.
+    """
+
+    name: str
+    semantic_keys: tuple[str, ...]
+    resolve: Callable[..., Optional[Mapping[str, str]]]
+    notes: Optional[str] = None
+
+
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 
 
@@ -873,5 +885,273 @@ def bootstrap_stage_boundary_durability_policy() -> tuple[StageBoundaryDurabilit
             semantic_keys=(LINKSTATS_WARMSTART,),
             resolve=_bootstrap_beam_warmstart_artifacts,
             notes="BEAM-only bootstrap should seed the initial linkstats warmstart when configured.",
+        ),
+    )
+
+
+def _restart_urbansim_required_artifacts(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    get_usim_datastore_fname_fn: Callable[..., str],
+    workflow_stage: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    current_stage = getattr(state, "current_major_stage", None)
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    requires_usim_base_h5 = (
+        getattr(model_cfg, "land_use", None) == "urbansim"
+        or getattr(model_cfg, "activity_demand", None) == "activitysim"
+    )
+    if not requires_usim_base_h5:
+        return None
+
+    usim_data_dir = workspace.get_usim_mutable_data_dir()
+    usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
+    required: Dict[str, str] = {
+        USIM_DATASTORE_BASE_H5: os.path.join(usim_data_dir, usim_base_fname)
+    }
+
+    region = getattr(getattr(settings, "run", None), "region", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if (
+        current_stage in {
+            None,
+            workflow_stage.land_use,
+        }
+        and region
+        and urbansim_cfg is not None
+    ):
+        region_id = (
+            getattr(urbansim_cfg, "region_mappings", {})
+            .get("region_to_region_id", {})
+            .get(region)
+        )
+        if region_id:
+            required.update(
+                {
+                    "omx_skims": os.path.join(usim_data_dir, f"skims_mpo_{region_id}.omx"),
+                    "hh_size": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
+                    "income_rates": os.path.join(
+                        usim_data_dir, f"income_rates_{region_id}.csv"
+                    ),
+                    "relmap": os.path.join(usim_data_dir, f"relmap_{region_id}.csv"),
+                    "schools": os.path.join(usim_data_dir, "schools_2010.csv"),
+                    "school_districts": os.path.join(
+                        usim_data_dir, "blocks_school_districts_2010.csv"
+                    ),
+                }
+            )
+
+    return required or None
+
+
+def _restart_activitysim_required_artifacts(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
+    workflow_stage: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    current_stage = getattr(state, "current_major_stage", None)
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "activity_demand", None) != "activitysim":
+        return None
+    if current_stage not in {
+        None,
+        workflow_stage.supply_demand_loop,
+        workflow_stage.activity_demand,
+        workflow_stage.activity_demand_directly_from_land_use,
+    }:
+        return None
+
+    asim_configs_dir = workspace.get_asim_mutable_configs_dir()
+    main_configs_dir = (
+        getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
+        or "configs"
+    )
+    required: Dict[str, str] = {}
+    for dirname in required_asim_config_dirs_fn(main_configs_dir):
+        required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
+            asim_configs_dir,
+            dirname,
+            "settings.yaml",
+        )
+    return required or None
+
+
+def _restart_activitysim_iteration_outputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    workflow_stage: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "activity_demand", None) != "activitysim":
+        return None
+
+    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if not callable(get_asim_output_dir):
+        return None
+
+    if not (
+        getattr(state, "current_major_stage", None) == workflow_stage.supply_demand_loop
+        and getattr(state, "current_sub_stage", None) == workflow_stage.traffic_assignment
+    ):
+        return None
+
+    return {
+        "activitysim_iteration_beam_plans_parquet": os.path.join(
+            get_asim_output_dir(),
+            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
+            "beam_plans.parquet",
+        ),
+        "activitysim_iteration_households_parquet": os.path.join(
+            get_asim_output_dir(),
+            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
+            "households.parquet",
+        ),
+        "activitysim_iteration_persons_parquet": os.path.join(
+            get_asim_output_dir(),
+            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
+            "persons.parquet",
+        ),
+    }
+
+
+def _restart_beam_required_artifacts(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    workflow_stage: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    current_stage = getattr(state, "current_major_stage", None)
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+    if current_stage not in {
+        workflow_stage.supply_demand_loop,
+        workflow_stage.traffic_assignment,
+    }:
+        return None
+
+    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+    region = getattr(getattr(settings, "run", None), "region", None)
+    if not callable(get_beam_input_dir) or not region:
+        return None
+
+    beam_input_dir = get_beam_input_dir()
+    beam_cfg = getattr(settings, "beam", None)
+    beam_config_name = getattr(beam_cfg, "config", None)
+    required: Dict[str, str] = {
+        "beam_mutable_data_dir": beam_input_dir,
+        "beam_region_input_dir": os.path.join(beam_input_dir, region),
+    }
+    if beam_config_name:
+        required["beam_primary_config_file"] = os.path.join(
+            beam_input_dir, region, beam_config_name
+        )
+    return required or None
+
+
+def _restart_atlas_required_artifacts(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
+    workflow_stage: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return None
+    if getattr(state, "current_major_stage", None) != workflow_stage.vehicle_ownership_model:
+        return None
+
+    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+    if not callable(get_atlas_input_dir):
+        return None
+
+    atlas_input_dir = get_atlas_input_dir()
+    required: Dict[str, str] = {}
+    for relpath in atlas_static_input_relpaths_fn(settings):
+        required[f"atlas_static::{relpath}"] = os.path.join(atlas_input_dir, relpath)
+    return required or None
+
+
+def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirementRule, ...]:
+    """
+    Stage-aware restart artifact policy.
+
+    Restart preflight consumes this policy to keep its required-local-artifact
+    inventory inspectable without open-coding the stage branches in runtime
+    logic.
+    """
+
+    return (
+        RestartArtifactRequirementRule(
+            name="urbansim_restart_artifacts",
+            semantic_keys=(
+                USIM_DATASTORE_BASE_H5,
+                "omx_skims",
+                "hh_size",
+                "income_rates",
+                "relmap",
+                "schools",
+                "school_districts",
+            ),
+            resolve=_restart_urbansim_required_artifacts,
+            notes=(
+                "UrbanSim restart should keep the mutable base datastore, "
+                "land-use datastore handle, and local lookup inputs required "
+                "to resume UrbanSim entry stages."
+            ),
+        ),
+        RestartArtifactRequirementRule(
+            name="activitysim_restart_configs",
+            semantic_keys=(),
+            resolve=_restart_activitysim_required_artifacts,
+            notes=(
+                "ActivitySim restart should keep the mutable config tree for "
+                "stage entries that can re-enter ActivitySim directly."
+            ),
+        ),
+        RestartArtifactRequirementRule(
+            name="activitysim_iteration_outputs",
+            semantic_keys=(
+                "activitysim_iteration_beam_plans_parquet",
+                "activitysim_iteration_households_parquet",
+                "activitysim_iteration_persons_parquet",
+            ),
+            resolve=_restart_activitysim_iteration_outputs,
+            notes=(
+                "Traffic-assignment restart should preserve the ActivitySim "
+                "iteration outputs that BEAM consumes for the resumed loop."
+            ),
+        ),
+        RestartArtifactRequirementRule(
+            name="beam_restart_inputs",
+            semantic_keys=("beam_mutable_data_dir", "beam_region_input_dir", "beam_primary_config_file"),
+            resolve=_restart_beam_required_artifacts,
+            notes=(
+                "BEAM restart should preserve the mutable input tree and primary "
+                "config for resumed traffic assignment."
+            ),
+        ),
+        RestartArtifactRequirementRule(
+            name="atlas_restart_static_inputs",
+            semantic_keys=(),
+            resolve=_restart_atlas_required_artifacts,
+            notes=(
+                "ATLAS restart should keep the static mutable-input files needed "
+                "for vehicle ownership resume."
+            ),
         ),
     )

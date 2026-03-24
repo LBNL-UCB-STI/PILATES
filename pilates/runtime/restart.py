@@ -12,6 +12,7 @@ from consist import MaterializationResult
 
 from pilates.runtime.cache_recovery import materialize_cached_runs
 from pilates.utils.io import get_traffic_assignment_model
+from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
 
@@ -148,177 +149,35 @@ def restart_required_local_artifacts(
     Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
     """
     required: List[Dict[str, str]] = []
-
-    current_stage = getattr(state, "current_major_stage", None)
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    requires_usim_base_h5 = (
-        getattr(model_cfg, "land_use", None) == "urbansim"
-        or getattr(model_cfg, "activity_demand", None) == "activitysim"
-    )
-    if requires_usim_base_h5:
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-        required.append(
-            {
-                "key": "usim_datastore_base_h5",
-                "path": os.path.join(usim_data_dir, usim_base_fname),
-                "reason": "UrbanSim base datastore required for downstream restart inputs",
-            }
+    for rule in restart_required_local_artifact_policy():
+        resolved = rule.resolve(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            get_usim_datastore_fname_fn=get_usim_datastore_fname_fn,
+            required_asim_config_dirs_fn=required_asim_config_dirs_fn,
+            atlas_static_input_relpaths_fn=atlas_static_input_relpaths_fn,
+            workflow_stage=workflow_stage,
         )
-
-    region = getattr(getattr(settings, "run", None), "region", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    requires_urbansim_run_locals = current_stage in {
-        None,
-        workflow_stage.land_use,
-    }
-    if requires_urbansim_run_locals and region and urbansim_cfg is not None:
-        region_id = (
-            getattr(urbansim_cfg, "region_mappings", {})
-            .get("region_to_region_id", {})
-            .get(region)
-        )
-        if region_id:
-            required.extend(
-                [
-                    {
-                        "key": "omx_skims",
-                        "path": os.path.join(usim_data_dir, f"skims_mpo_{region_id}.omx"),
-                        "reason": "UrbanSim run requires mutable OMX skims in the local workspace",
-                    },
-                    {
-                        "key": "hh_size",
-                        "path": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
-                        "reason": "UrbanSim run requires household-size lookup data in the local workspace",
-                    },
-                    {
-                        "key": "income_rates",
-                        "path": os.path.join(usim_data_dir, f"income_rates_{region_id}.csv"),
-                        "reason": "UrbanSim run requires income-rate lookup data in the local workspace",
-                    },
-                    {
-                        "key": "relmap",
-                        "path": os.path.join(usim_data_dir, f"relmap_{region_id}.csv"),
-                        "reason": "UrbanSim run requires relationship-mapping data in the local workspace",
-                    },
-                    {
-                        "key": "schools",
-                        "path": os.path.join(usim_data_dir, "schools_2010.csv"),
-                        "reason": "UrbanSim run requires schools lookup data in the local workspace",
-                    },
-                    {
-                        "key": "school_districts",
-                        "path": os.path.join(usim_data_dir, "blocks_school_districts_2010.csv"),
-                        "reason": "UrbanSim run requires school-district lookup data in the local workspace",
-                    },
-                ]
-            )
-
-    requires_activitysim_locals = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and (
-            current_stage is None
-            or current_stage
-            in {
-                workflow_stage.supply_demand_loop,
-                workflow_stage.activity_demand,
-                workflow_stage.activity_demand_directly_from_land_use,
-            }
-        )
-    )
-    if requires_activitysim_locals:
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-        main_configs_dir = (
-            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-            or "configs"
-        )
-        for dirname in required_asim_config_dirs_fn(main_configs_dir):
+        if not resolved:
+            continue
+        for key, path in resolved.items():
+            if path is None:
+                continue
             required.append(
                 {
-                    "key": f"activitysim_config_settings_yaml_{dirname}",
-                    "path": os.path.join(asim_configs_dir, dirname, "settings.yaml"),
+                    "key": key,
+                    "path": path,
                     "reason": (
-                        "ActivitySim mutable config tree required on restart "
-                        f"(config_dir={dirname})"
+                        f"Restart policy '{rule.name}' requires {key}"
+                        + (
+                            f" ({rule.notes})"
+                            if rule.notes
+                            else ""
+                        )
                     ),
                 }
             )
-
-    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    requires_activitysim_iteration_outputs = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and current_stage == workflow_stage.supply_demand_loop
-        and getattr(state, "current_sub_stage", None) == workflow_stage.traffic_assignment
-        and callable(get_asim_output_dir)
-    )
-    if requires_activitysim_iteration_outputs:
-        required.extend(
-            _activitysim_iteration_output_requirements(
-                asim_output_dir=get_asim_output_dir(),
-                year=getattr(state, "current_year", "unknown"),
-                iteration=getattr(state, "current_inner_iter", 0),
-            )
-        )
-
-    requires_beam_locals = (
-        get_traffic_assignment_model(settings) == "beam"
-        and current_stage
-        in {
-            workflow_stage.supply_demand_loop,
-            workflow_stage.traffic_assignment,
-        }
-    )
-    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
-    if requires_beam_locals and callable(get_beam_input_dir) and region:
-        beam_input_dir = get_beam_input_dir()
-        required.append(
-            {
-                "key": "beam_mutable_data_dir",
-                "path": beam_input_dir,
-                "reason": (
-                    "BEAM mutable data root required for restart metadata and "
-                    "resumed traffic assignment"
-                ),
-            }
-        )
-        required.append(
-            {
-                "key": "beam_region_input_dir",
-                "path": os.path.join(beam_input_dir, region),
-                "reason": (
-                    "BEAM mutable input tree required for resumed traffic assignment"
-                ),
-            }
-        )
-        beam_cfg = getattr(settings, "beam", None)
-        beam_config_name = getattr(beam_cfg, "config", None)
-        if beam_config_name:
-            required.append(
-                {
-                    "key": "beam_primary_config_file",
-                    "path": os.path.join(beam_input_dir, region, beam_config_name),
-                    "reason": (
-                        "BEAM primary config required for resumed traffic assignment"
-                    ),
-                }
-            )
-
-    requires_atlas_locals = (
-        getattr(model_cfg, "vehicle_ownership", None) == "atlas"
-        and current_stage == workflow_stage.vehicle_ownership_model
-    )
-    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
-    if requires_atlas_locals and callable(get_atlas_input_dir):
-        atlas_input_dir = get_atlas_input_dir()
-        for relpath in atlas_static_input_relpaths_fn(settings):
-            required.append(
-                {
-                    "key": f"atlas_static::{relpath}",
-                    "path": os.path.join(atlas_input_dir, relpath),
-                    "reason": "ATLAS static input required during vehicle ownership restart",
-                }
-            )
-
     return required
 
 

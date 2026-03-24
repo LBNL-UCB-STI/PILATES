@@ -1508,6 +1508,40 @@ def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_as
     )
 
 
+def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
+    workspace = DummyWorkspace(str(tmp_path / "local-run"))
+    policy_path = tmp_path / "policy" / "seed.txt"
+
+    monkeypatch.setattr(
+        run_module.restart_runtime,
+        "restart_required_local_artifact_policy",
+        lambda: (
+            SimpleNamespace(
+                name="custom_restart_artifact",
+                semantic_keys=("custom_restart_artifact",),
+                resolve=lambda **_kwargs: {
+                    "custom_restart_artifact": str(policy_path)
+                },
+                notes="test policy",
+            ),
+        ),
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+    )
+
+    assert missing == [
+        {
+            "key": "custom_restart_artifact",
+            "path": str(policy_path.resolve()),
+            "reason": "Restart policy 'custom_restart_artifact' requires custom_restart_artifact (test policy)",
+        }
+    ]
+
+
 def test_reconstruct_restart_completed_run_outputs_materializes_manifest_run_ids(tmp_path):
     archive_run_dir = tmp_path / "archive-run"
     local_run_dir = tmp_path / "local-run"
