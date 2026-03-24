@@ -701,6 +701,58 @@ def test_seed_bootstrap_artifacts_to_coupler_does_not_probe_router_dir_when_warm
 
     assert coupler.get("linkstats_warmstart") is None
 
+
+def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
+    monkeypatch,
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    artifact_path = tmp_path / "policy" / "seed.txt"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("policy", encoding="utf-8")
+
+    policy_rule = SimpleNamespace(
+        name="custom_bootstrap_artifact",
+        semantic_keys=("custom_bootstrap_artifact",),
+        resolve=lambda **_kwargs: {"custom_bootstrap_artifact": str(artifact_path)},
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "bootstrap_stage_boundary_durability_policy",
+        lambda: (policy_rule,),
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand=None, travel=None),
+        )
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
+
 def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(
     tmp_path,
 ):
@@ -752,6 +804,53 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artif
     assert coupler.get("asim_sharrow_cache_dir") is not None
     assert isinstance(coupler.get("zarr_skims"), str)
     assert isinstance(coupler.get("asim_sharrow_cache_dir"), str)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_publishes_sharrow_cache_without_zarr(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+        def view(self, _namespace):
+            return self
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    sharrow_cache = tmp_path / "shared_cache" / "numba"
+    sharrow_cache.mkdir(parents=True, exist_ok=True)
+    (sharrow_cache / "cache.bin").write_text("cache", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(activity_demand="activitysim", travel="beam"),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="urbansim",
+            router_directory="r5/network",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(full_settings=settings)
+    coupler = DummyCoupler()
+
+    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("zarr_skims") is None
+    assert coupler.get("asim_sharrow_cache_dir") == str(sharrow_cache)
 
 
 def test_bootstrap_output_invariant_accepts_valid_result():

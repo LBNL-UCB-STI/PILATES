@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -22,8 +23,11 @@ from consist.types import BindingResult
 
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import resolve_input_precedence
+from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
+    ASIM_SHARROW_CACHE_DIR,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -32,10 +36,13 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:
@@ -203,6 +210,18 @@ class BindingPlan:
         if self.output_paths is not None:
             kwargs["output_paths"] = dict(self.output_paths)
         return kwargs
+
+
+@dataclass(frozen=True)
+class StageBoundaryDurabilityRule:
+    """
+    Runtime policy for artifacts that must survive a stage boundary.
+    """
+
+    name: str
+    semantic_keys: tuple[str, ...]
+    resolve: Callable[..., Optional[Mapping[str, str]]]
+    notes: Optional[str] = None
 
 
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
@@ -719,4 +738,140 @@ def build_key_only_binding_plan(
         state=state,
         workspace=workspace,
         year=year,
+    )
+
+
+def _bootstrap_activitysim_durable_artifacts(
+    *,
+    settings: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
+    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    if activity_demand_model != "activitysim":
+        return None
+
+    artifacts: Dict[str, str] = {}
+    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if callable(get_asim_output_dir):
+        zarr_candidate = os.path.join(get_asim_output_dir(), "cache", "skims.zarr")
+        if os.path.exists(zarr_candidate):
+            artifacts[ZARR_SKIMS] = zarr_candidate
+
+    sharrow_cache_dir = os.path.join(
+        getattr(workspace, "full_path", ""),
+        "shared_cache",
+        "numba",
+    )
+    if os.path.isdir(sharrow_cache_dir):
+        for _root, _dirs, files in os.walk(sharrow_cache_dir):
+            if files:
+                artifacts[ASIM_SHARROW_CACHE_DIR] = sharrow_cache_dir
+                break
+    return artifacts or None
+
+
+def _bootstrap_beam_exchange_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    model_factory_cls: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
+    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    if activity_demand_model is not None:
+        return None
+
+    model_factory = model_factory_cls()
+    beam_preprocessor = model_factory.get_preprocessor("beam", state)
+    existing_inputs = getattr(beam_preprocessor, "existing_beam_exchange_inputs", None)
+    if not callable(existing_inputs):
+        logger.debug(
+            "BEAM preprocessor does not expose existing_beam_exchange_inputs(); "
+            "skipping bootstrap coupler seeding."
+        )
+        return None
+
+    try:
+        record_store = existing_inputs(workspace)
+    except FileNotFoundError as exc:
+        logger.warning(
+            "Bootstrap could not seed default BEAM inputs into coupler: %s",
+            exc,
+        )
+        return None
+
+    allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
+    artifacts: Dict[str, str] = {}
+    if record_store is not None:
+        for record in record_store.all_records():
+            key = getattr(record, "short_name", None)
+            if key not in allowed_keys:
+                continue
+            path = record.get_absolute_path(base_path=getattr(workspace, "full_path", None))
+            if not path or not os.path.exists(path):
+                continue
+            artifacts[key] = path
+    return artifacts or None
+
+
+def _bootstrap_beam_warmstart_artifacts(
+    *,
+    settings: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
+    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    if activity_demand_model is not None:
+        return None
+
+    warmstart_path = resolve_initial_linkstats_path(settings, workspace)
+    if not warmstart_path:
+        return None
+    return {LINKSTATS_WARMSTART: warmstart_path}
+
+
+def bootstrap_stage_boundary_durability_policy() -> tuple[StageBoundaryDurabilityRule, ...]:
+    """
+    Stage-boundary durability policy for bootstrap seeding.
+
+    The returned rules are consumable by runtime bootstrap code and keep the
+    policy inspectable without hard-coding path inventories in the runtime.
+    """
+
+    return (
+        StageBoundaryDurabilityRule(
+            name="activitysim_bootstrap_artifacts",
+            semantic_keys=(ZARR_SKIMS, ASIM_SHARROW_CACHE_DIR),
+            resolve=_bootstrap_activitysim_durable_artifacts,
+            notes=(
+                "ActivitySim bootstrap should publish compiled skims and the "
+                "persisted numba/sharrow cache when present."
+            ),
+        ),
+        StageBoundaryDurabilityRule(
+            name="beam_exchange_inputs",
+            semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
+            resolve=_bootstrap_beam_exchange_inputs,
+            notes=(
+                "BEAM-only bootstrap should seed the mutable exchange inputs "
+                "already staged inside the BEAM workspace."
+            ),
+        ),
+        StageBoundaryDurabilityRule(
+            name="beam_warmstart",
+            semantic_keys=(LINKSTATS_WARMSTART,),
+            resolve=_bootstrap_beam_warmstart_artifacts,
+            notes="BEAM-only bootstrap should seed the initial linkstats warmstart when configured.",
+        ),
     )
