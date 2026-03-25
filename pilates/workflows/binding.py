@@ -642,12 +642,12 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
     return {
         "activitysim_preprocess": (
             ArtifactBindingRule(
-                semantic_key=USIM_H5_UPDATED,
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
                 required=True,
                 allow_fallback=True,
                 preferred_keys=(
-                    USIM_H5_UPDATED,
                     USIM_DATASTORE_CURRENT_H5,
+                    USIM_H5_UPDATED,
                     USIM_DATASTORE_BASE_H5,
                 ),
                 fallback_provider="urbansim_inputs_for_year",

@@ -12,8 +12,9 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
-    USIM_INPUT_NEXT,
+    USIM_DATASTORE_H5,
 )
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.outputs_base import (
     OutputValidator,
     StepOutputsBase,
@@ -351,7 +352,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Yield run output records.
         """
         for key, path in self.raw_outputs.items():
-            yield key, path, f"ActivitySim raw output: {key}"
+            normalized_key = _normalize_activitysim_run_output_key(key)
+            yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
 
     @classmethod
     def from_record_store(
@@ -396,13 +398,18 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Convert outputs to a RecordStore with optional content hashes.
         """
         records = []
-        for short_name, path, description in self._iter_record_items():
+        for raw_key, path in self.raw_outputs.items():
+            short_name = _normalize_activitysim_run_output_key(raw_key)
+            description = f"ActivitySim raw output: {short_name}"
             records.append(
                 FileRecord(
                     file_path=str(path),
                     short_name=short_name,
                     description=description,
-                    content_hash=self.raw_output_hashes.get(short_name),
+                    content_hash=(
+                        self.raw_output_hashes.get(raw_key)
+                        or self.raw_output_hashes.get(short_name)
+                    ),
                 )
             )
         return RecordStore(recordList=records)
@@ -523,14 +530,15 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     processed_output_hashes : dict
         Mapping of short_name to known content hashes for copied outputs.
     usim_datastore_key : str, optional
-        Canonical coupler key for the next-iteration UrbanSim input datastore.
-        Legacy manifests may record a year-derived ``usim_input_<year>`` key;
-        this class normalizes that to the stable ``usim_input_next`` contract
-        when re-publishing or reconstructing typed outputs.
+        Canonical coupler key for the current UrbanSim datastore handoff.
+        Legacy manifests may record phase-specific aliases such as
+        ``usim_input_next``; this class normalizes those aliases back to the
+        stable ``usim_datastore_h5`` contract when re-publishing or
+        reconstructing typed outputs.
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
-    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_INPUT_NEXT,)
+    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
     required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
@@ -550,7 +558,7 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     def _resolved_usim_datastore_key(self) -> Optional[str]:
         if self.usim_datastore_h5 is None:
             return None
-        return USIM_INPUT_NEXT
+        return USIM_DATASTORE_H5
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -595,8 +603,12 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         if record_store is not None:
             for record in record_store.all_records():
                 short_name = getattr(record, "short_name", "") or ""
-                if short_name.startswith("usim_input_"):
-                    usim_key = USIM_INPUT_NEXT
+                canonical_short_name = resolve_artifact_key(short_name)
+                if (
+                    short_name.startswith("usim_input_")
+                    or canonical_short_name == USIM_DATASTORE_H5
+                ):
+                    usim_key = USIM_DATASTORE_H5
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
                 normalized_name = normalize_asim_output_key(short_name)

@@ -204,7 +204,7 @@ _ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS = tuple(
 )
 _ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-    (USIM_INPUT_NEXT, USIM_DATASTORE_H5),
+    (USIM_DATASTORE_H5,),
 )
 _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     _BEAM_RUN_OUTPUT_KEYS,
@@ -244,7 +244,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=UrbanSimRunOutputs,
         input_keys=_URBANSIM_PREPROCESS_PREPARED_KEYS,
         optional_input_keys=("usim_skims_input_updated",),
-        output_keys=(USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT),
+        output_keys=(USIM_DATASTORE_H5,),
         depends_on=("urbansim_preprocess",),
         holder_inputs=("urbansim_preprocess",),
         upstream_step_inputs=("urbansim_preprocess",),
@@ -259,7 +259,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="land_use",
         order=30,
         outputs_class=UrbanSimPostprocessOutputs,
-        input_keys=(USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT),
+        input_keys=(USIM_DATASTORE_H5,),
         output_keys=(USIM_DATASTORE_H5,),
         dynamic_output_families=(
             "usim_input_archive_{year}",
@@ -327,10 +327,9 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=AtlasPostprocessOutputs,
         input_keys=(USIM_DATASTORE_CURRENT_H5,),
         output_keys=(
-                ATLAS_OUTPUT_DIR,
-                USIM_H5_UPDATED,
-                USIM_DATASTORE_H5,
-                ATLAS_VEHICLES2_OUTPUT,
+            ATLAS_OUTPUT_DIR,
+            USIM_DATASTORE_H5,
+            ATLAS_VEHICLES2_OUTPUT,
         ),
         dynamic_input_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_run",),
@@ -347,9 +346,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=70,
         outputs_class=ActivitySimPreprocessOutputs,
-        input_keys=(USIM_H5_UPDATED,),
+        input_keys=(USIM_DATASTORE_CURRENT_H5,),
         optional_input_keys=(
-            USIM_DATASTORE_CURRENT_H5,
             USIM_DATASTORE_BASE_H5,
             FINAL_SKIMS_OMX,
         ),
@@ -424,7 +422,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ASIM_OMX_SKIMS,
             ZARR_SKIMS,
             USIM_DATASTORE_CURRENT_H5,
-            USIM_FORECAST_OUTPUT,
             *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
         output_keys=(
@@ -434,8 +431,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         optional_input_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, USIM_DATASTORE_BASE_H5),
         optional_output_keys=(
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-            USIM_INPUT_NEXT,
-            USIM_DATASTORE_H5,
         ),
         depends_on=("activitysim_run",),
         holder_inputs=("activitysim_run",),

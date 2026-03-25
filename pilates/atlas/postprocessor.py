@@ -13,7 +13,6 @@ from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import enqueue_archive_copy
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.workflows.artifact_keys import USIM_H5_UPDATED
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +224,6 @@ class AtlasPostprocessor(GenericPostprocessor):
             "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
         )
         updated_usim_h5 = Path(usim_h5_file)
-        output_paths[USIM_H5_UPDATED] = updated_usim_h5
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh2_file = os.path.join(

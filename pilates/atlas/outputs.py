@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -101,6 +102,12 @@ class AtlasPostprocessOutputs(StepOutputsBase):
         """
         Yield ATLAS postprocessed output records.
         """
+        if self.usim_datastore_h5 is not None:
+            yield (
+                USIM_DATASTORE_H5,
+                self.usim_datastore_h5,
+                f"ATLAS postprocess output: {USIM_DATASTORE_H5}",
+            )
         for key, path in self.processed_outputs.items():
             yield key, path, f"ATLAS postprocess output: {key}"
 

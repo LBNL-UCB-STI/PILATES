@@ -7,7 +7,6 @@ from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim import postprocessor as usim_post
-from pilates.workflows.artifact_keys import USIM_FORECAST_OUTPUT
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -202,7 +201,7 @@ class UrbansimRunner(GenericRunner):
 
         return UrbanSimRunOutputs(
             usim_datastore_h5=Path(usim_datastore_fpath),
-            raw_outputs={USIM_FORECAST_OUTPUT: Path(usim_datastore_fpath)},
+            raw_outputs={},
         )
 
     def run(

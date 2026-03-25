@@ -105,6 +105,71 @@ def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
     return None
 
 
+def _restart_required_atlas_input_years(
+    *,
+    start_year: int,
+    atlas_year: int,
+) -> List[int]:
+    """
+    Return the minimal ATLAS year-input directories required on restart.
+
+    Dynamic ATLAS subyear runs rely on the workflow start-year seed inputs and,
+    for later subyears, the immediately preceding ATLAS evolution-year inputs.
+    """
+    required_years = [start_year]
+    if atlas_year > start_year:
+        prior_subyear = atlas_year - 2
+        if prior_subyear >= start_year and prior_subyear not in required_years:
+            required_years.append(prior_subyear)
+    return required_years
+
+
+def _restore_restart_atlas_year_inputs(
+    *,
+    previous_run_dir: str,
+    workspace: "Workspace",
+    start_year: int,
+    atlas_year: int,
+) -> None:
+    """
+    Rehydrate restart-critical ATLAS year directories from the previous run.
+
+    For reruns of later ATLAS subyears, restoring only the workflow start year
+    is insufficient. The dynamic container also expects the immediately
+    preceding ATLAS subyear input directory to exist.
+    """
+    for required_year in _restart_required_atlas_input_years(
+        start_year=start_year,
+        atlas_year=atlas_year,
+    ):
+        old_year_input_path = os.path.join(
+            previous_run_dir, "atlas", "atlas_input", f"year{required_year}"
+        )
+        new_year_input_path = os.path.join(
+            workspace.get_atlas_mutable_input_dir(), f"year{required_year}"
+        )
+        if os.path.exists(new_year_input_path):
+            continue
+        if not os.path.exists(old_year_input_path):
+            logger.warning(
+                "[AtlasPreprocessor] Restart requires prior ATLAS input directory "
+                "year%s, but it was missing from previous run: %s",
+                required_year,
+                old_year_input_path,
+            )
+            continue
+        logger.info(
+            "[AtlasPreprocessor] Copying restart-required ATLAS inputs from previous run: %s",
+            old_year_input_path,
+        )
+        shutil.copytree(
+            old_year_input_path,
+            new_year_input_path,
+            dirs_exist_ok=True,
+            symlinks=True,
+        )
+
+
 def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
     """
     Discover top-level static ATLAS global inputs that must be present in mutable input.
@@ -556,25 +621,13 @@ class AtlasPreprocessor(GenericPreprocessor):
                 f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}"
             )
 
-            # 1. Copy base year atlas inputs from previous run
-            old_base_year_input_path = os.path.join(
-                previous_run_dir, "atlas", "atlas_input", f"year{self.state.start_year}"
+            # 1. Copy restart-critical ATLAS year inputs from previous run.
+            _restore_restart_atlas_year_inputs(
+                previous_run_dir=previous_run_dir,
+                workspace=workspace,
+                start_year=self.state.start_year,
+                atlas_year=self.state.year,
             )
-            new_base_year_input_path = os.path.join(
-                workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}"
-            )
-            if os.path.exists(old_base_year_input_path) and not os.path.exists(
-                new_base_year_input_path
-            ):
-                logger.info(
-                    f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}"
-                )
-                shutil.copytree(
-                    old_base_year_input_path,
-                    new_base_year_input_path,
-                    dirs_exist_ok=True,
-                    symlinks=True,
-                )
 
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, "urbansim", "data")

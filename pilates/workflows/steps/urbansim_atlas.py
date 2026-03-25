@@ -12,6 +12,7 @@ from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.workflows.outputs_base import StepOutputsBase
 from pilates.workspace import Workspace
 
@@ -530,7 +531,7 @@ def make_urbansim_run_step(
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
-                description=(f"UrbanSim datastore output for year {forecast_year}"),
+                description=(f"UrbanSim forecast datastore output for year {forecast_year}"),
                 coupler=coupler,
                 step_name="urbansim_run",
                 profile_file_schema=True,
@@ -941,7 +942,7 @@ def make_atlas_postprocess_step(
             record_items=(
                 (short_name, path, description)
                 for short_name, path, description in outputs._iter_record_items()
-                if short_name != USIM_H5_UPDATED
+                if short_name not in {USIM_H5_UPDATED, USIM_DATASTORE_H5}
             ),
             log_fn=lambda key, path, description, **meta: log_output_only(
                 key=key,

@@ -1183,6 +1183,12 @@ def _detect_stale_steps(
         try:
             outputs = deserialize_step_outputs(outputs_class, outputs_data)
             _coerce_outputs_path_fields(outputs, outputs_class)
+            _remap_outputs_workspace_paths(
+                outputs,
+                outputs_class,
+                workspace=workspace,
+                step_name=step_name,
+            )
             validate = getattr(outputs, "validate", None)
             if callable(validate):
                 validate()
@@ -1444,6 +1450,12 @@ def _restore_outputs_from_manifest(
     try:
         outputs = deserialize_step_outputs(outputs_class, outputs_data)
         _coerce_outputs_path_fields(outputs, outputs_class)
+        _remap_outputs_workspace_paths(
+            outputs,
+            outputs_class,
+            workspace=workspace,
+            step_name=step_name,
+        )
         validate = getattr(outputs, "validate", None)
         if callable(validate):
             validate()
@@ -1481,3 +1493,91 @@ def _coerce_outputs_path_fields(outputs: Any, outputs_class: Any) -> None:
                 for key, path_value in value.items()
             },
         )
+
+
+def _remap_outputs_workspace_paths(
+    outputs: Any,
+    outputs_class: Any,
+    *,
+    workspace: Any,
+    step_name: Optional[str] = None,
+) -> None:
+    """
+    Remap manifest-restored workspace-local paths into the current workspace.
+
+    Restart manifests may serialize absolute paths from an older node-local
+    workspace root such as ``/local/job123/.../<run_name>/...``. On restart,
+    the run name is stable but the node-local job root changes. When the same
+    relative path now exists under the current workspace root, rewrite the
+    deserialized path so manifest restore can succeed without rerunning the
+    step.
+    """
+
+    current_root_raw = getattr(workspace, "full_path", None)
+    if not current_root_raw:
+        return
+    current_root = Path(current_root_raw)
+    current_run_dir_name = current_root.name
+    if not current_run_dir_name:
+        return
+
+    def _is_within_root(path: Path, root: Path) -> bool:
+        try:
+            path.relative_to(root)
+            return True
+        except ValueError:
+            return False
+
+    def _remap_path(path_value: Any) -> Any:
+        if not isinstance(path_value, Path):
+            return path_value
+
+        direct_existing = resolve_existing_path(
+            str(path_value),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if direct_existing:
+            return Path(direct_existing)
+
+        if _is_within_root(path_value, current_root):
+            return path_value
+
+        matching_indices = [
+            index
+            for index, part in enumerate(path_value.parts)
+            if part == current_run_dir_name
+        ]
+        for index in reversed(matching_indices):
+            suffix = path_value.parts[index + 1 :]
+            candidate = current_root.joinpath(*suffix)
+            remapped_existing = resolve_existing_path(
+                str(candidate),
+                workspace=workspace,
+                materialize_from_archive=True,
+            )
+            if remapped_existing:
+                logger.info(
+                    "Manifest restore remapped %s path from old workspace root: %s -> %s",
+                    step_name or outputs_class.__name__,
+                    path_value,
+                    remapped_existing,
+                )
+                return Path(remapped_existing)
+        return path_value
+
+    for field_name in tuple(getattr(outputs_class, "required_path_fields", ()) or ()):
+        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
+
+    for field_name in tuple(getattr(outputs_class, "optional_path_fields", ()) or ()):
+        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
+
+    for field_name in tuple(getattr(outputs_class, "dict_path_fields", ()) or ()):
+        value = getattr(outputs, field_name, None)
+        if not isinstance(value, Mapping):
+            continue
+        remapped = {
+            key: _remap_path(path_value)
+            for key, path_value in value.items()
+        }
+        setattr(outputs, field_name, remapped)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from collections import defaultdict
 from datetime import datetime
@@ -45,24 +46,63 @@ def _audit_paths(workspace: Any) -> Optional[Dict[str, Path]]:
     }
 
 
-def _state_for_root(root_key: str) -> Dict[str, Any]:
-    state = _AUDIT_STATE_BY_ROOT.get(root_key)
-    if state is not None:
-        return state
-    state = {
+def _attempt_dir(diagnostics_dir: Path, attempt_id: str) -> Path:
+    return diagnostics_dir / "attempts" / attempt_id
+
+
+def _sanitize_path_component(value: Any, fallback: str) -> str:
+    text = str(value).strip()
+    if not text:
+        return fallback
+    sanitized = []
+    for char in text:
+        if char.isalnum() or char in {"-", "_", "."}:
+            sanitized.append(char)
+        else:
+            sanitized.append("_")
+    result = "".join(sanitized).strip("._")
+    return result or fallback
+
+
+def _attempt_id_for_event(event: Mapping[str, Any], attempt_number: int) -> str:
+    recorded_at = _sanitize_path_component(
+        event.get("recorded_at") or datetime.now().isoformat(),
+        "unknown-time",
+    )
+    run_name = _sanitize_path_component(event.get("run_name"), "run")
+    pid = os.getpid()
+    return f"attempt_{attempt_number:04d}__{recorded_at}__pid{pid}__{run_name}"
+
+
+def _new_state(event: Mapping[str, Any], attempt_number: int) -> Dict[str, Any]:
+    return {
+        "attempt_id": _attempt_id_for_event(event, attempt_number),
+        "attempt_number": attempt_number,
+        "attempt_started_at": event.get("recorded_at"),
         "event_counts": defaultdict(int),
         "resolution_mode_counts_by_step": defaultdict(lambda: defaultdict(int)),
         "steps_with_incomplete_hydration": defaultdict(int),
         "steps_using_custom_recovery": defaultdict(lambda: defaultdict(int)),
         "last_event_at": None,
     }
-    _AUDIT_STATE_BY_ROOT[root_key] = state
+
+
+def _state_for_root(root_key: str) -> Optional[Dict[str, Any]]:
+    state = _AUDIT_STATE_BY_ROOT.get(root_key)
     return state
 
 
-def _summary_payload(root_key: str) -> Dict[str, Any]:
-    state = _state_for_root(root_key)
+def reset_consist_audit_state() -> None:
+    """Clear in-memory audit state, primarily for tests."""
+    with _AUDIT_LOCK:
+        _AUDIT_STATE_BY_ROOT.clear()
+
+
+def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
     return {
+        "attempt_id": state.get("attempt_id"),
+        "attempt_number": state.get("attempt_number"),
+        "attempt_started_at": state.get("attempt_started_at"),
         "generated_at": state["last_event_at"],
         "event_counts": {
             key: state["event_counts"][key]
@@ -93,8 +133,7 @@ def _summary_payload(root_key: str) -> Dict[str, Any]:
     }
 
 
-def _update_summary_state(root_key: str, event: Mapping[str, Any]) -> None:
-    state = _state_for_root(root_key)
+def _update_summary_state(state: Dict[str, Any], event: Mapping[str, Any]) -> None:
     event_type = str(event.get("event_type"))
     state["event_counts"][event_type] += 1
     state["last_event_at"] = event.get("recorded_at")
@@ -143,14 +182,34 @@ def emit_consist_audit_event(
     root_key = str(paths["diagnostics_dir"].parent.parent)
 
     with _AUDIT_LOCK:
+        current_state = _state_for_root(root_key)
+        is_new_attempt = current_state is None or event_type == "run_context"
+        if is_new_attempt:
+            attempt_number = (
+                1 if current_state is None else int(current_state["attempt_number"]) + 1
+            )
+            current_state = _new_state(event, attempt_number)
+            _AUDIT_STATE_BY_ROOT[root_key] = current_state
+        assert current_state is not None
+        attempt_dir = _attempt_dir(paths["diagnostics_dir"], str(current_state["attempt_id"]))
+        attempt_paths = {
+            "diagnostics_dir": attempt_dir,
+            "events": attempt_dir / "consist_restart_audit.jsonl",
+            "summary": attempt_dir / "consist_restart_audit_summary.json",
+        }
         paths["diagnostics_dir"].mkdir(parents=True, exist_ok=True)
-        with paths["events"].open("a", encoding="utf-8") as handle:
-            handle.write(json.dumps(event, sort_keys=True) + "\n")
-        _update_summary_state(root_key, event)
-        paths["summary"].write_text(
-            json.dumps(_summary_payload(root_key), indent=2, sort_keys=True),
-            encoding="utf-8",
-        )
+        attempt_paths["diagnostics_dir"].mkdir(parents=True, exist_ok=True)
+        event_mode = "w" if is_new_attempt else "a"
+        for event_path in (paths["events"], attempt_paths["events"]):
+            with event_path.open(event_mode, encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+        _update_summary_state(current_state, event)
+        summary_payload = _summary_payload(current_state)
+        for summary_path in (paths["summary"], attempt_paths["summary"]):
+            summary_path.write_text(
+                json.dumps(summary_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
         # Mirror diagnostics into the archive run dir when local and archive roots
         # differ, so post-run inspection and restart debugging can use the same
         # audit bundle.
@@ -161,4 +220,12 @@ def emit_consist_audit_event(
         enqueue_archive_copy(
             key="workflow_diagnostics_consist_restart_audit_summary",
             path=paths["summary"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_consist_restart_audit_attempt",
+            path=attempt_paths["events"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_consist_restart_audit_summary_attempt",
+            path=attempt_paths["summary"],
         )

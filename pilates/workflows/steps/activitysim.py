@@ -21,7 +21,7 @@ from pilates.utils.coupler_helpers import (
 from pilates.activitysim.postprocessor import get_usim_datastore_fname
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR, USIM_INPUT_NEXT
+from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.outputs_base import (
     StepOutputsBase,
@@ -586,7 +586,7 @@ def _recover_activitysim_postprocess_outputs(
         asim_output_dir=asim_output_dir,
         processed_outputs=processed_outputs,
         processed_output_hashes=processed_output_hashes,
-        usim_datastore_key=USIM_INPUT_NEXT if usim_existing else None,
+        usim_datastore_key=USIM_DATASTORE_H5 if usim_existing else None,
     )
 
 
@@ -821,11 +821,11 @@ def make_activitysim_preprocess_step(
             workspace=workspace,
             year=state.year,
         )
-        selected_key = selected_candidate_key(resolution, USIM_H5_UPDATED)
+        selected_key = selected_candidate_key(resolution, USIM_DATASTORE_CURRENT_H5)
         selected_value = (
             resolved_value_for_key(
                 resolved=resolution,
-                key=USIM_H5_UPDATED,
+                key=USIM_DATASTORE_CURRENT_H5,
                 coupler=coupler,
             )
             if selected_key is not None
@@ -1306,7 +1306,7 @@ def make_activitysim_postprocess_step(
             "households_asim_out",
             "linkstats",
             "persons_asim_out",
-            USIM_INPUT_NEXT,
+            USIM_DATASTORE_H5,
         }
         profile_schema_keys = {
             "persons_asim_out",
@@ -1336,7 +1336,9 @@ def make_activitysim_postprocess_step(
             extra_meta_fn=_extra_meta,
         )
         _log_step_records(
-            record_items=handoff_items,
+            record_items=(
+                record for record in handoff_items if record[0] != USIM_DATASTORE_H5
+            ),
             log_fn=lambda key, path, description, **meta: log_and_set_output(
                 key=key,
                 path=path,
