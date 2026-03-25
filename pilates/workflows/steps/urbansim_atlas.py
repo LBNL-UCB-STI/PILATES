@@ -7,7 +7,10 @@ from typing import Any, Callable, Dict, Mapping, Optional
 import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
-from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
+from pilates.atlas.preprocessor import (
+    _resolve_atlas_h5_table_key,
+    _restore_restart_atlas_year_inputs,
+)
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
@@ -350,6 +353,42 @@ def _execute_atlas_preprocess_typed(
     return preprocessor.preprocess(
         workspace,
         **_strip_component_runtime_kwargs(kwargs),
+    )
+
+
+def _rehydrate_restart_atlas_preprocess_state(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> None:
+    """
+    Restore restart-critical ATLAS year directories for recovered preprocess outputs.
+
+    ``atlas_preprocess`` can now be restored from manifest/cache without rerunning
+    the component. When ``atlas_run`` reruns after that restore, the dynamic ATLAS
+    container still expects the base-year and immediately preceding subyear
+    ``atlas_input/year*`` directories to exist locally. Rehydrate them here so the
+    output replayer makes recovered preprocess state runner-ready.
+    """
+    if not bool(getattr(state, "is_restart_run", False)):
+        return
+
+    run_info_path = getattr(state, "run_info_path", None)
+    start_year = getattr(state, "start_year", None)
+    atlas_year = getattr(state, "year", getattr(state, "current_year", None))
+    if (
+        not run_info_path
+        or start_year is None
+        or atlas_year is None
+        or not os.path.exists(run_info_path)
+    ):
+        return
+
+    _restore_restart_atlas_year_inputs(
+        previous_run_dir=os.path.dirname(run_info_path),
+        workspace=workspace,
+        start_year=int(start_year),
+        atlas_year=int(atlas_year),
     )
 
 
@@ -736,7 +775,20 @@ def make_atlas_preprocess_step(
             },
         )
 
-    return _make_logged_typed_step_function(
+    def _replay_outputs(
+        outputs: AtlasPreprocessOutputs,
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> None:
+        _rehydrate_restart_atlas_preprocess_state(
+            state=state,
+            workspace=workspace,
+        )
+        _log_outputs(outputs, settings, state, workspace, holder)
+
+    step = _make_logged_typed_step_function(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name="atlas",
@@ -752,6 +804,8 @@ def make_atlas_preprocess_step(
         output_logger=_log_outputs,
         step_logger=logger,
     )
+    setattr(step, "pilates_output_replayer", _replay_outputs)
+    return step
 
 
 def make_atlas_run_step(

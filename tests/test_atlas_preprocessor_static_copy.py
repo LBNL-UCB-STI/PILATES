@@ -4,6 +4,8 @@ import pytest
 
 from pilates.atlas.preprocessor import AtlasPreprocessor
 import pilates.atlas.preprocessor as atlas_preprocessor_module
+from pilates.workflows import binding as workflow_binding
+from workflow_state import WorkflowState
 
 
 def _touch(path: Path, content: str = "x") -> None:
@@ -148,3 +150,46 @@ def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year
         start_year=2017,
         atlas_year=2023,
     ) == [2017, 2021]
+
+
+def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_path):
+    atlas_input_dir = tmp_path / "atlas" / "atlas_input"
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(atlas_input_dir),
+        },
+    )()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "run": type("RunCfg", (), {"models": type("Models", (), {"vehicle_ownership": "atlas"})()})()
+        },
+    )()
+    state = type(
+        "State",
+        (),
+        {
+            "start_year": 2017,
+            "year": 2023,
+            "current_year": 2023,
+            "current_major_stage": WorkflowState.Stage.vehicle_ownership_model,
+        },
+    )()
+
+    required = workflow_binding._restart_atlas_required_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        atlas_static_input_relpaths_fn=lambda _settings: ("psid_names.Rdat",),
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    assert required is not None
+    assert required["atlas_static::psid_names.Rdat"] == str(
+        atlas_input_dir / "psid_names.Rdat"
+    )
+    assert required["atlas_restart_year::2017"] == str(atlas_input_dir / "year2017")
+    assert required["atlas_restart_year::2021"] == str(atlas_input_dir / "year2021")

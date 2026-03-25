@@ -1377,6 +1377,19 @@ def _restart_atlas_required_artifacts(
     required: Dict[str, str] = {}
     for relpath in atlas_static_input_relpaths_fn(settings):
         required[f"atlas_static::{relpath}"] = os.path.join(atlas_input_dir, relpath)
+    start_year = getattr(state, "start_year", None)
+    atlas_year = getattr(state, "year", getattr(state, "current_year", None))
+    if start_year is not None and atlas_year is not None:
+        from pilates.atlas.preprocessor import _restart_required_atlas_input_years
+
+        for required_year in _restart_required_atlas_input_years(
+            start_year=int(start_year),
+            atlas_year=int(atlas_year),
+        ):
+            required[f"atlas_restart_year::{required_year}"] = os.path.join(
+                atlas_input_dir,
+                f"year{required_year}",
+            )
     return required or None
 
 
@@ -1440,12 +1453,12 @@ def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirement
             ),
         ),
         RestartArtifactRequirementRule(
-            name="atlas_restart_static_inputs",
+            name="atlas_restart_inputs",
             semantic_keys=(),
             resolve=_restart_atlas_required_artifacts,
             notes=(
-                "ATLAS restart should keep the static mutable-input files needed "
-                "for vehicle ownership resume."
+                "ATLAS restart should keep both static mutable-input files and "
+                "restart-critical year directories needed for vehicle ownership resume."
             ),
         ),
     )

@@ -915,3 +915,46 @@ def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
     assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
     assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
     assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv
+
+
+def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(tmp_path):
+    archive_root = tmp_path / "archive-run"
+    current_root = tmp_path / "current-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(current_root)
+
+    run_info_path = archive_root / "run_state.yaml"
+    _write_file(run_info_path)
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "households.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "households.csv")
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_households_csv = current_atlas_input_dir / "year2023" / "households.csv"
+    _write_file(current_households_csv)
+
+    holder = StepOutputsHolder()
+    step = make_atlas_preprocess_step(
+        coupler=_ManifestCoupler(),
+        outputs_holder=holder,
+    )
+    outputs = AtlasPreprocessOutputs(
+        atlas_mutable_input_dir=current_atlas_input_dir,
+        prepared_inputs={"atlas_households_csv": current_households_csv},
+    )
+
+    step.pilates_output_replayer(
+        outputs,
+        SimpleNamespace(atlas=SimpleNamespace(scenario="baseline")),
+        SimpleNamespace(
+            is_restart_run=True,
+            run_info_path=str(run_info_path),
+            start_year=2017,
+            year=2023,
+            current_year=2023,
+            forecast_year=2029,
+        ),
+        workspace,
+        holder,
+    )
+
+    assert (current_atlas_input_dir / "year2017" / "households.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "households.csv").exists()

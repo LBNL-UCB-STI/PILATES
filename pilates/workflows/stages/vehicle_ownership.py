@@ -19,6 +19,7 @@ from pilates.atlas.inputs import (
 )
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.binding import _archive_fallback_path
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import (
     ManifestConfig,
@@ -132,6 +133,11 @@ def select_atlas_usim_input_path(
         usim_dir,
         urbansim_settings.output_file_template.format(year=forecast_year),
     )
+    forecast_output_archive_path = _archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=Path(forecast_output_path),
+    )
 
     current_candidate = (
         os.fspath(fallback_current_path)
@@ -145,9 +151,23 @@ def select_atlas_usim_input_path(
     )
 
     if prefer_forecast_output:
-        candidates = [forecast_output_path, current_candidate, default_candidate]
+        candidates = [
+            forecast_output_path,
+            os.fspath(forecast_output_archive_path)
+            if forecast_output_archive_path is not None
+            else None,
+            current_candidate,
+            default_candidate,
+        ]
     else:
-        candidates = [current_candidate, default_candidate, forecast_output_path]
+        candidates = [
+            current_candidate,
+            default_candidate,
+            forecast_output_path,
+            os.fspath(forecast_output_archive_path)
+            if forecast_output_archive_path is not None
+            else None,
+        ]
     for candidate in candidates:
         if candidate and os.path.exists(candidate):
             return candidate
@@ -156,6 +176,47 @@ def select_atlas_usim_input_path(
         if candidate:
             return candidate
     return forecast_output_path
+
+
+def _validate_atlas_subyear_usim_datastore(
+    *,
+    atlas_year: int,
+    start_year: int,
+    forecast_year: int,
+    selected_path: str,
+    settings: PilatesConfig,
+    state: WorkflowState,
+) -> None:
+    """
+    Reject later ATLAS subyears that resolve to a non-forecast UrbanSim datastore.
+
+    Dynamic ATLAS subyears after ``start_year`` must read from the forecast-year
+    UrbanSim output datastore (for example ``model_data_2029.h5`` for the 2029
+    land-use interval). Falling back to an older datastore such as
+    ``model_data_2023.h5`` silently degrades table selection and produces
+    incorrect restart behavior.
+    """
+    if atlas_year <= start_year:
+        return
+
+    urbansim_settings = settings.urbansim
+    if urbansim_settings is None:
+        return
+
+    expected_name = os.path.basename(
+        urbansim_settings.output_file_template.format(year=forecast_year)
+    )
+    selected_name = os.path.basename(os.fspath(selected_path))
+    if selected_name == expected_name:
+        return
+
+    restart_note = " during restart resume" if bool(getattr(state, "is_restart_run", False)) else ""
+    raise RuntimeError(
+        "ATLAS subyear datastore resolution mismatch%s: year %s requires forecast-year "
+        "UrbanSim datastore %r, but resolved %r. This would cause ATLAS to fall back "
+        "to older year-scoped tables instead of failing cleanly."
+        % (restart_note, atlas_year, expected_name, selected_name)
+    )
 
 
 def run_vehicle_ownership_stage(
@@ -261,6 +322,14 @@ def run_vehicle_ownership_stage(
             usim_datastore_h5_start_year_path
             if atlas_state.is_start_year()
             else usim_datastore_h5_subyear_path
+        )
+        _validate_atlas_subyear_usim_datastore(
+            atlas_year=atlas_year,
+            start_year=atlas_state.start_year,
+            forecast_year=forecast_year,
+            selected_path=atlas_usim_datastore_h5_path,
+            settings=settings,
+            state=state,
         )
         logger.debug(
             "[ATLAS] Year %s using UrbanSim datastore: %s",
