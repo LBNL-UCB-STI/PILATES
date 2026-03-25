@@ -325,7 +325,7 @@ def run_vehicle_ownership_stage(
         )
         _validate_atlas_subyear_usim_datastore(
             atlas_year=atlas_year,
-            start_year=atlas_state.start_year,
+            start_year=atlas_state.atlas_interval_start_year,
             forecast_year=forecast_year,
             selected_path=atlas_usim_datastore_h5_path,
             settings=settings,

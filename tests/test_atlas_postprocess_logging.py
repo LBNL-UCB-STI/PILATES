@@ -212,6 +212,77 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
     }
 
 
+def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    def _fake_make_typed_step_function(**kwargs):
+        captured["input_logger"] = kwargs["input_logger"]
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_make_logged_typed_step_function",
+        _fake_make_typed_step_function,
+    )
+
+    steps.make_atlas_postprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    input_logger = captured["input_logger"]
+    calls = []
+    h5_table_calls = []
+
+    def _log_input_only(*, key, path, description, **meta):
+        calls.append((key, path, meta))
+
+    monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        lambda **kwargs: h5_table_calls.append(kwargs),
+    )
+
+    year_scoped_h5 = tmp_path / "model_data_2023.h5"
+    pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
+        year_scoped_h5, key="/2023/households", mode="w"
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path),
+    )
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(
+            output_file_template="model_data_{year}.h5",
+            input_file_template="model_data_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"test": "000"}},
+        ),
+        run=SimpleNamespace(region="test"),
+    )
+    state = SimpleNamespace(
+        forecast_year=2023,
+        is_start_year=lambda: True,
+        atlas_usim_datastore_h5=str(year_scoped_h5),
+    )
+
+    input_logger(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        holder=SimpleNamespace(),
+    )
+
+    assert len(calls) == 1
+    assert calls[0][0] == "usim_datastore_h5"
+    assert calls[0][1] == str(year_scoped_h5)
+    assert len(h5_table_calls) == 1
+    assert h5_table_calls[0]["table_keys"] == {
+        "/2023/households": "atlas_postprocess_usim_households_table_input"
+    }
+
+
 def test_atlas_postprocess_logs_resolved_fallback_households_table(
     monkeypatch, tmp_path
 ):

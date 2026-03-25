@@ -41,6 +41,18 @@ def test_resolve_atlas_h5_table_key_uses_root_for_start_year(tmp_path):
     assert resolved == "households"
 
 
+def test_resolve_atlas_h5_table_key_prefers_year_scoped_start_year_table(tmp_path):
+    path = tmp_path / "data.h5"
+    pd.DataFrame({"x": [1]}).to_hdf(path, key="/2023/households", mode="w")
+
+    with pd.HDFStore(path, mode="r") as store:
+        resolved = _resolve_atlas_h5_table_key(
+            store, year=2023, table="households", is_start_year=True
+        )
+
+    assert resolved == "/2023/households"
+
+
 def test_resolve_atlas_h5_table_key_falls_back_to_prior_year_scoped_table(tmp_path):
     path = tmp_path / "data.h5"
     pd.DataFrame({"x": [1]}).to_hdf(path, key="/2023/households", mode="w")

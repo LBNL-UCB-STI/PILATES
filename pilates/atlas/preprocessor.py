@@ -250,18 +250,21 @@ def _resolve_atlas_h5_table_key(
     """
     Resolve the HDF5 key for an ATLAS-required table.
 
-    For non-start years, prefer ``/{year}/{table}`` when present. Fall back to
-    root-level ``{table}`` to support merged/current datastores that do not keep
-    per-year table prefixes.
-    """
-    if is_start_year:
-        return table
+    Prefer ``/{year}/{table}`` when present, regardless of whether the current
+    ATLAS sub-year is the first sub-year in the interval. Some start-subyear
+    UrbanSim snapshots are still year-scoped (for example ``/2023/households``
+    inside ``model_data_2023.h5``) rather than root-scoped.
 
+    Fall back to root-level ``{table}`` to support merged/current datastores
+    that do not keep per-year table prefixes.
+    """
     year_key = f"/{year}/{table}"
     if year_key in store:
         return year_key
 
     if table in store:
+        if is_start_year:
+            return table
         logger.warning(
             "[AtlasPreprocessor] Year-specific table %s not found; falling back "
             "to root table %s.",

@@ -172,6 +172,17 @@ def test_validate_atlas_subyear_usim_datastore_allows_forecast_year_output():
     )
 
 
+def test_validate_atlas_subyear_usim_datastore_allows_interval_start_year_output():
+    _validate_atlas_subyear_usim_datastore(
+        atlas_year=2023,
+        start_year=2023,
+        forecast_year=2029,
+        selected_path="/tmp/model_data_2023.h5",
+        settings=_settings(),
+        state=SimpleNamespace(is_restart_run=True),
+    )
+
+
 def test_validate_atlas_subyear_usim_datastore_rejects_older_datastore():
     with pytest.raises(RuntimeError, match="requires forecast-year UrbanSim datastore"):
         _validate_atlas_subyear_usim_datastore(
