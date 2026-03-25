@@ -113,3 +113,38 @@ def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
             settings=settings,
             output_dir=str(output_dir),
         )
+
+
+def test_restore_restart_atlas_year_inputs_copies_base_and_prior_subyear(tmp_path):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input"
+    current_atlas_input = current_run_dir / "atlas" / "atlas_input"
+
+    _touch(previous_atlas_input / "year2017" / "households.csv")
+    _touch(previous_atlas_input / "year2021" / "households.csv")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(current_atlas_input),
+        },
+    )()
+
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(previous_run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2023,
+    )
+
+    assert (current_atlas_input / "year2017" / "households.csv").exists()
+    assert (current_atlas_input / "year2021" / "households.csv").exists()
+
+
+def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year_minus_two():
+    assert atlas_preprocessor_module._restart_required_atlas_input_years(
+        start_year=2017,
+        atlas_year=2023,
+    ) == [2017, 2021]

@@ -9,6 +9,8 @@ from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
 from pilates.generic.records import RecordStore
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT
+from pilates.workflows.outputs_base import step_output_mapping
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
@@ -47,6 +49,20 @@ def test_urbansim_run_executor_rejects_wrong_upstream_typed_output(tmp_path: Pat
         _execute_urbansim_run_typed(runner, _StubWorkspace(), holder)
 
     assert state.sub_stage_progress is None
+
+
+def test_urbansim_run_outputs_publish_only_canonical_datastore_key(
+    tmp_path: Path,
+) -> None:
+    forecast_h5 = tmp_path / "model_data_2030.h5"
+    outputs = UrbanSimRunOutputs(
+        usim_datastore_h5=forecast_h5,
+        raw_outputs={USIM_FORECAST_OUTPUT: forecast_h5},
+    )
+
+    assert step_output_mapping(outputs, warn_lossy=False) == {
+        USIM_DATASTORE_H5: str(forecast_h5),
+    }
 
 
 def test_urbansim_postprocess_executor_rejects_wrong_upstream_typed_output(

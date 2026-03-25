@@ -107,6 +107,11 @@ EXPECTED_MANIFEST_STEPS = {
 }
 
 EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
+    "accessibility_asim_out_temp",
+    "disaggregate_accessibility_asim_out_temp",
+    "joint_tour_participants_asim_out_temp",
+    "land_use_asim_out_temp",
+    "non_mandatory_tour_destination_accessibility_asim_out_temp",
     "households_asim_out_temp",
     "persons_asim_out_temp",
     "tours_asim_out_temp",
@@ -115,6 +120,11 @@ EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
 }
 
 EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS = {
+    normalize_asim_output_key("accessibility"),
+    normalize_asim_output_key("disaggregate_accessibility"),
+    normalize_asim_output_key("joint_tour_participants"),
+    normalize_asim_output_key("land_use"),
+    normalize_asim_output_key("non_mandatory_tour_destination_accessibility"),
     normalize_asim_output_key("households"),
     normalize_asim_output_key("persons"),
     normalize_asim_output_key("tours"),
@@ -462,11 +472,55 @@ def golden_stub_env(tmp_path, monkeypatch):
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"
     )
+    asim_accessibility_out_path = (
+        asim_out_dir / "final_pipeline" / "accessibility" / "final.parquet"
+    )
+    asim_disagg_accessibility_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "disaggregate_accessibility"
+        / "final.parquet"
+    )
+    asim_joint_tour_participants_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "joint_tour_participants"
+        / "final.parquet"
+    )
+    asim_land_use_out_path = (
+        asim_out_dir / "final_pipeline" / "land_use" / "final.parquet"
+    )
+    asim_non_mandatory_accessibility_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "non_mandatory_tour_destination_accessibility"
+        / "final.parquet"
+    )
     asim_persons_out_path = asim_out_dir / "final_pipeline" / "persons" / "final.parquet"
     asim_tours_out_path = asim_out_dir / "final_pipeline" / "tours" / "final.parquet"
     asim_trips_out_path = asim_out_dir / "final_pipeline" / "trips" / "final.parquet"
     asim_beam_plans_out_path = (
         asim_out_dir / "final_pipeline" / "beam_plans" / "final.parquet"
+    )
+    _write_parquet(
+        asim_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "accessibility": [1.2, 0.8]}),
+    )
+    _write_parquet(
+        asim_disagg_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "zone_id": [1, 2], "utility": [0.5, 0.3]}),
+    )
+    _write_parquet(
+        asim_joint_tour_participants_out_path,
+        pd.DataFrame({"tour_id": [100], "person_id": [12], "participant_num": [1]}),
+    )
+    _write_parquet(
+        asim_land_use_out_path,
+        pd.DataFrame({"zone_id": [1, 2], "TOTPOP": [120, 80], "TOTEMP": [15, 20]}),
+    )
+    _write_parquet(
+        asim_non_mandatory_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "destination": [2, 1], "utility": [0.7, 0.4]}),
     )
     _write_parquet(
         asim_households_out_path,
@@ -644,6 +698,11 @@ def golden_stub_env(tmp_path, monkeypatch):
                 return ActivitySimRunOutputs(
                     output_dir=Path(workspace.get_asim_output_dir()),
                     raw_outputs={
+                        "accessibility_asim_out_temp": asim_accessibility_out_path,
+                        "disaggregate_accessibility_asim_out_temp": asim_disagg_accessibility_out_path,
+                        "joint_tour_participants_asim_out_temp": asim_joint_tour_participants_out_path,
+                        "land_use_asim_out_temp": asim_land_use_out_path,
+                        "non_mandatory_tour_destination_accessibility_asim_out_temp": asim_non_mandatory_accessibility_out_path,
                         "households_asim_out_temp": asim_households_out_path,
                         "persons_asim_out_temp": asim_persons_out_path,
                         "tours_asim_out_temp": asim_tours_out_path,
@@ -723,9 +782,10 @@ def golden_stub_env(tmp_path, monkeypatch):
                         shutil.copy2(source_path, target_path)
                     processed_outputs[normalize_asim_output_key(clean_name)] = target_path
                 return ActivitySimPostprocessOutputs(
-                    usim_datastore_h5=None,
+                    usim_datastore_h5=usim_merged_path,
                     asim_output_dir=Path(workspace.get_asim_output_dir()),
                     processed_outputs=processed_outputs,
+                    usim_datastore_key=USIM_DATASTORE_H5,
                 )
             if model_name == "beam":
                 return BeamPostprocessOutputs(

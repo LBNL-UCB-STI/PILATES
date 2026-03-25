@@ -642,7 +642,7 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     assert outputs is not None
     assert holder.urbansim_run is not None
     assert holder.urbansim_run.usim_datastore_h5 == usim_output
-    assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
+    assert holder.urbansim_run.raw_outputs[USIM_DATASTORE_H5] == usim_output
     assert coupler.get(USIM_DATASTORE_H5) is not None
     assert coupler.get(USIM_FORECAST_OUTPUT) is None
 
@@ -833,7 +833,7 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     assert outputs is not None
     assert holder.atlas_postprocess is not None
     assert holder.atlas_postprocess.usim_datastore_h5 == updated_h5
-    assert holder.atlas_postprocess.processed_outputs[USIM_H5_UPDATED] == updated_h5
+    assert holder.atlas_postprocess.processed_outputs[USIM_DATASTORE_H5] == updated_h5
     assert holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"] == vehicles2
     assert coupler.get(USIM_DATASTORE_H5) is not None
     assert coupler.get(USIM_H5_UPDATED) is None

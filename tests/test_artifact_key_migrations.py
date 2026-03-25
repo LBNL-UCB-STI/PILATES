@@ -34,3 +34,15 @@ def test_resolve_artifact_key_usim_current_aliases():
         resolve_artifact_key("usim_datastore_h5")
         == ArtifactKeys.USIM_DATASTORE_CURRENT_H5
     )
+    assert (
+        resolve_artifact_key("usim_forecast_output")
+        == ArtifactKeys.USIM_DATASTORE_CURRENT_H5
+    )
+    assert (
+        resolve_artifact_key("usim_h5_updated")
+        == ArtifactKeys.USIM_DATASTORE_CURRENT_H5
+    )
+    assert (
+        resolve_artifact_key("usim_input_next")
+        == ArtifactKeys.USIM_DATASTORE_CURRENT_H5
+    )

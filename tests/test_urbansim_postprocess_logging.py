@@ -21,7 +21,7 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 
@@ -89,7 +89,7 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 

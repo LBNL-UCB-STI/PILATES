@@ -97,19 +97,13 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_input_keys": ("usim_skims_input_updated",),
             "optional_output_keys": (),
             "dynamic_input_families": (),
-            "output_keys": (
-                USIM_DATASTORE_H5,
-                USIM_FORECAST_OUTPUT,
-            ),
+            "output_keys": (USIM_DATASTORE_H5,),
             "dynamic_output_families": (),
             "holder_inputs": ("urbansim_preprocess",),
             "upstream_step_inputs": ("urbansim_preprocess",),
         },
         "urbansim_postprocess": {
-            "input_keys": (
-                USIM_DATASTORE_H5,
-                USIM_FORECAST_OUTPUT,
-            ),
+            "input_keys": (USIM_DATASTORE_H5,),
             "optional_input_keys": (),
             "optional_output_keys": (),
             "dynamic_input_families": (),
@@ -178,7 +172,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "output_keys": (
                 ATLAS_OUTPUT_DIR,
-                USIM_H5_UPDATED,
                 USIM_DATASTORE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
             ),
@@ -187,11 +180,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "upstream_step_inputs": ("atlas_run",),
         },
         "activitysim_preprocess": {
-            "input_keys": (USIM_H5_UPDATED,),
-            "optional_input_keys": (
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            ),
+            "input_keys": (USIM_DATASTORE_CURRENT_H5,),
+            "optional_input_keys": (USIM_DATASTORE_BASE_H5, FINAL_SKIMS_OMX),
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (
@@ -241,23 +231,17 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ASIM_OMX_SKIMS,
                 ZARR_SKIMS,
                 USIM_DATASTORE_CURRENT_H5,
-                USIM_FORECAST_OUTPUT,
                 *ActivitySimRunOutputs.required_output_keys(),
             ),
             "optional_input_keys": (
                 *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
                 USIM_DATASTORE_BASE_H5,
             ),
-            "optional_output_keys": (
-                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-                USIM_INPUT_NEXT,
-                USIM_DATASTORE_H5,
-            ),
+            "optional_output_keys": (*ASIM_OPTIONAL_RUN_OUTPUT_KEYS,),
             "dynamic_input_families": (),
             "output_keys": (
                 ASIM_OUTPUT_DIR,
                 *ActivitySimRunOutputs.required_output_keys(),
-                USIM_INPUT_NEXT,
                 USIM_DATASTORE_H5,
             ),
             "dynamic_output_families": (),
@@ -409,10 +393,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "optional_output_keys": [],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["urbansim_preprocess"],
-        "output_keys": [
-            USIM_DATASTORE_H5,
-            USIM_FORECAST_OUTPUT,
-        ],
+        "output_keys": [USIM_DATASTORE_H5],
         "dynamic_output_families": [],
         "optional": False,
     }
@@ -431,7 +412,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "upstream_step_inputs": ["atlas_run"],
         "output_keys": [
             ATLAS_OUTPUT_DIR,
-            USIM_H5_UPDATED,
             USIM_DATASTORE_H5,
             ATLAS_VEHICLES2_OUTPUT,
         ],
@@ -450,24 +430,18 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ASIM_OMX_SKIMS,
             ZARR_SKIMS,
             USIM_DATASTORE_CURRENT_H5,
-            USIM_FORECAST_OUTPUT,
             *ActivitySimRunOutputs.required_output_keys(),
         ],
         "optional_input_keys": [
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             USIM_DATASTORE_BASE_H5,
         ],
-        "optional_output_keys": [
-            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-            USIM_INPUT_NEXT,
-            USIM_DATASTORE_H5,
-        ],
+        "optional_output_keys": [*ASIM_OPTIONAL_RUN_OUTPUT_KEYS],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_run"],
         "output_keys": [
             ASIM_OUTPUT_DIR,
             *ActivitySimRunOutputs.required_output_keys(),
-            USIM_INPUT_NEXT,
             USIM_DATASTORE_H5,
         ],
         "dynamic_output_families": [],

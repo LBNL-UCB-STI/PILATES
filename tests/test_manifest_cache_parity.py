@@ -21,7 +21,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_PERSONS_IN,
     BEAM_CONFIG_FILE,
     USIM_DATASTORE_BASE_H5,
-    USIM_INPUT_NEXT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PLANS_OUT,
     BEAM_PERSONS_IN,
@@ -1113,7 +1112,7 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
         "asim_input_land_use_csv_archived",
         "asim_input_skims_omx_archived",
         "asim_input_skims_zarr_archived",
-        USIM_INPUT_NEXT,
+        "usim_datastore_h5",
     ]
 
     fresh_holder = StepOutputsHolder()
@@ -1135,7 +1134,7 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
             "asim_input_skims_omx_archived": archived_skims,
             "asim_input_skims_zarr_archived": archived_zarr,
         },
-        usim_datastore_key=USIM_INPUT_NEXT,
+        usim_datastore_key="usim_datastore_h5",
     )
 
     def _fresh_step(**_runtime_kwargs):

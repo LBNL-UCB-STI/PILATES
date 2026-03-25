@@ -25,6 +25,7 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.atlas.outputs import AtlasPreprocessOutputs, AtlasRunOutputs
 from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
 from pilates.workflows import steps
 from pilates.workflows.artifact_keys import (
@@ -314,6 +315,12 @@ class _ManifestWorkspace:
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._root / "activitysim" / "data")
 
+    def get_atlas_mutable_input_dir(self) -> str:
+        return str(self._root / "atlas" / "atlas_input")
+
+    def get_atlas_output_dir(self) -> str:
+        return str(self._root / "atlas" / "atlas_output")
+
 
 class _ManifestCoupler:
     def __init__(self) -> None:
@@ -357,8 +364,8 @@ def _prepare_activitysim_preprocess_manifest(
         outputs_holder=seed_holder,
     )
     outputs = _recover_step_outputs(
+        step=StepRef(name="activitysim_preprocess", step_func=step_func),
         step_name="activitysim_preprocess",
-        step_func=step_func,
         outputs_holder=seed_holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, iteration=0),
@@ -691,7 +698,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         usim_datastore_h5=usim_h5,
         asim_output_dir=tmp_path / "post-old",
         processed_outputs={"households_asim_out": old_post_path},
-        usim_datastore_key=USIM_INPUT_NEXT,
+        usim_datastore_key="usim_datastore_h5",
     )
 
     manifest_path = tmp_path / "manifest_split_downstream_stale.yaml"
@@ -737,7 +744,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
             usim_datastore_h5=usim_h5,
             asim_output_dir=tmp_path / "post-new",
             processed_outputs={"households_asim_out": new_post_path},
-            usim_datastore_key=USIM_INPUT_NEXT,
+            usim_datastore_key="usim_datastore_h5",
         )
 
     for fn, model in (
@@ -813,3 +820,98 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         ]
         == str(new_post_path)
     )
+
+
+def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
+    old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
+    new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(new_root)
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    current_households_csv = current_atlas_input_dir / "year2023" / "households.csv"
+    current_householdv_csv = current_atlas_output_dir / "householdv_2023.csv"
+    current_vehicles_csv = current_atlas_output_dir / "vehicles_2023.csv"
+    for path in (
+        current_households_csv,
+        current_householdv_csv,
+        current_vehicles_csv,
+    ):
+        _write_file(path)
+
+    old_atlas_input_dir = old_root / "atlas" / "atlas_input"
+    old_atlas_output_dir = old_root / "atlas" / "atlas_output"
+    manifest = {
+        "atlas_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasPreprocessOutputs(
+                    atlas_mutable_input_dir=old_atlas_input_dir,
+                    prepared_inputs={
+                        "atlas_households_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "households.csv"
+                    },
+                )
+            ),
+        },
+        "atlas_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasRunOutputs(
+                    atlas_output_dir=old_atlas_output_dir,
+                    raw_outputs={
+                        "householdv_2023": old_atlas_output_dir / "householdv_2023.csv",
+                        "vehicles_2023": old_atlas_output_dir / "vehicles_2023.csv",
+                    },
+                )
+            ),
+        },
+    }
+    manifest_path = tmp_path / "atlas_manifest.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    scenario = _ManifestScenario(cache_hit=False)
+    state = SimpleNamespace(year=2023, forecast_year=2029, atlas_year=2023, iteration=0)
+
+    run_manifested_steps(
+        stage_name="atlas",
+        steps=[
+            StepRef(
+                name="atlas_preprocess",
+                step_func=make_atlas_preprocess_step(
+                    coupler=coupler,
+                    outputs_holder=holder,
+                ),
+            ),
+            StepRef(
+                name="atlas_run",
+                step_func=make_atlas_run_step(
+                    coupler=coupler,
+                    outputs_holder=holder,
+                ),
+            ),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2023_i0",
+        iteration=0,
+    )
+
+    assert scenario.calls == []
+    assert holder.atlas_preprocess is not None
+    assert holder.atlas_run is not None
+    assert holder.atlas_preprocess.atlas_mutable_input_dir == current_atlas_input_dir
+    assert holder.atlas_preprocess.prepared_inputs["atlas_households_csv"] == current_households_csv
+    assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
+    assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
+    assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv

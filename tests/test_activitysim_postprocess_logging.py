@@ -9,7 +9,7 @@ from pilates.activitysim.outputs import (
 )
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.binding import BindingPlan
-from pilates.workflows.artifact_keys import USIM_INPUT_NEXT
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows import steps
 from pilates.workflows.steps import activitysim as steps_activitysim
 
@@ -224,8 +224,8 @@ def test_activitysim_postprocess_normalizes_legacy_usim_input_key(
     )
 
     assert outputs.usim_datastore_h5 == tmp_path / "usim_2018.h5"
-    assert outputs.usim_datastore_key == USIM_INPUT_NEXT
-    assert list(outputs.to_record_store().to_mapping()) == [USIM_INPUT_NEXT]
+    assert outputs.usim_datastore_key == USIM_DATASTORE_H5
+    assert list(outputs.to_record_store().to_mapping()) == [USIM_DATASTORE_H5]
 
 
 def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:
@@ -249,11 +249,11 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         steps_activitysim,
         "build_binding_plan",
         lambda **_kwargs: BindingPlan(
-            source_by_key={"usim_h5_updated": "explicit"},
-            inputs={"usim_h5_updated": str(tmp_path / "model_data.h5")},
+            source_by_key={"usim_datastore_h5": "explicit"},
+            inputs={"usim_datastore_h5": str(tmp_path / "model_data.h5")},
             metadata={
                 "selected_key_by_semantic_key": {
-                    "usim_h5_updated": "usim_datastore_base_h5"
+                    "usim_datastore_h5": "usim_datastore_base_h5"
                 }
             },
         ),

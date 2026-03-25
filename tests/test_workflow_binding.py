@@ -255,8 +255,8 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
         year=2030,
     )
 
-    assert plan.inputs[USIM_H5_UPDATED] == "/tmp/base.h5"
-    assert plan.source_by_key[USIM_H5_UPDATED] == "fallback"
+    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/base.h5"
+    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "fallback"
     assert not plan.missing_required
 
 
