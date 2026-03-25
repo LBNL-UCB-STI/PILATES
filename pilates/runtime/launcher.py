@@ -505,6 +505,21 @@ def _repair_restart_state_for_incomplete_atlas_outputs(
     )
 
 
+def _repair_restart_atlas_inputs_from_archive(
+    *,
+    settings: Any,
+    state: WorkflowState,
+    workspace: Workspace,
+    archive_run_dir: str,
+) -> bool:
+    return restart_runtime.repair_restart_atlas_inputs_from_archive(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        archive_run_dir=archive_run_dir,
+    )
+
+
 def _repair_restart_beam_inputs_from_source(
     *,
     settings: Any,
@@ -900,6 +915,28 @@ def main(
                         workspace=workspace,
                     )
                 )
+            restart_repairs_applied = False
+            if is_restart_run and _repair_restart_atlas_inputs_from_archive(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                archive_run_dir=archive_run_dir,
+            ):
+                restart_repairs_applied = True
+            if is_restart_run and _repair_restart_beam_inputs_from_source(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ):
+                restart_repairs_applied = True
+            if restart_repairs_applied:
+                restart_missing_artifacts_after_recovery = (
+                    _find_missing_restart_local_artifacts(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
+                )
             if restart_missing_artifacts_after_recovery:
                 logger.warning(
                     "Restart diagnostic still sees missing local workspace inputs "
@@ -908,16 +945,6 @@ def main(
                         restart_missing_artifacts_after_recovery
                     ),
                 )
-    if is_restart_run and _repair_restart_beam_inputs_from_source(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    ):
-        restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-        )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap

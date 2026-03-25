@@ -327,6 +327,94 @@ def repair_restart_state_for_incomplete_atlas_outputs(
     return True
 
 
+def repair_restart_atlas_inputs_from_archive(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    archive_run_dir: str,
+) -> bool:
+    """
+    Rehydrate restart-critical ATLAS year-input directories into the local workspace.
+
+    Strict restart preflight can require these directories before any ATLAS step
+    executes, so startup needs a repair path independent from the later
+    preprocess restore/rerun logic.
+    """
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return False
+
+    stage_enum = getattr(state, "Stage", None)
+    current_major_stage = getattr(state, "current_major_stage", None)
+    if stage_enum is None or current_major_stage != stage_enum.vehicle_ownership_model:
+        return False
+
+    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+    if not callable(get_atlas_input_dir):
+        return False
+
+    start_year = _coerce_int(getattr(state, "start_year", None))
+    atlas_year = _coerce_int(getattr(state, "year", getattr(state, "current_year", None)))
+    if start_year is None or atlas_year is None:
+        return False
+
+    archive_root = os.path.realpath(archive_run_dir)
+    if not os.path.isdir(archive_root):
+        return False
+
+    from pilates.atlas.preprocessor import (
+        _restart_required_atlas_input_years,
+        _restore_restart_atlas_year_inputs,
+    )
+
+    atlas_input_dir = os.path.realpath(get_atlas_input_dir())
+    required_years = _restart_required_atlas_input_years(
+        start_year=start_year,
+        atlas_year=atlas_year,
+    )
+    missing_before = [
+        year
+        for year in required_years
+        if not os.path.exists(os.path.join(atlas_input_dir, f"year{year}"))
+    ]
+    if not missing_before:
+        return False
+
+    logger.warning(
+        "[RestartRepair] Missing restart-critical ATLAS year inputs %s under %s; "
+        "rehydrating from archive %s.",
+        missing_before,
+        atlas_input_dir,
+        archive_root,
+    )
+    _restore_restart_atlas_year_inputs(
+        previous_run_dir=archive_root,
+        workspace=workspace,
+        start_year=start_year,
+        atlas_year=atlas_year,
+    )
+
+    missing_after = [
+        year
+        for year in required_years
+        if not os.path.exists(os.path.join(atlas_input_dir, f"year{year}"))
+    ]
+    repaired_years = [year for year in missing_before if year not in missing_after]
+    if repaired_years:
+        logger.info(
+            "[RestartRepair] Restored restart-critical ATLAS year inputs from archive: %s",
+            repaired_years,
+        )
+    if missing_after:
+        logger.warning(
+            "[RestartRepair] ATLAS restart year inputs still missing after archive "
+            "rehydration: %s",
+            missing_after,
+        )
+    return bool(repaired_years)
+
+
 def _supply_demand_manifest_path(
     *,
     run_dir: str,

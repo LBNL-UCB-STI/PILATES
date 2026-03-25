@@ -1522,6 +1522,42 @@ def test_repair_restart_beam_inputs_from_source_repopulates_missing_primary_conf
     ).exists()
 
 
+def test_repair_restart_atlas_inputs_from_archive_restores_missing_year_dirs(tmp_path):
+    archive_run_dir = tmp_path / "archive-run"
+    local_run_dir = tmp_path / "local-run"
+    workspace = DummyWorkspace(str(local_run_dir))
+    settings = _restart_settings()
+    state = SimpleNamespace(
+        Stage=WorkflowState.Stage,
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
+        start_year=2017,
+        current_year=2023,
+    )
+
+    for required_year in (2017, 2021):
+        source_dir = archive_run_dir / "atlas" / "atlas_input" / f"year{required_year}"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        (source_dir / "households.csv").write_text(
+            f"households-{required_year}",
+            encoding="utf-8",
+        )
+
+    repaired = run_module._repair_restart_atlas_inputs_from_archive(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        archive_run_dir=str(archive_run_dir),
+    )
+
+    assert repaired is True
+    assert (
+        local_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
+    ).read_text(encoding="utf-8") == "households-2017"
+    assert (
+        local_run_dir / "atlas" / "atlas_input" / "year2021" / "households.csv"
+    ).read_text(encoding="utf-8") == "households-2021"
+
+
 def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_assignment(
     tmp_path,
 ):
@@ -2104,6 +2140,154 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         match="Strict restart preflight failed; required restart artifacts are still missing after restart bootstrap",
     ):
         run_module.main()
+
+
+def test_main_restart_strict_repairs_atlas_year_dirs_before_validation(
+    tmp_path, monkeypatch
+):
+    class StopAfterScenario(RuntimeError):
+        pass
+
+    class SnapshotStub:
+        def final_snapshot(self):
+            return True
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+        def get_atlas_mutable_input_dir(self):
+            return os.path.join(self.full_path, "atlas", "atlas_input")
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-strict-atlas-repair"
+    archive_run_dir = archive_root / run_name
+    archive_run_dir.mkdir(parents=True, exist_ok=True)
+    run_state_path = archive_run_dir / "run_state.yaml"
+    run_state_path.write_text("state", encoding="utf-8")
+    for required_year in (2017, 2021):
+        source_dir = archive_run_dir / "atlas" / "atlas_input" / f"year{required_year}"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        (source_dir / "households.csv").write_text("hh\n", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused-on-restart",
+            restart_strict=True,
+            models=SimpleNamespace(vehicle_ownership="atlas"),
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = SimpleNamespace(
+        Stage=WorkflowState.Stage,
+        run_info_path=str(run_state_path),
+        data_initialized=True,
+        file_loc=None,
+        mirror_file_loc=None,
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
+        current_year=2023,
+        start_year=2017,
+        forecast_year=2023,
+    )
+    state.set_run_info_path = lambda path: setattr(state, "run_info_path", path)
+    state.set_data_initialized = lambda initialized: setattr(
+        state, "data_initialized", initialized
+    )
+
+    def _atlas_only_missing(*, workspace, **_kwargs):
+        missing = []
+        for required_year in (2017, 2021):
+            path = os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                f"year{required_year}",
+            )
+            if not os.path.exists(path):
+                missing.append(
+                    {
+                        "key": f"atlas_restart_year::{required_year}",
+                        "path": path,
+                        "reason": "test",
+                    }
+                )
+        return missing
+
+    monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
+    monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(run_module, "_run_resume_doctor_diagnostics", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        run_module,
+        "_reconstruct_restart_completed_run_outputs",
+        lambda **_kwargs: {
+            "run_ids": ["run-1"],
+            "source_root": str(archive_run_dir),
+            "target_root": str(local_root / run_name),
+            "materialization_result": MaterializationResult(
+                materialized_from_filesystem={"run-1": "/restored/run-1"},
+            ),
+        },
+    )
+    monkeypatch.setattr(run_module, "_find_missing_restart_local_artifacts", _atlas_only_missing)
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **_kwargs: {
+            "bootstrap_cache_hit": False,
+            "run_reference": {"probe_run_id": "bootstrap-run"},
+            "staged_artifact_summary": {"copied_records_total": 0},
+        },
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            StopAfterScenario("reached scenario")
+        ),
+    )
+
+    with pytest.raises(StopAfterScenario, match="reached scenario"):
+        run_module.main()
+
+    local_run_dir = local_root / run_name
+    assert (local_run_dir / "atlas" / "atlas_input" / "year2017").exists()
+    assert (local_run_dir / "atlas" / "atlas_input" / "year2021").exists()
 
 
 def test_resolve_consist_db_paths_uses_local_run_dir_by_default():
