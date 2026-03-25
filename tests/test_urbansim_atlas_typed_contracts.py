@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from pilates.atlas.outputs import AtlasPreprocessOutputs, AtlasRunOutputs
@@ -247,6 +248,43 @@ def test_atlas_postprocess_fails_closed_without_current_year_run_outputs(tmp_pat
             ),
             workspace,
         )
+
+
+def test_atlas_update_h5_vehicle_updates_nearest_year_scoped_households_table(
+    tmp_path: Path,
+) -> None:
+    state = _StubState()
+    state.forecast_year = 2029
+    state.current_year = 2023
+    state.is_start_year = lambda: False
+    postprocessor = AtlasPostprocessor("atlas", state)
+
+    h5_path = tmp_path / "model_data_2029.h5"
+    original = pd.DataFrame(
+        {"cars": [0, 1], "hh_cars": ["none", "one"]},
+        index=pd.Index([10, 20], name="household_id"),
+    )
+    original.to_hdf(h5_path, key="/2024/households", mode="w")
+
+    household_v_csv = tmp_path / "householdv_2029.csv"
+    pd.DataFrame(
+        {"household_id": [10, 20], "nvehicles": [2, 0]}
+    ).to_csv(household_v_csv, index=False)
+
+    updated = postprocessor.atlas_update_h5_vehicle(
+        settings=None,
+        output_year=2023,
+        h5_file_path=str(h5_path),
+        household_v_csv_path=str(household_v_csv),
+    )
+
+    assert updated is True
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert "/2024/households" in store
+        households = store["/2024/households"]
+
+    assert households["cars"].tolist() == [2, 0]
+    assert households["hh_cars"].tolist() == ["two or more", "none"]
 
 
 def test_urbansim_postprocess_uses_handed_off_run_output_path(

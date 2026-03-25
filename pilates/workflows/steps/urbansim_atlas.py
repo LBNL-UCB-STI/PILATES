@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Mapping, Optional
 import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
+from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils import consist_runtime as cr
@@ -103,6 +104,33 @@ def _root_h5_table_descriptions(path: str, *, action: str) -> Dict[str, str]:
         table_name = table_path.split("/")[-1]
         descriptions[table_path] = f"UrbanSim {table_name} table {action}"
     return descriptions
+
+
+def _resolve_atlas_postprocess_households_table_path(
+    *,
+    path: str,
+    forecast_year: int,
+    is_start_year: bool,
+) -> str:
+    """
+    Resolve the households table path ATLAS postprocess will actually touch.
+
+    Fall back to the legacy default when the file is missing or unreadable so
+    logging remains best-effort and does not block execution.
+    """
+    default_path = "/households" if is_start_year else f"/{forecast_year}/households"
+    try:
+        with pd.HDFStore(path, mode="r") as store:
+            resolved = _resolve_atlas_h5_table_key(
+                store,
+                year=forecast_year,
+                table="households",
+                is_start_year=is_start_year,
+            )
+    except Exception:
+        return default_path
+
+    return resolved if str(resolved).startswith("/") else f"/{resolved}"
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
@@ -877,9 +905,11 @@ def make_atlas_postprocess_step(
                 ),
             )
             households_table_path = (
-                "/households"
-                if state.is_start_year()
-                else f"/{forecast_year}/households"
+                _resolve_atlas_postprocess_households_table_path(
+                    path=str(usim_output_path),
+                    forecast_year=forecast_year,
+                    is_start_year=state.is_start_year(),
+                )
             )
             _log_named_h5_tables(
                 path=str(usim_output_path),
@@ -939,9 +969,11 @@ def make_atlas_postprocess_step(
                 ),
             )
             households_table_path = (
-                "/households"
-                if state.is_start_year()
-                else f"/{forecast_year}/households"
+                _resolve_atlas_postprocess_households_table_path(
+                    path=str(outputs.usim_datastore_h5),
+                    forecast_year=forecast_year,
+                    is_start_year=state.is_start_year(),
+                )
             )
             _log_named_h5_tables(
                 path=str(outputs.usim_datastore_h5),

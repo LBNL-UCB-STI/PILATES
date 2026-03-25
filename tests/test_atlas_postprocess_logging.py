@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from pilates.atlas import postprocessor as atlas_postprocessor
@@ -17,7 +18,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 
@@ -89,7 +90,7 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 
@@ -151,7 +152,7 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 
@@ -208,6 +209,96 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
     assert len(h5_table_calls) == 1
     assert h5_table_calls[0]["table_keys"] == {
         "/households": "atlas_postprocess_usim_households_table_input"
+    }
+
+
+def test_atlas_postprocess_logs_resolved_fallback_households_table(
+    monkeypatch, tmp_path
+):
+    captured = {}
+
+    def _fake_make_typed_step_function(**kwargs):
+        captured["input_logger"] = kwargs["input_logger"]
+        captured["output_logger"] = kwargs["output_logger"]
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_make_logged_typed_step_function",
+        _fake_make_typed_step_function,
+    )
+
+    steps.make_atlas_postprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    usim_path = tmp_path / "model_data_2023.h5"
+    pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
+        usim_path, key="/2024/households", mode="w"
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path),
+    )
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
+    )
+    state = SimpleNamespace(forecast_year=2023, is_start_year=lambda: False)
+
+    input_h5_calls = []
+    output_h5_calls = []
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_input_only",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda **kwargs: None,
+    )
+
+    def _capture_input_tables(**kwargs):
+        input_h5_calls.append(kwargs)
+
+    def _capture_output_tables(**kwargs):
+        output_h5_calls.append(kwargs)
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        _capture_input_tables,
+    )
+    captured["input_logger"](
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        holder=SimpleNamespace(),
+    )
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        _capture_output_tables,
+    )
+    captured["output_logger"](
+        AtlasPostprocessOutputs(
+            atlas_output_dir=tmp_path,
+            usim_datastore_h5=usim_path,
+            processed_outputs={"usim_h5_updated": usim_path},
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        holder=SimpleNamespace(),
+    )
+
+    assert input_h5_calls[0]["table_keys"] == {
+        "/2024/households": "atlas_postprocess_usim_households_table_input"
+    }
+    assert output_h5_calls[0]["table_keys"] == {
+        "/2024/households": "atlas_postprocess_usim_households_table_updated"
     }
 
 

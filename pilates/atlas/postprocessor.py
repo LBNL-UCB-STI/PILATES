@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
+from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import enqueue_archive_copy
@@ -104,8 +105,6 @@ def resolve_atlas_usim_datastore_path(
             settings, io="output", year=state.forecast_year
         )
     return Path(usim_mutable_data_dir) / usim_datastore_fname
-
-
 class AtlasPostprocessor(GenericPostprocessor):
     """
     ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.
@@ -324,11 +323,13 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         # Read original h5 files and update
         with pd.HDFStore(h5_file_path, mode="r+") as h5:
-            # The sub-state's `is_start_year` method correctly determines if this is a warm start context
-            key = (
-                "households"
-                if self.state.is_start_year()
-                else f"/{output_year}/households"
+            # Keep write target resolution aligned with ATLAS preprocess so
+            # subyear runs can update the nearest available year-scoped table.
+            key = _resolve_atlas_h5_table_key(
+                h5,
+                year=output_year,
+                table="households",
+                is_start_year=self.state.is_start_year(),
             )
 
             try:
