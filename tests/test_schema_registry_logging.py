@@ -730,3 +730,93 @@ def test_log_h5_table_activitysim_postprocess_persons_fk_targets_are_registered(
     assert direction == "output"
     assert meta["schema"].__name__ == "ActivitysimPostprocessUsimPersonsUpdated"
     assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_atlas_postprocess_households_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="atlas_postprocess_usim_households_table_updated",
+            table_path="/2023/households",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "atlas_postprocess_usim_households_table_updated"
+    assert table_path == "/2023/households"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "AtlasPostprocessUsimHouseholdsUpdated"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_urbansim_postprocess_persons_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="urbansim_postprocess_usim_persons_table_updated",
+            table_path="/persons",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "urbansim_postprocess_usim_persons_table_updated"
+    assert table_path == "/persons"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "UrbansimPostprocessUsimPersonsTable"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_urbansim_postprocess_work_locations_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="urbansim_postprocess_usim_work_locations_table_updated",
+            table_path="/work_locations",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "urbansim_postprocess_usim_work_locations_table_updated"
+    assert table_path == "/work_locations"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "UrbansimPostprocessUsimWorkLocationsTable"
+    assert "target table is not registered in schema registry" not in caplog.text

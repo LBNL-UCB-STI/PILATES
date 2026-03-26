@@ -72,6 +72,10 @@ def _iter_schema_fields(schema_cls: type) -> Iterable[Tuple[str, object]]:
             yield py_name, field
 
 
+def _schema_table_name(schema_cls: type) -> str:
+    return str(getattr(schema_cls, "__tablename__", None) or schema_cls.__name__)
+
+
 def _extract_columns_and_relationships(
     schema_classes: Sequence[type],
 ) -> Tuple[Dict[str, List[ColumnInfo]], List[RelationshipInfo]]:
@@ -79,7 +83,7 @@ def _extract_columns_and_relationships(
     relationships: List[RelationshipInfo] = []
 
     for schema_cls in schema_classes:
-        table_name = schema_cls.__name__
+        table_name = _schema_table_name(schema_cls)
         table_columns: List[ColumnInfo] = []
 
         for py_name, field in _iter_schema_fields(schema_cls):

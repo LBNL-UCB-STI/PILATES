@@ -22,6 +22,19 @@ def test_generate_schema_erd_script_writes_expected_relationships(tmp_path: Path
     assert content.startswith("erDiagram")
     assert "PersonsAsimIn }o--|| HouseholdsAsimIn" in content
     assert "HouseholdsAsimIn }o--|| LandUseAsimIn" in content
+    assert "BeamPlansAsimOut }o--|| tripsAsimOut" in content
+    assert (
+        "UrbansimPostprocessUsimPersonsTable }o--|| "
+        "UrbansimPostprocessUsimHouseholdsTable" in content
+    )
+    assert (
+        "UrbansimPostprocessUsimWorkLocationsTable }o--|| "
+        "UrbansimPostprocessUsimPersonsTable" in content
+    )
+    assert (
+        "UrbansimPostprocessUsimBlocksTable }o--|| "
+        "UrbansimPostprocessUsimTazZoneGeomsTable" in content
+    )
 
 
 def test_generate_schema_erd_script_dot_format(tmp_path: Path):
@@ -64,3 +77,4 @@ def test_generate_schema_erd_script_html_format(tmp_path: Path):
     assert "cytoscape.min.js" in content
     assert 'id="cy"' in content
     assert "PersonsAsimIn" in content
+    assert "tripsAsimOut" in content

@@ -693,8 +693,19 @@ class BeamEventsLeavingParkingEvent(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier involved in the event.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -853,7 +864,10 @@ class BeamEventsModeChoice(SQLModel, table=True):
     )
     legvehicleids: Optional[str] = Field(
         default=None,
-        description="Serialized leg vehicle identifiers.",
+        description=(
+            "Serialized BEAM leg vehicle references. Entries may contain "
+            "stringified household vehicle ids or other fleet/transit vehicle ids."
+        ),
         sa_column=Column("legVehicleIds", String, nullable=True),
     )
 
@@ -897,8 +911,19 @@ class BeamEventsParkingEvent(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier involved in the event.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -999,16 +1024,21 @@ class BeamEventsPathTraversal(SQLModel, table=True):
         description="Start Y coordinate.",
         sa_column=Column("startY", Float, nullable=True),
     )
-    vehicle: Optional[int] = Field(
+    vehicle: Optional[str] = Field(
         default=None,
-        description="Optional vehicle identifier when it maps to VehiclesBeamIn.",
-        sa_column=Column(
-            "vehicle",
-            BigInteger,
-            ForeignKey("VehiclesBeamIn.vehicle_id"),
-            nullable=True,
-            index=True,
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
         ),
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the traversal refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     endx: Optional[float] = Field(
         default=None,
@@ -1112,7 +1142,7 @@ class BeamEventsPathTraversal(SQLModel, table=True):
     )
     vehicletype: Optional[str] = Field(
         default=None,
-        description="Vehicle type classification.",
+        description="BEAM-reported vehicle type label for the traversal.",
         sa_column=Column("vehicleType", String, nullable=True),
     )
     emissions: Optional[str] = Field(
@@ -1204,8 +1234,19 @@ class BeamEventsPersonEntersVehicle(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier entered by the person.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -1248,8 +1289,19 @@ class BeamEventsPersonLeavesVehicle(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier exited by the person.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,

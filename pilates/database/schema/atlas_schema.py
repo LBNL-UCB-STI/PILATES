@@ -93,7 +93,7 @@ class AtlasBlocks(SQLModel, table=True):
     mpo_id: Optional[str] = Field(
         default=None,
         description='Metropolitan planning organization identifier.',
-        sa_column=Column('MPO_ID', String, nullable=True),
+        sa_column=Column('mpo_id', String, nullable=True),
     )
     sum_acres: Optional[float] = Field(
         default=None,
@@ -161,13 +161,7 @@ class AtlasGrave(SQLModel, table=True):
     school_block_id: Optional[int] = Field(
         default=None,
         description='Census block identifier for school location.',
-        sa_column=Column(
-            'school_block_id',
-            BigInteger,
-            ForeignKey('AtlasBlocks.block_id'),
-            nullable=True,
-            index=True,
-        ),
+        sa_column=Column('school_block_id', BigInteger, nullable=True, index=True),
     )
     school_zone_id: Optional[int] = Field(
         default=None,
@@ -265,7 +259,7 @@ class AtlasGrave(SQLModel, table=True):
     hispanic_1: Optional[float] = Field(
         default=None,
         description='Hispanic status code (alternate encoding).',
-        sa_column=Column('hispanic.1', Float, nullable=True),
+        sa_column=Column('hispanic_1', Float, nullable=True),
     )
     age: Optional[float] = Field(
         default=None,
@@ -297,7 +291,7 @@ class AtlasGrave(SQLModel, table=True):
     mar: Optional[float] = Field(
         default=None,
         description='Marital status code.',
-        sa_column=Column('MAR', Float, nullable=True),
+        sa_column=Column('mar', Float, nullable=True),
     )
     edu: Optional[float] = Field(
         default=None,
@@ -546,13 +540,7 @@ class AtlasPersons(SQLModel, table=True):
     school_block_id: Optional[int] = Field(
         default=None,
         description='Census block identifier for school location.',
-        sa_column=Column(
-            'school_block_id',
-            BigInteger,
-            ForeignKey('AtlasBlocks.block_id'),
-            nullable=True,
-            index=True,
-        ),
+        sa_column=Column('school_block_id', BigInteger, nullable=True, index=True),
     )
     school_zone_id: Optional[int] = Field(
         default=None,
@@ -650,7 +638,7 @@ class AtlasPersons(SQLModel, table=True):
     hispanic_1: Optional[float] = Field(
         default=None,
         description='Hispanic status code (alternate encoding).',
-        sa_column=Column('hispanic.1', Float, nullable=True),
+        sa_column=Column('hispanic_1', Float, nullable=True),
     )
     age: Optional[float] = Field(
         default=None,
@@ -682,7 +670,7 @@ class AtlasPersons(SQLModel, table=True):
     mar: Optional[int] = Field(
         default=None,
         description='Marital status code.',
-        sa_column=Column('MAR', BigInteger, nullable=True),
+        sa_column=Column('mar', BigInteger, nullable=True),
     )
     edu: Optional[float] = Field(
         default=None,
@@ -715,12 +703,12 @@ class AtlasResidential(SQLModel, table=True):
     acs_18_rent: Optional[float] = Field(
         default=None,
         description='ACS 2018 rent estimate for the unit or block group.',
-        sa_column=Column('ACS_18_rent', Float, nullable=True),
+        sa_column=Column('acs_18_rent', Float, nullable=True),
     )
     acs_13_value: Optional[float] = Field(
         default=None,
         description='ACS 2013 value estimate for the unit or block group.',
-        sa_column=Column('ACS_13_value', Float, nullable=True),
+        sa_column=Column('acs_13_value', Float, nullable=True),
     )
     lcm_county_id: Optional[str] = Field(
         default=None,
@@ -745,12 +733,12 @@ class AtlasResidential(SQLModel, table=True):
     acs_13_rent: Optional[float] = Field(
         default=None,
         description='ACS 2013 rent estimate for the unit or block group.',
-        sa_column=Column('ACS_13_rent', Float, nullable=True),
+        sa_column=Column('acs_13_rent', Float, nullable=True),
     )
     acs_18_value: Optional[float] = Field(
         default=None,
         description='ACS 2018 value estimate for the unit or block group.',
-        sa_column=Column('ACS_18_value', Float, nullable=True),
+        sa_column=Column('acs_18_value', Float, nullable=True),
     )
 
 
@@ -860,12 +848,12 @@ class VehiclesAtlasOut(SQLModel, table=True):
         description='Indicator for newly created household in the model year.',
         sa_column=Column('newhhflag', String, nullable=True),
     )
-    maindriver_id: Optional[str] = Field(
+    maindriver_id: Optional[int] = Field(
         default=None,
         description='Primary driver identifier for the vehicle.',
         sa_column=Column(
             'maindriver_id',
-            String,
+            BigInteger,
             ForeignKey('AtlasPersons.person_id'),
             nullable=True,
             index=True,
@@ -875,4 +863,9 @@ class VehiclesAtlasOut(SQLModel, table=True):
         default=None,
         description='Vehicle vintage/age category.',
         sa_column=Column('vintage_category', String, nullable=True),
+    )
+    vehicletypeid: Optional[str] = Field(
+        default=None,
+        description='BEAM vehicle type identifier added during ATLAS postprocessing.',
+        sa_column=Column('vehicleTypeId', String, nullable=True, index=True),
     )
