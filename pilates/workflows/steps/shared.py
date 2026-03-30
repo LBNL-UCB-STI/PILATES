@@ -1104,14 +1104,20 @@ def validate_workflow_step_contracts(
             step_func = declared_by_model.get(step_name)
             if outputs_class is None or step_func is None:
                 continue
-            canonical = list(required_outputs_for_step_outputs_class(outputs_class))
+            required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
+            declared_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
             step_meta = getattr(step_func, "__consist_step__", None)
             metadata_outputs = _normalize_output_keys(
                 getattr(step_meta, "outputs", None)
             )
-            if canonical != metadata_outputs:
+            metadata_set = set(metadata_outputs)
+            if (
+                metadata_outputs != required_outputs
+                and metadata_outputs != declared_outputs
+            ) or not set(required_outputs).issubset(metadata_set):
                 errors.append(
-                    f"Step '{step_name}': canonical outputs {canonical} conflict with metadata outputs "
+                    f"Step '{step_name}': canonical required outputs {required_outputs} "
+                    f"and declared outputs {declared_outputs} conflict with metadata outputs "
                     f"{metadata_outputs}. Fix: remove metadata override or update declared_outputs in "
                     f"{outputs_class.__name__}."
                 )

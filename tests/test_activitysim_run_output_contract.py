@@ -74,6 +74,7 @@ def test_activitysim_run_stepref_uses_required_outputs_for_runtime_contract():
         step=step,
         settings=SimpleNamespace(run=None),
         state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
         runtime_kwargs={},
         stage_name="activity_demand_run",
         default_iteration=0,
@@ -91,10 +92,14 @@ def test_activitysim_postprocess_outputs_require_processed_asim_tables_but_not_u
     assert "usim_input_next" not in required
 
 
-def test_activitysim_postprocess_validation_requires_usim_output_when_land_use_enabled():
+def test_activitysim_postprocess_validation_requires_usim_output_when_land_use_enabled(
+    tmp_path,
+):
+    asim_output_dir = tmp_path / "asim"
+    asim_output_dir.mkdir()
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
-        asim_output_dir=Path("/tmp/asim"),
+        asim_output_dir=asim_output_dir,
         processed_outputs={},
     )
 
@@ -110,10 +115,14 @@ def test_activitysim_postprocess_validation_requires_usim_output_when_land_use_e
         )
 
 
-def test_activitysim_postprocess_validation_allows_missing_usim_output_when_land_use_disabled():
+def test_activitysim_postprocess_validation_allows_missing_usim_output_when_land_use_disabled(
+    tmp_path,
+):
+    asim_output_dir = tmp_path / "asim"
+    asim_output_dir.mkdir()
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
-        asim_output_dir=Path("/tmp/asim"),
+        asim_output_dir=asim_output_dir,
         processed_outputs={},
     )
 

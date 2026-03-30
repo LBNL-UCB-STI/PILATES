@@ -69,6 +69,7 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     BEAM_PLANS_IN: "BEAM plans input staged for the runner.",
     BEAM_HOUSEHOLDS_IN: "BEAM households input staged for the runner.",
     BEAM_PERSONS_IN: "BEAM persons input staged for the runner.",
+    "vehicles_beam_in": "BEAM vehicles input staged for the runner.",
     LINKSTATS_WARMSTART: "BEAM warm-start linkstats input (initial or prior run).",
     LINKSTATS: "BEAM linkstats output for downstream runs.",
     BEAM_FULL_SKIMS: "BEAM full-skim background skims output.",

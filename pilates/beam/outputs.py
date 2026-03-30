@@ -103,6 +103,13 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+        "vehicles_beam_in",
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
     )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)

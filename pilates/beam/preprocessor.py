@@ -21,6 +21,8 @@ from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
@@ -204,6 +206,28 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         Declare the input paths/artifacts this preprocessor expects from the workflow.
         """
+        beam_scenario_dir = beam_exchange.resolve_beam_exchange_scenario_folder(
+            settings,
+            workspace,
+        )
+        preferred_format = (
+            getattr(getattr(settings, "activitysim", None), "file_format", None)
+            or "parquet"
+        )
+        beam_input_paths = {
+            BEAM_PLANS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "plans", preferred_format
+            )[0],
+            BEAM_HOUSEHOLDS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "households", preferred_format
+            )[0],
+            BEAM_PERSONS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "persons", preferred_format
+            )[0],
+            LINKSTATS_WARMSTART: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "linkstats", preferred_format
+            )[0],
+        }
         asim_output_dir = None
         if getattr(settings, "activity_demand_enabled", False):
             asim_output_dir = workspace.get_asim_output_dir()
@@ -211,10 +235,30 @@ class BeamPreprocessor(GenericPreprocessor):
         atlas_output_dir = None
         if getattr(settings, "vehicle_ownership_model_enabled", False):
             atlas_output_dir = workspace.get_atlas_output_dir()
+        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config_path = (
+            os.path.join(workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config)
+            if beam_config
+            else None
+        )
+        atlas_vehicle_input = None
+        if atlas_output_dir is not None:
+            forecast_year = getattr(state, "forecast_year", None)
+            if forecast_year is not None:
+                for candidate in (
+                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
+                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
+                ):
+                    if os.path.exists(candidate):
+                        atlas_vehicle_input = candidate
+                        break
         return {
             BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            BEAM_CONFIG_FILE: beam_config_path,
             ASIM_OUTPUT_DIR: asim_output_dir,
             ATLAS_OUTPUT_DIR: atlas_output_dir,
+            ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_input,
+            **beam_input_paths,
         }
 
     @staticmethod

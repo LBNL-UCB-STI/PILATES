@@ -441,11 +441,13 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=BeamPreprocessOutputs,
         input_keys=(
             BEAM_CONFIG_FILE,
-            *_ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS,
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
         ),
         optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
         output_keys=(
-            *BeamPreprocessOutputs.declared_output_keys(),
+            *BeamPreprocessOutputs.required_output_keys(),
         ),
         optional_output_keys=("vehicles_beam_in", LINKSTATS_WARMSTART),
         depends_on=("activitysim_postprocess",),

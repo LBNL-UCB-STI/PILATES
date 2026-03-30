@@ -4,6 +4,7 @@ import logging
 import os
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -37,6 +38,26 @@ _ATLAS_SUBYEAR_MANIFEST_RE = re.compile(
     r"^forecast_year_(?P<forecast_year>-?\d+)_subyear_(?P<sub_year>-?\d+)\.yaml$"
 )
 _OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES = ("_asim_out_temp",)
+_ACTIVITYSIM_QUERY_TARGETS = (
+    ("activitysim_preprocess", "activity_demand_preprocess", "preprocess"),
+    ("activitysim_run", "activity_demand_run", "run"),
+    ("activitysim_postprocess", "activity_demand_postprocess", "postprocess"),
+)
+_LAND_USE_QUERY_TARGETS = (
+    ("urbansim_preprocess", "land_use", "preprocess"),
+    ("urbansim_run", "land_use", "run"),
+    ("urbansim_postprocess", "land_use", "postprocess"),
+)
+_ATLAS_QUERY_TARGETS = (
+    ("atlas_preprocess", "atlas", "preprocess"),
+    ("atlas_run", "atlas", "run"),
+    ("atlas_postprocess", "atlas", "postprocess"),
+)
+_BEAM_QUERY_TARGETS = (
+    ("beam_preprocess", "beam", "preprocess"),
+    ("beam_run", "beam", "run"),
+    ("beam_postprocess", "beam", "postprocess"),
+)
 
 
 def _copy_restart_bookkeeping_file(
@@ -489,6 +510,7 @@ def _atlas_manifest_targets(
     forecast_year: Optional[int],
     require_all_subyears: bool,
     require_complete_steps: bool,
+    step_filter_override: Optional[Set[str]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[Tuple[str, str]]]:
     sub_years = _atlas_sub_years(current_year=year, forecast_year=forecast_year)
     manifest_scope_year = forecast_year if forecast_year is not None else year
@@ -512,9 +534,10 @@ def _atlas_manifest_targets(
 
     targets: List[Dict[str, Any]] = []
     issues: List[Tuple[str, str]] = []
-    step_filter = (
-        set(_ATLAS_MANIFEST_STEPS) if require_complete_steps else None
-    )
+    if step_filter_override is not None:
+        step_filter = set(step_filter_override)
+    else:
+        step_filter = set(_ATLAS_MANIFEST_STEPS) if require_complete_steps else None
     gap_detected = False
     for sub_year in sub_years:
         matching_paths = matched_by_sub_year.get(sub_year, [])
@@ -538,6 +561,291 @@ def _atlas_manifest_targets(
         issues.append((str(missing_path), "workflow manifest is missing"))
 
     return targets, issues
+
+
+def _stage_query_target(
+    *,
+    year: int,
+    model: str,
+    stage: str,
+    phase: Optional[str],
+    iteration: Optional[int] = None,
+) -> Dict[str, Any]:
+    target = {
+        "year": year,
+        "model": model,
+        "stage": stage,
+        "status": "completed",
+    }
+    if phase is not None:
+        target["phase"] = phase
+    if iteration is not None:
+        target["iteration"] = iteration
+    return target
+
+
+def _restart_query_targets(
+    *,
+    state: Any,
+    year: int,
+    workflow_stage: Any,
+) -> List[Dict[str, Any]]:
+    targets: List[Dict[str, Any]] = []
+    current_stage = getattr(state, "current_major_stage", None)
+    current_sub_stage = getattr(state, "current_sub_stage", None)
+    resume_iter = max(_coerce_int(getattr(state, "current_inner_iter", 0)) or 0, 0)
+    forecast_year = _coerce_int(getattr(state, "forecast_year", None))
+
+    land_use_enabled = _is_stage_explicitly_enabled(
+        state=state,
+        stage=workflow_stage.land_use,
+    )
+    if current_stage in {
+        workflow_stage.vehicle_ownership_model,
+        workflow_stage.supply_demand_loop,
+        workflow_stage.postprocessing,
+    } and land_use_enabled is not False:
+        for model, stage_name, phase in _LAND_USE_QUERY_TARGETS:
+            targets.append(
+                _stage_query_target(
+                    year=year,
+                    iteration=0,
+                    model=model,
+                    stage=stage_name,
+                    phase=phase,
+                )
+            )
+
+    vehicle_enabled = _is_stage_explicitly_enabled(
+        state=state,
+        stage=workflow_stage.vehicle_ownership_model,
+    )
+    if (
+        current_stage
+        in {
+            workflow_stage.vehicle_ownership_model,
+            workflow_stage.supply_demand_loop,
+            workflow_stage.postprocessing,
+        }
+        and vehicle_enabled is not False
+    ):
+        atlas_targets = _ATLAS_QUERY_TARGETS
+        if current_stage in {
+            workflow_stage.supply_demand_loop,
+            workflow_stage.postprocessing,
+        }:
+            atlas_targets = (("atlas_postprocess", "atlas", "postprocess"),)
+        for sub_year in _atlas_sub_years(
+            current_year=year,
+            forecast_year=forecast_year,
+        ):
+            for model, stage_name, phase in atlas_targets:
+                targets.append(
+                    _stage_query_target(
+                        year=sub_year,
+                        iteration=0,
+                        model=model,
+                        stage=stage_name,
+                        phase=phase,
+                    )
+                )
+
+    if current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}:
+        total_iters = max(
+            _coerce_int(getattr(state, "_settings", {}).get("supply_demand_iters", None))
+            or 0,
+            0,
+        )
+        completed_iterations = range(0, total_iters) if current_stage == workflow_stage.postprocessing and total_iters > 0 else range(0, resume_iter)
+        for iteration in completed_iterations:
+            for model, stage_name, phase in (*_ACTIVITYSIM_QUERY_TARGETS, *_BEAM_QUERY_TARGETS):
+                targets.append(
+                    _stage_query_target(
+                        year=year,
+                        iteration=iteration,
+                        model=model,
+                        stage=stage_name,
+                        phase=phase,
+                    )
+                )
+        if current_stage == workflow_stage.supply_demand_loop and current_sub_stage == workflow_stage.traffic_assignment:
+            for model, stage_name, phase in _ACTIVITYSIM_QUERY_TARGETS:
+                targets.append(
+                    _stage_query_target(
+                        year=year,
+                        iteration=resume_iter,
+                        model=model,
+                        stage=stage_name,
+                        phase=phase,
+                    )
+                )
+        if current_stage == workflow_stage.postprocessing:
+            postprocessing_enabled = _is_stage_explicitly_enabled(
+                state=state,
+                stage=workflow_stage.postprocessing,
+            )
+            if postprocessing_enabled is not False:
+                targets.append(
+                    _stage_query_target(
+                        year=year,
+                        model="postprocessing",
+                        stage="postprocessing",
+                        phase=None,
+                    )
+                )
+
+    deduped: List[Dict[str, Any]] = []
+    seen: Set[Tuple[Any, ...]] = set()
+    for target in targets:
+        key = (
+            target.get("year"),
+            target.get("iteration"),
+            target.get("model"),
+            target.get("stage"),
+            target.get("phase"),
+            target.get("status"),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(target)
+    return deduped
+
+
+def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
+    if not runs:
+        return None
+
+    def _latest_key(run: Any) -> Tuple[int, float, str]:
+        created_at = getattr(run, "created_at", None)
+        if isinstance(created_at, datetime):
+            created_at_value = created_at.timestamp()
+        else:
+            created_at_value = float("-inf")
+        return (
+            _coerce_int(getattr(run, "iteration", None)) or -1,
+            created_at_value,
+            str(getattr(run, "id", "")),
+        )
+
+    return max(runs, key=_latest_key)
+
+
+def _find_latest_run_for_restart_target(
+    *,
+    tracker: Any,
+    target: Dict[str, Any],
+) -> Any:
+    find_latest_run = getattr(tracker, "find_latest_run", None)
+    if callable(find_latest_run):
+        return find_latest_run(**target)
+
+    find_runs = getattr(tracker, "find_runs", None)
+    if callable(find_runs):
+        runs = find_runs(limit=10_000, **target)
+        if isinstance(runs, dict):
+            runs = list(runs.values())
+        run = _select_latest_run_from_candidates(runs)
+        if run is None:
+            raise ValueError(
+                f"No runs found matching criteria for restart target: {target}"
+            )
+        return run
+
+    raise AttributeError("tracker does not support find_latest_run/find_runs")
+
+
+def _collect_restart_completed_run_ids_from_tracker(
+    *,
+    tracker: Any,
+    state: Any,
+    workflow_stage: Any,
+) -> Dict[str, Any]:
+    year = _coerce_int(getattr(state, "current_year", None))
+    if year is None:
+        return {
+            "run_ids": [],
+            "issues": [("state.current_year", "missing year")],
+            "manifest_paths": [],
+            "query_targets": [],
+            "discovery_mode": "tracker",
+        }
+
+    targets = _restart_query_targets(
+        state=state,
+        year=year,
+        workflow_stage=workflow_stage,
+    )
+    run_ids: List[str] = []
+    seen: Set[str] = set()
+    issues: List[Tuple[str, str]] = []
+    matched_targets: List[Dict[str, Any]] = []
+    unmatched_targets: List[Dict[str, Any]] = []
+    current_stage = getattr(state, "current_major_stage", None)
+    vehicle_enabled = _is_stage_explicitly_enabled(
+        state=state,
+        stage=workflow_stage.vehicle_ownership_model,
+    )
+    atlas_require_all_subyears = (
+        current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}
+        and vehicle_enabled is True
+    )
+    atlas_gap_detected = False
+
+    for target in targets:
+        is_atlas_target = target.get("stage") == "atlas"
+        if atlas_gap_detected and is_atlas_target:
+            if atlas_require_all_subyears:
+                issues.append(
+                    (
+                        repr(target),
+                        "required atlas restart target missing after contiguous-prefix gap",
+                    )
+                )
+            unmatched_targets.append(dict(target))
+            continue
+        try:
+            run = _find_latest_run_for_restart_target(tracker=tracker, target=target)
+        except ValueError:
+            unmatched_targets.append(dict(target))
+            if is_atlas_target:
+                atlas_gap_detected = True
+                if atlas_require_all_subyears:
+                    issues.append(
+                        (
+                            repr(target),
+                            "no completed run found for required atlas restart target",
+                        )
+                    )
+                continue
+            issues.append((repr(target), "no completed run found for restart target"))
+            continue
+        except Exception as exc:
+            issues.append(
+                (
+                    repr(target),
+                    f"tracker query failed: {exc}",
+                )
+            )
+            continue
+        run_id = str(getattr(run, "id", "")).strip()
+        if not run_id or run_id in seen:
+            continue
+        seen.add(run_id)
+        run_ids.append(run_id)
+        matched_targets.append({**dict(target), "run_id": run_id})
+
+    return {
+        "run_ids": run_ids,
+        "issues": issues,
+        "manifest_paths": [],
+        "query_targets": targets,
+        "matched_query_targets": matched_targets,
+        "unmatched_query_targets": unmatched_targets,
+        "atlas_gap_detected": atlas_gap_detected,
+        "fallback_reason": None,
+        "discovery_mode": "tracker",
+    }
 
 
 def _restart_manifest_targets(
@@ -590,6 +898,16 @@ def _restart_manifest_targets(
         }
         and vehicle_enabled is not False
     ):
+        atlas_step_filter: Optional[Set[str]] = None
+        if current_stage in {
+            workflow_stage.supply_demand_loop,
+            workflow_stage.postprocessing,
+        }:
+            # Supply-demand only consumes the durable ATLAS handoff products
+            # emitted by atlas_postprocess (for example vehicles2_* and the
+            # updated UrbanSim datastore). Reconstructing atlas_preprocess/run
+            # runs adds restart noise without improving recovery.
+            atlas_step_filter = {"atlas_postprocess"}
         atlas_targets, atlas_issues = _atlas_manifest_targets(
             archive_run_dir=archive_run_dir,
             year=year,
@@ -600,6 +918,7 @@ def _restart_manifest_targets(
             ),
             require_complete_steps=current_stage
             in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing},
+            step_filter_override=atlas_step_filter,
         )
         targets.extend(atlas_targets)
         issues.extend(atlas_issues)
@@ -723,10 +1042,110 @@ def collect_restart_completed_run_ids(
     state: Any,
     archive_run_dir: str,
     workflow_stage: Any,
+    tracker: Any = None,
 ) -> Dict[str, Any]:
+    tracker_discovery: Optional[Dict[str, Any]] = None
+    if tracker is not None:
+        tracker_discovery = _collect_restart_completed_run_ids_from_tracker(
+            tracker=tracker,
+            state=state,
+            workflow_stage=workflow_stage,
+        )
+        if tracker_discovery["run_ids"] and not tracker_discovery["issues"]:
+            shadow_discovery: Optional[Dict[str, Any]] = None
+            year = _coerce_int(getattr(state, "current_year", None))
+            if year is not None:
+                targets, target_issues = _restart_manifest_targets(
+                    state=state,
+                    archive_run_dir=archive_run_dir,
+                    year=year,
+                    workflow_stage=workflow_stage,
+                )
+                all_run_ids: List[str] = []
+                seen: Set[str] = set()
+                issues: List[Tuple[str, str]] = list(target_issues)
+                manifest_paths: List[str] = []
+                seen_manifest_paths: Set[str] = set()
+                for target in targets:
+                    manifest_path = target["path"]
+                    step_filter = target["steps"]
+                    manifest_path_str = str(manifest_path)
+                    if manifest_path_str in seen_manifest_paths:
+                        continue
+                    seen_manifest_paths.add(manifest_path_str)
+                    manifest_paths.append(manifest_path_str)
+                    run_ids, manifest_issues = _load_manifest_run_ids(
+                        manifest_path=manifest_path,
+                        step_filter=step_filter,
+                    )
+                    issues.extend(manifest_issues)
+                    for run_id in run_ids:
+                        if run_id in seen:
+                            continue
+                        seen.add(run_id)
+                        all_run_ids.append(run_id)
+                shadow_discovery = {
+                    "run_ids": all_run_ids,
+                    "issues": issues,
+                    "manifest_paths": manifest_paths,
+                }
+            tracker_only_run_ids: List[str] = []
+            manifest_only_run_ids: List[str] = []
+            if shadow_discovery is not None:
+                tracker_only_run_ids = sorted(
+                    set(tracker_discovery["run_ids"]) - set(shadow_discovery["run_ids"])
+                )
+                manifest_only_run_ids = sorted(
+                    set(shadow_discovery["run_ids"]) - set(tracker_discovery["run_ids"])
+                )
+                tracker_discovery["shadow_compare"] = {
+                    "enabled": True,
+                    "parity": not tracker_only_run_ids and not manifest_only_run_ids,
+                    "manifest_run_ids": list(shadow_discovery["run_ids"]),
+                    "tracker_only_run_ids": tracker_only_run_ids,
+                    "manifest_only_run_ids": manifest_only_run_ids,
+                    "manifest_issue_count": len(shadow_discovery["issues"]),
+                    "manifest_path_count": len(shadow_discovery["manifest_paths"]),
+                }
+            else:
+                tracker_discovery["shadow_compare"] = {
+                    "enabled": False,
+                    "parity": None,
+                    "manifest_run_ids": [],
+                    "tracker_only_run_ids": [],
+                    "manifest_only_run_ids": [],
+                    "manifest_issue_count": 0,
+                    "manifest_path_count": 0,
+                }
+            return tracker_discovery
+        logger.warning(
+            "Restart completed-run discovery falling back to manifests after tracker query issues=%s run_ids=%s",
+            tracker_discovery["issues"],
+            tracker_discovery["run_ids"],
+        )
+
     year = _coerce_int(getattr(state, "current_year", None))
     if year is None:
-        return {"run_ids": [], "issues": [("state.current_year", "missing year")], "manifest_paths": []}
+        return {
+            "run_ids": [],
+            "issues": [("state.current_year", "missing year")],
+            "manifest_paths": [],
+            "query_targets": [],
+            "matched_query_targets": [],
+            "unmatched_query_targets": [],
+            "atlas_gap_detected": False,
+            "fallback_reason": "state.current_year missing",
+            "shadow_compare": {
+                "enabled": False,
+                "parity": None,
+                "manifest_run_ids": [],
+                "tracker_only_run_ids": [],
+                "manifest_only_run_ids": [],
+                "manifest_issue_count": 0,
+                "manifest_path_count": 0,
+            },
+            "discovery_mode": "manifest",
+        }
 
     targets, target_issues = _restart_manifest_targets(
         state=state,
@@ -763,6 +1182,31 @@ def collect_restart_completed_run_ids(
         "run_ids": all_run_ids,
         "issues": issues,
         "manifest_paths": manifest_paths,
+        "query_targets": [],
+        "matched_query_targets": [],
+        "unmatched_query_targets": [],
+        "atlas_gap_detected": bool(
+            tracker_discovery and tracker_discovery.get("atlas_gap_detected")
+        ),
+        "fallback_reason": (
+            None
+            if tracker_discovery is None
+            else (
+                "tracker returned no run_ids"
+                if not tracker_discovery.get("run_ids")
+                else "tracker discovery had issues"
+            )
+        ),
+        "shadow_compare": {
+            "enabled": False,
+            "parity": None,
+            "manifest_run_ids": [],
+            "tracker_only_run_ids": [],
+            "manifest_only_run_ids": [],
+            "manifest_issue_count": 0,
+            "manifest_path_count": len(manifest_paths),
+        },
+        "discovery_mode": "manifest",
     }
 
 
@@ -778,6 +1222,7 @@ def reconstruct_restart_completed_run_outputs(
         state=state,
         archive_run_dir=archive_run_dir,
         workflow_stage=workflow_stage,
+        tracker=tracker,
     )
     run_ids = list(discovery["run_ids"])
     issues = list(discovery["issues"])
@@ -800,6 +1245,13 @@ def reconstruct_restart_completed_run_outputs(
         "source_root": source_root,
         "target_root": target_root,
         "manifest_paths": list(discovery["manifest_paths"]),
+        "query_targets": list(discovery.get("query_targets", [])),
+        "matched_query_targets": list(discovery.get("matched_query_targets", [])),
+        "unmatched_query_targets": list(discovery.get("unmatched_query_targets", [])),
+        "discovery_mode": discovery.get("discovery_mode"),
+        "fallback_reason": discovery.get("fallback_reason"),
+        "atlas_gap_detected": bool(discovery.get("atlas_gap_detected", False)),
+        "shadow_compare": dict(discovery.get("shadow_compare", {}) or {}),
         "materialization_result": aggregate,
     }
 

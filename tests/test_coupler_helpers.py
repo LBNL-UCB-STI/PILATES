@@ -1,4 +1,5 @@
 import pytest
+from types import SimpleNamespace
 
 from pilates.utils import coupler_helpers
 
@@ -69,6 +70,20 @@ def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> Non
     )
     assert ("view.set", "beam/linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
     assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
+
+
+def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() -> None:
+    coupler = CouplerWithNamespaceView()
+    artifact = SimpleNamespace(id="artifact-1")
+
+    coupler_helpers.set_coupler_from_artifact(
+        coupler,
+        "usim_h5_updated",
+        artifact,
+        fallback="/tmp/path.h5",
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
 def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatch) -> None:
@@ -150,7 +165,7 @@ def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
     )
 
     assert coupler.calls == [
-        ("set_from_artifact", "usim_h5_updated", container_artifact)
+        ("set_from_artifact", "usim_datastore_h5", container_artifact)
     ]
 
 

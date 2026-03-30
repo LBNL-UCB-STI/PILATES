@@ -671,15 +671,15 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
     beam_preprocess_calls = [
         call
         for call in scenario.calls
-        if "beam_plans_asim_out" in call["inputs"]
-        and "households_asim_out" in call["inputs"]
-        and "persons_asim_out" in call["inputs"]
+        if "plans_beam_in" in call["inputs"]
+        and "households_beam_in" in call["inputs"]
+        and "persons_beam_in" in call["inputs"]
     ]
     assert beam_preprocess_calls, "Expected BEAM preprocess to start from restored ActivitySim outputs."
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs["beam_plans_asim_out"] == str(restored_plans)
-    assert beam_preprocess_inputs["households_asim_out"] == str(restored_households)
-    assert beam_preprocess_inputs["persons_asim_out"] == str(restored_persons)
+    assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
+    assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
+    assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
 
 
 def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_filesystem(
@@ -723,18 +723,18 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_f
     beam_preprocess_calls = [
         call
         for call in scenario.calls
-        if "beam_plans_asim_out" in call["inputs"]
-        and "households_asim_out" in call["inputs"]
-        and "persons_asim_out" in call["inputs"]
+        if "plans_beam_in" in call["inputs"]
+        and "households_beam_in" in call["inputs"]
+        and "persons_beam_in" in call["inputs"]
     ]
     assert beam_preprocess_calls, (
         "Expected BEAM preprocess to recover ActivitySim outputs from the "
         "restored local iteration directory."
     )
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs["beam_plans_asim_out"] == str(restored_plans)
-    assert beam_preprocess_inputs["households_asim_out"] == str(restored_households)
-    assert beam_preprocess_inputs["persons_asim_out"] == str(restored_persons)
+    assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
+    assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
+    assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
 
 
 def test_restart_traffic_assignment_boundary_rejects_partial_filesystem_restore(

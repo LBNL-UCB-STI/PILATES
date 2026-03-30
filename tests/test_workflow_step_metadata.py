@@ -539,6 +539,20 @@ def test_build_coupler_schema_declares_urbansim_geoid_to_zone_output():
     assert "geoid_to_zone" in schema
 
 
+def test_build_coupler_schema_declares_optional_beam_staged_outputs():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    preprocess_step = make_beam_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    schema = build_coupler_schema([preprocess_step], settings=SimpleNamespace())
+
+    assert "vehicles_beam_in" in schema
+
+
 def test_define_step_identity_inputs_metadata_drives_cache_identity_end_to_end(
     tmp_path,
 ):

@@ -37,6 +37,38 @@ def _restart_state(
     )
 
 
+def _run_query_key(**filters):
+    return (
+        filters.get("year"),
+        filters.get("iteration"),
+        filters.get("model"),
+        filters.get("stage"),
+        filters.get("phase"),
+        filters.get("status"),
+    )
+
+
+class _QueryTrackerStub:
+    def __init__(self, runs_by_target=None):
+        self.runs_by_target = dict(runs_by_target or {})
+        self.find_latest_run_calls = []
+        self.materialize_calls = []
+
+    def find_latest_run(self, **kwargs):
+        self.find_latest_run_calls.append(dict(kwargs))
+        run_id = self.runs_by_target.get(_run_query_key(**kwargs))
+        if run_id is None:
+            raise ValueError(f"no run for target {kwargs}")
+        return SimpleNamespace(id=run_id)
+
+    def materialize_run_outputs(self, **kwargs):
+        self.materialize_calls.append(dict(kwargs))
+        run_id = kwargs["run_id"]
+        return MaterializationResult(
+            materialized_from_filesystem={run_id: f"/restored/{run_id}"}
+        )
+
+
 def test_collect_restart_completed_run_ids_for_supply_demand_resume(tmp_path):
     archive_run_dir = tmp_path / "archive-run"
     _write_manifest(
@@ -209,14 +241,8 @@ def test_collect_restart_completed_run_ids_for_supply_demand_resume_merges_land_
         "usim-pre-2018",
         "usim-run-2018",
         "usim-post-2018",
-        "atlas-pre-2018",
-        "atlas-run-2018",
         "atlas-post-2018",
-        "atlas-pre-2020",
-        "atlas-run-2020",
         "atlas-post-2020",
-        "atlas-pre-2022",
-        "atlas-run-2022",
         "atlas-post-2022",
         "asim-pre-0",
         "asim-run-0",
@@ -284,8 +310,6 @@ def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_c
         "usim-pre-2018",
         "usim-run-2018",
         "usim-post-2018",
-        "atlas-pre-2018",
-        "atlas-run-2018",
         "atlas-post-2018",
         "asim-run-0",
         "asim-run-1",
@@ -293,6 +317,283 @@ def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_c
         "post-2018",
     }
     assert len(discovery["manifest_paths"]) == 6
+
+
+def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_demand_resume():
+    state = _restart_state(
+        iteration=1,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        forecast_year=2022,
+        enabled_stages={
+            WorkflowState.Stage.land_use,
+            WorkflowState.Stage.vehicle_ownership_model,
+            WorkflowState.Stage.supply_demand_loop,
+        },
+    )
+    tracker = _QueryTrackerStub(
+        {
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_preprocess",
+                stage="land_use",
+                phase="preprocess",
+                status="completed",
+            ): "usim-pre-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_run",
+                stage="land_use",
+                phase="run",
+                status="completed",
+            ): "usim-run-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_postprocess",
+                stage="land_use",
+                phase="postprocess",
+                status="completed",
+            ): "usim-post-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2018",
+            _run_query_key(
+                year=2020,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2020",
+            _run_query_key(
+                year=2022,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2022",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_preprocess",
+                stage="activity_demand_preprocess",
+                phase="preprocess",
+                status="completed",
+            ): "asim-pre-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_run",
+                stage="activity_demand_run",
+                phase="run",
+                status="completed",
+            ): "asim-run-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+            ): "asim-post-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="beam_preprocess",
+                stage="beam",
+                phase="preprocess",
+                status="completed",
+            ): "beam-pre-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="beam_run",
+                stage="beam",
+                phase="run",
+                status="completed",
+            ): "beam-run-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="beam_postprocess",
+                stage="beam",
+                phase="postprocess",
+                status="completed",
+            ): "beam-post-0",
+            _run_query_key(
+                year=2018,
+                iteration=1,
+                model="activitysim_preprocess",
+                stage="activity_demand_preprocess",
+                phase="preprocess",
+                status="completed",
+            ): "asim-pre-1",
+            _run_query_key(
+                year=2018,
+                iteration=1,
+                model="activitysim_run",
+                stage="activity_demand_run",
+                phase="run",
+                status="completed",
+            ): "asim-run-1",
+            _run_query_key(
+                year=2018,
+                iteration=1,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+            ): "asim-post-1",
+        }
+    )
+
+    discovery = restart_runtime.collect_restart_completed_run_ids(
+        state=state,
+        archive_run_dir="/unused-when-tracker-succeeds",
+        workflow_stage=WorkflowState.Stage,
+        tracker=tracker,
+    )
+
+    assert discovery["issues"] == []
+    assert discovery["manifest_paths"] == []
+    assert discovery["discovery_mode"] == "tracker"
+    assert set(discovery["run_ids"]) == {
+        "usim-pre-2018",
+        "usim-run-2018",
+        "usim-post-2018",
+        "atlas-post-2018",
+        "atlas-post-2020",
+        "atlas-post-2022",
+        "asim-pre-0",
+        "asim-run-0",
+        "asim-post-0",
+        "beam-pre-0",
+        "beam-run-0",
+        "beam-post-0",
+        "asim-pre-1",
+        "asim-run-1",
+        "asim-post-1",
+    }
+
+
+def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_for_vehicle_ownership_resume():
+    state = _restart_state(
+        iteration=0,
+        sub_stage=None,
+        major_stage=WorkflowState.Stage.vehicle_ownership_model,
+        forecast_year=2022,
+        enabled_stages={WorkflowState.Stage.vehicle_ownership_model},
+    )
+    tracker = _QueryTrackerStub(
+        {
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="atlas_preprocess",
+                stage="atlas",
+                phase="preprocess",
+                status="completed",
+            ): "atlas-pre-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="atlas_run",
+                stage="atlas",
+                phase="run",
+                status="completed",
+            ): "atlas-run-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2018",
+            _run_query_key(
+                year=2022,
+                iteration=0,
+                model="atlas_preprocess",
+                stage="atlas",
+                phase="preprocess",
+                status="completed",
+            ): "atlas-pre-2022",
+            _run_query_key(
+                year=2022,
+                iteration=0,
+                model="atlas_run",
+                stage="atlas",
+                phase="run",
+                status="completed",
+            ): "atlas-run-2022",
+            _run_query_key(
+                year=2022,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2022",
+        }
+    )
+
+    discovery = restart_runtime.collect_restart_completed_run_ids(
+        state=state,
+        archive_run_dir="/unused-when-tracker-succeeds",
+        workflow_stage=WorkflowState.Stage,
+        tracker=tracker,
+    )
+
+    assert discovery["issues"] == []
+    assert discovery["manifest_paths"] == []
+    assert discovery["discovery_mode"] == "tracker"
+    assert set(discovery["run_ids"]) == {
+        "atlas-pre-2018",
+        "atlas-run-2018",
+        "atlas-post-2018",
+    }
+    assert "atlas-pre-2022" not in discovery["run_ids"]
+
+
+def test_collect_restart_completed_run_ids_falls_back_to_manifests_when_tracker_cannot_answer(
+    tmp_path,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-0"},
+            "activitysim_run": {"run_id": "asim-run-0"},
+            "activitysim_postprocess": {"run_id": "asim-post-0"},
+        },
+    )
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+    )
+
+    discovery = restart_runtime.collect_restart_completed_run_ids(
+        state=state,
+        archive_run_dir=str(archive_run_dir),
+        workflow_stage=WorkflowState.Stage,
+        tracker=_QueryTrackerStub(),
+    )
+
+    assert discovery["issues"] == []
+    assert discovery["discovery_mode"] == "manifest"
+    assert set(discovery["run_ids"]) == {
+        "asim-pre-0",
+        "asim-run-0",
+        "asim-post-0",
+    }
 
 
 def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(tmp_path):
@@ -357,13 +658,11 @@ def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(t
 
     result = reconstruction["materialization_result"]
     assert result.complete is True
-    assert len(tracker.calls) == 9
+    assert len(tracker.calls) == 7
     assert {call["run_id"] for call in tracker.calls} == {
         "usim-pre-2018",
         "usim-run-2018",
         "usim-post-2018",
-        "atlas-pre-2018",
-        "atlas-run-2018",
         "atlas-post-2018",
         "asim-pre-0",
         "asim-run-0",
@@ -373,6 +672,106 @@ def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(t
         assert call["target_root"] == str(local_run_dir.resolve())
         assert call["source_root"] == str(archive_run_dir.resolve())
         assert call["preserve_existing"] is True
+
+
+def test_reconstruct_restart_completed_run_outputs_uses_tracker_query_discovery_without_manifests(
+    tmp_path,
+):
+    local_run_dir = tmp_path / "local-run"
+    archive_run_dir = tmp_path / "archive-run"
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        enabled_stages={
+            WorkflowState.Stage.land_use,
+            WorkflowState.Stage.vehicle_ownership_model,
+            WorkflowState.Stage.supply_demand_loop,
+        },
+    )
+    tracker = _QueryTrackerStub(
+        {
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_preprocess",
+                stage="land_use",
+                phase="preprocess",
+                status="completed",
+            ): "usim-pre-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_run",
+                stage="land_use",
+                phase="run",
+                status="completed",
+            ): "usim-run-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="urbansim_postprocess",
+                stage="land_use",
+                phase="postprocess",
+                status="completed",
+            ): "usim-post-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="atlas_postprocess",
+                stage="atlas",
+                phase="postprocess",
+                status="completed",
+            ): "atlas-post-2018",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_preprocess",
+                stage="activity_demand_preprocess",
+                phase="preprocess",
+                status="completed",
+            ): "asim-pre-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_run",
+                stage="activity_demand_run",
+                phase="run",
+                status="completed",
+            ): "asim-run-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+            ): "asim-post-0",
+        }
+    )
+
+    reconstruction = restart_runtime.reconstruct_restart_completed_run_outputs(
+        tracker=tracker,
+        state=state,
+        local_run_dir=str(local_run_dir),
+        archive_run_dir=str(archive_run_dir),
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    result = reconstruction["materialization_result"]
+    assert result.complete is True
+    assert reconstruction["manifest_paths"] == []
+    assert set(reconstruction["run_ids"]) == {
+        "usim-pre-2018",
+        "usim-run-2018",
+        "usim-post-2018",
+        "atlas-post-2018",
+        "asim-pre-0",
+        "asim-run-0",
+        "asim-post-0",
+    }
+    assert {call["run_id"] for call in tracker.materialize_calls} == set(
+        reconstruction["run_ids"]
+    )
 
 
 def test_reconstruct_restart_completed_run_outputs_reports_missing_manifest(tmp_path):

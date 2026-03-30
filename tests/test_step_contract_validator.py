@@ -174,8 +174,9 @@ def test_validate_workflow_step_contracts_reports_output_contract_conflicts():
     ] + [_conflicting_urbansim_run]
 
     expected = (
-        "Step 'urbansim_run': canonical outputs ['usim_datastore_h5'] "
-        "conflict with metadata outputs ['metadata_override']. "
+        "Step 'urbansim_run': canonical required outputs ['usim_datastore_h5'] "
+        "and declared outputs ['usim_datastore_h5'] conflict with metadata outputs "
+        "['metadata_override']. "
         "Fix: remove metadata override or update declared_outputs in UrbanSimRunOutputs."
     )
 
@@ -196,9 +197,10 @@ def test_validate_workflow_step_contracts_flags_missing_canonical_outputs_when_m
     ]
 
     expected = (
-        "Step 'beam_run': canonical outputs ['linkstats', 'beam_plans_out'] conflict with metadata outputs "
-        "['beam_linkstats']. Fix: remove metadata override or update declared_outputs "
-        "in BeamRunOutputs."
+        "Step 'beam_run': canonical required outputs ['linkstats', 'beam_plans_out'] "
+        "and declared outputs ['linkstats', 'beam_plans_out'] conflict with metadata outputs "
+        "['beam_linkstats']. Fix: remove metadata override or update declared_outputs in "
+        "BeamRunOutputs."
     )
 
     with pytest.raises(RuntimeError, match=re.escape(expected)):
@@ -222,7 +224,7 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
 
     for step_name, expected_outputs in expected.items():
         outputs_class = step_shared.STEP_OUTPUTS_CLASSES[step_name]
-        canonical = declared_outputs_for_step_outputs_class(outputs_class)
+        canonical = required_outputs_for_step_outputs_class(outputs_class)
         if not canonical and step_name in allowed_empty:
             continue
         assert canonical == expected_outputs
@@ -289,6 +291,7 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
             ),
             settings=SimpleNamespace(run=None),
             state=SimpleNamespace(),
+            workspace=SimpleNamespace(),
             runtime_kwargs={},
             stage_name="test_stage",
             default_iteration=0,

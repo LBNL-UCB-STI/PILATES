@@ -1021,6 +1021,14 @@ def set_coupler_from_artifact(
     canonical_key = resolve_artifact_key(key)
     value = artifact or fallback
 
+    def _preserve_artifact_identity(candidate: Any) -> bool:
+        if candidate is None or isinstance(candidate, (str, os.PathLike)):
+            return False
+        return any(
+            getattr(candidate, attr_name, None) is not None
+            for attr_name in ("id", "uri", "container_uri", "content_hash", "hash")
+        )
+
     def _set_value(target: Any, target_key: str) -> None:
         set_from_artifact = getattr(target, "set_from_artifact", None)
         if callable(set_from_artifact):
@@ -1033,7 +1041,11 @@ def set_coupler_from_artifact(
     # Preferred path: if available, also publish through model namespace view.
     target = namespaced_view_target(canonical_key)
     view_fn = getattr(coupler, "view", None)
-    if target is not None and callable(view_fn):
+    if (
+        target is not None
+        and callable(view_fn)
+        and not _preserve_artifact_identity(value)
+    ):
         namespace, local_key = target
         try:
             view = view_fn(namespace)
