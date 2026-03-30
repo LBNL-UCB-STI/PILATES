@@ -11,6 +11,7 @@ import yaml
 from consist import MaterializationResult
 
 from pilates.runtime.cache_recovery import materialize_cached_runs
+from pilates.utils.coupler_helpers import resolve_existing_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.binding import restart_required_local_artifact_policy
 
@@ -193,7 +194,12 @@ def find_missing_restart_local_artifacts(
         settings=settings, state=state, workspace=workspace
     ):
         path = os.path.realpath(artifact["path"])
-        if not os.path.exists(path):
+        resolved_path = resolve_existing_path(
+            path,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if resolved_path is None or not os.path.exists(resolved_path):
             missing.append(
                 {
                     "key": artifact["key"],

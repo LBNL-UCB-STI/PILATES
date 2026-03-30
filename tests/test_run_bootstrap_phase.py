@@ -1595,6 +1595,74 @@ def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_as
     )
 
 
+def test_restart_preflight_materializes_activitysim_iteration_outputs_from_archive(
+    tmp_path, monkeypatch
+):
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-asim-archive"
+    archive_run_dir = archive_root / run_name
+    local_run_dir = local_root / run_name
+    workspace = DummyWorkspace(str(local_run_dir))
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+        current_sub_stage=WorkflowState.Stage.traffic_assignment,
+        current_year=2017,
+        current_inner_iter=0,
+        asim_compiled=True,
+    )
+
+    archive_iter_dir = (
+        archive_run_dir
+        / "activitysim"
+        / "output"
+        / "year-2017-iteration-0"
+    )
+    archive_iter_dir.mkdir(parents=True, exist_ok=True)
+    for filename in ("beam_plans.parquet", "households.parquet", "persons.parquet"):
+        (archive_iter_dir / filename).write_text(filename, encoding="utf-8")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_run_dir))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run_dir))
+    monkeypatch.setattr(
+        run_module,
+        "_restart_required_local_artifacts",
+        lambda **_kwargs: [
+            {
+                "key": "activitysim_iteration_beam_plans_parquet",
+                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "beam_plans.parquet"),
+                "reason": "test",
+            },
+            {
+                "key": "activitysim_iteration_households_parquet",
+                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "households.parquet"),
+                "reason": "test",
+            },
+            {
+                "key": "activitysim_iteration_persons_parquet",
+                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "persons.parquet"),
+                "reason": "test",
+            },
+        ],
+    )
+
+    missing = run_module._find_missing_restart_local_artifacts(
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+    )
+
+    assert missing == []
+    for filename in ("beam_plans.parquet", "households.parquet", "persons.parquet"):
+        assert (
+            local_run_dir
+            / "activitysim"
+            / "output"
+            / "year-2017-iteration-0"
+            / filename
+        ).read_text(encoding="utf-8") == filename
+
+
 def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     policy_path = tmp_path / "policy" / "seed.txt"
