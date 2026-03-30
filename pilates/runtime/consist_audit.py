@@ -83,6 +83,22 @@ def _new_state(event: Mapping[str, Any], attempt_number: int) -> Dict[str, Any]:
         "resolution_mode_counts_by_step": defaultdict(lambda: defaultdict(int)),
         "steps_with_incomplete_hydration": defaultdict(int),
         "steps_using_custom_recovery": defaultdict(lambda: defaultdict(int)),
+        "restart_discovery": {
+            "event_count": 0,
+            "latest_discovery_mode": None,
+            "latest_fallback_reason": None,
+            "latest_target_count": 0,
+            "latest_matched_target_count": 0,
+            "latest_unmatched_target_count": 0,
+            "latest_run_id_count": 0,
+            "latest_atlas_gap_detected": False,
+            "latest_shadow_compare": {
+                "enabled": False,
+                "parity": None,
+                "tracker_only_count": 0,
+                "manifest_only_count": 0,
+            },
+        },
         "last_event_at": None,
     }
 
@@ -130,6 +146,7 @@ def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
                 state["steps_using_custom_recovery"].items()
             )
         },
+        "restart_discovery": _json_safe(state.get("restart_discovery", {})),
     }
 
 
@@ -137,6 +154,31 @@ def _update_summary_state(state: Dict[str, Any], event: Mapping[str, Any]) -> No
     event_type = str(event.get("event_type"))
     state["event_counts"][event_type] += 1
     state["last_event_at"] = event.get("recorded_at")
+    if event_type == "restart_discovery":
+        shadow_compare = dict(event.get("shadow_compare") or {})
+        tracker_only_run_ids = list(event.get("tracker_only_run_ids") or [])
+        manifest_only_run_ids = list(event.get("manifest_only_run_ids") or [])
+        state["restart_discovery"] = {
+            "event_count": int(state.get("restart_discovery", {}).get("event_count", 0))
+            + 1,
+            "latest_discovery_mode": event.get("discovery_mode"),
+            "latest_fallback_reason": event.get("fallback_reason"),
+            "latest_target_count": int(event.get("query_target_count") or 0),
+            "latest_matched_target_count": int(
+                event.get("matched_query_target_count") or 0
+            ),
+            "latest_unmatched_target_count": int(
+                event.get("unmatched_query_target_count") or 0
+            ),
+            "latest_run_id_count": int(event.get("discovered_run_count") or 0),
+            "latest_atlas_gap_detected": bool(event.get("atlas_gap_detected", False)),
+            "latest_shadow_compare": {
+                "enabled": bool(shadow_compare.get("enabled", False)),
+                "parity": shadow_compare.get("parity"),
+                "tracker_only_count": len(tracker_only_run_ids),
+                "manifest_only_count": len(manifest_only_run_ids),
+            },
+        }
 
     step_name = event.get("step_name")
     if step_name:
