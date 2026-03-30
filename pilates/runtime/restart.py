@@ -1054,7 +1054,8 @@ def collect_restart_completed_run_ids(
         if tracker_discovery["run_ids"] and not tracker_discovery["issues"]:
             shadow_discovery: Optional[Dict[str, Any]] = None
             year = _coerce_int(getattr(state, "current_year", None))
-            if year is not None:
+            diagnostics_root = Path(os.path.realpath(archive_run_dir)) / ".workflow"
+            if year is not None and diagnostics_root.exists():
                 targets, target_issues = _restart_manifest_targets(
                     state=state,
                     archive_run_dir=archive_run_dir,

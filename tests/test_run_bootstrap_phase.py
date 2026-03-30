@@ -8,6 +8,10 @@ import pytest
 from consist import MaterializationResult
 from consist.types import CacheOptions
 
+from pilates.runtime.consist_audit import (
+    emit_consist_audit_event,
+    reset_consist_audit_state,
+)
 from pilates.runtime import launcher as run_module
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_db_snapshot as snapshot_module
@@ -254,6 +258,56 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["event_counts"]["bootstrap_resolution"] == 1
+
+
+def test_consist_audit_summary_tracks_restart_discovery_snapshot(tmp_path):
+    reset_consist_audit_state()
+    workspace = DummyWorkspace(full_path=str(tmp_path / "restart-audit"))
+
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="restart-audit-run",
+    )
+    emit_consist_audit_event(
+        workspace=workspace,
+        event_type="restart_discovery",
+        discovery_mode="tracker",
+        fallback_reason=None,
+        discovered_run_count=7,
+        query_target_count=7,
+        matched_query_target_count=7,
+        unmatched_query_target_count=0,
+        atlas_gap_detected=False,
+        shadow_compare={
+            "enabled": True,
+            "parity": True,
+        },
+        tracker_only_run_ids=[],
+        manifest_only_run_ids=[],
+    )
+
+    summary_path = (
+        Path(workspace.full_path)
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+
+    assert summary["event_counts"]["restart_discovery"] == 1
+    assert summary["restart_discovery"]["event_count"] == 1
+    assert summary["restart_discovery"]["latest_discovery_mode"] == "tracker"
+    assert summary["restart_discovery"]["latest_run_id_count"] == 7
+    assert summary["restart_discovery"]["latest_target_count"] == 7
+    assert summary["restart_discovery"]["latest_matched_target_count"] == 7
+    assert summary["restart_discovery"]["latest_unmatched_target_count"] == 0
+    assert summary["restart_discovery"]["latest_shadow_compare"] == {
+        "enabled": True,
+        "parity": True,
+        "tracker_only_count": 0,
+        "manifest_only_count": 0,
+    }
 
 
 def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback_rerun(monkeypatch):

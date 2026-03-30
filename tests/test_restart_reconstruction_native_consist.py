@@ -319,7 +319,47 @@ def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_c
     assert len(discovery["manifest_paths"]) == 6
 
 
-def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_demand_resume():
+def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_demand_resume(
+    tmp_path,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "land_use_year_2018.yaml",
+        {
+            "urbansim_preprocess": {"run_id": "usim-pre-2018"},
+            "urbansim_run": {"run_id": "usim-run-2018"},
+            "urbansim_postprocess": {"run_id": "usim-post-2018"},
+        },
+    )
+    for sub_year in (2018, 2020, 2022):
+        _write_manifest(
+            archive_run_dir
+            / ".workflow"
+            / "vehicle_ownership"
+            / f"forecast_year_2022_subyear_{sub_year}.yaml",
+            {
+                "atlas_postprocess": {"run_id": f"atlas-post-{sub_year}"},
+            },
+        )
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-0"},
+            "activitysim_run": {"run_id": "asim-run-0"},
+            "activitysim_postprocess": {"run_id": "asim-post-0"},
+            "beam_preprocess": {"run_id": "beam-pre-0"},
+            "beam_run": {"run_id": "beam-run-0"},
+            "beam_postprocess": {"run_id": "beam-post-0"},
+        },
+    )
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_1.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-1"},
+            "activitysim_run": {"run_id": "asim-run-1"},
+            "activitysim_postprocess": {"run_id": "asim-post-1"},
+        },
+    )
     state = _restart_state(
         iteration=1,
         sub_stage=WorkflowState.Stage.traffic_assignment,
@@ -457,7 +497,7 @@ def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_de
 
     discovery = restart_runtime.collect_restart_completed_run_ids(
         state=state,
-        archive_run_dir="/unused-when-tracker-succeeds",
+        archive_run_dir=str(archive_run_dir),
         workflow_stage=WorkflowState.Stage,
         tracker=tracker,
     )
@@ -465,6 +505,14 @@ def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_de
     assert discovery["issues"] == []
     assert discovery["manifest_paths"] == []
     assert discovery["discovery_mode"] == "tracker"
+    assert discovery["fallback_reason"] is None
+    assert discovery["atlas_gap_detected"] is False
+    assert len(discovery["matched_query_targets"]) == len(discovery["run_ids"])
+    assert discovery["unmatched_query_targets"] == []
+    assert discovery["shadow_compare"]["enabled"] is True
+    assert discovery["shadow_compare"]["parity"] is True
+    assert discovery["shadow_compare"]["tracker_only_run_ids"] == []
+    assert discovery["shadow_compare"]["manifest_only_run_ids"] == []
     assert set(discovery["run_ids"]) == {
         "usim-pre-2018",
         "usim-run-2018",
@@ -484,7 +532,32 @@ def test_collect_restart_completed_run_ids_prefers_tracker_queries_for_supply_de
     }
 
 
-def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_for_vehicle_ownership_resume():
+def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_for_vehicle_ownership_resume(
+    tmp_path,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir
+        / ".workflow"
+        / "vehicle_ownership"
+        / "forecast_year_2022_subyear_2018.yaml",
+        {
+            "atlas_preprocess": {"run_id": "atlas-pre-2018"},
+            "atlas_run": {"run_id": "atlas-run-2018"},
+            "atlas_postprocess": {"run_id": "atlas-post-2018"},
+        },
+    )
+    _write_manifest(
+        archive_run_dir
+        / ".workflow"
+        / "vehicle_ownership"
+        / "forecast_year_2022_subyear_2022.yaml",
+        {
+            "atlas_preprocess": {"run_id": "atlas-pre-2022"},
+            "atlas_run": {"run_id": "atlas-run-2022"},
+            "atlas_postprocess": {"run_id": "atlas-post-2022"},
+        },
+    )
     state = _restart_state(
         iteration=0,
         sub_stage=None,
@@ -547,7 +620,7 @@ def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_
 
     discovery = restart_runtime.collect_restart_completed_run_ids(
         state=state,
-        archive_run_dir="/unused-when-tracker-succeeds",
+        archive_run_dir=str(archive_run_dir),
         workflow_stage=WorkflowState.Stage,
         tracker=tracker,
     )
@@ -555,6 +628,12 @@ def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_
     assert discovery["issues"] == []
     assert discovery["manifest_paths"] == []
     assert discovery["discovery_mode"] == "tracker"
+    assert discovery["fallback_reason"] is None
+    assert discovery["atlas_gap_detected"] is True
+    assert discovery["shadow_compare"]["enabled"] is True
+    assert discovery["shadow_compare"]["parity"] is True
+    assert discovery["shadow_compare"]["tracker_only_run_ids"] == []
+    assert discovery["shadow_compare"]["manifest_only_run_ids"] == []
     assert set(discovery["run_ids"]) == {
         "atlas-pre-2018",
         "atlas-run-2018",
@@ -589,6 +668,8 @@ def test_collect_restart_completed_run_ids_falls_back_to_manifests_when_tracker_
 
     assert discovery["issues"] == []
     assert discovery["discovery_mode"] == "manifest"
+    assert discovery["fallback_reason"] == "tracker returned no run_ids"
+    assert discovery["shadow_compare"]["enabled"] is False
     assert set(discovery["run_ids"]) == {
         "asim-pre-0",
         "asim-run-0",
@@ -760,6 +841,10 @@ def test_reconstruct_restart_completed_run_outputs_uses_tracker_query_discovery_
     result = reconstruction["materialization_result"]
     assert result.complete is True
     assert reconstruction["manifest_paths"] == []
+    assert reconstruction["discovery_mode"] == "tracker"
+    assert reconstruction["fallback_reason"] is None
+    assert reconstruction["shadow_compare"]["enabled"] is False
+    assert reconstruction["shadow_compare"]["parity"] is None
     assert set(reconstruction["run_ids"]) == {
         "usim-pre-2018",
         "usim-run-2018",
