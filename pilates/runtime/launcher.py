@@ -874,6 +874,53 @@ def main(
                     reconstruction_result.skipped_missing_source,
                     reconstruction_result.failed,
                 )
+            shadow_compare = dict(restart_reconstruction.get("shadow_compare", {}) or {})
+            tracker_only_run_ids = list(shadow_compare.get("tracker_only_run_ids", []) or [])
+            manifest_only_run_ids = list(
+                shadow_compare.get("manifest_only_run_ids", []) or []
+            )
+            logger.info(
+                "Restart discovery summary: mode=%s run_ids=%s matched_targets=%s "
+                "unmatched_targets=%s fallback_reason=%s atlas_gap_detected=%s "
+                "shadow_compare_enabled=%s shadow_parity=%s tracker_only=%s manifest_only=%s",
+                restart_reconstruction.get("discovery_mode"),
+                len(restart_reconstruction.get("run_ids", [])),
+                len(restart_reconstruction.get("matched_query_targets", [])),
+                len(restart_reconstruction.get("unmatched_query_targets", [])),
+                restart_reconstruction.get("fallback_reason"),
+                restart_reconstruction.get("atlas_gap_detected"),
+                shadow_compare.get("enabled", False),
+                shadow_compare.get("parity"),
+                tracker_only_run_ids,
+                manifest_only_run_ids,
+            )
+            emit_consist_audit_event(
+                workspace=workspace,
+                event_type="restart_discovery",
+                discovery_mode=restart_reconstruction.get("discovery_mode"),
+                fallback_reason=restart_reconstruction.get("fallback_reason"),
+                discovered_run_count=len(restart_reconstruction.get("run_ids", [])),
+                query_target_count=len(restart_reconstruction.get("query_targets", [])),
+                matched_query_target_count=len(
+                    restart_reconstruction.get("matched_query_targets", [])
+                ),
+                unmatched_query_target_count=len(
+                    restart_reconstruction.get("unmatched_query_targets", [])
+                ),
+                query_targets=restart_reconstruction.get("query_targets", []),
+                matched_run_ids_by_target=restart_reconstruction.get(
+                    "matched_query_targets", []
+                ),
+                unmatched_query_targets=restart_reconstruction.get(
+                    "unmatched_query_targets", []
+                ),
+                atlas_gap_detected=bool(
+                    restart_reconstruction.get("atlas_gap_detected", False)
+                ),
+                shadow_compare=shadow_compare,
+                tracker_only_run_ids=tracker_only_run_ids,
+                manifest_only_run_ids=manifest_only_run_ids,
+            )
 
     if is_restart_run:
         restart_bookkeeping_hydration = _hydrate_restart_local_bookkeeping(
