@@ -149,12 +149,11 @@ def run_land_use_stage(
 
     run_inputs = step_output_handoff_mapping(upstream_preprocess, coupler=coupler)
     # Some preprocessors materialize key artifacts via explicit logging rather
-    # than RecordStore outputs. Keep those handoff outputs, but also preserve
-    # declared UrbanSim inputs so run identity/provenance still reflects the
-    # restart-critical datastore dependencies. This includes the semantic
-    # ``base`` and ``current`` datastore roles even when they currently point
-    # at the same file.
-    for key, value in usim_inputs.items():
+    # than RecordStore outputs. Preserve the restart-critical datastore roles
+    # explicitly, but do not leak preprocess-only component-local inputs such as
+    # ``usim_source_data_dir`` into the UrbanSim run binding contract.
+    for key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
+        value = usim_inputs.get(key)
         if value is not None:
             run_inputs.setdefault(key, value)
     run_binding = build_binding_plan(

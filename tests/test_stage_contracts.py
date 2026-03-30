@@ -666,6 +666,7 @@ def test_land_use_stage_merges_declared_datastore_when_preprocess_outputs_are_pa
     assert captured["inputs"]["geoid_to_zone"] == str(geoid_to_zone_path)
     assert captured["inputs"][USIM_DATASTORE_CURRENT_H5] == stage_env["usim_input_path"]
     assert captured["inputs"][USIM_DATASTORE_BASE_H5] == stage_env["usim_input_path"]
+    assert "usim_source_data_dir" not in captured["inputs"]
 
 
 def test_vehicle_ownership_stage_contract(stage_env):

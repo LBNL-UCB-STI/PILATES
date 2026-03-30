@@ -57,6 +57,8 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_pending_tasks.clear()
+    ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
     consist_audit.reset_consist_audit_state()
@@ -67,6 +69,8 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_pending_tasks.clear()
+    ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
     consist_audit.reset_consist_audit_state()
@@ -391,6 +395,50 @@ def test_archive_copy_dedupes_same_signature(monkeypatch, tmp_path):
     assert archived.exists()
     assert archived.read_text() == "linkstats"
     assert len(copy_calls) == 1
+
+
+def test_archive_copy_coalesces_pending_updates_for_same_destination(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    def _ensure_queue_only():
+        if ch._archive_queue is None:
+            ch._archive_queue = queue.Queue()
+
+    monkeypatch.setattr(ch, "_ensure_archive_worker", _ensure_queue_only)
+
+    source = local_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    _write_file(source, '{"event_count": 1}')
+    ch._enqueue_archive_copy(
+        "workflow_diagnostics_consist_restart_audit_summary",
+        str(source),
+    )
+
+    _write_file(source, '{"event_count": 2, "latest": true}')
+    ch._enqueue_archive_copy(
+        "workflow_diagnostics_consist_restart_audit_summary",
+        str(source),
+    )
+
+    dest = str(
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+    assert ch._archive_queue is not None
+    assert ch._archive_queue.qsize() == 1
+    assert dest in ch._archive_pending_tasks
+
+    key, pending_src, pending_dest, _is_dir, _signature = ch._archive_pending_tasks[dest]
+    assert key == "workflow_diagnostics_consist_restart_audit_summary"
+    assert pending_src == str(source)
+    assert pending_dest == dest
 
 
 def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):

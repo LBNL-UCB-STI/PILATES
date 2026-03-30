@@ -43,10 +43,14 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "atlas_input_year_dir_*",
 )
 _archive_queue: Optional[
-    "queue.Queue[Optional[tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]]]"
+    "queue.Queue[Optional[str]]"
 ] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
+_archive_pending_tasks: Dict[
+    str, tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]
+] = {}
+_archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
 
@@ -144,6 +148,14 @@ def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int,
     return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
 
 
+def _archive_log_method(key: str) -> Callable[..., None]:
+    # Restart diagnostics are latest-state artifacts; keep their archive churn
+    # out of INFO logs while still preserving the archive copies.
+    if str(key).startswith("workflow_diagnostics_"):
+        return logger.debug
+    return logger.info
+
+
 def _copy_archive_payload(
     *,
     key: str,
@@ -162,7 +174,7 @@ def _copy_archive_payload(
             if _archive_inflight_signature.get(dest) == signature:
                 _archive_inflight_signature.pop(dest, None)
             _archive_last_copied_signature[dest] = signature
-    logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+    _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
 
 
 def _archive_worker() -> None:
@@ -172,7 +184,19 @@ def _archive_worker() -> None:
             if _archive_queue is not None:
                 _archive_queue.task_done()
             break
-        key, src, dest, is_dir, signature = task
+        dest = task
+        with _archive_lock:
+            _archive_queued_destinations.discard(dest)
+            payload = _archive_pending_tasks.pop(dest, None)
+            if payload is not None:
+                signature = payload[-1]
+                if signature is not None:
+                    _archive_inflight_signature[dest] = signature
+        if payload is None:
+            if _archive_queue is not None:
+                _archive_queue.task_done()
+            continue
+        key, src, dest, is_dir, signature = payload
         try:
             _copy_archive_payload(
                 key=key,
@@ -236,8 +260,18 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
     if dest is None or dest == path:
         return
     signature = _archive_path_signature(path, is_dir)
+    should_queue = False
     if signature is not None:
         with _archive_lock:
+            pending_task = _archive_pending_tasks.get(dest)
+            pending_signature = pending_task[-1] if pending_task is not None else None
+            if pending_signature == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (pending): %s (key=%s)",
+                    path,
+                    key,
+                )
+                return
             if _archive_inflight_signature.get(dest) == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
@@ -252,11 +286,27 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
                     key,
                 )
                 return
-            _archive_inflight_signature[dest] = signature
+            _archive_pending_tasks[dest] = (key, path, dest, is_dir, signature)
+            if dest not in _archive_queued_destinations:
+                _archive_queued_destinations.add(dest)
+                should_queue = True
+    else:
+        with _archive_lock:
+            _archive_pending_tasks[dest] = (key, path, dest, is_dir, signature)
+            if dest not in _archive_queued_destinations:
+                _archive_queued_destinations.add(dest)
+                should_queue = True
     _ensure_archive_worker()
-    logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
-    if _archive_queue is not None:
-        _archive_queue.put((key, path, dest, is_dir, signature))
+    if should_queue and _archive_queue is not None:
+        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
+        _archive_queue.put(dest)
+    else:
+        logger.debug(
+            "[Archive] Coalesced pending enqueue %s -> %s (key=%s)",
+            path,
+            dest,
+            key,
+        )
 
 
 def _warn_once(signature: tuple[Any, ...], message: str, *args: Any) -> None:

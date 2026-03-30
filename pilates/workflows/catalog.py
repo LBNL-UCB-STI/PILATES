@@ -224,7 +224,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         output_keys=(
             *_URBANSIM_PREPROCESS_PREPARED_KEYS,
         ),
-        optional_output_keys=("usim_skims_input_updated",),
+        optional_output_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
         depends_on=(),
         holder_inputs=(),
         upstream_step_inputs=(),
@@ -240,7 +240,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=20,
         outputs_class=UrbanSimRunOutputs,
         input_keys=_URBANSIM_PREPROCESS_PREPARED_KEYS,
-        optional_input_keys=("usim_skims_input_updated",),
+        optional_input_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
         output_keys=(USIM_DATASTORE_H5,),
         depends_on=("urbansim_preprocess",),
         holder_inputs=("urbansim_preprocess",),
