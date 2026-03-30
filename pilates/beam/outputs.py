@@ -324,6 +324,38 @@ class BeamRunOutputs(StepOutputsBase):
                 path,
                 "BEAM plans output for downstream runs",
             )
+        latest_output_plans_xml = self._latest_publication_output_for_prefix(
+            BEAM_OUTPUT_PLANS_XML
+        )
+        if latest_output_plans_xml is not None:
+            _, path = latest_output_plans_xml
+            yield (
+                BEAM_OUTPUT_PLANS_XML,
+                path,
+                "BEAM output plans XML for downstream warm-start reuse",
+            )
+        latest_output_experienced_plans_xml = (
+            self._latest_publication_output_for_prefix(
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+            )
+        )
+        if latest_output_experienced_plans_xml is not None:
+            _, path = latest_output_experienced_plans_xml
+            yield (
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+                path,
+                "BEAM output experienced plans XML for downstream warm-start reuse",
+            )
+        latest_experienced_plans_xml = self._latest_publication_output_for_prefix(
+            BEAM_EXPERIENCED_PLANS_XML
+        )
+        if latest_experienced_plans_xml is not None:
+            _, path = latest_experienced_plans_xml
+            yield (
+                BEAM_EXPERIENCED_PLANS_XML,
+                path,
+                "BEAM experienced plans XML for downstream warm-start reuse",
+            )
         for key, path in self.raw_outputs.items():
             yield key, path, f"BEAM raw output: {key}"
 

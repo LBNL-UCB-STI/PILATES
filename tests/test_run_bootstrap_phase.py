@@ -2235,10 +2235,23 @@ def test_main_restart_strict_repairs_atlas_year_dirs_before_validation(
     archive_run_dir.mkdir(parents=True, exist_ok=True)
     run_state_path = archive_run_dir / "run_state.yaml"
     run_state_path.write_text("state", encoding="utf-8")
-    for required_year in (2017, 2021):
-        source_dir = archive_run_dir / "atlas" / "atlas_input" / f"year{required_year}"
-        source_dir.mkdir(parents=True, exist_ok=True)
-        (source_dir / "households.csv").write_text("hh\n", encoding="utf-8")
+    year2017 = archive_run_dir / "atlas" / "atlas_input" / "year2017"
+    year2017.mkdir(parents=True, exist_ok=True)
+    for filename in (
+        "households.csv",
+        "blocks.csv",
+        "persons.csv",
+        "residential.csv",
+        "jobs.csv",
+    ):
+        (year2017 / filename).write_text("seed\n", encoding="utf-8")
+
+    year2021 = archive_run_dir / "atlas" / "atlas_input" / "year2021"
+    year2021.mkdir(parents=True, exist_ok=True)
+    (year2021 / "vehicles_output.RData").write_text("vehicles\n", encoding="utf-8")
+    (year2021 / "households_output.RData").write_text(
+        "households\n", encoding="utf-8"
+    )
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -2269,15 +2282,33 @@ def test_main_restart_strict_repairs_atlas_year_dirs_before_validation(
 
     def _atlas_only_missing(*, workspace, **_kwargs):
         missing = []
-        for required_year in (2017, 2021):
-            path = os.path.join(
+        required_paths = {
+            "atlas_restart_seed::2017::households": os.path.join(
                 workspace.get_atlas_mutable_input_dir(),
-                f"year{required_year}",
-            )
+                "year2017",
+                "households.csv",
+            ),
+            "atlas_restart_seed::2017::blocks": os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                "year2017",
+                "blocks.csv",
+            ),
+            "atlas_restart_prior::2021::vehicles_output_RData": os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                "year2021",
+                "vehicles_output.RData",
+            ),
+            "atlas_restart_prior::2021::households_output_RData": os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                "year2021",
+                "households_output.RData",
+            ),
+        }
+        for key, path in required_paths.items():
             if not os.path.exists(path):
                 missing.append(
                     {
-                        "key": f"atlas_restart_year::{required_year}",
+                        "key": key,
                         "path": path,
                         "reason": "test",
                     }

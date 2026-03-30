@@ -925,7 +925,16 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     run_info_path = archive_root / "run_state.yaml"
     _write_file(run_info_path)
     _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "households.csv")
-    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "households.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "blocks.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "persons.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "residential.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "jobs.csv")
+    _write_file(
+        archive_root / "atlas" / "atlas_input" / "year2021" / "vehicles_output.RData"
+    )
+    _write_file(
+        archive_root / "atlas" / "atlas_input" / "year2021" / "households_output.RData"
+    )
 
     current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
     current_households_csv = current_atlas_input_dir / "year2023" / "households.csv"
@@ -957,4 +966,10 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     )
 
     assert (current_atlas_input_dir / "year2017" / "households.csv").exists()
-    assert (current_atlas_input_dir / "year2021" / "households.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "blocks.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "persons.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "residential.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "jobs.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "vehicles_output.RData").exists()
+    assert (current_atlas_input_dir / "year2021" / "households_output.RData").exists()
+    assert getattr(outputs, "_compatibility_fallback_used", False) is True

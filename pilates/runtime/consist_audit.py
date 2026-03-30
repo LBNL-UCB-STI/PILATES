@@ -159,6 +159,7 @@ def _update_summary_state(state: Dict[str, Any], event: Mapping[str, Any]) -> No
             "used_tracker_output_lookup",
             "used_cached_artifact_recovery",
             "used_manifest_restore",
+            "used_compatibility_fallback",
         ):
             if bool(event.get(mode_field)):
                 state["steps_using_custom_recovery"][str(step_name)][mode_field] += 1

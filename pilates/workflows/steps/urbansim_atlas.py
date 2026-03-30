@@ -360,7 +360,7 @@ def _rehydrate_restart_atlas_preprocess_state(
     *,
     state: WorkflowState,
     workspace: Workspace,
-) -> None:
+) -> bool:
     """
     Restore restart-critical ATLAS year directories for recovered preprocess outputs.
 
@@ -371,7 +371,7 @@ def _rehydrate_restart_atlas_preprocess_state(
     output replayer makes recovered preprocess state runner-ready.
     """
     if not bool(getattr(state, "is_restart_run", False)):
-        return
+        return False
 
     run_info_path = getattr(state, "run_info_path", None)
     start_year = getattr(state, "start_year", None)
@@ -382,7 +382,18 @@ def _rehydrate_restart_atlas_preprocess_state(
         or atlas_year is None
         or not os.path.exists(run_info_path)
     ):
-        return
+        return False
+
+    atlas_input_root = workspace.get_atlas_mutable_input_dir()
+    from pilates.atlas.preprocessor import restart_required_atlas_input_paths
+
+    required_paths = restart_required_atlas_input_paths(
+        atlas_input_root=atlas_input_root,
+        start_year=int(start_year),
+        atlas_year=int(atlas_year),
+    )
+    if all(os.path.exists(path) for path in required_paths.values()):
+        return False
 
     _restore_restart_atlas_year_inputs(
         previous_run_dir=os.path.dirname(run_info_path),
@@ -390,6 +401,7 @@ def _rehydrate_restart_atlas_preprocess_state(
         start_year=int(start_year),
         atlas_year=int(atlas_year),
     )
+    return True
 
 
 def _execute_atlas_run_typed(
@@ -782,9 +794,13 @@ def make_atlas_preprocess_step(
         workspace: Workspace,
         holder: StepOutputsHolder,
     ) -> None:
-        _rehydrate_restart_atlas_preprocess_state(
-            state=state,
-            workspace=workspace,
+        setattr(
+            outputs,
+            "_compatibility_fallback_used",
+            _rehydrate_restart_atlas_preprocess_state(
+                state=state,
+                workspace=workspace,
+            ),
         )
         _log_outputs(outputs, settings, state, workspace, holder)
 

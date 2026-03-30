@@ -23,10 +23,7 @@ from pilates.atlas.outputs import (
     AtlasRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
-    ASIM_MUTABLE_DATA_DIR,
-    ASIM_OUTPUT_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -36,8 +33,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
-    BEAM_MUTABLE_DATA_DIR,
-    BEAM_OUTPUT_DIR,
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
     BEAM_OUTPUT_PLANS_XML,
     BEAM_PERSONS_IN,
@@ -68,8 +63,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_output_keys": ("usim_skims_input_updated",),
             "dynamic_input_families": (),
             "output_keys": (
-                "usim_mutable_data_dir",
-                USIM_DATASTORE_BASE_H5,
                 USIM_DATASTORE_H5,
                 "omx_skims",
                 "hh_size",
@@ -127,7 +120,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "dynamic_input_families": (),
             "output_keys": (
-                "atlas_mutable_input_dir",
                 "atlas_households_csv",
                 "atlas_blocks_csv",
                 "atlas_persons_csv",
@@ -154,7 +146,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "optional_output_keys": (),
             "dynamic_input_families": (),
-            "output_keys": (ATLAS_OUTPUT_DIR,),
+            "output_keys": (),
             "dynamic_output_families": (
                 "householdv_{year}",
                 "vehicles_{year}",
@@ -171,7 +163,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "vehicles_{year}",
             ),
             "output_keys": (
-                ATLAS_OUTPUT_DIR,
                 USIM_DATASTORE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
             ),
@@ -185,7 +176,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (
-                ASIM_MUTABLE_DATA_DIR,
                 ASIM_LAND_USE_IN,
                 ASIM_HOUSEHOLDS_IN,
                 ASIM_PERSONS_IN,
@@ -216,7 +206,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_output_keys": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             "dynamic_input_families": (),
             "output_keys": (
-                ASIM_OUTPUT_DIR,
                 *ActivitySimRunOutputs.required_output_keys(),
             ),
             "dynamic_output_families": (),
@@ -240,7 +229,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_output_keys": (*ASIM_OPTIONAL_RUN_OUTPUT_KEYS,),
             "dynamic_input_families": (),
             "output_keys": (
-                ASIM_OUTPUT_DIR,
                 *ActivitySimRunOutputs.required_output_keys(),
                 USIM_DATASTORE_H5,
             ),
@@ -256,12 +244,10 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "persons_asim_out",
             ),
             "optional_input_keys": (LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
-            "optional_output_keys": ("vehicles_beam_in",),
+            "optional_output_keys": ("vehicles_beam_in", LINKSTATS_WARMSTART),
             "dynamic_input_families": (),
             "output_keys": (
-                BEAM_MUTABLE_DATA_DIR,
                 *BeamPreprocessOutputs.declared_output_keys(),
-                LINKSTATS_WARMSTART,
             ),
             "dynamic_output_families": (),
             "holder_inputs": ("activitysim_postprocess",),
@@ -275,14 +261,14 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 BEAM_PERSONS_IN,
             ),
             "optional_input_keys": (LINKSTATS_WARMSTART,),
-            "optional_output_keys": (),
-            "dynamic_input_families": (),
-            "output_keys": (
-                BEAM_OUTPUT_DIR,
-                *BeamRunOutputs.declared_output_keys(),
+            "optional_output_keys": (
                 BEAM_OUTPUT_PLANS_XML,
                 BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
                 BEAM_EXPERIENCED_PLANS_XML,
+            ),
+            "dynamic_input_families": (),
+            "output_keys": (
+                *BeamRunOutputs.declared_output_keys(),
             ),
             "dynamic_output_families": (
                 "linkstats_{year}_{iteration}",
@@ -368,7 +354,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_preprocess"],
         "output_keys": [
-            ASIM_OUTPUT_DIR,
             *ActivitySimRunOutputs.required_output_keys(),
         ],
         "dynamic_output_families": [],
@@ -411,7 +396,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         ],
         "upstream_step_inputs": ["atlas_run"],
         "output_keys": [
-            ATLAS_OUTPUT_DIR,
             USIM_DATASTORE_H5,
             ATLAS_VEHICLES2_OUTPUT,
         ],
@@ -440,7 +424,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_run"],
         "output_keys": [
-            ASIM_OUTPUT_DIR,
             *ActivitySimRunOutputs.required_output_keys(),
             USIM_DATASTORE_H5,
         ],
@@ -459,13 +442,11 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             "persons_asim_out",
         ],
         "optional_input_keys": [LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT],
-        "optional_output_keys": ["vehicles_beam_in"],
+        "optional_output_keys": ["vehicles_beam_in", LINKSTATS_WARMSTART],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_postprocess"],
         "output_keys": [
-            BEAM_MUTABLE_DATA_DIR,
             *BeamPreprocessOutputs.declared_output_keys(),
-            LINKSTATS_WARMSTART,
         ],
         "dynamic_output_families": [],
         "optional": False,

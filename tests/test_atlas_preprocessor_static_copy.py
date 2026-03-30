@@ -191,5 +191,15 @@ def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_pa
     assert required["atlas_static::psid_names.Rdat"] == str(
         atlas_input_dir / "psid_names.Rdat"
     )
-    assert required["atlas_restart_year::2017"] == str(atlas_input_dir / "year2017")
-    assert required["atlas_restart_year::2021"] == str(atlas_input_dir / "year2021")
+    assert required["atlas_restart_seed::2017::households"] == str(
+        atlas_input_dir / "year2017" / "households.csv"
+    )
+    assert required["atlas_restart_seed::2017::blocks"] == str(
+        atlas_input_dir / "year2017" / "blocks.csv"
+    )
+    assert required["atlas_restart_prior::2021::vehicles_output_RData"] == str(
+        atlas_input_dir / "year2021" / "vehicles_output.RData"
+    )
+    assert required["atlas_restart_prior::2021::households_output_RData"] == str(
+        atlas_input_dir / "year2021" / "households_output.RData"
+    )

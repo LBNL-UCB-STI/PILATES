@@ -365,11 +365,15 @@ def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
         ASIM_LAND_USE_IN,
         ASIM_PERSONS_IN,
     ]
+    assert hydration_check["optional_outputs"] == []
+    assert hydration_check["missing_optional_outputs"] == []
     assert hydration_check["resolved_outputs"] == [
         ASIM_HOUSEHOLDS_IN,
         ASIM_LAND_USE_IN,
         ASIM_PERSONS_IN,
     ]
+    assert step_resolution["used_compatibility_fallback"] is False
+    assert hydration_check["used_compatibility_fallback"] is False
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     assert summary["event_counts"]["step_resolution"] == 1

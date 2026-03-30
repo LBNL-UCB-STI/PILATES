@@ -370,27 +370,26 @@ def repair_restart_atlas_inputs_from_archive(
         return False
 
     from pilates.atlas.preprocessor import (
-        _restart_required_atlas_input_years,
         _restore_restart_atlas_year_inputs,
+        restart_required_atlas_input_paths,
     )
 
     atlas_input_dir = os.path.realpath(get_atlas_input_dir())
-    required_years = _restart_required_atlas_input_years(
+    required_paths = restart_required_atlas_input_paths(
+        atlas_input_root=atlas_input_dir,
         start_year=start_year,
         atlas_year=atlas_year,
     )
-    missing_before = [
-        year
-        for year in required_years
-        if not os.path.exists(os.path.join(atlas_input_dir, f"year{year}"))
-    ]
+    missing_before = {
+        key: path for key, path in required_paths.items() if not os.path.exists(path)
+    }
     if not missing_before:
         return False
 
     logger.warning(
-        "[RestartRepair] Missing restart-critical ATLAS year inputs %s under %s; "
+        "[RestartRepair] Missing restart-critical ATLAS inputs %s under %s; "
         "rehydrating from archive %s.",
-        missing_before,
+        sorted(missing_before),
         atlas_input_dir,
         archive_root,
     )
@@ -401,24 +400,24 @@ def repair_restart_atlas_inputs_from_archive(
         atlas_year=atlas_year,
     )
 
-    missing_after = [
-        year
-        for year in required_years
-        if not os.path.exists(os.path.join(atlas_input_dir, f"year{year}"))
+    missing_after = {
+        key: path for key, path in required_paths.items() if not os.path.exists(path)
+    }
+    repaired_keys = [
+        key for key in missing_before.keys() if key not in missing_after
     ]
-    repaired_years = [year for year in missing_before if year not in missing_after]
-    if repaired_years:
+    if repaired_keys:
         logger.info(
-            "[RestartRepair] Restored restart-critical ATLAS year inputs from archive: %s",
-            repaired_years,
+            "[RestartRepair] Restored restart-critical ATLAS inputs from archive: %s",
+            repaired_keys,
         )
     if missing_after:
         logger.warning(
             "[RestartRepair] ATLAS restart year inputs still missing after archive "
             "rehydration: %s",
-            missing_after,
+            sorted(missing_after),
         )
-    return bool(repaired_years)
+    return bool(repaired_keys)
 
 
 def _supply_demand_manifest_path(

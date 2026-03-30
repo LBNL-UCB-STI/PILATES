@@ -264,7 +264,19 @@ def _resolved_output_keys(outputs: Any) -> list[str]:
         return []
 
 
-def _declared_and_required_output_keys(step_name: str) -> tuple[list[str], list[str]]:
+def _declared_required_and_optional_output_keys(
+    step_name: str,
+) -> tuple[list[str], list[str], list[str]]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is not None:
+        declared = sorted(dict.fromkeys(spec.output_keys))
+        optional = sorted(dict.fromkeys(spec.optional_output_keys))
+        required = list(declared)
+        outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
+        if outputs_class is not None:
+            required = list(required_outputs_for_step_outputs_class(outputs_class))
+        return declared, sorted(dict.fromkeys(required)), optional
+
     outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
     declared = list(workflow_step_declared_output_keys(step_name))
     if not declared and outputs_class is not None:
@@ -272,7 +284,7 @@ def _declared_and_required_output_keys(step_name: str) -> tuple[list[str], list[
     required: list[str] = []
     if outputs_class is not None:
         required = list(required_outputs_for_step_outputs_class(outputs_class))
-    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required))
+    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required)), []
 
 
 def _emit_output_hydration_audit(
@@ -289,13 +301,20 @@ def _emit_output_hydration_audit(
 ) -> None:
     if outputs is None:
         return
-    declared_outputs, required_outputs = _declared_and_required_output_keys(step_name)
+    (
+        declared_outputs,
+        required_outputs,
+        optional_outputs,
+    ) = _declared_required_and_optional_output_keys(step_name)
     resolved_outputs = _resolved_output_keys(outputs)
     missing_required_outputs = [
         key for key in required_outputs if key not in resolved_outputs
     ]
     missing_declared_outputs = [
         key for key in declared_outputs if key not in resolved_outputs
+    ]
+    missing_optional_outputs = [
+        key for key in optional_outputs if key not in resolved_outputs
     ]
     recovery_meta = recovery_meta or {}
     emit_consist_audit_event(
@@ -311,9 +330,11 @@ def _emit_output_hydration_audit(
         resolution_mode=resolution_mode,
         declared_outputs=declared_outputs,
         required_outputs=required_outputs,
+        optional_outputs=optional_outputs,
         resolved_outputs=resolved_outputs,
         missing_required_outputs=missing_required_outputs,
         missing_declared_outputs=missing_declared_outputs,
+        missing_optional_outputs=missing_optional_outputs,
         typed_output_rebuilt=bool(outputs is not None),
         hydration_complete=not missing_required_outputs,
         used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
@@ -324,6 +345,9 @@ def _emit_output_hydration_audit(
         ),
         used_cached_artifact_recovery=bool(
             recovery_meta.get("used_cached_artifact_recovery", False)
+        ),
+        used_compatibility_fallback=bool(
+            recovery_meta.get("used_compatibility_fallback", False)
         ),
         overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
     )
@@ -360,6 +384,9 @@ def _emit_step_resolution_audit(
         ),
         used_cached_artifact_recovery=bool(
             recovery_meta.get("used_cached_artifact_recovery", False)
+        ),
+        used_compatibility_fallback=bool(
+            recovery_meta.get("used_compatibility_fallback", False)
         ),
         overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
         initial_cache_hit=bool(recovery_meta.get("initial_cache_hit", False)),
@@ -670,6 +697,11 @@ def _publish_recovered_outputs(
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
 
 
+def _merge_output_recovery_meta(outputs: Any, audit_meta: Dict[str, Any]) -> None:
+    if bool(getattr(outputs, "_compatibility_fallback_used", False)):
+        audit_meta["used_compatibility_fallback"] = True
+
+
 def _finalize_recovered_step_outputs(
     *,
     step: StepRef,
@@ -734,7 +766,7 @@ def _recover_step_outputs(
             audit_meta["used_output_replayer"] = bool(
                 publish_outputs and step.output_replayer is not None
             )
-            return _finalize_recovered_step_outputs(
+            outputs = _finalize_recovered_step_outputs(
                 step=step,
                 step_name=step_name,
                 outputs=outputs,
@@ -745,6 +777,8 @@ def _recover_step_outputs(
                 outputs_holder=outputs_holder,
                 publish_outputs=publish_outputs,
             )
+            _merge_output_recovery_meta(outputs, audit_meta)
+            return outputs
 
     outputs = _recover_cached_outputs(
         step_name=step_name,
@@ -773,6 +807,7 @@ def _recover_step_outputs(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
             )
+        _merge_output_recovery_meta(outputs, audit_meta)
         return outputs
     return None
 
@@ -846,6 +881,7 @@ def run_manifested_steps(
                         coupler=coupler,
                         outputs_holder=outputs_holder,
                     )
+                    _merge_output_recovery_meta(outputs, recovery_meta)
                     _emit_step_resolution_audit(
                         workspace=workspace,
                         stage_name=stage_name,

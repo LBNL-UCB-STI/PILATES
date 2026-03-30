@@ -31,6 +31,7 @@ from pilates.workflows.artifact_keys import (
 )
 
 NAMESPACE_SEPARATOR = "/"
+_KNOWN_NAMESPACES = {"activitysim", "atlas", "beam", "urbansim"}
 
 
 _EXPLICIT_NAMESPACE_BY_KEY = {
@@ -77,7 +78,10 @@ _NAMESPACE_PREFIX_RULES = (
 
 
 def is_namespaced_key(key: str) -> bool:
-    return NAMESPACE_SEPARATOR in key
+    if NAMESPACE_SEPARATOR not in key:
+        return False
+    namespace, _local_key = key.split(NAMESPACE_SEPARATOR, 1)
+    return namespace in _KNOWN_NAMESPACES
 
 
 def infer_namespace_for_key(key: str) -> Optional[str]:

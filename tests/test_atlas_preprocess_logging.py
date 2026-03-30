@@ -16,7 +16,7 @@ def test_atlas_preprocess_output_logger_preserves_static_input_metadata(
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
+        "_make_logged_typed_step_function",
         _fake_make_typed_step_function,
     )
 

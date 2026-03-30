@@ -209,8 +209,6 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
         artifact
         for artifact in plan.artifacts
         if artifact.canonical_key == "usim_datastore_base_h5"
-        and artifact.producer_step_run_id is not None
-        and steps_by_id[artifact.producer_step_run_id].step_name == "urbansim_preprocess"
     )
     current_handoff_artifact = next(
         artifact
@@ -222,7 +220,7 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
     forecast_output_artifact = next(
         artifact
         for artifact in plan.artifacts
-        if artifact.canonical_key == "usim_forecast_output"
+        if artifact.canonical_key == "usim_datastore_h5"
         and artifact.producer_step_run_id is not None
         and steps_by_id[artifact.producer_step_run_id].step_name == "urbansim_run"
     )
@@ -233,6 +231,7 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
 
     assert base_artifact.resolved_path_hint is not None
     assert current_handoff_artifact.resolved_path_hint == base_artifact.resolved_path_hint
+    assert base_artifact.producer_step_run_id is None
     assert forecast_output_artifact.resolved_path_hint is not None
     assert forecast_output_artifact.resolved_path_hint != base_artifact.resolved_path_hint
 

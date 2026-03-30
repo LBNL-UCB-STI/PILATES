@@ -163,7 +163,6 @@ _URBANSIM_PREPROCESS_PREPARED_KEYS = (
     "school_districts",
 )
 _ATLAS_PREPROCESS_CORE_OUTPUT_KEYS = (
-    "atlas_mutable_input_dir",
     "atlas_households_csv",
     "atlas_blocks_csv",
     "atlas_persons_csv",
@@ -223,8 +222,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         input_keys=(USIM_DATASTORE_BASE_H5,),
         optional_input_keys=(USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX),
         output_keys=(
-            USIM_MUTABLE_DATA_DIR,
-            USIM_DATASTORE_BASE_H5,
             *_URBANSIM_PREPROCESS_PREPARED_KEYS,
         ),
         optional_output_keys=("usim_skims_input_updated",),
@@ -303,13 +300,13 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         input_keys=(
             USIM_DATASTORE_CURRENT_H5,
             USIM_DATASTORE_BASE_H5,
-            *_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS[1:],
+            *_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS,
         ),
         optional_input_keys=_ordered_unique(
             _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
             _ATLAS_STATIC_INPUT_KEYS,
         ),
-        output_keys=(ATLAS_OUTPUT_DIR,),
+        output_keys=(),
         dynamic_output_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_preprocess",),
         holder_inputs=("atlas_preprocess",),
@@ -327,7 +324,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=AtlasPostprocessOutputs,
         input_keys=(USIM_DATASTORE_CURRENT_H5,),
         output_keys=(
-            ATLAS_OUTPUT_DIR,
             USIM_DATASTORE_H5,
             ATLAS_VEHICLES2_OUTPUT,
         ),
@@ -352,7 +348,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             FINAL_SKIMS_OMX,
         ),
         output_keys=(
-            ASIM_MUTABLE_DATA_DIR,
             ASIM_LAND_USE_IN,
             ASIM_HOUSEHOLDS_IN,
             ASIM_PERSONS_IN,
@@ -397,7 +392,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         ),
         optional_input_keys=(ASIM_SHARROW_CACHE_DIR,),
         output_keys=(
-            ASIM_OUTPUT_DIR,
             *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
         optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
@@ -425,7 +419,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
         output_keys=(
-            ASIM_OUTPUT_DIR,
             *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
         ),
         optional_input_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, USIM_DATASTORE_BASE_H5),
@@ -452,11 +445,9 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         ),
         optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
         output_keys=(
-            BEAM_MUTABLE_DATA_DIR,
             *BeamPreprocessOutputs.declared_output_keys(),
-            LINKSTATS_WARMSTART,
         ),
-        optional_output_keys=("vehicles_beam_in",),
+        optional_output_keys=("vehicles_beam_in", LINKSTATS_WARMSTART),
         depends_on=("activitysim_postprocess",),
         holder_inputs=("activitysim_postprocess",),
         upstream_step_inputs=("activitysim_postprocess",),
@@ -479,8 +470,9 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         ),
         optional_input_keys=(LINKSTATS_WARMSTART,),
         output_keys=(
-            BEAM_OUTPUT_DIR,
             *_BEAM_RUN_OUTPUT_KEYS,
+        ),
+        optional_output_keys=(
             BEAM_OUTPUT_PLANS_XML,
             BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
             BEAM_EXPERIENCED_PLANS_XML,

@@ -124,6 +124,12 @@ def test_canonical_artifact_key_normalizes_namespaced_and_alias_keys():
         canonical_artifact_key_from_raw_key("usim_datastore_current_h5")
         == "usim_datastore_h5"
     )
+    assert (
+        canonical_artifact_key_from_raw_key(
+            "adopt/baseline/new_vehicles_biannual_values_2023"
+        )
+        == "adopt/baseline/new_vehicles_biannual_values_2023"
+    )
 
 
 def test_resolve_coupler_value_preserves_canonical_key_and_storage_key():

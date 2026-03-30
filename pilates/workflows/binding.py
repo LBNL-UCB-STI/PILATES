@@ -1380,16 +1380,15 @@ def _restart_atlas_required_artifacts(
     start_year = getattr(state, "start_year", None)
     atlas_year = getattr(state, "year", getattr(state, "current_year", None))
     if start_year is not None and atlas_year is not None:
-        from pilates.atlas.preprocessor import _restart_required_atlas_input_years
+        from pilates.atlas.preprocessor import restart_required_atlas_input_paths
 
-        for required_year in _restart_required_atlas_input_years(
-            start_year=int(start_year),
-            atlas_year=int(atlas_year),
-        ):
-            required[f"atlas_restart_year::{required_year}"] = os.path.join(
-                atlas_input_dir,
-                f"year{required_year}",
+        required.update(
+            restart_required_atlas_input_paths(
+                atlas_input_root=atlas_input_dir,
+                start_year=int(start_year),
+                atlas_year=int(atlas_year),
             )
+        )
     return required or None
 
 
