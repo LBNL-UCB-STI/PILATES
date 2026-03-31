@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+import re
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
@@ -12,6 +13,16 @@ from .epoch_views import epoch_views
 from .epochs import build_epoch_panel
 from .packaging import export_bundle
 from .runset import runset_from_query, runset_run_ids
+
+_ACTIVITYSIM_INPUT_SNAPSHOT_RE = re.compile(
+    r"(?:^|/|\\\\)inputs-year-(?P<year>\d+)-iteration-(?P<iteration>\d+)(?:/|\\\\|$)"
+)
+_ACTIVITYSIM_OUTPUT_SNAPSHOT_RE = re.compile(
+    r"(?:^|/|\\\\)year-(?P<year>\d+)-iteration-(?P<iteration>\d+)(?:/|\\\\|$)"
+)
+_URBANSIM_FORECAST_OUTPUT_RE = re.compile(r"(?:^|/|\\\\)model_data_(?P<year>\d+)\.h5$")
+_URBANSIM_NEXT_INPUT_RE = re.compile(r"(?:^|/|\\\\)input_data_for_(?P<year>\d+)_outputs\.h5$")
+_URBANSIM_ROLLING_INPUT_RE = re.compile(r"(?:^|/|\\\\)(?P<name>[^/\\\\]+_model_data\.h5)$")
 
 
 @dataclass
@@ -176,6 +187,12 @@ def list_run_artifacts(
             continue
 
         resolved_path = _resolve_artifact_path(tracker, artifact=artifact, run=run)
+        tagged_year = _run_tag_value(run, "year")
+        tagged_iteration = _run_tag_value(run, "iteration")
+        path_context = _parse_artifact_path_context(
+            resolved_path=resolved_path,
+            container_uri=str(getattr(artifact, "container_uri", "") or ""),
+        )
         rows.append(
             {
                 "run_id": run_id,
@@ -184,6 +201,11 @@ def list_run_artifacts(
                 "key": key,
                 "artifact_family": family,
                 "driver": getattr(artifact, "driver", None),
+                "tagged_year": tagged_year,
+                "tagged_iteration": tagged_iteration,
+                "content_year": path_context.get("content_year"),
+                "content_iteration": path_context.get("content_iteration"),
+                "content_path_kind": path_context.get("content_path_kind"),
                 "container_uri": str(getattr(artifact, "container_uri", "") or ""),
                 "resolved_path": str(resolved_path) if resolved_path is not None else None,
                 "path_exists": bool(resolved_path.exists()) if resolved_path is not None else False,
@@ -199,12 +221,86 @@ def list_run_artifacts(
                 "key",
                 "artifact_family",
                 "driver",
+                "tagged_year",
+                "tagged_iteration",
+                "content_year",
+                "content_iteration",
+                "content_path_kind",
                 "container_uri",
                 "resolved_path",
                 "path_exists",
             ]
         )
     return pd.DataFrame(rows).sort_values(["direction", "key"]).reset_index(drop=True)
+
+
+def resolve_urbansim_activitysim_boundary_h5s(
+    archive_run_dir: str | Path,
+    *,
+    forecast_year: int,
+    next_input_year: Optional[int] = None,
+) -> pd.DataFrame:
+    """
+    Resolve the pre/post H5 files around one UrbanSim -> ActivitySim cycle.
+
+    The expected pair is:
+    - pre-ASim UrbanSim forecast output: ``model_data_<forecast_year>.h5``
+    - post-ASim next-cycle UrbanSim input snapshot: ``input_data_for_<next_year>_outputs.h5``
+
+    When ``next_input_year`` is omitted, this picks the smallest available
+    ``input_data_for_<year>_outputs.h5`` year greater than ``forecast_year``.
+    """
+    data_dir = Path(archive_run_dir).expanduser().resolve() / "urbansim" / "data"
+    discovered = _discover_urbansim_h5s(data_dir)
+
+    resolved_forecast_year = int(forecast_year)
+    next_year = int(next_input_year) if next_input_year is not None else None
+    if next_year is None:
+        input_years = sorted(
+            {
+                int(value)
+                for value in discovered.loc[
+                    discovered["kind"].eq("urbansim_next_input_snapshot"), "year"
+                ].dropna()
+            }
+        )
+        next_candidates = [value for value in input_years if value > resolved_forecast_year]
+        next_year = next_candidates[0] if next_candidates else None
+
+    rows = [
+        {
+            "boundary_role": "pre_urbansim_forecast_output",
+            "year": resolved_forecast_year,
+            "kind": "urbansim_forecast_output",
+            "path": str(data_dir / f"model_data_{resolved_forecast_year}.h5"),
+        }
+    ]
+    if next_year is not None:
+        rows.append(
+            {
+                "boundary_role": "post_activitysim_next_input",
+                "year": int(next_year),
+                "kind": "urbansim_next_input_snapshot",
+                "path": str(data_dir / f"input_data_for_{int(next_year)}_outputs.h5"),
+            }
+        )
+
+    rolling = discovered.loc[discovered["kind"].eq("urbansim_rolling_input")].copy()
+    for row in rolling.itertuples(index=False):
+        rows.append(
+            {
+                "boundary_role": "rolling_urbansim_input",
+                "year": None,
+                "kind": row.kind,
+                "path": str(row.path),
+            }
+        )
+
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return pd.DataFrame(columns=["boundary_role", "year", "kind", "path", "path_exists"])
+    frame["path_exists"] = frame["path"].map(lambda value: Path(value).exists())
+    return frame
 
 
 def export_scenario_bundle(
@@ -652,6 +748,107 @@ def _resolve_artifact_path(
         except Exception:
             return None
     return None
+
+
+def _run_tag_value(run: Optional[Any], key: str) -> Optional[int]:
+    if run is None:
+        return None
+    direct = getattr(run, key, None)
+    if direct is not None and str(direct).strip() != "":
+        try:
+            return int(direct)
+        except Exception:
+            pass
+
+    for meta_name in ("meta", "metadata"):
+        meta = getattr(run, meta_name, None)
+        if not isinstance(meta, dict):
+            continue
+        facet = meta.get("facet")
+        if isinstance(facet, dict):
+            raw = facet.get(key)
+            if raw is not None and str(raw).strip() != "":
+                try:
+                    return int(raw)
+                except Exception:
+                    pass
+    return None
+
+
+def _parse_artifact_path_context(
+    *,
+    resolved_path: Optional[Path],
+    container_uri: str,
+) -> dict[str, Any]:
+    candidates: list[str] = []
+    if resolved_path is not None:
+        candidates.append(str(resolved_path))
+    if container_uri:
+        candidates.append(str(container_uri))
+
+    for raw in candidates:
+        parsed = _parse_path_context(raw)
+        if parsed is not None:
+            return parsed
+    return {
+        "content_year": None,
+        "content_iteration": None,
+        "content_path_kind": None,
+    }
+
+
+def _parse_path_context(raw_path: str) -> Optional[dict[str, Any]]:
+    text = str(raw_path).strip()
+    if not text:
+        return None
+
+    for pattern, kind in (
+        (_ACTIVITYSIM_INPUT_SNAPSHOT_RE, "activitysim_input_snapshot"),
+        (_ACTIVITYSIM_OUTPUT_SNAPSHOT_RE, "activitysim_output_snapshot"),
+        (_URBANSIM_FORECAST_OUTPUT_RE, "urbansim_forecast_output"),
+        (_URBANSIM_NEXT_INPUT_RE, "urbansim_next_input_snapshot"),
+    ):
+        match = pattern.search(text)
+        if not match:
+            continue
+        payload: dict[str, Any] = {
+            "content_year": int(match.group("year")),
+            "content_iteration": None,
+            "content_path_kind": kind,
+        }
+        if "iteration" in match.groupdict() and match.group("iteration") is not None:
+            payload["content_iteration"] = int(match.group("iteration"))
+        return payload
+
+    rolling = _URBANSIM_ROLLING_INPUT_RE.search(text)
+    if rolling:
+        return {
+            "content_year": None,
+            "content_iteration": None,
+            "content_path_kind": "urbansim_rolling_input",
+        }
+    return None
+
+
+def _discover_urbansim_h5s(data_dir: Path) -> pd.DataFrame:
+    if not data_dir.exists():
+        return pd.DataFrame(columns=["path", "kind", "year"])
+
+    rows: list[dict[str, Any]] = []
+    for path in sorted(data_dir.glob("*.h5")):
+        parsed = _parse_path_context(str(path))
+        if parsed is None:
+            continue
+        rows.append(
+            {
+                "path": path,
+                "kind": parsed.get("content_path_kind"),
+                "year": parsed.get("content_year"),
+            }
+        )
+    if not rows:
+        return pd.DataFrame(columns=["path", "kind", "year"])
+    return pd.DataFrame(rows)
 
 
 def _build_ingest_tags(

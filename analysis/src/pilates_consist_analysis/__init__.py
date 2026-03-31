@@ -31,6 +31,7 @@ from .handoff import (
     ingest_artifacts,
     list_run_artifacts,
     parse_artifact_ref_arg,
+    resolve_urbansim_activitysim_boundary_h5s,
 )
 from .runtime import (
     assert_run_tagging_consistent,
@@ -74,6 +75,7 @@ __all__ = [
     "export_activitysim_inputs",
     "list_run_artifacts",
     "parse_artifact_ref_arg",
+    "resolve_urbansim_activitysim_boundary_h5s",
     "open_archive",
     "open_run",
     "inspect_run_tagging",
