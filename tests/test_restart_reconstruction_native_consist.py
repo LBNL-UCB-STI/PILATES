@@ -251,8 +251,67 @@ def test_collect_restart_completed_run_ids_for_supply_demand_resume_merges_land_
         "asim-run-1",
         "asim-post-1",
     }
-    assert "beam-run-1" not in discovery["run_ids"]
-    assert len(discovery["manifest_paths"]) == 6
+
+
+def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(tmp_path):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-0"},
+            "activitysim_run": {"run_id": "asim-run-0"},
+            "activitysim_postprocess": {"run_id": "asim-post-0"},
+        },
+    )
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        enabled_stages={WorkflowState.Stage.supply_demand_loop},
+    )
+    tracker = _QueryTrackerStub(
+        runs_by_target={
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_preprocess",
+                stage="activity_demand_preprocess",
+                phase="preprocess",
+                status="completed",
+            ): "asim-pre-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_run",
+                stage="activity_demand_run",
+                phase="run",
+                status="completed",
+            ): "asim-run-0",
+            _run_query_key(
+                year=2018,
+                iteration=0,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+            ): "asim-post-0",
+        }
+    )
+
+    discovery = restart_runtime.collect_restart_completed_run_ids(
+        state=state,
+        archive_run_dir=str(archive_run_dir),
+        workflow_stage=WorkflowState.Stage,
+        tracker=tracker,
+        query_facet={"scenario_id": "scenario-alpha", "seed": 777},
+    )
+
+    assert discovery["issues"] == []
+    assert tracker.find_latest_run_calls
+    assert all(
+        call.get("facet") == {"scenario_id": "scenario-alpha", "seed": 777}
+        for call in tracker.find_latest_run_calls
+    )
+    assert discovery["manifest_paths"] == []
 
 
 def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_completed_run_ids(

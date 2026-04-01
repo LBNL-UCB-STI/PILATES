@@ -704,13 +704,9 @@ def _step_with_model(model_name: str):
     return _step
 
 
-def test_epoch_tagging_proxy_injects_required_facet_and_tag_keys():
+def test_epoch_tagging_proxy_keeps_step_local_facet_keys_without_adding_tags():
     scenario = _FakeEpochTaggingScenario(run_ids=["asim-r1"])
-    proxy = run_module._EpochTaggingScenarioProxy(
-        scenario,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._EpochTaggingScenarioProxy(scenario)
 
     proxy.run(
         fn=_step_with_model("activitysim_run"),
@@ -723,27 +719,44 @@ def test_epoch_tagging_proxy_injects_required_facet_and_tag_keys():
 
     call = scenario.calls[0]
     assert call["model"] == "activitysim_run"
-    assert "existing" in call["tags"]
-    assert "scenario_id:scenario-alpha" in call["tags"]
-    assert "seed:777" in call["tags"]
-    assert "model:activitysim_run" in call["tags"]
-    assert "year:2035" in call["tags"]
-    assert "iteration:2" in call["tags"]
+    assert call["tags"] == ["existing"]
     assert call["facet"]["existing_key"] == "existing_value"
-    assert call["facet"]["scenario_id"] == "scenario-alpha"
-    assert call["facet"]["seed"] == 777
     assert call["facet"]["model"] == "activitysim_run"
     assert call["facet"]["year"] == 2035
     assert call["facet"]["iteration"] == 2
 
 
-def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
-    scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
-    proxy = run_module._EpochTaggingScenarioProxy(
-        scenario,
+def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_metadata():
+    contract = run_module.scenario_runtime.build_scenario_runtime_contract(
+        settings=SimpleNamespace(),
         scenario_id="scenario-alpha",
         seed=777,
+        cache_epoch=5,
+        build_scenario_consist_kwargs_fn=lambda _settings: {
+            "facet": {"existing": "header"},
+            "step_tags": ["existing-step-tag"],
+            "step_facet": {"existing": "child"},
+        },
+        build_coupler_schema_fn=lambda *_args, **_kwargs: {},
+        validate_workflow_step_contracts_fn=lambda **_kwargs: None,
+        build_schema_steps_fn=lambda: [],
+        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: steps,
+        merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
+        scenario_name_template="scenario-{run_name}",
     )
+
+    scenario_kwargs = contract["scenario_kwargs"]
+    assert "existing-step-tag" in scenario_kwargs["step_tags"]
+    assert "scenario_id:scenario-alpha" in scenario_kwargs["step_tags"]
+    assert "seed:777" in scenario_kwargs["step_tags"]
+    assert scenario_kwargs["step_facet"]["existing"] == "child"
+    assert scenario_kwargs["step_facet"]["scenario_id"] == "scenario-alpha"
+    assert scenario_kwargs["step_facet"]["seed"] == 777
+
+
+def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
+    scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
+    proxy = run_module._EpochTaggingScenarioProxy(scenario)
 
     proxy.run(model="activitysim_run", year=2030, iteration=1)
     proxy.run(model="beam_run", year=2030, iteration=1)
@@ -754,11 +767,7 @@ def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
 
 def test_epoch_tagging_proxy_sets_activitysim_parent_to_previous_beam_iteration():
     scenario = _FakeEpochTaggingScenario(run_ids=["beam-2030-i0", "asim-2030-i1"])
-    proxy = run_module._EpochTaggingScenarioProxy(
-        scenario,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._EpochTaggingScenarioProxy(scenario)
 
     proxy.run(model="beam_run", year=2030, iteration=0)
     proxy.run(model="activitysim_run", year=2030, iteration=1)
@@ -771,11 +780,7 @@ def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar
     scenario = _FakeEpochTaggingScenario(
         run_ids=["beam-2030-i0", "beam-fullskim-2030-i0", "asim-2030-i1"]
     )
-    proxy = run_module._EpochTaggingScenarioProxy(
-        scenario,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._EpochTaggingScenarioProxy(scenario)
 
     proxy.run(model="beam_run", year=2030, iteration=0)
     proxy.run(model="beam_full_skim", year=2030, iteration=0)
@@ -794,11 +799,7 @@ def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar
 )
 def test_epoch_tagging_proxy_missing_parent_does_not_raise(model, year, iteration):
     scenario = _FakeEpochTaggingScenario(run_ids=["run-1"])
-    proxy = run_module._EpochTaggingScenarioProxy(
-        scenario,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._EpochTaggingScenarioProxy(scenario)
 
     proxy.run(model=model, year=year, iteration=iteration)
 

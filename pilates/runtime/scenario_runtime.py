@@ -111,15 +111,38 @@ def merge_epoch_facet(
     return merged
 
 
+def merge_step_scope_facet(
+    *,
+    existing: Any,
+    model: Optional[str],
+    year: Optional[int],
+    iteration: Optional[int],
+) -> Dict[str, Any]:
+    merged = facet_to_mapping(existing)
+    if model:
+        merged["model"] = model
+    if year is not None:
+        merged["year"] = year
+    if iteration is not None:
+        merged["iteration"] = iteration
+    return merged
+
+
 class EpochTaggingScenarioProxy:
     """
-    Wrapper around a Consist scenario that injects epoch metadata and parent linkage.
+    Wrapper around a Consist scenario that preserves parent linkage hints.
+
+    Shared scenario-scoped metadata such as ``scenario_id`` / ``seed`` is now
+    supplied via Consist ``step_tags`` / ``step_facet`` defaults at scenario
+    construction time. This proxy only infers per-step model/year/iteration
+    metadata and parent run IDs for ActivitySim/BEAM lineage.
     """
 
-    def __init__(self, scenario: Any, *, scenario_id: str, seed: Optional[int]) -> None:
+    def __init__(
+        self,
+        scenario: Any,
+    ) -> None:
         self._scenario = scenario
-        self._scenario_id = scenario_id
-        self._seed = seed
         self._activitysim_run_ids: Dict[Tuple[int, int], str] = {}
         self._activitysim_step_ids: Dict[Tuple[int, int], str] = {}
         self._beam_run_ids: Dict[Tuple[int, int], str] = {}
@@ -243,20 +266,8 @@ class EpochTaggingScenarioProxy:
                     iteration,
                 )
 
-        tag_additions = [f"scenario_id:{self._scenario_id}"]
-        if self._seed is not None:
-            tag_additions.append(f"seed:{self._seed}")
-        if model_name:
-            tag_additions.append(f"model:{model_name}")
-        if year is not None:
-            tag_additions.append(f"year:{year}")
-        if iteration is not None:
-            tag_additions.append(f"iteration:{iteration}")
-        run_kwargs["tags"] = merge_tag_list(run_kwargs.get("tags"), tag_additions)
-        run_kwargs["facet"] = merge_epoch_facet(
+        run_kwargs["facet"] = merge_step_scope_facet(
             existing=run_kwargs.get("facet"),
-            scenario_id=self._scenario_id,
-            seed=self._seed,
             model=model_name,
             year=year,
             iteration=iteration,
@@ -377,6 +388,20 @@ def build_scenario_runtime_contract(
     scenario_name_template: str,
 ) -> Dict[str, Any]:
     scenario_kwargs = build_scenario_consist_kwargs_fn(settings)
+    scenario_step_tags = [f"scenario_id:{scenario_id}"]
+    if seed is not None:
+        scenario_step_tags.append(f"seed:{seed}")
+    scenario_step_facet: Dict[str, Any] = {"scenario_id": scenario_id}
+    if seed is not None:
+        scenario_step_facet["seed"] = seed
+    scenario_kwargs["step_tags"] = merge_tag_list(
+        scenario_kwargs.get("step_tags"),
+        scenario_step_tags,
+    )
+    scenario_kwargs["step_facet"] = {
+        **facet_to_mapping(scenario_kwargs.get("step_facet")),
+        **scenario_step_facet,
+    }
     scenario_kwargs["facet"] = merge_epoch_facet_fn(
         existing=scenario_kwargs.get("facet"),
         scenario_id=scenario_id,

@@ -760,6 +760,7 @@ def _collect_restart_completed_run_ids_from_tracker(
     tracker: Any,
     state: Any,
     workflow_stage: Any,
+    query_facet: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     year = _coerce_int(getattr(state, "current_year", None))
     if year is None:
@@ -793,37 +794,45 @@ def _collect_restart_completed_run_ids_from_tracker(
     atlas_gap_detected = False
 
     for target in targets:
+        query_target = dict(target)
+        if query_facet is not None:
+            query_target["facet"] = dict(query_facet)
         is_atlas_target = target.get("stage") == "atlas"
         if atlas_gap_detected and is_atlas_target:
             if atlas_require_all_subyears:
                 issues.append(
                     (
-                        repr(target),
+                        repr(query_target),
                         "required atlas restart target missing after contiguous-prefix gap",
                     )
                 )
-            unmatched_targets.append(dict(target))
+            unmatched_targets.append(query_target)
             continue
         try:
-            run = _find_latest_run_for_restart_target(tracker=tracker, target=target)
+            run = _find_latest_run_for_restart_target(
+                tracker=tracker,
+                target=query_target,
+            )
         except ValueError:
-            unmatched_targets.append(dict(target))
+            unmatched_targets.append(query_target)
             if is_atlas_target:
                 atlas_gap_detected = True
                 if atlas_require_all_subyears:
                     issues.append(
                         (
-                            repr(target),
+                            repr(query_target),
                             "no completed run found for required atlas restart target",
                         )
                     )
                 continue
-            issues.append((repr(target), "no completed run found for restart target"))
+            issues.append(
+                (repr(query_target), "no completed run found for restart target")
+            )
             continue
         except Exception as exc:
             issues.append(
                 (
-                    repr(target),
+                    repr(query_target),
                     f"tracker query failed: {exc}",
                 )
             )
@@ -833,13 +842,20 @@ def _collect_restart_completed_run_ids_from_tracker(
             continue
         seen.add(run_id)
         run_ids.append(run_id)
-        matched_targets.append({**dict(target), "run_id": run_id})
+        matched_targets.append({**query_target, "run_id": run_id})
 
     return {
         "run_ids": run_ids,
         "issues": issues,
         "manifest_paths": [],
-        "query_targets": targets,
+        "query_targets": [
+            (
+                {**dict(target), "facet": dict(query_facet)}
+                if query_facet is not None
+                else dict(target)
+            )
+            for target in targets
+        ],
         "matched_query_targets": matched_targets,
         "unmatched_query_targets": unmatched_targets,
         "atlas_gap_detected": atlas_gap_detected,
@@ -1043,6 +1059,7 @@ def collect_restart_completed_run_ids(
     archive_run_dir: str,
     workflow_stage: Any,
     tracker: Any = None,
+    query_facet: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     tracker_discovery: Optional[Dict[str, Any]] = None
     if tracker is not None:
@@ -1050,6 +1067,7 @@ def collect_restart_completed_run_ids(
             tracker=tracker,
             state=state,
             workflow_stage=workflow_stage,
+            query_facet=query_facet,
         )
         if tracker_discovery["run_ids"] and not tracker_discovery["issues"]:
             shadow_discovery: Optional[Dict[str, Any]] = None
@@ -1218,12 +1236,14 @@ def reconstruct_restart_completed_run_outputs(
     local_run_dir: str,
     archive_run_dir: str,
     workflow_stage: Any,
+    query_facet: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     discovery = collect_restart_completed_run_ids(
         state=state,
         archive_run_dir=archive_run_dir,
         workflow_stage=workflow_stage,
         tracker=tracker,
+        query_facet=query_facet,
     )
     run_ids = list(discovery["run_ids"])
     issues = list(discovery["issues"])

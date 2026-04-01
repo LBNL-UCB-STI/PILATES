@@ -572,6 +572,7 @@ def _reconstruct_restart_completed_run_outputs(
     state: WorkflowState,
     local_run_dir: str,
     archive_run_dir: str,
+    query_facet: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return restart_runtime.reconstruct_restart_completed_run_outputs(
         tracker=tracker,
@@ -579,6 +580,7 @@ def _reconstruct_restart_completed_run_outputs(
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
         workflow_stage=WorkflowState.Stage,
+        query_facet=query_facet,
     )
 
 
@@ -859,6 +861,9 @@ def main(
         restart_strict=restart_strict,
         bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
     )
+    restart_query_facet: Dict[str, Any] = {"scenario_id": scenario_id}
+    if run_seed is not None:
+        restart_query_facet["seed"] = run_seed
 
     if is_restart_run and state.data_initialized:
         if restart_rehydrate_mode == "off":
@@ -872,6 +877,7 @@ def main(
                 state=state,
                 local_run_dir=local_run_dir,
                 archive_run_dir=archive_run_dir,
+                query_facet=restart_query_facet,
             )
             reconstruction_result = restart_reconstruction["materialization_result"]
             logger.info(
@@ -1134,11 +1140,7 @@ def main(
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            tagged_scenario = _EpochTaggingScenarioProxy(
-                scenario,
-                scenario_id=scenario_id,
-                seed=run_seed,
-            )
+            tagged_scenario = _EpochTaggingScenarioProxy(scenario)
             coupler = tagged_scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),

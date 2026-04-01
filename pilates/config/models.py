@@ -491,6 +491,24 @@ class ActivitySimConfig(BaseModel):
     random_seed: Optional[int] = Field(
         None, description="Base random number generator seed"
     )
+    workplace_reassignment_share: float = Field(
+        0.0,
+        description=(
+            "Share of workers with valid workplace assignments to mark for "
+            "mandatory workplace re-assignment in ActivitySim preprocess."
+        ),
+        ge=0.0,
+        le=1.0,
+    )
+    school_reassignment_share: float = Field(
+        0.0,
+        description=(
+            "Share of students with valid school assignments to mark for "
+            "mandatory school re-assignment in ActivitySim preprocess."
+        ),
+        ge=0.0,
+        le=1.0,
+    )
     final_plans_folder: str = Field(..., description="Final plans output folder")
 
     def to_consist_facet(self) -> Dict[str, Any]:
@@ -505,6 +523,8 @@ class ActivitySimConfig(BaseModel):
             "replan_hh_samp_size": self.replan_hh_samp_size,
             "replan_after": self.replan_after,
             "random_seed": self.random_seed,
+            "workplace_reassignment_share": self.workplace_reassignment_share,
+            "school_reassignment_share": self.school_reassignment_share,
             "database": self.database.model_dump() if self.database else None,
         }
 
