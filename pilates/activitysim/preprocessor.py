@@ -1957,7 +1957,12 @@ def _process_raw_h5_for_asim(
         raw_households, raw_blocks, asim_zone_id_col
     )
     persons = _update_persons_table(
-        raw_persons, households, unassigned_households, raw_blocks, asim_zone_id_col
+        raw_persons,
+        households,
+        unassigned_households,
+        raw_blocks,
+        asim_zone_id_col,
+        settings=settings,
     )
     num_reassigned_jobs, jobs = _update_jobs_table(
         raw_jobs,
@@ -2876,6 +2881,8 @@ def _update_persons_table(
     unassigned_households: pd.Series,
     blocks: pd.DataFrame,
     asim_zone_id_col: str = "TAZ",
+    settings: Optional[PilatesConfig] = None,
+    state: Optional["WorkflowState"] = None,
 ) -> pd.DataFrame:
     """
     Updates person attributes and assigns zones for ActivitySim processing.
@@ -2892,6 +2899,7 @@ def _update_persons_table(
     - Clearing school/work locations for specific person types (e.g., workers
       shouldn't have school locations, non-workers/students shouldn't have
       work/school locations).
+    - Marking subsets of workers/students for mandatory location re-assignment.
 
     Args:
         persons (pd.DataFrame): DataFrame containing person records.
@@ -2904,6 +2912,10 @@ def _update_persons_table(
             including 'x', 'y' coordinates and the `asim_zone_id_col`.
         asim_zone_id_col (str): Column name for the ActivitySim zone ID
             (e.g., 'TAZ'). Defaults to 'TAZ'.
+        settings (PilatesConfig, optional): PILATES settings for configurable
+            re-assignment shares.
+        state (WorkflowState, optional): Workflow state used to derive
+            deterministic sampling seeds.
 
     Returns:
         pd.DataFrame: DataFrame with updated and cleaned person attributes,
@@ -2999,10 +3011,6 @@ def _update_persons_table(
     # Filter invalid records
     mask = ~persons[asim_zone_id_col].isnull() & (persons["age"] >= 1.0)
 
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        mask &= ~((persons.worker == 1) & (persons.workplace_taz < 0))
-        mask &= ~((persons.student == 1) & (persons.school_taz < 0))
-
     persons = persons.loc[mask].dropna().copy()
 
     # Reset member IDs
@@ -3037,6 +3045,74 @@ def _update_persons_table(
         )
         logger.info(
             f"Non-workers/students with work location: {before_work} before, {after_work} after"
+        )
+
+    persons["needs_workplace_reassignment"] = False
+    persons["needs_school_reassignment"] = False
+
+    def _rng_for(offset: int) -> np.random.Generator:
+        base_seed = get_setting(settings, "activitysim.random_seed", 0) if settings else 0
+        if base_seed is None:
+            base_seed = 0
+        year = int(getattr(state, "year", 0) or 0)
+        iteration = int(
+            getattr(
+                state,
+                "current_inner_iter",
+                getattr(state, "iteration", 0),
+            )
+            or 0
+        )
+        seed = (int(base_seed) + year * 1009 + iteration * 9176 + offset) % (2**32)
+        return np.random.default_rng(seed)
+
+    def _mark_sampled_reassignments(
+        target_col: str, eligible_mask: pd.Series, share: float, rng: np.random.Generator
+    ) -> None:
+        clipped_share = min(max(float(share), 0.0), 1.0)
+        if clipped_share <= 0.0:
+            return
+        eligible_ids = persons.index[eligible_mask]
+        sample_size = int(round(len(eligible_ids) * clipped_share))
+        sample_size = min(sample_size, len(eligible_ids))
+        if sample_size <= 0:
+            return
+        sampled_ids = rng.choice(eligible_ids.to_numpy(), size=sample_size, replace=False)
+        persons.loc[sampled_ids, target_col] = True
+
+    workplace_share = get_setting(settings, "activitysim.workplace_reassignment_share", 0.0)
+    school_share = get_setting(settings, "activitysim.school_reassignment_share", 0.0)
+
+    if "workplace_taz" in persons.columns:
+        missing_work_mask = (persons["worker"] == 1) & (persons["workplace_taz"] < 0)
+        valid_work_mask = (persons["worker"] == 1) & (persons["workplace_taz"] >= 0)
+        persons.loc[missing_work_mask, "needs_workplace_reassignment"] = True
+        _mark_sampled_reassignments(
+            "needs_workplace_reassignment",
+            valid_work_mask,
+            workplace_share,
+            _rng_for(11),
+        )
+        logger.info(
+            "Marked %s workers with missing workplaces and %s valid workers for reassignment",
+            int(missing_work_mask.sum()),
+            int((persons.loc[valid_work_mask, "needs_workplace_reassignment"]).sum()),
+        )
+
+    if "school_taz" in persons.columns:
+        missing_school_mask = (persons["student"] == 1) & (persons["school_taz"] < 0)
+        valid_school_mask = (persons["student"] == 1) & (persons["school_taz"] >= 0)
+        persons.loc[missing_school_mask, "needs_school_reassignment"] = True
+        _mark_sampled_reassignments(
+            "needs_school_reassignment",
+            valid_school_mask,
+            school_share,
+            _rng_for(23),
+        )
+        logger.info(
+            "Marked %s students with missing schools and %s valid students for reassignment",
+            int(missing_school_mask.sum()),
+            int((persons.loc[valid_school_mask, "needs_school_reassignment"]).sum()),
         )
 
     return persons
@@ -3693,7 +3769,13 @@ def create_asim_data_from_h5(
         households, blocks, asim_zone_id_col
     )
     persons = _update_persons_table(
-        persons, households, unassigned_households, blocks, asim_zone_id_col
+        persons,
+        households,
+        unassigned_households,
+        blocks,
+        asim_zone_id_col,
+        settings=settings,
+        state=state,
     )
     num_reassigned_jobs, jobs = _update_jobs_table(
         jobs,
