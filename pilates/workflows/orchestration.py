@@ -244,17 +244,28 @@ def _step_scope_fields(
     run_id: Optional[str] = None,
     cache_hit: Optional[bool] = None,
 ) -> Dict[str, Any]:
+    current_year = getattr(state, "current_year", getattr(state, "year", None))
+    forecast_year = getattr(state, "forecast_year", None)
+    atlas_year = getattr(state, "atlas_year", None)
+
+    target_year = current_year
+    if step_name.startswith("activitysim_") or step_name.startswith("beam_"):
+        target_year = forecast_year if forecast_year is not None else current_year
+    elif atlas_year is not None:
+        target_year = atlas_year
+
     return {
         "stage_name": stage_name,
         "step_name": step_name,
-        "year": getattr(state, "current_year", getattr(state, "year", None)),
-        "forecast_year": getattr(state, "forecast_year", None),
+        "year": target_year,
+        "simulation_year": current_year,
+        "forecast_year": forecast_year,
         "iteration": getattr(
             state,
             "current_inner_iter",
             getattr(state, "iteration", None),
         ),
-        "atlas_year": getattr(state, "atlas_year", None),
+        "atlas_year": atlas_year,
         "run_id": run_id,
         "cache_hit": cache_hit,
     }
@@ -287,6 +298,8 @@ def _declared_required_and_optional_output_keys(
         required = list(declared)
         outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
         if outputs_class is not None:
+            if not optional:
+                optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
             required = list(
                 required_outputs_for_step_outputs_class(outputs_class, state=state)
             )
@@ -299,7 +312,12 @@ def _declared_required_and_optional_output_keys(
     required: list[str] = []
     if outputs_class is not None:
         required = list(required_outputs_for_step_outputs_class(outputs_class, state=state))
-    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required)), []
+    optional: list[str] = []
+    if outputs_class is not None:
+        optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
+    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required)), sorted(
+        dict.fromkeys(optional)
+    )
 
 
 def _emit_output_hydration_audit(

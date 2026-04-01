@@ -407,6 +407,25 @@ def test_log_and_set_output_does_not_warn_for_declared_dynamic_output(caplog, tm
     )
 
 
+def test_log_and_set_output_does_not_warn_for_declared_optional_output(caplog, tmp_path):
+    coupler = _FakeCoupler()
+    artifact_path = tmp_path / "artifact.txt"
+    artifact_path.write_text("artifact", encoding="utf-8")
+
+    with caplog.at_level("WARNING"):
+        log_and_set_output(
+            key="linkstats_warmstart",
+            path=str(artifact_path),
+            description="test artifact",
+            coupler=coupler,
+            step_name="beam_run",
+        )
+
+    assert not any(
+        "published undeclared output key" in record.message for record in caplog.records
+    )
+
+
 def test_log_output_only_uses_same_declared_output_validation(caplog, tmp_path):
     artifact_path = tmp_path / "artifact.txt"
     artifact_path.write_text("artifact", encoding="utf-8")

@@ -205,6 +205,13 @@ _ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     (USIM_DATASTORE_H5,),
 )
+_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS = (
+    "asim_input_households_csv_archived",
+    "asim_input_persons_csv_archived",
+    "asim_input_land_use_csv_archived",
+    "asim_input_skims_omx_archived",
+    "asim_input_skims_zarr_archived",
+)
 _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     _BEAM_RUN_OUTPUT_KEYS,
     (BEAM_OUTPUT_PLANS_XML, BEAM_OUTPUT_EXPERIENCED_PLANS_XML, BEAM_EXPERIENCED_PLANS_XML, ZARR_SKIMS, FINAL_SKIMS_OMX),
@@ -424,6 +431,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         optional_input_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, USIM_DATASTORE_BASE_H5),
         optional_output_keys=(
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            *_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS,
         ),
         depends_on=("activitysim_run",),
         holder_inputs=("activitysim_run",),
@@ -475,6 +483,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             *_BEAM_RUN_OUTPUT_KEYS,
         ),
         optional_output_keys=(
+            LINKSTATS_WARMSTART,
             BEAM_OUTPUT_PLANS_XML,
             BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
             BEAM_EXPERIENCED_PLANS_XML,

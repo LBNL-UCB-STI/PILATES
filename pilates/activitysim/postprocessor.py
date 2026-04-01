@@ -16,7 +16,7 @@ from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
 )
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -935,8 +935,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             "households.csv",
             "persons.csv",
             "land_use.csv",
-            "skims.omx",
         ]
+        zarr_used_as_input = bool(raw_outputs.source_input_paths.get(ZARR_SKIMS))
+        if not zarr_used_as_input:
+            input_files_to_archive.append("skims.omx")
 
         for input_file in input_files_to_archive:
             source_path = os.path.join(asim_data_dir, input_file)

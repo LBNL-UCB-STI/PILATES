@@ -16,8 +16,8 @@ from pilates.generic.initialization import (
 from pilates.runtime.cache_recovery import (
     cache_miss_audit_fields,
     log_cache_miss_explanation,
-    materialize_cached_run,
 )
+from consist import MaterializationResult
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
@@ -230,14 +230,29 @@ def run_bootstrap_phase(
             workspace.full_path,
             probe_run_id,
         )
-        materialization_result, materialization_exc = materialize_cached_run(
-            tracker=tracker,
-            run_id=probe_run_id,
-            target_root=workspace.full_path,
-            source_root=None,
-            preserve_existing=True,
-            context="bootstrap_initialization",
-        )
+        materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
+        materialization_exc = None
+        if not probe_run_id:
+            materialization_result = MaterializationResult(
+                failed=[("bootstrap_initialization", "cache hit missing run id")]
+            )
+        elif not callable(materialize_run_outputs_fn):
+            materialization_result = MaterializationResult(
+                failed=[("bootstrap_initialization", "tracker does not expose materialize_run_outputs")]
+            )
+        else:
+            try:
+                materialization_result = materialize_run_outputs_fn(
+                    run_id=probe_run_id,
+                    target_root=workspace.full_path,
+                    source_root=None,
+                    preserve_existing=True,
+                )
+            except Exception as exc:
+                materialization_result = MaterializationResult(
+                    failed=[("bootstrap_initialization", f"materialize_run_outputs raised: {exc}")]
+                )
+                materialization_exc = exc
         if materialization_exc is not None:
             logger.warning(
                 "BOOTSTRAP CACHE HIT materialization failed with exception; "

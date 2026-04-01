@@ -1,3 +1,56 @@
+"""
+pilates/workflows/step_consist_meta.py
+
+Provides lazy metadata builders for Consist step decoration.
+
+## Why lazy resolution?
+
+Consist's ``define_step()`` decorator accepts callables for ``adapter``,
+``config``, ``facet``, ``facet_index``, ``facet_schema_version``, and
+``identity_inputs``.  These callables receive a ``StepContext`` at step
+execution time, giving them access to the runtime settings, state, and
+workspace that only exist after the simulation has started.
+
+Resolving these values at import/decoration time (i.e. statically) would not
+work: the workspace doesn't exist yet, and config file paths can't be
+discovered until the workspace is created for each run.
+
+## What each returned key means for Consist caching
+
+- ``adapter``: A ``ConfigAdapter`` (ActivitySimConfigAdapter or
+  BeamConfigAdapter) that fingerprints the model's config files.  When any
+  config file changes, Consist detects a cache miss automatically — without
+  PILATES having to track config hashes manually.
+
+- ``config``: A dict of scalar key-value pairs that form part of the run's
+  cache identity (e.g. region, year, scenario settings).  Changing any value
+  causes a cache miss.
+
+- ``facet``: Structured metadata stored with every run for later querying
+  (e.g. year, iteration, scenario_id, region).  Does not affect cache
+  identity by default, but can be used to filter runs via
+  ``tracker.find_runs(facet=...)``.
+
+- ``facet_index``: Whether to index the facet for fast lookup. ``True`` for
+  models where facet-based filtering is expected (see B1 in consist changelog).
+
+- ``facet_schema_version``: Version tag for the facet schema; bump when facet
+  structure changes to avoid querying stale runs.
+
+- ``identity_inputs``: Additional file paths whose content hashes contribute to
+  the cache identity (beyond what the adapter already covers).
+
+## How to add a new model adapter
+
+1. Add a ``_<model>_adapter(ctx)`` function analogous to ``_activitysim_adapter``
+   and ``_beam_adapter``.  It should return a Consist ``ConfigAdapter`` instance
+   or ``None`` if config discovery fails gracefully.
+2. Wire it into ``_adapter(ctx)`` with a ``model.startswith("<model>_")`` branch.
+3. If the model has ATLAS-style runtime identity (e.g. a subyear), add it in
+   ``_resolve()`` alongside the existing ``atlas_`` branch.
+4. Register the new model in ``WORKFLOW_STEP_SPECS`` (catalog.py) and implement
+   the step function in ``pilates/workflows/steps/``.
+"""
 from __future__ import annotations
 
 from pathlib import Path

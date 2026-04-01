@@ -229,7 +229,14 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
                 USIM_DATASTORE_BASE_H5,
             ),
-            "optional_output_keys": (*ASIM_OPTIONAL_RUN_OUTPUT_KEYS,),
+            "optional_output_keys": (
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+                "asim_input_households_csv_archived",
+                "asim_input_persons_csv_archived",
+                "asim_input_land_use_csv_archived",
+                "asim_input_skims_omx_archived",
+                "asim_input_skims_zarr_archived",
+            ),
             "dynamic_input_families": (),
             "output_keys": (
                 *ActivitySimRunOutputs.required_output_keys(),
@@ -265,6 +272,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             ),
             "optional_input_keys": (LINKSTATS_WARMSTART,),
             "optional_output_keys": (
+                LINKSTATS_WARMSTART,
                 BEAM_OUTPUT_PLANS_XML,
                 BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
                 BEAM_EXPERIENCED_PLANS_XML,
@@ -424,6 +432,14 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             USIM_DATASTORE_BASE_H5,
         ],
         "optional_output_keys": [*ASIM_OPTIONAL_RUN_OUTPUT_KEYS],
+        "optional_output_keys": [
+            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            "asim_input_households_csv_archived",
+            "asim_input_persons_csv_archived",
+            "asim_input_land_use_csv_archived",
+            "asim_input_skims_omx_archived",
+            "asim_input_skims_zarr_archived",
+        ],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_run"],
         "output_keys": [
@@ -452,6 +468,42 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             *BeamPreprocessOutputs.required_output_keys(),
         ],
         "dynamic_output_families": [],
+        "optional": False,
+    }
+    assert contracts["beam_run"] == {
+        "step_name": "beam_run",
+        "stage_name": "traffic_assignment",
+        "phase": "run",
+        "depends_on": ["beam_preprocess"],
+        "input_keys": [
+            BEAM_CONFIG_FILE,
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        ],
+        "optional_input_keys": [LINKSTATS_WARMSTART],
+        "optional_output_keys": [
+            LINKSTATS_WARMSTART,
+            BEAM_OUTPUT_PLANS_XML,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            BEAM_EXPERIENCED_PLANS_XML,
+        ],
+        "dynamic_input_families": [],
+        "upstream_step_inputs": ["beam_preprocess"],
+        "output_keys": [*BeamRunOutputs.declared_output_keys()],
+        "dynamic_output_families": [
+            "linkstats_{year}_{iteration}",
+            "linkstats_parquet_{year}_{iteration}",
+            "linkstats_unmodified_{year}_{iteration}",
+            "linkstats_unmodified_parquet_{year}_{iteration}",
+            "events_{year}_{iteration}",
+            "events_parquet_{year}_{iteration}",
+            "raw_od_skims_{year}_{iteration}",
+            "raw_od_skims_zarr_{year}_{iteration}",
+            "beam_plans_{year}_{iteration}",
+            "beam_experienced_plans_{year}_{iteration}",
+            "beam_output_*",
+        ],
         "optional": False,
     }
     assert contracts["beam_postprocess"] == {

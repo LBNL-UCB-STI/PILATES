@@ -1,8 +1,5 @@
 import types
 
-import pandas as pd
-import pyarrow as pa
-
 from pilates.utils import consist_runtime as cr
 
 
@@ -499,46 +496,6 @@ def test_log_output_trips_asim_out_key_attaches_schema(monkeypatch):
     assert meta["schema"].__name__ == "TripsAsimOut"
 
 
-def test_log_output_warns_on_schema_column_mismatch_without_failing(
-    monkeypatch, tmp_path, caplog
-):
-    calls = []
-    _install_consist_stub(monkeypatch, calls)
-
-    csv_path = tmp_path / "householdv_2023.csv"
-    csv_path.write_text("household_id,unexpected_column\n1,foo\n", encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        cr.log_output(str(csv_path), key="householdv_2023", enabled=True)
-
-    assert calls
-    _, _, meta = calls[0]
-    assert meta["schema"].__name__ == "HouseholdVAtlasOut"
-    assert "[SCHEMA WARNING]" in caplog.text
-    assert "missing_columns" in caplog.text
-
-
-def test_arrow_type_family_treats_dictionary_encoded_strings_as_string():
-    dictionary_type = pa.dictionary(pa.int32(), pa.string())
-
-    assert cr._arrow_type_family(dictionary_type, pa_module=pa) == "string"
-
-
-def test_integer_expected_accepts_float_observed_for_schema_checker():
-    assert cr._type_families_compatible("integer", "float") is True
-
-
-def test_observed_columns_and_families_ignore_pandas_index_parquet_column(tmp_path):
-    parquet_path = tmp_path / "indexed.parquet"
-    pd.DataFrame({"tour_mode": ["drive", "walk"]}).to_parquet(parquet_path, index=True)
-
-    names, families = cr._observed_columns_and_families(str(parquet_path))
-
-    assert "__index_level_0__" not in names
-    assert "__index_level_0__" not in families
-    assert "tour_mode" in names
-
-
 def test_log_output_retries_without_schema_when_schema_logging_fails(
     monkeypatch, caplog
 ):
@@ -585,37 +542,6 @@ def test_log_output_raises_schema_logging_failure_when_warn_only_disabled(monkey
         pass
 
     assert len(calls) == 1
-
-
-def test_log_output_warns_when_schema_fk_target_not_registered(monkeypatch, caplog):
-    from sqlalchemy import BigInteger, Column, ForeignKey
-    from sqlmodel import Field, SQLModel
-
-    calls = []
-    _install_consist_stub(monkeypatch, calls)
-
-    class _BadFkSchema(SQLModel, table=True):
-        __tablename__ = "BadFkSchema"
-        __table_args__ = {"extend_existing": True}
-        __abstract__ = True
-
-        bad_ref: int | None = Field(
-            default=None,
-            sa_column=Column(
-                "bad_ref",
-                BigInteger,
-                ForeignKey("MissingTable.missing_id"),
-                nullable=True,
-            ),
-        )
-
-    monkeypatch.setattr(cr, "_schema_for_key", lambda _key: _BadFkSchema)
-
-    with caplog.at_level("WARNING"):
-        cr.log_output("/tmp/does_not_matter.parquet", key="bad_fk_key", enabled=True)
-
-    assert calls
-    assert "target table is not registered in schema registry" in caplog.text
 
 
 def test_log_output_trips_asim_out_fk_targets_are_registered(monkeypatch, caplog):

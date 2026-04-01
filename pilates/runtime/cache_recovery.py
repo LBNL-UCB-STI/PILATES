@@ -131,58 +131,6 @@ def log_cache_miss_explanation(
     return explanation
 
 
-def materialize_cached_run(
-    *,
-    tracker: Any,
-    run_id: Optional[str],
-    target_root: str,
-    source_root: Optional[str],
-    preserve_existing: bool,
-    context: str,
-) -> tuple[MaterializationResult, Optional[Exception]]:
-    """
-    Materialize one cached Consist run output set with normalized failures.
-    """
-    if not run_id:
-        return (
-            MaterializationResult(
-                failed=[
-                    (
-                        context,
-                        "cache hit missing run id; cannot materialize cached outputs",
-                    )
-                ]
-            ),
-            None,
-        )
-
-    materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
-    if not callable(materialize_run_outputs_fn):
-        return (
-            MaterializationResult(
-                failed=[(context, "tracker does not expose materialize_run_outputs")]
-            ),
-            None,
-        )
-
-    try:
-        return (
-            materialize_run_outputs_fn(
-                run_id=run_id,
-                target_root=target_root,
-                source_root=source_root,
-                preserve_existing=preserve_existing,
-            ),
-            None,
-        )
-    except Exception as exc:
-        return (
-            MaterializationResult(
-                failed=[(context, f"materialize_run_outputs raised: {exc}")]
-            ),
-            exc,
-        )
-
 
 def merge_materialization_result(
     *,
@@ -234,14 +182,17 @@ def materialize_cached_runs(
         return aggregate
 
     for run_id in run_ids:
-        result, _exc = materialize_cached_run(
-            tracker=tracker,
-            run_id=run_id,
-            target_root=target_root,
-            source_root=source_root,
-            preserve_existing=preserve_existing,
-            context=run_id,
-        )
+        try:
+            result = materialize_run_outputs_fn(
+                run_id=run_id,
+                target_root=target_root,
+                source_root=source_root,
+                preserve_existing=preserve_existing,
+            )
+        except Exception as exc:
+            result = MaterializationResult(
+                failed=[(run_id, f"materialize_run_outputs raised: {exc}")]
+            )
         merge_materialization_result(aggregate=aggregate, result=result)
 
     return aggregate

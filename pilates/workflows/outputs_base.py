@@ -427,6 +427,7 @@ class StepOutputsBase:
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
     required_outputs: ClassVar[Tuple[str, ...]] = ()
     required_output_families: ClassVar[Tuple[str, ...]] = ()
+    optional_outputs: ClassVar[Tuple[str, ...]] = ()
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
@@ -448,6 +449,14 @@ class StepOutputsBase:
         Return strict required output keys for this ``StepOutputs`` class.
         """
         return required_outputs_for_step_outputs_class(cls, state=state)
+
+    @classmethod
+    def optional_output_keys(cls) -> Tuple[str, ...]:
+        """
+        Return optional output keys for this ``StepOutputs`` class.
+        """
+        explicit = getattr(cls, "optional_outputs", None) or ()
+        return tuple(dict.fromkeys(key for key in explicit if isinstance(key, str)))
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

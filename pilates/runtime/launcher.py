@@ -11,6 +11,7 @@ This module assembles and runs the full simulation lifecycle:
 """
 
 import warnings
+from contextlib import nullcontext
 from datetime import datetime
 import os
 import logging
@@ -795,11 +796,27 @@ def main(
     )
 
     # 4. INITIALIZE WORKSPACE
-    workspace = Workspace(
-        settings,
-        local_root,
-        folder_name=run_name,
-    )
+    # Use tracker.trace() when available to record workspace setup in lineage,
+    # but keep launcher compatibility with test doubles and limited trackers.
+    workspace_trace = nullcontext()
+    trace_fn = getattr(tracker, "trace", None)
+    if callable(trace_fn):
+        workspace_trace = trace_fn(
+            name="workspace_setup",
+            model="pilates_orchestrator",
+            tags=[f"scenario_id:{scenario_id}"],
+        )
+    else:
+        logger.debug(
+            "Tracker %s does not expose trace(); skipping workspace setup trace.",
+            type(tracker).__name__,
+        )
+    with workspace_trace:
+        workspace = Workspace(
+            settings,
+            local_root,
+            folder_name=run_name,
+        )
     archive_state_path = os.path.join(archive_run_dir, "run_state.yaml")
     local_state_path = os.path.join(workspace.full_path, "run_state.yaml")
     _set_run_failure_context(archive_state_path=archive_state_path)

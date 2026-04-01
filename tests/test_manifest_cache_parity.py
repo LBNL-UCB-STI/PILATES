@@ -1088,13 +1088,11 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
     archived_households = inputs_dir / "households.csv"
     archived_persons = inputs_dir / "persons.csv"
     archived_land_use = inputs_dir / "land_use.csv"
-    archived_skims = inputs_dir / "skims.omx"
     archived_zarr = inputs_dir / "skims.zarr"
     for path in (
         archived_households,
         archived_persons,
         archived_land_use,
-        archived_skims,
         archived_zarr,
     ):
         _write_file(path)
@@ -1114,7 +1112,6 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
         "asim_input_households_csv_archived",
         "asim_input_persons_csv_archived",
         "asim_input_land_use_csv_archived",
-        "asim_input_skims_omx_archived",
         "asim_input_skims_zarr_archived",
         "usim_datastore_h5",
     ]
@@ -1135,7 +1132,6 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
             "asim_input_households_csv_archived": archived_households,
             "asim_input_persons_csv_archived": archived_persons,
             "asim_input_land_use_csv_archived": archived_land_use,
-            "asim_input_skims_omx_archived": archived_skims,
             "asim_input_skims_zarr_archived": archived_zarr,
         },
         usim_datastore_key="usim_datastore_h5",

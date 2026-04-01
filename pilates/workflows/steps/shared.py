@@ -1377,6 +1377,9 @@ def _decorate_step_with_consist(
         "description": description,
         "name_template": "{func_name}__y{year}__i{iteration}__phase_{phase}",
         "tags": tags or [step_model],
+        # Injects 6 lazy-resolved keys: adapter, config, facet, facet_index,
+        # facet_schema_version, identity_inputs. See step_consist_meta.py for
+        # what each means for Consist cache identity and how to add new models.
         **consist_step_meta(step_model),
     }
     if schema_outputs:

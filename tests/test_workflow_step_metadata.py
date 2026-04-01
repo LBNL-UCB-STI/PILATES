@@ -24,7 +24,12 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.orchestration import StepRef, WorkflowStage, _build_step_run_kwargs
+from pilates.workflows.orchestration import (
+    StepRef,
+    WorkflowStage,
+    _build_step_run_kwargs,
+    _step_scope_fields,
+)
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -230,6 +235,61 @@ def test_atlas_run_runtime_kwargs_use_stateful_required_outputs():
     )
 
     assert run_kwargs["outputs"] == ["householdv_2023", "vehicles_2023"]
+
+
+def test_step_scope_fields_use_forecast_year_for_activitysim_and_beam_steps():
+    state = SimpleNamespace(year=2017, current_year=2017, forecast_year=2023, iteration=0)
+
+    activitysim_scope = _step_scope_fields(
+        stage_name="activity_demand_run",
+        step_name="activitysim_run",
+        state=state,
+    )
+    beam_scope = _step_scope_fields(
+        stage_name="beam",
+        step_name="beam_run",
+        state=state,
+    )
+
+    assert activitysim_scope["year"] == 2023
+    assert activitysim_scope["simulation_year"] == 2017
+    assert beam_scope["year"] == 2023
+    assert beam_scope["simulation_year"] == 2017
+
+
+def test_step_scope_fields_keep_simulation_year_for_urbansim_steps():
+    state = SimpleNamespace(year=2023, current_year=2023, forecast_year=2029, iteration=0)
+
+    scope = _step_scope_fields(
+        stage_name="land_use",
+        step_name="urbansim_preprocess",
+        state=state,
+    )
+
+    assert scope["year"] == 2023
+    assert scope["simulation_year"] == 2023
+    assert scope["forecast_year"] == 2029
+
+
+def test_step_scope_fields_prefer_atlas_subyear_when_present():
+    state = SimpleNamespace(
+        year=2023,
+        current_year=2023,
+        forecast_year=2029,
+        atlas_year=2025,
+        iteration=0,
+    )
+
+    scope = _step_scope_fields(
+        stage_name="vehicle_ownership_model",
+        step_name="atlas_run",
+        state=state,
+    )
+
+    assert scope["year"] == 2025
+    assert scope["simulation_year"] == 2023
+    assert scope["forecast_year"] == 2029
+    assert scope["atlas_year"] == 2025
 
 
 def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs():
