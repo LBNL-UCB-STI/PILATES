@@ -480,11 +480,7 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
             )
 
     underlying = _UnderlyingScenario()
-    proxy = run_module._EpochTaggingScenarioProxy(
-        underlying,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._ScenarioParentLinkProxy(underlying)
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
     state = SimpleNamespace(year=2030, forecast_year=2030, iteration=1)

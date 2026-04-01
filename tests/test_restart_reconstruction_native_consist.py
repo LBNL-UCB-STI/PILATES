@@ -1,3 +1,4 @@
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Optional, Sequence
@@ -253,7 +254,9 @@ def test_collect_restart_completed_run_ids_for_supply_demand_resume_merges_land_
     }
 
 
-def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(tmp_path):
+def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(
+    tmp_path, caplog
+):
     archive_run_dir = tmp_path / "archive-run"
     _write_manifest(
         archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
@@ -297,13 +300,14 @@ def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(tmp
         }
     )
 
-    discovery = restart_runtime.collect_restart_completed_run_ids(
-        state=state,
-        archive_run_dir=str(archive_run_dir),
-        workflow_stage=WorkflowState.Stage,
-        tracker=tracker,
-        query_facet={"scenario_id": "scenario-alpha", "seed": 777},
-    )
+    with caplog.at_level(logging.INFO):
+        discovery = restart_runtime.collect_restart_completed_run_ids(
+            state=state,
+            archive_run_dir=str(archive_run_dir),
+            workflow_stage=WorkflowState.Stage,
+            tracker=tracker,
+            query_facet={"scenario_id": "scenario-alpha", "seed": 777},
+        )
 
     assert discovery["issues"] == []
     assert tracker.find_latest_run_calls
@@ -312,6 +316,8 @@ def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(tmp
         for call in tracker.find_latest_run_calls
     )
     assert discovery["manifest_paths"] == []
+    assert "[RestartQuery] target=" in caplog.text
+    assert "status=matched" in caplog.text
 
 
 def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_completed_run_ids(
@@ -812,6 +818,25 @@ def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(t
         assert call["target_root"] == str(local_run_dir.resolve())
         assert call["source_root"] == str(archive_run_dir.resolve())
         assert call["preserve_existing"] is True
+    assert {
+        (
+            item["run_id"],
+            item["model"],
+            item["year"],
+            item["iteration"],
+            item["parent_run_id"],
+            item["source"],
+        )
+        for item in reconstruction["restored_run_diagnostics"]
+    } == {
+        ("usim-pre-2018", None, None, None, None, "manifest_reconstruction"),
+        ("usim-run-2018", None, None, None, None, "manifest_reconstruction"),
+        ("usim-post-2018", None, None, None, None, "manifest_reconstruction"),
+        ("atlas-post-2018", None, None, None, None, "manifest_reconstruction"),
+        ("asim-pre-0", None, None, None, None, "manifest_reconstruction"),
+        ("asim-run-0", None, None, None, None, "manifest_reconstruction"),
+        ("asim-post-0", None, None, None, None, "manifest_reconstruction"),
+    }
 
 
 def test_reconstruct_restart_completed_run_outputs_uses_tracker_query_discovery_without_manifests(

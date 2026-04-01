@@ -704,9 +704,9 @@ def _step_with_model(model_name: str):
     return _step
 
 
-def test_epoch_tagging_proxy_keeps_step_local_facet_keys_without_adding_tags():
+def test_epoch_tagging_proxy_preserves_step_local_metadata_without_adding_keys():
     scenario = _FakeEpochTaggingScenario(run_ids=["asim-r1"])
-    proxy = run_module._EpochTaggingScenarioProxy(scenario)
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
 
     proxy.run(
         fn=_step_with_model("activitysim_run"),
@@ -720,10 +720,7 @@ def test_epoch_tagging_proxy_keeps_step_local_facet_keys_without_adding_tags():
     call = scenario.calls[0]
     assert call["model"] == "activitysim_run"
     assert call["tags"] == ["existing"]
-    assert call["facet"]["existing_key"] == "existing_value"
-    assert call["facet"]["model"] == "activitysim_run"
-    assert call["facet"]["year"] == 2035
-    assert call["facet"]["iteration"] == 2
+    assert call["facet"] == {"existing_key": "existing_value"}
 
 
 def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_metadata():
@@ -756,7 +753,7 @@ def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_meta
 
 def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
     scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
-    proxy = run_module._EpochTaggingScenarioProxy(scenario)
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
 
     proxy.run(model="activitysim_run", year=2030, iteration=1)
     proxy.run(model="beam_run", year=2030, iteration=1)
@@ -767,7 +764,7 @@ def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
 
 def test_epoch_tagging_proxy_sets_activitysim_parent_to_previous_beam_iteration():
     scenario = _FakeEpochTaggingScenario(run_ids=["beam-2030-i0", "asim-2030-i1"])
-    proxy = run_module._EpochTaggingScenarioProxy(scenario)
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
 
     proxy.run(model="beam_run", year=2030, iteration=0)
     proxy.run(model="activitysim_run", year=2030, iteration=1)
@@ -780,7 +777,7 @@ def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar
     scenario = _FakeEpochTaggingScenario(
         run_ids=["beam-2030-i0", "beam-fullskim-2030-i0", "asim-2030-i1"]
     )
-    proxy = run_module._EpochTaggingScenarioProxy(scenario)
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
 
     proxy.run(model="beam_run", year=2030, iteration=0)
     proxy.run(model="beam_full_skim", year=2030, iteration=0)
@@ -799,7 +796,7 @@ def test_epoch_tagging_proxy_does_not_replace_beam_parent_with_full_skim_sidecar
 )
 def test_epoch_tagging_proxy_missing_parent_does_not_raise(model, year, iteration):
     scenario = _FakeEpochTaggingScenario(run_ids=["run-1"])
-    proxy = run_module._EpochTaggingScenarioProxy(scenario)
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
 
     proxy.run(model=model, year=year, iteration=iteration)
 

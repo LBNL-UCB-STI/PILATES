@@ -192,7 +192,7 @@ def _merge_epoch_facet(
     )
 
 
-_EpochTaggingScenarioProxy = scenario_runtime.EpochTaggingScenarioProxy
+_ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
 
 
 def _resolve_cache_epoch(settings: Any) -> int:
@@ -917,6 +917,18 @@ def main(
                 tracker_only_run_ids,
                 manifest_only_run_ids,
             )
+            for restored_run in restart_reconstruction.get(
+                "restored_run_diagnostics", []
+            ):
+                logger.info(
+                    "[RestartRestore] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
+                    restored_run.get("source"),
+                    restored_run.get("model"),
+                    restored_run.get("year"),
+                    restored_run.get("iteration"),
+                    restored_run.get("run_id"),
+                    restored_run.get("parent_run_id"),
+                )
             emit_consist_audit_event(
                 workspace=workspace,
                 event_type="restart_discovery",
@@ -943,6 +955,9 @@ def main(
                 shadow_compare=shadow_compare,
                 tracker_only_run_ids=tracker_only_run_ids,
                 manifest_only_run_ids=manifest_only_run_ids,
+                restored_run_diagnostics=restart_reconstruction.get(
+                    "restored_run_diagnostics", []
+                ),
             )
 
     if is_restart_run:
@@ -1127,6 +1142,12 @@ def main(
         len(schema_steps_all),
         required_output_keys[:preview_count],
     )
+    logger.info(
+        "Scenario Consist defaults: step_tags=%s step_facet=%s tracker_trace_enabled=%s",
+        scenario_kwargs.get("step_tags"),
+        scenario_kwargs.get("step_facet"),
+        callable(getattr(tracker, "trace", None)),
+    )
     scenario_tags = _merge_tag_list(
         ["pilates_simulation"],
         [f"scenario_id:{scenario_id}"]
@@ -1140,7 +1161,7 @@ def main(
             model="pilates_orchestrator",
             **scenario_kwargs,
         ) as scenario:
-            tagged_scenario = _EpochTaggingScenarioProxy(scenario)
+            tagged_scenario = _ScenarioParentLinkProxy(scenario)
             coupler = tagged_scenario.coupler
             coupler.declare_outputs(
                 *coupler_schema.keys(),

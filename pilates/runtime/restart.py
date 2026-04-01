@@ -6,7 +6,7 @@ import re
 import shutil
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import yaml
 from consist import MaterializationResult
@@ -798,6 +798,7 @@ def _collect_restart_completed_run_ids_from_tracker(
         if query_facet is not None:
             query_target["facet"] = dict(query_facet)
         is_atlas_target = target.get("stage") == "atlas"
+        logger.info("[RestartQuery] target=%s status=pending", query_target)
         if atlas_gap_detected and is_atlas_target:
             if atlas_require_all_subyears:
                 issues.append(
@@ -807,6 +808,10 @@ def _collect_restart_completed_run_ids_from_tracker(
                     )
                 )
             unmatched_targets.append(query_target)
+            logger.info(
+                "[RestartQuery] target=%s status=skipped reason=contiguous_prefix_gap",
+                query_target,
+            )
             continue
         try:
             run = _find_latest_run_for_restart_target(
@@ -815,6 +820,10 @@ def _collect_restart_completed_run_ids_from_tracker(
             )
         except ValueError:
             unmatched_targets.append(query_target)
+            logger.info(
+                "[RestartQuery] target=%s status=unmatched reason=no_completed_run",
+                query_target,
+            )
             if is_atlas_target:
                 atlas_gap_detected = True
                 if atlas_require_all_subyears:
@@ -830,6 +839,11 @@ def _collect_restart_completed_run_ids_from_tracker(
             )
             continue
         except Exception as exc:
+            logger.info(
+                "[RestartQuery] target=%s status=error reason=%s",
+                query_target,
+                exc,
+            )
             issues.append(
                 (
                     repr(query_target),
@@ -843,6 +857,11 @@ def _collect_restart_completed_run_ids_from_tracker(
         seen.add(run_id)
         run_ids.append(run_id)
         matched_targets.append({**query_target, "run_id": run_id})
+        logger.info(
+            "[RestartQuery] target=%s status=matched run_id=%s",
+            query_target,
+            run_id,
+        )
 
     return {
         "run_ids": run_ids,
@@ -1260,6 +1279,34 @@ def reconstruct_restart_completed_run_outputs(
         missing_api_context="restart_reconstruction",
     )
     aggregate = _prune_optional_restart_missing_sources(aggregate)
+    restored_run_diagnostics = []
+    matched_query_targets = list(discovery.get("matched_query_targets", []))
+    if matched_query_targets:
+        for query_target in matched_query_targets:
+            if not isinstance(query_target, Mapping):
+                continue
+            restored_run_diagnostics.append(
+                {
+                    "model": query_target.get("model"),
+                    "year": query_target.get("year"),
+                    "iteration": query_target.get("iteration"),
+                    "run_id": query_target.get("run_id"),
+                    "parent_run_id": None,
+                    "source": "restore_reconstruction",
+                }
+            )
+    else:
+        restored_run_diagnostics.extend(
+            {
+                "model": None,
+                "year": None,
+                "iteration": None,
+                "run_id": run_id,
+                "parent_run_id": None,
+                "source": "manifest_reconstruction",
+            }
+            for run_id in run_ids
+        )
 
     return {
         "run_ids": run_ids,
@@ -1273,6 +1320,7 @@ def reconstruct_restart_completed_run_outputs(
         "fallback_reason": discovery.get("fallback_reason"),
         "atlas_gap_detected": bool(discovery.get("atlas_gap_detected", False)),
         "shadow_compare": dict(discovery.get("shadow_compare", {}) or {}),
+        "restored_run_diagnostics": restored_run_diagnostics,
         "materialization_result": aggregate,
     }
 

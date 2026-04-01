@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
+
+
+logger = logging.getLogger(__name__)
 
 
 RUN_INDEX_COLUMNS = [
@@ -155,6 +159,7 @@ def _collect_runs(tracker: Any, *, limit: int = 200000) -> list[Any]:
 class RunIndex:
     frame: pd.DataFrame
     archive_run_dir: Optional[Path] = None
+    source_usage: Optional[dict[str, dict[str, int]]] = None
 
     @classmethod
     def build(
@@ -170,12 +175,28 @@ class RunIndex:
             else None
         )
         rows: list[dict[str, Any]] = []
+        source_usage: dict[str, dict[str, int]] = {
+            "scenario_id": {},
+            "year": {},
+            "iteration": {},
+            "model": {},
+            "seed": {},
+        }
         for run in _collect_runs(tracker, limit=limit):
             scenario_id, scenario_id_source = _run_field_with_source(run, "scenario_id")
             year, year_source = _run_field_with_source(run, "year")
             iteration, iteration_source = _run_field_with_source(run, "iteration")
             model, model_source = _run_field_with_source(run, "model")
             seed, seed_source = _run_field_with_source(run, "seed")
+            for field, source in (
+                ("scenario_id", scenario_id_source),
+                ("year", year_source),
+                ("iteration", iteration_source),
+                ("model", model_source),
+                ("seed", seed_source),
+            ):
+                field_usage = source_usage[field]
+                field_usage[source] = field_usage.get(source, 0) + 1
             name, _name_source = _run_field_with_source(run, "name")
             status, _status_source = _run_field_with_source(run, "status")
 
@@ -222,7 +243,12 @@ class RunIndex:
                 na_position="last",
             )
             frame = frame.reset_index(drop=True)
-        return cls(frame=frame, archive_run_dir=resolved_archive)
+        logger.info("Run index source usage: %s", source_usage)
+        return cls(
+            frame=frame,
+            archive_run_dir=resolved_archive,
+            source_usage=source_usage,
+        )
 
     def scenarios(self) -> list[str]:
         if self.frame.empty or "scenario_id" not in self.frame.columns:

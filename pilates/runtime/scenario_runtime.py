@@ -111,31 +111,15 @@ def merge_epoch_facet(
     return merged
 
 
-def merge_step_scope_facet(
-    *,
-    existing: Any,
-    model: Optional[str],
-    year: Optional[int],
-    iteration: Optional[int],
-) -> Dict[str, Any]:
-    merged = facet_to_mapping(existing)
-    if model:
-        merged["model"] = model
-    if year is not None:
-        merged["year"] = year
-    if iteration is not None:
-        merged["iteration"] = iteration
-    return merged
-
-
-class EpochTaggingScenarioProxy:
+class ScenarioParentLinkProxy:
     """
     Wrapper around a Consist scenario that preserves parent linkage hints.
 
     Shared scenario-scoped metadata such as ``scenario_id`` / ``seed`` is now
     supplied via Consist ``step_tags`` / ``step_facet`` defaults at scenario
-    construction time. This proxy only infers per-step model/year/iteration
-    metadata and parent run IDs for ActivitySim/BEAM lineage.
+    construction time. First-class run attrs carry step ``model`` / ``year`` /
+    ``iteration``. This proxy only fills in missing ``model`` kwargs and parent
+    run IDs for ActivitySim/BEAM lineage.
     """
 
     def __init__(
@@ -223,12 +207,27 @@ class EpochTaggingScenarioProxy:
         iteration: Optional[int],
         run_id: Optional[str],
     ) -> None:
+        parent_run_id = self._resolve_parent_run_id(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+        )
         self._remember_run_id(
             model_name=model_name,
             year=year,
             iteration=iteration,
             run_id=run_id,
         )
+        if model_name is not None and year is not None and iteration is not None:
+            logger.info(
+                "[ParentLink] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
+                "restore_seeding" if parent_run_id else "remained_unset",
+                model_name,
+                year,
+                iteration,
+                run_id,
+                parent_run_id,
+            )
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         if len(args) > 2:
@@ -266,13 +265,6 @@ class EpochTaggingScenarioProxy:
                     iteration,
                 )
 
-        run_kwargs["facet"] = merge_step_scope_facet(
-            existing=run_kwargs.get("facet"),
-            model=model_name,
-            year=year,
-            iteration=iteration,
-        )
-
         result = self._scenario.run(**run_kwargs)
         run_id = str(getattr(getattr(result, "run", None), "id", "")).strip() or None
         self._remember_run_id(
@@ -281,6 +273,18 @@ class EpochTaggingScenarioProxy:
             iteration=iteration,
             run_id=run_id,
         )
+        if model_name is not None and year is not None and iteration is not None:
+            logger.info(
+                "[ParentLink] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
+                "live_execution"
+                if run_kwargs.get("parent_run_id")
+                else "remained_unset",
+                model_name,
+                year,
+                iteration,
+                run_id,
+                run_kwargs.get("parent_run_id"),
+            )
         return result
 
 

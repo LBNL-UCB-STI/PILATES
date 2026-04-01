@@ -249,6 +249,52 @@ def test_build_run_index_normalizes_metadata_and_sources():
     assert bool(beam_row["has_parent"]) is True
 
 
+def test_build_run_index_prefers_run_attrs_over_facet_copies():
+    tracker = TrackerStub(
+        [
+            _run(
+                "asim-new",
+                model_name="activitysim",
+                scenario_id="baseline",
+                year=2030,
+                iteration=2,
+                metadata={
+                    "facet": {
+                        "scenario_id": "old-baseline",
+                        "year": 1999,
+                        "iteration": 9,
+                        "model": "stale-model",
+                        "seed": 123,
+                    }
+                },
+                status="completed",
+            ),
+        ]
+    )
+
+    frame = build_run_index(tracker).frame
+    row = frame.loc[frame["run_id"] == "asim-new"].iloc[0]
+
+    assert row["scenario_id"] == "baseline"
+    assert row["scenario_id_source"] == "run_attr"
+    assert int(row["year"]) == 2030
+    assert row["year_source"] == "run_attr"
+    assert int(row["iteration"]) == 2
+    assert row["iteration_source"] == "run_attr"
+    assert row["model"] == "activitysim"
+    assert row["model_source"] == "run_attr"
+    assert int(row["seed"]) == 123
+    assert row["seed_source"] == "metadata.facet.seed"
+    run_index = build_run_index(tracker)
+    assert run_index.source_usage == {
+        "scenario_id": {"run_attr": 1},
+        "year": {"run_attr": 1},
+        "iteration": {"run_attr": 1},
+        "model": {"run_attr": 1},
+        "seed": {"metadata.facet.seed": 1},
+    }
+
+
 def test_run_index_filter_scopes_scenarios_and_years():
     tracker = TrackerStub(
         [
