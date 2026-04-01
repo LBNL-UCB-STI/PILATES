@@ -25,6 +25,14 @@ class AtlasPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_mutable_input_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        "atlas_households_csv",
+        "atlas_blocks_csv",
+        "atlas_persons_csv",
+        "atlas_residential_csv",
+        "atlas_jobs_csv",
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_mutable_input_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     atlas_mutable_input_dir: Path
@@ -53,6 +61,10 @@ class AtlasRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_output_dir"
+    required_output_families: ClassVar[Tuple[str, ...]] = (
+        "householdv_{year}",
+        "vehicles_{year}",
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     atlas_output_dir: Path

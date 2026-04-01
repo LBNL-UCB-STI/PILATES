@@ -9,7 +9,11 @@ from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Se
 
 from consist.types import BindingResult, CacheOptions, ExecutionOptions, OutputPolicyOptions
 
-from pilates.runtime.cache_recovery import run_with_cache_recovery
+from pilates.runtime.cache_recovery import (
+    cache_miss_audit_fields,
+    log_cache_miss_explanation,
+    run_with_cache_recovery,
+)
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -19,6 +23,7 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.catalog import (
+    workflow_step_contracts_by_name,
     workflow_step_declared_output_keys,
     workflow_step_key_is_declared,
     workflow_step_key_match,
@@ -266,15 +271,25 @@ def _resolved_output_keys(outputs: Any) -> list[str]:
 
 def _declared_required_and_optional_output_keys(
     step_name: str,
+    *,
+    settings: Any = None,
+    state: Any = None,
 ) -> tuple[list[str], list[str], list[str]]:
     spec = workflow_step_spec_for_step_name(step_name)
     if spec is not None:
-        declared = sorted(dict.fromkeys(spec.output_keys))
-        optional = sorted(dict.fromkeys(spec.optional_output_keys))
+        contract = workflow_step_contracts_by_name(settings=settings).get(step_name, {})
+        declared = sorted(dict.fromkeys(contract.get("output_keys", spec.output_keys)))
+        optional = sorted(
+            dict.fromkeys(
+                contract.get("optional_output_keys", spec.optional_output_keys)
+            )
+        )
         required = list(declared)
         outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
         if outputs_class is not None:
-            required = list(required_outputs_for_step_outputs_class(outputs_class))
+            required = list(
+                required_outputs_for_step_outputs_class(outputs_class, state=state)
+            )
         return declared, sorted(dict.fromkeys(required)), optional
 
     outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
@@ -283,13 +298,14 @@ def _declared_required_and_optional_output_keys(
         declared = list(declared_outputs_for_step_outputs_class(outputs_class))
     required: list[str] = []
     if outputs_class is not None:
-        required = list(required_outputs_for_step_outputs_class(outputs_class))
+        required = list(required_outputs_for_step_outputs_class(outputs_class, state=state))
     return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required)), []
 
 
 def _emit_output_hydration_audit(
     *,
     workspace: Any,
+    settings: Any,
     stage_name: str,
     step_name: str,
     state: Any,
@@ -305,7 +321,11 @@ def _emit_output_hydration_audit(
         declared_outputs,
         required_outputs,
         optional_outputs,
-    ) = _declared_required_and_optional_output_keys(step_name)
+    ) = _declared_required_and_optional_output_keys(
+        step_name,
+        settings=settings,
+        state=state,
+    )
     resolved_outputs = _resolved_output_keys(outputs)
     missing_required_outputs = [
         key for key in required_outputs if key not in resolved_outputs
@@ -391,6 +411,7 @@ def _emit_step_resolution_audit(
         overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
         initial_cache_hit=bool(recovery_meta.get("initial_cache_hit", False)),
         recovery_attempts=int(recovery_meta.get("recovery_attempts", 0) or 0),
+        **cache_miss_audit_fields(recovery_meta.get("cache_miss_explanation")),
     )
 
 
@@ -487,7 +508,9 @@ def _build_step_run_kwargs(
     outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
     required_outputs: list[str] = []
     if outputs_class is not None:
-        required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
+        required_outputs = list(
+            required_outputs_for_step_outputs_class(outputs_class, state=state)
+        )
 
     resolved_required_outputs: Optional[Sequence[str]] = None
     if step.required_outputs is not None:
@@ -894,6 +917,7 @@ def run_manifested_steps(
                     )
                     _emit_output_hydration_audit(
                         workspace=workspace,
+                        settings=settings,
                         stage_name=stage_name,
                         step_name=spec.name,
                         state=state,
@@ -999,6 +1023,7 @@ def run_manifested_steps(
             )
             _emit_output_hydration_audit(
                 workspace=workspace,
+                settings=settings,
                 stage_name=stage_name,
                 step_name=spec.name,
                 state=state,
@@ -1014,6 +1039,17 @@ def run_manifested_steps(
             # do not force an outputs_holder hydration loop.
             result = _run_step(None)
             serialized_outputs = {}
+            if not getattr(result, "cache_hit", False):
+                cache_miss_explanation = log_cache_miss_explanation(
+                    logger=logger,
+                    result=result,
+                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
+                    info_args=(stage_name, spec.name),
+                    debug_message="[%s] Cache miss details for %s: %s",
+                    debug_args=(stage_name, spec.name),
+                )
+                if cache_miss_explanation is not None:
+                    recovery_meta["cache_miss_explanation"] = cache_miss_explanation
             _emit_step_resolution_audit(
                 workspace=workspace,
                 stage_name=stage_name,
@@ -1022,6 +1058,7 @@ def run_manifested_steps(
                 resolution_mode="executed",
                 run_id=getattr(getattr(result, "run", None), "id", None),
                 cache_hit=bool(getattr(result, "cache_hit", False)),
+                recovery_meta=recovery_meta,
             )
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
@@ -1173,6 +1210,7 @@ def run_workflow(
         )
         _emit_output_hydration_audit(
             workspace=workspace,
+            settings=settings,
             stage_name=stage_name,
             step_name=spec.name,
             state=state,

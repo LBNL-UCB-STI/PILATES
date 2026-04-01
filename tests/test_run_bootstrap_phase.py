@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -12,6 +13,7 @@ from pilates.runtime.consist_audit import (
     emit_consist_audit_event,
     reset_consist_audit_state,
 )
+from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_db_snapshot as snapshot_module
@@ -89,7 +91,10 @@ class DummyTracker:
             kwargs["fn"]()
         return SimpleNamespace(
             cache_hit=response["cache_hit"],
-            run=SimpleNamespace(id=response["run_id"]),
+            run=SimpleNamespace(
+                id=response["run_id"],
+                meta=response.get("meta"),
+            ),
         )
 
     def materialize_run_outputs(self, **kwargs):
@@ -166,6 +171,73 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
 
 
+def test_run_bootstrap_phase_cache_miss_logs_explanation_and_writes_audit_fields(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    explanation = {
+        "reason": "config_changed",
+        "candidate_run_id": "bootstrap_prior",
+        "confidence": "high",
+        "mismatched_components": ["config_hash"],
+        "details": {
+            "config_keys_changed": ["run.start_year", "models.beam.enabled"],
+            "identity_inputs_changed": ["start_year"],
+            "fallbacks_used": ["identity_snapshot_json"],
+        },
+    }
+    tracker = DummyTracker(
+        responses=[
+            {
+                "cache_hit": False,
+                "execute_fn": True,
+                "run_id": "bootstrap_probe",
+                "meta": {"cache_miss_explplanation": explanation},
+            }
+        ]
+    )
+    workspace = DummyWorkspace(full_path=str(tmp_path / "bootstrap-run"))
+
+    with caplog.at_level(logging.DEBUG):
+        result = run_module.run_bootstrap_phase(
+            tracker=tracker,
+            settings=_settings(cache_enabled=True),
+            state=_state(),
+            workspace=workspace,
+            scenario_id="seattle-baseline",
+            seed=12345,
+        )
+
+    assert result["cache_miss_explanation"] == explanation
+    assert (
+        "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
+        "reason=config_changed candidate_run_id=bootstrap_prior"
+    ) in caplog.text
+    assert "BOOTSTRAP cache miss details:" in caplog.text
+    assert "config_keys_changed" in caplog.text
+    assert "fallbacks_used" in caplog.text
+
+    events_path = (
+        Path(workspace.full_path)
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit.jsonl"
+    )
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    bootstrap_event = next(
+        event for event in events if event["event_type"] == "bootstrap_resolution"
+    )
+    assert bootstrap_event["cache_miss_reason"] == "config_changed"
+    assert bootstrap_event["cache_miss_candidate_run_id"] == "bootstrap_prior"
+    assert bootstrap_event["cache_miss_explanation"] == explanation
+
+
 def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
@@ -207,6 +279,49 @@ def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
             "preserve_existing": True,
         }
     ]
+
+
+def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
+    explanation = {
+        "reason": "inputs_changed",
+        "candidate_run_id": "step_prior",
+        "confidence": "medium",
+        "matched_components": ["config_hash"],
+        "mismatched_components": ["input_hash"],
+        "details": {
+            "input_keys_added": ["beam_skims_input"],
+            "input_artifact_changes": {
+                "beam_skims_input": {"change": "upstream_run_drift"}
+            },
+        },
+    }
+    outputs = object()
+
+    def _run_step(_cache_options):
+        return SimpleNamespace(
+            cache_hit=False,
+            run=SimpleNamespace(id="step_run", meta={"cache_miss_explanation": explanation}),
+        )
+
+    with caplog.at_level(logging.DEBUG):
+        result, recovered_outputs, metadata = cache_recovery_module.run_with_cache_recovery(
+            stage_name="atlas",
+            step_name="atlas_run",
+            run_step=_run_step,
+            read_outputs=lambda: outputs,
+            recover_outputs=lambda _result: None,
+        )
+
+    assert result.run.id == "step_run"
+    assert recovered_outputs is outputs
+    assert metadata["initial_cache_hit"] is False
+    assert metadata["cache_miss_explanation"] == explanation
+    assert (
+        "[atlas] Cache miss for atlas_run. reason=inputs_changed "
+        "candidate_run_id=step_prior"
+    ) in caplog.text
+    assert "[atlas] Cache miss details for atlas_run:" in caplog.text
+    assert "input_keys_added" in caplog.text
 
 
 def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_path):

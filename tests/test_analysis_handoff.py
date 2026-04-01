@@ -38,6 +38,8 @@ class FakeRunArtifacts:
 class FakeRunRecord:
     id: str
     meta: dict
+    year: int | None = None
+    iteration: int | None = None
 
 
 class FakeQueryResult:
@@ -289,6 +291,71 @@ def test_list_run_artifacts_resolves_paths(tmp_path):
     assert len(frame) == 1
     assert frame.iloc[0]["key"] == "trips"
     assert bool(frame.iloc[0]["path_exists"]) is True
+
+
+def test_list_run_artifacts_includes_tagged_and_content_years(tmp_path):
+    skim_path = (
+        tmp_path
+        / "activitysim"
+        / "output"
+        / "inputs-year-2035-iteration-0"
+        / "skims.zarr"
+    )
+    skim_path.parent.mkdir(parents=True, exist_ok=True)
+    skim_path.write_text("placeholder", encoding="utf-8")
+
+    tracker = FakeTracker()
+    tracker._runs["run-1"] = FakeRunRecord(id="run-1", meta={}, year=2041, iteration=0)
+    tracker._run_artifacts["run-1"] = FakeRunArtifacts(
+        inputs={},
+        outputs={
+            "asim_input_skims_zarr_archived": FakeArtifact(
+                id="src-art-1",
+                key="asim_input_skims_zarr_archived",
+                uri="workspace://activitysim/output/inputs-year-2035-iteration-0/skims.zarr",
+                container_uri="workspace://activitysim/output/inputs-year-2035-iteration-0/skims.zarr",
+                abs_path=str(skim_path.resolve()),
+                run_id="run-1",
+                driver="zarr",
+                meta={"artifact_family": "skims"},
+            )
+        },
+    )
+
+    frame = handoff.list_run_artifacts(tracker, run_id="run-1")
+    assert int(frame.iloc[0]["tagged_year"]) == 2041
+    assert int(frame.iloc[0]["tagged_iteration"]) == 0
+    assert int(frame.iloc[0]["content_year"]) == 2035
+    assert int(frame.iloc[0]["content_iteration"]) == 0
+    assert frame.iloc[0]["content_path_kind"] == "activitysim_input_snapshot"
+
+
+def test_resolve_urbansim_activitysim_boundary_h5s_discovers_next_input_snapshot(tmp_path):
+    data_dir = tmp_path / "archive" / "urbansim" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / "model_data_2029.h5").write_bytes(b"")
+    (data_dir / "input_data_for_2035_outputs.h5").write_bytes(b"")
+    (data_dir / "custom_mpo_06197001_model_data.h5").write_bytes(b"")
+
+    frame = handoff.resolve_urbansim_activitysim_boundary_h5s(
+        tmp_path / "archive",
+        forecast_year=2029,
+    )
+
+    pre = frame.loc[frame["boundary_role"].eq("pre_urbansim_forecast_output")].iloc[0]
+    post = frame.loc[frame["boundary_role"].eq("post_activitysim_next_input")].iloc[0]
+    rolling = frame.loc[frame["boundary_role"].eq("rolling_urbansim_input")].iloc[0]
+
+    assert int(pre["year"]) == 2029
+    assert pre["path"].endswith("model_data_2029.h5")
+    assert bool(pre["path_exists"]) is True
+
+    assert int(post["year"]) == 2035
+    assert post["path"].endswith("input_data_for_2035_outputs.h5")
+    assert bool(post["path_exists"]) is True
+
+    assert rolling["path"].endswith("custom_mpo_06197001_model_data.h5")
+    assert bool(rolling["path_exists"]) is True
 
 
 def test_export_scenario_bundle_uses_runset_and_export(monkeypatch, tmp_path):

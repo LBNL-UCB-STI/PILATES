@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     ActivitySimPostprocessOutputs,
@@ -50,6 +52,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows import catalog
+from pilates.workflows.orchestration import _declared_required_and_optional_output_keys
 
 
 def test_selected_catalog_step_contract_metadata_matches_current_wiring():
@@ -504,3 +507,35 @@ def test_beam_catalog_dynamic_families_capture_runtime_fan_out():
     assert "beam_output_*" in beam_run.dynamic_output_families
     assert "events_parquet_{year}_{iteration}" in beam_postprocess.dynamic_output_families
     assert "path_traversal_links_{year}_{iteration}" in beam_postprocess.dynamic_output_families
+
+
+def test_atlas_preprocess_audit_contract_uses_settings_specialized_optional_outputs():
+    settings = SimpleNamespace(
+        atlas=SimpleNamespace(adscen="zev_mandate", scenario="zev_mandate")
+    )
+
+    declared, required, optional = _declared_required_and_optional_output_keys(
+        "atlas_preprocess",
+        settings=settings,
+    )
+
+    assert set(declared) == set(catalog._ATLAS_PREPROCESS_CORE_OUTPUT_KEYS)
+    assert set(required) == set(catalog._ATLAS_PREPROCESS_CORE_OUTPUT_KEYS)
+    assert "vehicle_type_mapping_evMandForced2" in optional
+    assert "vehicle_type_mapping_baseline" not in optional
+    assert "vehicle_type_mapping_ESS_const_220_price" not in optional
+    assert "adopt/zev_mandate/new_vehicles" in optional
+    assert "adopt/baseline/new_vehicles" not in optional
+    assert "adopt/ess_cons/new_vehicles" not in optional
+
+
+def test_atlas_run_audit_contract_expands_dynamic_required_outputs():
+    declared, required, optional = _declared_required_and_optional_output_keys(
+        "atlas_run",
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2021, forecast_year=2023, iteration=0),
+    )
+
+    assert declared == []
+    assert required == ["householdv_2023", "vehicles_2023"]
+    assert optional == []

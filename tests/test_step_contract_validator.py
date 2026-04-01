@@ -230,6 +230,33 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
         assert canonical == expected_outputs
 
 
+def test_atlas_preprocess_output_class_defines_strict_core_contract():
+    outputs_class = step_shared.STEP_OUTPUTS_CLASSES["atlas_preprocess"]
+
+    declared = declared_outputs_for_step_outputs_class(outputs_class)
+    required = required_outputs_for_step_outputs_class(outputs_class)
+
+    assert declared == (
+        "atlas_households_csv",
+        "atlas_blocks_csv",
+        "atlas_persons_csv",
+        "atlas_residential_csv",
+        "atlas_jobs_csv",
+    )
+    assert required == declared
+
+
+def test_atlas_run_output_class_expands_stateful_required_outputs():
+    outputs_class = step_shared.STEP_OUTPUTS_CLASSES["atlas_run"]
+
+    required = required_outputs_for_step_outputs_class(
+        outputs_class,
+        state=SimpleNamespace(year=2019, forecast_year=2021, iteration=0),
+    )
+
+    assert required == ("householdv_2021", "vehicles_2021")
+
+
 def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():
     """Deprecated StepRef.required_outputs override requires rationale at validation time."""
 

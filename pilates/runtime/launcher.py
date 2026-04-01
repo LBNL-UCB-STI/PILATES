@@ -1022,12 +1022,24 @@ def main(
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     if bootstrap_result is not None:
-        logger.info(
-            "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s",
-            bootstrap_result.get("bootstrap_cache_hit"),
-            bootstrap_result.get("run_reference"),
-            bootstrap_result.get("staged_artifact_summary"),
-        )
+        cache_miss_explanation = bootstrap_result.get("cache_miss_explanation")
+        if isinstance(cache_miss_explanation, dict):
+            logger.info(
+                "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s "
+                "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
+                bootstrap_result.get("bootstrap_cache_hit"),
+                bootstrap_result.get("run_reference"),
+                bootstrap_result.get("staged_artifact_summary"),
+                cache_miss_explanation.get("reason"),
+                cache_miss_explanation.get("candidate_run_id"),
+            )
+        else:
+            logger.info(
+                "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s",
+                bootstrap_result.get("bootstrap_cache_hit"),
+                bootstrap_result.get("run_reference"),
+                bootstrap_result.get("staged_artifact_summary"),
+            )
     if is_restart_run:
         restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
             settings=settings,

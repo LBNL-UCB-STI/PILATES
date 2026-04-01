@@ -376,18 +376,46 @@ def declared_outputs_for_step_outputs_class(
 
 def required_outputs_for_step_outputs_class(
     outputs_class: Type[Any],
+    state: Any = None,
 ) -> Tuple[str, ...]:
     """
     Resolve strict required output keys for a ``StepOutputs`` class.
 
     Precedence:
     1. Explicit ``required_outputs`` class attribute.
+    2. State-expanded ``required_output_families`` class attribute.
     2. Fallback to all declared outputs for the class.
     """
     explicit = getattr(outputs_class, "required_outputs", None) or ()
     explicit_keys = [key for key in explicit if isinstance(key, str)]
     if explicit_keys:
         return tuple(dict.fromkeys(explicit_keys))
+    families = getattr(outputs_class, "required_output_families", None) or ()
+    family_keys = [key for key in families if isinstance(key, str)]
+    if family_keys and state is not None:
+        year = getattr(state, "forecast_year", None)
+        if year is None:
+            year = getattr(state, "current_year", getattr(state, "year", None))
+        iteration = getattr(
+            state,
+            "current_inner_iter",
+            getattr(state, "iteration", None),
+        )
+        atlas_year = getattr(state, "atlas_year", None)
+        format_values = {
+            "year": year,
+            "forecast_year": getattr(state, "forecast_year", None),
+            "iteration": iteration,
+            "atlas_year": atlas_year,
+        }
+        expanded: list[str] = []
+        for family in family_keys:
+            try:
+                expanded.append(family.format(**format_values))
+            except Exception:
+                continue
+        if expanded:
+            return tuple(dict.fromkeys(expanded))
     return declared_outputs_for_step_outputs_class(outputs_class)
 
 
@@ -398,6 +426,7 @@ class StepOutputsBase:
 
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
     required_outputs: ClassVar[Tuple[str, ...]] = ()
+    required_output_families: ClassVar[Tuple[str, ...]] = ()
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
@@ -414,11 +443,11 @@ class StepOutputsBase:
         return declared_outputs_for_step_outputs_class(cls)
 
     @classmethod
-    def required_output_keys(cls) -> Tuple[str, ...]:
+    def required_output_keys(cls, state: Any = None) -> Tuple[str, ...]:
         """
         Return strict required output keys for this ``StepOutputs`` class.
         """
-        return required_outputs_for_step_outputs_class(cls)
+        return required_outputs_for_step_outputs_class(cls, state=state)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

@@ -24,7 +24,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.orchestration import StepRef, WorkflowStage
+from pilates.workflows.orchestration import StepRef, WorkflowStage, _build_step_run_kwargs
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -207,6 +207,29 @@ def test_urbansim_run_declares_strict_output_contract():
     meta = run_step.__consist_step__
     assert meta.model == "urbansim_run"
     assert meta.outputs == [USIM_DATASTORE_H5]
+
+
+def test_atlas_run_runtime_kwargs_use_stateful_required_outputs():
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+
+    run_step = make_atlas_run_step(coupler=coupler, outputs_holder=holder)
+    run_kwargs = _build_step_run_kwargs(
+        step=StepRef(
+            name="atlas_run",
+            step_func=run_step,
+            year=2021,
+            iteration=0,
+        ),
+        settings=SimpleNamespace(run=None),
+        state=SimpleNamespace(year=2021, forecast_year=2023, iteration=0),
+        workspace=SimpleNamespace(),
+        runtime_kwargs={},
+        stage_name="test_stage",
+        default_iteration=0,
+    )
+
+    assert run_kwargs["outputs"] == ["householdv_2023", "vehicles_2023"]
 
 
 def test_workflow_stage_uses_decorator_metadata_without_legacy_consist_kwargs():

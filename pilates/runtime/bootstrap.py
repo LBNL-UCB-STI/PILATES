@@ -13,7 +13,11 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
-from pilates.runtime.cache_recovery import materialize_cached_run
+from pilates.runtime.cache_recovery import (
+    cache_miss_audit_fields,
+    log_cache_miss_explanation,
+    materialize_cached_run,
+)
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
@@ -129,6 +133,7 @@ def run_bootstrap_phase(
         materialization_result: Optional[MaterializationResult] = None,
         fallback_rerun: bool = False,
         resolution_mode: str,
+        cache_miss_explanation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
@@ -146,6 +151,7 @@ def run_bootstrap_phase(
                 else None
             ),
             "fallback_rerun": fallback_rerun,
+            "cache_miss_explanation": cache_miss_explanation,
         }
         emit_consist_audit_event(
             workspace=workspace,
@@ -162,6 +168,7 @@ def run_bootstrap_phase(
             materialization_run_id=materialization_run_id,
             materialization=result.get("materialization"),
             staged_artifact_summary=staged_artifact_summary,
+            **cache_miss_audit_fields(cache_miss_explanation),
         )
         return result
 
@@ -275,11 +282,22 @@ def run_bootstrap_phase(
             resolution_mode="cache_hit_incomplete_fallback_rerun",
         )
 
-    logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
+    cache_miss_explanation = log_cache_miss_explanation(
+        logger=logger,
+        result=probe_result,
+        info_message=(
+            "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
+            "reason=%s candidate_run_id=%s"
+        ),
+        debug_message="BOOTSTRAP cache miss details: %s",
+    )
+    if cache_miss_explanation is None:
+        logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
     return _finalize_bootstrap_result(
         cache_hit=False,
         probe_run_id=probe_run_id,
         resolution_mode="cache_miss_execute",
+        cache_miss_explanation=cache_miss_explanation,
     )
 
 
