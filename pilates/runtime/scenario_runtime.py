@@ -199,6 +199,30 @@ class ScenarioParentLinkProxy:
         elif model_norm in {"beam", "beam_run"}:
             self._beam_run_ids[key] = run_id
 
+    def _log_parent_link(
+        self,
+        *,
+        source: str,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+        run_id: Optional[str],
+        parent_run_id: Optional[str],
+        parent_expected: bool,
+    ) -> None:
+        if model_name is None or year is None or iteration is None:
+            return
+        log_fn = logger.info if (parent_run_id or parent_expected) else logger.debug
+        log_fn(
+            "[ParentLink] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
+            source,
+            model_name,
+            year,
+            iteration,
+            run_id,
+            parent_run_id,
+        )
+
     def remember_restored_run_id(
         self,
         *,
@@ -212,22 +236,26 @@ class ScenarioParentLinkProxy:
             year=year,
             iteration=iteration,
         )
+        parent_expected = self._should_expect_parent(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+        )
         self._remember_run_id(
             model_name=model_name,
             year=year,
             iteration=iteration,
             run_id=run_id,
         )
-        if model_name is not None and year is not None and iteration is not None:
-            logger.info(
-                "[ParentLink] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
-                "restore_seeding" if parent_run_id else "remained_unset",
-                model_name,
-                year,
-                iteration,
-                run_id,
-                parent_run_id,
-            )
+        self._log_parent_link(
+            source="restore_seeding" if parent_run_id else "remained_unset",
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            parent_expected=parent_expected,
+        )
 
     def run(self, *args: Any, **kwargs: Any) -> Any:
         if len(args) > 2:
@@ -244,6 +272,11 @@ class ScenarioParentLinkProxy:
         iteration = coerce_int(run_kwargs.get("iteration"))
         if model_name and "model" not in run_kwargs:
             run_kwargs["model"] = model_name
+        parent_expected = self._should_expect_parent(
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+        )
 
         if not run_kwargs.get("parent_run_id"):
             resolved_parent = self._resolve_parent_run_id(
@@ -273,18 +306,17 @@ class ScenarioParentLinkProxy:
             iteration=iteration,
             run_id=run_id,
         )
-        if model_name is not None and year is not None and iteration is not None:
-            logger.info(
-                "[ParentLink] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
-                "live_execution"
-                if run_kwargs.get("parent_run_id")
-                else "remained_unset",
-                model_name,
-                year,
-                iteration,
-                run_id,
-                run_kwargs.get("parent_run_id"),
-            )
+        self._log_parent_link(
+            source="live_execution"
+            if run_kwargs.get("parent_run_id")
+            else "remained_unset",
+            model_name=model_name,
+            year=year,
+            iteration=iteration,
+            run_id=run_id,
+            parent_run_id=run_kwargs.get("parent_run_id"),
+            parent_expected=parent_expected,
+        )
         return result
 
 

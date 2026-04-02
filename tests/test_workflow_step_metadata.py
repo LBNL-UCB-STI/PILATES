@@ -804,6 +804,16 @@ def test_epoch_tagging_proxy_missing_parent_does_not_raise(model, year, iteratio
     assert "parent_run_id" not in call
 
 
+def test_parent_link_info_logging_skips_models_without_expected_parent(caplog):
+    scenario = _FakeEpochTaggingScenario(run_ids=["urbansim-2030-i0"])
+    proxy = run_module._ScenarioParentLinkProxy(scenario)
+
+    with caplog.at_level("INFO"):
+        proxy.run(model="urbansim_preprocess", year=2030, iteration=0)
+
+    assert not any("[ParentLink]" in record.message for record in caplog.records)
+
+
 def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
     coupler = _DummyCoupler()
     holder = StepOutputsHolder()
