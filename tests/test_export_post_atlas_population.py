@@ -39,7 +39,15 @@ def test_match_scenario_step_run_id_prefers_atlas_postprocess_name() -> None:
             ]
         }
     )
-    assert export_script._match_scenario_step_run_id(scenario_run, year=2025) == "step-1"
+    assert (
+        export_script._match_scenario_step_run_id(
+            scenario_run,
+            year=2025,
+            step_name="atlas_postprocess",
+            phase="postprocess",
+        )
+        == "step-1"
+    )
 
 
 def test_build_export_manifest_records_unique_scenario_run_id(tmp_path: Path) -> None:
@@ -127,20 +135,34 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: P
     )
 
     class _Tracker:
+        def find_runs(self, *, model=None, phase=None, year=None, status=None, limit=None):
+            assert year == 2025
+            if model == "atlas_preprocess" and phase == "preprocess":
+                return [SimpleNamespace(id="pre-1", parent_run_id=None, status="completed")]
+            if model == "atlas_run" and phase == "run":
+                return [SimpleNamespace(id="run-1", parent_run_id=None, status="completed")]
+            if model == "atlas_postprocess" and phase == "postprocess":
+                return [step_run]
+            return []
+
         def get_run_outputs(self, run_id):
-            assert run_id == "step-1"
-            return {
-                "atlas_vehicles2_output": SimpleNamespace(path=str(vehicles2_csv)),
-            }
+            if run_id == "pre-1":
+                return {
+                    "atlas_households_csv": SimpleNamespace(path=str(households_csv)),
+                    "atlas_persons_csv": SimpleNamespace(path=str(persons_csv)),
+                }
+            if run_id == "run-1":
+                return {
+                    "householdv_2025": SimpleNamespace(path=str(householdv_csv)),
+                }
+            if run_id == "step-1":
+                return {
+                    "atlas_vehicles2_output": SimpleNamespace(path=str(vehicles2_csv)),
+                }
+            raise AssertionError(run_id)
 
         def get_artifacts_for_run(self, run_id):
-            assert run_id == "step-1"
-            return SimpleNamespace(
-                inputs={
-                    "householdv_2025": SimpleNamespace(path=str(householdv_csv)),
-                },
-                outputs={},
-            )
+            return SimpleNamespace(inputs={}, outputs={})
 
         def resolve_uri(self, uri: str) -> str:
             return uri

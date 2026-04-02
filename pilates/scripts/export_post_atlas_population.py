@@ -222,7 +222,14 @@ def _choose_latest_run(runs: Sequence[Any]) -> Any:
     return sorted(runs, key=_sort_key, reverse=True)[0]
 
 
-def _match_scenario_step_run_id(scenario_run: Any, *, year: int) -> Optional[str]:
+def _match_scenario_step_run_id(
+    scenario_run: Any,
+    *,
+    year: int,
+    step_name: str,
+    phase: str,
+    compat_model: str = "atlas",
+) -> Optional[str]:
     meta = getattr(scenario_run, "meta", None) or {}
     steps = meta.get("steps")
     if not isinstance(steps, list):
@@ -231,13 +238,13 @@ def _match_scenario_step_run_id(scenario_run: Any, *, year: int) -> Optional[str
     for step in steps:
         if not isinstance(step, Mapping):
             continue
-        step_name = str(step.get("name", "") or "")
+        step_name_value = str(step.get("name", "") or "")
         step_model = str(step.get("model", "") or "")
         step_phase = str(step.get("phase", "") or "")
         step_year = step.get("year")
-        if step_name == "atlas_postprocess":
+        if step_name_value == step_name:
             pass
-        elif step_model != "atlas" or step_phase != "postprocess":
+        elif step_model != compat_model or step_phase != phase:
             continue
         if step_year is None or int(step_year) != year:
             continue
@@ -248,21 +255,33 @@ def _match_scenario_step_run_id(scenario_run: Any, *, year: int) -> Optional[str
     return str(matches[-1]["id"])
 
 
-def _step_run_for_year(tracker: Any, *, year: int, scenario_run: Optional[Any]) -> Any:
+def _step_run_for_year(
+    tracker: Any,
+    *,
+    year: int,
+    scenario_run: Optional[Any],
+    step_model: str,
+    phase: str,
+) -> Any:
     if scenario_run is not None:
-        step_run_id = _match_scenario_step_run_id(scenario_run, year=year)
+        step_run_id = _match_scenario_step_run_id(
+            scenario_run,
+            year=year,
+            step_name=step_model,
+            phase=phase,
+        )
         if step_run_id is None:
             raise ValueError(
-                f"Scenario run {getattr(scenario_run, 'id', 'unknown')} did not contain atlas_postprocess for year {year}."
+                f"Scenario run {getattr(scenario_run, 'id', 'unknown')} did not contain {step_model} for year {year}."
             )
         step_run = tracker.get_run(step_run_id)
         if step_run is None:
-            raise ValueError(f"Atlas postprocess run id {step_run_id} could not be loaded.")
+            raise ValueError(f"Step run id {step_run_id} could not be loaded.")
         return step_run
 
     matches = tracker.find_runs(
-        model="atlas_postprocess",
-        phase="postprocess",
+        model=step_model,
+        phase=phase,
         year=year,
         status="completed",
         limit=50,
@@ -272,16 +291,17 @@ def _step_run_for_year(tracker: Any, *, year: int, scenario_run: Optional[Any]) 
         # plain ``atlas`` with a postprocess phase facet.
         matches = tracker.find_runs(
             model="atlas",
-            phase="postprocess",
+            phase=phase,
             year=year,
             status="completed",
             limit=50,
         )
     if not matches:
-        raise ValueError(f"No atlas postprocess step run found for year {year}.")
+        raise ValueError(f"No {step_model} step run found for year {year}.")
     if len(matches) > 1:
         logger.warning(
-            "Multiple atlas postprocess step runs matched year %s; using the latest completed run.",
+            "Multiple %s step runs matched year %s; using the latest completed run.",
+            step_model,
             year,
         )
     return _choose_latest_run(matches)
@@ -297,7 +317,10 @@ def _scenario_root_for_run(tracker: Any, run: Any) -> Optional[Any]:
         visited.add(str(current_id))
         parent_id = getattr(current, "parent_run_id", None)
         if not parent_id:
-            return current
+            meta = getattr(current, "meta", None) or {}
+            if isinstance(meta.get("steps"), list):
+                return current
+            return None
         current = tracker.get_run(str(parent_id))
     return None
 
@@ -525,15 +548,14 @@ def _require_existing_path(path: Path, *, label: str) -> Path:
 
 
 def _resolve_householdv_source(tracker: Any, *, step_run: Any, year: int) -> tuple[str, str]:
-    step_artifacts = tracker.get_artifacts_for_run(getattr(step_run, "id"))
-    input_artifacts = getattr(step_artifacts, "inputs", None) or {}
     artifact_key = f"householdv_{year}"
-    artifact = input_artifacts.get(artifact_key)
+    outputs = load_tracker_run_outputs(getattr(step_run, "id", None), tracker=tracker)
+    artifact = outputs.get(artifact_key)
     path = _artifact_path(artifact, tracker)
     if path and Path(path).exists():
         return artifact_key, path
     raise FileNotFoundError(
-        f"Could not resolve household vehicle update artifact for year {year} from atlas_postprocess run {getattr(step_run, 'id', 'unknown')}."
+        f"Could not resolve household vehicle update artifact for year {year} from atlas_run step {getattr(step_run, 'id', 'unknown')}."
     )
 
 
@@ -577,23 +599,31 @@ def _create_households_base_stage(
 def _resolve_sql_year_sources(
     tracker: Any,
     *,
+    scenario_run: Optional[Any],
+    preprocess_step_run: Any,
+    run_step_run: Any,
     step_run: Any,
-    run_dir: Path,
     year: int,
     vehicles_source: str,
 ) -> dict[str, dict[str, str]]:
-    year_dir = _atlas_input_year_dir(run_dir, year)
+    del scenario_run
+    preprocess_outputs = load_tracker_run_outputs(
+        getattr(preprocess_step_run, "id", None),
+        tracker=tracker,
+    )
+    households_path = _artifact_path(preprocess_outputs.get("atlas_households_csv"), tracker)
+    persons_path = _artifact_path(preprocess_outputs.get("atlas_persons_csv"), tracker)
     households_csv = _require_existing_path(
-        year_dir / "households.csv",
+        Path(households_path) if households_path else Path(""),
         label=f"atlas households year {year}",
     )
     persons_csv = _require_existing_path(
-        year_dir / "persons.csv",
+        Path(persons_path) if persons_path else Path(""),
         label=f"atlas persons year {year}",
     )
     householdv_key, householdv_path = _resolve_householdv_source(
         tracker,
-        step_run=step_run,
+        step_run=run_step_run,
         year=year,
     )
     vehicles_key, vehicles_path = _resolve_vehicle_source(
@@ -639,10 +669,26 @@ def _extract_year_sql(
     step_run_id = str(getattr(step_run, "id"))
     scenario_run = _scenario_root_for_run(tracker, step_run)
     scenario_run_id = getattr(scenario_run, "id", None) if scenario_run else None
+    preprocess_step_run = _step_run_for_year(
+        tracker,
+        year=year,
+        scenario_run=scenario_run,
+        step_model="atlas_preprocess",
+        phase="preprocess",
+    )
+    run_step_run = _step_run_for_year(
+        tracker,
+        year=year,
+        scenario_run=scenario_run,
+        step_model="atlas_run",
+        phase="run",
+    )
     sources = _resolve_sql_year_sources(
         tracker,
+        scenario_run=scenario_run,
+        preprocess_step_run=preprocess_step_run,
+        run_step_run=run_step_run,
         step_run=step_run,
-        run_dir=run_dir,
         year=year,
         vehicles_source=vehicles_source,
     )
@@ -787,6 +833,8 @@ def _shared_extract_command(
                 tracker,
                 year=year_int,
                 scenario_run=scenario_run,
+                step_model="atlas_postprocess",
+                phase="postprocess",
             )
             logger.info(
                 "Exporting year %s from atlas_postprocess run %s",
