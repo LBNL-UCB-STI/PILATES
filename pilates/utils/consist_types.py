@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, Mapping, Optional, Protocol, runtime_checkable
+from typing import Any, Callable, ContextManager, Dict, Mapping, Optional, Protocol, runtime_checkable
 
 try:
     from consist.protocols import (  # type: ignore[assignment]
@@ -52,7 +52,13 @@ except Exception:  # pragma: no cover - optional Consist dependency
         ) -> Dict[str, Any]: ...
 
     @runtime_checkable
+    class TrackerPersistenceLike(Protocol):
+        def batch_artifact_writes(self) -> ContextManager[Any]: ...
+
+    @runtime_checkable
     class TrackerLike(Protocol):
+        persistence: TrackerPersistenceLike
+
         def log_output(
             self, path: Any, key: Optional[str] = None, **metadata: Any
         ) -> Optional[ArtifactLike]: ...

@@ -295,6 +295,88 @@ def test_build_run_index_prefers_run_attrs_over_facet_copies():
     }
 
 
+def test_build_run_index_keeps_grouping_stable_across_old_and_new_metadata_shapes():
+    tracker = TrackerStub(
+        [
+            _run(
+                "old-asim",
+                model_name=None,
+                scenario_id=None,
+                year=None,
+                iteration=None,
+                metadata={
+                    "facet": {
+                        "scenario_id": "baseline",
+                        "year": 2030,
+                        "iteration": 1,
+                        "model": "activitysim",
+                        "seed": 17,
+                    }
+                },
+                status="completed",
+            ),
+            _run(
+                "new-beam",
+                model_name="beam",
+                scenario_id="baseline",
+                year=2030,
+                iteration=1,
+                parent_run_id="old-asim",
+                metadata={"facet": {"scenario_id": "stale-copy", "year": 1999}},
+                status="completed",
+            ),
+            _run(
+                "new-usim",
+                model_name="urbansim",
+                scenario_id="baseline",
+                year=2031,
+                iteration=0,
+                status="completed",
+            ),
+            _run(
+                "old-atlas",
+                model_name=None,
+                scenario_id=None,
+                year=None,
+                iteration=None,
+                metadata={
+                    "facet": {
+                        "scenario_id": "baseline",
+                        "year": 2031,
+                        "iteration": 0,
+                        "model": "atlas",
+                    }
+                },
+                status="completed",
+            ),
+        ]
+    )
+
+    run_index = build_run_index(tracker, archive_run_dir=Path("/tmp/archive"))
+    frame = run_index.frame
+    tuples = set(
+        tuple(row)
+        for row in frame.loc[:, ["scenario_id", "year", "iteration", "model"]].itertuples(
+            index=False, name=None
+        )
+    )
+
+    assert tuples == {
+        ("baseline", 2030, 1, "activitysim"),
+        ("baseline", 2030, 1, "beam"),
+        ("baseline", 2031, 0, "urbansim"),
+        ("baseline", 2031, 0, "atlas"),
+    }
+    assert run_index.source_usage["scenario_id"] == {
+        "metadata.facet.scenario_id": 2,
+        "run_attr": 2,
+    }
+    assert run_index.source_usage["year"] == {
+        "metadata.facet.year": 2,
+        "run_attr": 2,
+    }
+
+
 def test_run_index_filter_scopes_scenarios_and_years():
     tracker = TrackerStub(
         [

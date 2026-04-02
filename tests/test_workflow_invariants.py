@@ -504,6 +504,87 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
     assert underlying.calls[0]["parent_run_id"] == "asim-restored-run"
 
 
+def test_restored_and_live_parent_linkage_match_for_beam_resume():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            model = kwargs.get("model")
+            if model == "activitysim_run":
+                run_id = "asim-live-run"
+            elif model == "beam_run":
+                run_id = "beam-live-run"
+            else:
+                run_id = f"{model}-run"
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id=run_id))
+
+    uninterrupted = _UnderlyingScenario()
+    uninterrupted_proxy = run_module._ScenarioParentLinkProxy(uninterrupted)
+    uninterrupted_proxy.run(model="activitysim_run", year=2030, iteration=0)
+    uninterrupted_proxy.run(model="beam_run", year=2030, iteration=0)
+
+    restored = _UnderlyingScenario()
+    restored_proxy = run_module._ScenarioParentLinkProxy(restored)
+    restored_proxy.remember_restored_run_id(
+        model_name="activitysim_run",
+        year=2030,
+        iteration=0,
+        run_id="asim-live-run",
+    )
+    restored_proxy.run(model="beam_run", year=2030, iteration=0)
+
+    assert uninterrupted.calls[1]["parent_run_id"] == "asim-live-run"
+    assert restored.calls[0]["parent_run_id"] == uninterrupted.calls[1]["parent_run_id"]
+
+
+def test_restored_and_live_parent_linkage_match_for_next_iteration_activitysim():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            model = kwargs.get("model")
+            run_id = "beam-live-run" if model == "beam_run" else "asim-next-run"
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id=run_id))
+
+    uninterrupted = _UnderlyingScenario()
+    uninterrupted_proxy = run_module._ScenarioParentLinkProxy(uninterrupted)
+    uninterrupted_proxy.run(model="beam_run", year=2030, iteration=0)
+    uninterrupted_proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    restored = _UnderlyingScenario()
+    restored_proxy = run_module._ScenarioParentLinkProxy(restored)
+    restored_proxy.remember_restored_run_id(
+        model_name="beam_run",
+        year=2030,
+        iteration=0,
+        run_id="beam-live-run",
+    )
+    restored_proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    assert uninterrupted.calls[1]["parent_run_id"] == "beam-live-run"
+    assert restored.calls[0]["parent_run_id"] == uninterrupted.calls[1]["parent_run_id"]
+
+
+def test_parent_link_proxy_leaves_parent_unset_when_no_safe_parent_exists():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id="beam-live-run"))
+
+    underlying = _UnderlyingScenario()
+    proxy = run_module._ScenarioParentLinkProxy(underlying)
+    proxy.run(model="beam_run", year=2030, iteration=0)
+
+    assert "parent_run_id" not in underlying.calls[0]
+
+
 def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):
     """
     Document stale-manifest recovery behavior.

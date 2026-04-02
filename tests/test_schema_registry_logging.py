@@ -1,4 +1,5 @@
 import types
+from contextlib import contextmanager
 
 from pilates.utils import consist_runtime as cr
 
@@ -84,7 +85,15 @@ def test_log_h5_container_falls_back_outside_active_run(monkeypatch, tmp_path):
     h5_path = tmp_path / "model_data.h5"
     h5_path.write_text("x")
 
+    class _Persistence:
+        @contextmanager
+        def batch_artifact_writes(self):
+            yield
+
     class _Tracker:
+        def __init__(self):
+            self.persistence = _Persistence()
+
         def log_h5_container(self, *args, **kwargs):
             raise RuntimeError("Cannot log artifact outside of a run context.")
 
@@ -103,6 +112,45 @@ def test_log_h5_container_falls_back_outside_active_run(monkeypatch, tmp_path):
     assert direction == "output"
     assert key == "usim_datastore_h5"
     assert meta["enabled"] is False
+
+
+def test_log_h5_container_batches_artifact_writes_when_available(monkeypatch, tmp_path):
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+    events = []
+
+    class _Persistence:
+        @contextmanager
+        def batch_artifact_writes(self):
+            events.append("enter")
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+    class _Tracker:
+        def __init__(self):
+            self.persistence = _Persistence()
+
+        def log_h5_container(self, *args, **kwargs):
+            events.append(("log_h5_container", kwargs.get("key"), kwargs.get("direction")))
+            return {"path": args[0], "key": kwargs.get("key")}
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    artifact = cr.log_h5_container(
+        str(h5_path),
+        key="usim_datastore_h5",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact["key"] == "usim_datastore_h5"
+    assert events == [
+        "enter",
+        ("log_h5_container", "usim_datastore_h5", "output"),
+        "exit",
+    ]
 
 
 def test_log_input_unknown_key_has_no_schema(monkeypatch):

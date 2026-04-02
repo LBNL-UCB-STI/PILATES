@@ -219,7 +219,8 @@ def log_h5_container(
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
     try:
-        return tracker.log_h5_container(path, key=key, direction=direction, **meta)
+        with tracker.persistence.batch_artifact_writes():
+            return tracker.log_h5_container(path, key=key, direction=direction, **meta)
     except RuntimeError:
         logger.debug("Skipping HDF5 container logging outside active Consist run.")
         if direction == "output":

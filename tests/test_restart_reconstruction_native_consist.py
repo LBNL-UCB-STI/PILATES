@@ -70,6 +70,21 @@ class _QueryTrackerStub:
         )
 
 
+class _FacetAwareTrackerStub:
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.find_latest_run_calls = []
+
+    def find_latest_run(self, **kwargs):
+        self.find_latest_run_calls.append(dict(kwargs))
+        for expected, result in self._responses:
+            if kwargs == expected:
+                if isinstance(result, Exception):
+                    raise result
+                return SimpleNamespace(id=result)
+        raise ValueError(f"no run for target {kwargs}")
+
+
 def test_collect_restart_completed_run_ids_for_supply_demand_resume(tmp_path):
     archive_run_dir = tmp_path / "archive-run"
     _write_manifest(
@@ -318,6 +333,127 @@ def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(
     assert discovery["manifest_paths"] == []
     assert "[RestartQuery] target=" in caplog.text
     assert "status=matched" in caplog.text
+
+
+def test_collect_restart_completed_run_ids_tracker_prefers_correct_scenario_facet_when_newer_wrong_run_exists(
+    tmp_path,
+    caplog,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-right"},
+            "activitysim_run": {"run_id": "asim-run-right"},
+            "activitysim_postprocess": {"run_id": "asim-post-right"},
+        },
+    )
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        enabled_stages={WorkflowState.Stage.supply_demand_loop},
+    )
+    tracker = _FacetAwareTrackerStub(
+        [
+            (
+                {
+                    "year": 2018,
+                    "iteration": 0,
+                    "model": "activitysim_preprocess",
+                    "stage": "activity_demand_preprocess",
+                    "phase": "preprocess",
+                    "status": "completed",
+                    "facet": {"scenario_id": "scenario-right", "seed": 11},
+                },
+                "asim-pre-right",
+            ),
+            (
+                {
+                    "year": 2018,
+                    "iteration": 0,
+                    "model": "activitysim_run",
+                    "stage": "activity_demand_run",
+                    "phase": "run",
+                    "status": "completed",
+                    "facet": {"scenario_id": "scenario-right", "seed": 11},
+                },
+                "asim-run-right",
+            ),
+            (
+                {
+                    "year": 2018,
+                    "iteration": 0,
+                    "model": "activitysim_postprocess",
+                    "stage": "activity_demand_postprocess",
+                    "phase": "postprocess",
+                    "status": "completed",
+                    "facet": {"scenario_id": "scenario-right", "seed": 11},
+                },
+                "asim-post-right",
+            ),
+        ]
+    )
+
+    with caplog.at_level(logging.INFO):
+        discovery = restart_runtime.collect_restart_completed_run_ids(
+            state=state,
+            archive_run_dir=str(archive_run_dir),
+            workflow_stage=WorkflowState.Stage,
+            tracker=tracker,
+            query_facet={"scenario_id": "scenario-right", "seed": 11},
+        )
+
+    assert discovery["issues"] == []
+    assert discovery["discovery_mode"] == "tracker"
+    assert set(discovery["run_ids"]) == {
+        "asim-pre-right",
+        "asim-run-right",
+        "asim-post-right",
+    }
+    assert all(
+        call["facet"] == {"scenario_id": "scenario-right", "seed": 11}
+        for call in tracker.find_latest_run_calls
+    )
+    assert "status=matched" in caplog.text
+
+
+def test_collect_restart_completed_run_ids_tracker_falls_back_when_seed_facet_has_no_safe_match(
+    tmp_path,
+    caplog,
+):
+    archive_run_dir = tmp_path / "archive-run"
+    _write_manifest(
+        archive_run_dir / ".workflow" / "year_2018_iteration_0.yaml",
+        {
+            "activitysim_preprocess": {"run_id": "asim-pre-manifest"},
+            "activitysim_run": {"run_id": "asim-run-manifest"},
+            "activitysim_postprocess": {"run_id": "asim-post-manifest"},
+        },
+    )
+    state = _restart_state(
+        iteration=0,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        enabled_stages={WorkflowState.Stage.supply_demand_loop},
+    )
+    tracker = _FacetAwareTrackerStub([])
+
+    with caplog.at_level(logging.INFO):
+        discovery = restart_runtime.collect_restart_completed_run_ids(
+            state=state,
+            archive_run_dir=str(archive_run_dir),
+            workflow_stage=WorkflowState.Stage,
+            tracker=tracker,
+            query_facet={"scenario_id": "scenario-right", "seed": 11},
+        )
+
+    assert discovery["discovery_mode"] == "manifest"
+    assert discovery["fallback_reason"] == "tracker returned no run_ids"
+    assert set(discovery["run_ids"]) == {
+        "asim-pre-manifest",
+        "asim-run-manifest",
+        "asim-post-manifest",
+    }
+    assert "status=error" in caplog.text or "falling back to manifests" in caplog.text
 
 
 def test_collect_restart_completed_run_ids_for_postprocessing_resume_discovers_completed_run_ids(
