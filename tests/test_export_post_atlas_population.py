@@ -196,6 +196,6 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: P
     finally:
         conn.close()
 
-    assert households == [(1, 100, 2, "two or more"), (2, 200, 0, "none")]
-    assert persons == [(10, 1, 30), (20, 2, 40)]
-    assert vehicles == [(1000, 1, "sedan_gas_2015")]
+    assert households == [("1", "100", 2, "two or more"), ("2", "200", 0, "none")]
+    assert persons == [("10", "1", "30"), ("20", "2", "40")]
+    assert vehicles == [("1000", "1", "sedan_gas_2015")]

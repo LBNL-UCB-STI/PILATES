@@ -17,6 +17,12 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(repo_root))
 
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
+from pilates.database.schema.atlas_schema import (
+    AtlasHousehold,
+    AtlasPersons,
+    HouseholdVAtlasOut,
+    VehiclesAtlasOut,
+)
 from pilates.utils.consist_analysis import create_analysis_tracker
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT, USIM_DATASTORE_H5
@@ -566,6 +572,74 @@ def _relation_columns(relation: Any) -> list[str]:
     return [str(column) for column in relation.limit(0).df().columns]
 
 
+def _duckdb_type_for_schema_column(column: Any) -> str:
+    type_name = type(getattr(column, "type", None)).__name__
+    if type_name in {"BigInteger", "Integer", "SmallInteger"}:
+        return "BIGINT"
+    if type_name in {"Float", "Numeric", "REAL", "DOUBLE_PRECISION"}:
+        return "DOUBLE"
+    if type_name in {"String", "Text", "Unicode", "VARCHAR"}:
+        return "VARCHAR"
+    if type_name == "Boolean":
+        # ATLAS CSVs frequently encode booleans with sentinel values like "-1".
+        # Preserve raw values at ingest time and normalize later.
+        return "VARCHAR"
+    return "VARCHAR"
+
+
+def _duckdb_columns_from_schema(schema_cls: Any) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for field in getattr(schema_cls, "model_fields", {}).values():
+        column = getattr(field, "sa_column", None)
+        if column is None:
+            continue
+        column_name = getattr(column, "name", None)
+        if not column_name:
+            continue
+        mapping[str(column_name)] = _duckdb_type_for_schema_column(column)
+    return mapping
+
+
+def _cast_sql_for_schema_column(column_name: str, duckdb_type: str) -> str:
+    quoted = _quoted_ident(column_name)
+    if duckdb_type in {"BIGINT", "DOUBLE"}:
+        return f"try_cast({quoted} as {duckdb_type}) as {quoted}"
+    return f"cast({quoted} as VARCHAR) as {quoted}"
+
+
+def _read_csv_with_schema(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    path: str,
+    schema_cls: Any,
+    view_name: str,
+) -> None:
+    raw_view_name = f"{view_name}__raw"
+    conn.read_csv(
+        path,
+        all_varchar=True,
+    ).create_view(raw_view_name)
+    present_columns = set(_relation_columns(conn.table(raw_view_name)))
+    schema_columns = _duckdb_columns_from_schema(schema_cls)
+    select_parts = [
+        _cast_sql_for_schema_column(column_name, duckdb_type)
+        for column_name, duckdb_type in schema_columns.items()
+        if column_name in present_columns
+    ]
+    if not select_parts:
+        raise ValueError(
+            f"No schema columns from {schema_cls.__name__} were present in CSV: {path}"
+        )
+    conn.execute(
+        f"""
+        create or replace temp view {view_name} as
+        select
+          {", ".join(select_parts)}
+        from {raw_view_name}
+        """
+    )
+
+
 def _create_households_base_stage(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -691,12 +765,30 @@ def _extract_year_sql(
 
     conn = duckdb.connect()
     try:
-        conn.read_csv(sources["households_base"]["path"]).create_view("households_base")
-        conn.read_csv(sources["persons"]["path"]).create_view("persons_post_atlas")
-        conn.read_csv(sources["household_vehicle_update"]["path"]).create_view(
-            "household_vehicle_update_raw"
+        _read_csv_with_schema(
+            conn,
+            path=sources["households_base"]["path"],
+            schema_cls=AtlasHousehold,
+            view_name="households_base",
         )
-        conn.read_csv(sources["vehicles"]["path"]).create_view("vehicles_post_atlas")
+        _read_csv_with_schema(
+            conn,
+            path=sources["persons"]["path"],
+            schema_cls=AtlasPersons,
+            view_name="persons_post_atlas",
+        )
+        _read_csv_with_schema(
+            conn,
+            path=sources["household_vehicle_update"]["path"],
+            schema_cls=HouseholdVAtlasOut,
+            view_name="household_vehicle_update_raw",
+        )
+        _read_csv_with_schema(
+            conn,
+            path=sources["vehicles"]["path"],
+            schema_cls=VehiclesAtlasOut,
+            view_name="vehicles_post_atlas",
+        )
 
         _create_households_base_stage(
             conn,
