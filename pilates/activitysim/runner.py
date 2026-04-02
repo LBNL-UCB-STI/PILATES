@@ -335,9 +335,6 @@ class ActivitysimCompileRunner(GenericRunner):
             environment=container_environment,
             output_paths=[all_skims_path],
             lineage_mode="none",
-            before_direct_fallback=lambda: _cleanup_activitysim_compile_artifacts(
-                workspace
-            ),
         )
 
         if not success:
