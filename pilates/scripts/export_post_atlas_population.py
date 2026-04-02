@@ -243,7 +243,23 @@ def _step_run_for_year(tracker: Any, *, year: int, scenario_run: Optional[Any]) 
             raise ValueError(f"Atlas postprocess run id {step_run_id} could not be loaded.")
         return step_run
 
-    matches = tracker.find_runs(model="atlas", phase="postprocess", year=year, limit=50)
+    matches = tracker.find_runs(
+        model="atlas_postprocess",
+        phase="postprocess",
+        year=year,
+        status="completed",
+        limit=50,
+    )
+    if not matches:
+        # Compatibility fallback for runs that may have recorded the model as
+        # plain ``atlas`` with a postprocess phase facet.
+        matches = tracker.find_runs(
+            model="atlas",
+            phase="postprocess",
+            year=year,
+            status="completed",
+            limit=50,
+        )
     if not matches:
         raise ValueError(f"No atlas postprocess step run found for year {year}.")
     if len(matches) > 1:
