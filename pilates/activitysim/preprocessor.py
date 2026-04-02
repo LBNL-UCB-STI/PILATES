@@ -2924,6 +2924,46 @@ def _update_persons_table(
         pd.DataFrame: DataFrame with updated and cleaned person attributes,
             ready for ActivitySim.
     """
+    def _normalize_person_location_columns() -> None:
+        """
+        Phase 1 of the persons-schema migration: emit canonical ActivitySim
+        location columns while preserving the older PILATES aliases.
+
+        Phase 2 should update PILATES internals to prefer the canonical columns
+        end-to-end and then remove the transitional aliases `work_zone_id`,
+        `workplace_taz`, and `school_taz`.
+        """
+
+        canonical_sources = {
+            "workplace_zone_id": (
+                "workplace_zone_id",
+                "workplace_taz",
+                "work_zone_id",
+            ),
+            "school_zone_id": (
+                "school_zone_id",
+                "school_taz",
+            ),
+        }
+
+        for canonical_col, source_candidates in canonical_sources.items():
+            source_col = next(
+                (candidate for candidate in source_candidates if candidate in persons.columns),
+                None,
+            )
+            if source_col is None:
+                persons[canonical_col] = -1
+                continue
+            persons[canonical_col] = (
+                pd.to_numeric(persons[source_col], errors="coerce").fillna(-1).astype(int)
+            )
+
+        # Keep these aliases temporarily so older PILATES warm-start/postprocess
+        # code keeps working while configs move to the canonical ActivitySim names.
+        persons["work_zone_id"] = persons["workplace_zone_id"]
+        persons["workplace_taz"] = persons["workplace_zone_id"]
+        persons["school_taz"] = persons["school_zone_id"]
+
     # Convert index to int and filter out unassigned persons
     persons.index = persons.index.astype(int)
     unassigned_mask = persons.household_id.isin(unassigned_households)
@@ -2995,17 +3035,7 @@ def _update_persons_table(
     persons["home_x"] = persons["household_id"].map(home_coords["x"])
     persons["home_y"] = persons["household_id"].map(home_coords["y"])
 
-    # Convert location fields
-    for field in ["workplace_taz", "school_taz"]:
-        try:
-            source_field = (
-                "work_zone_id" if field == "workplace_taz" else "school_zone_id"
-            )
-            persons[field] = pd.to_numeric(
-                persons[source_field], errors="coerce"
-            ).fillna(-1)
-        except KeyError:
-            logger.info(f"Field `{field}` not present in input h5 file")
+    _normalize_person_location_columns()
 
     # Clean numeric fields
     persons["worker"] = pd.to_numeric(persons["worker"], errors="coerce").fillna(0)
@@ -3016,6 +3046,13 @@ def _update_persons_table(
 
     persons = persons.loc[mask].dropna().copy()
 
+    # Current ActivitySim configs expect these logsum fields to exist on the
+    # input persons table, but they can start empty and be populated by the
+    # location models during the run.
+    for logsum_col in ("workplace_location_logsum", "school_location_logsum"):
+        if logsum_col not in persons.columns:
+            persons[logsum_col] = np.nan
+
     # Reset member IDs
     persons["member_id"] = persons.groupby("household_id").cumcount() + 1
 
@@ -3024,24 +3061,37 @@ def _update_persons_table(
     nonwork_mask = persons.ptype.isin([4, 5])
 
     # Clear school locations for workers
-    if "school_taz" in persons.columns:
-        before_count = (workers_mask & (persons.school_taz >= 0)).sum()
-        persons.loc[workers_mask, ["school_taz", "school_zone_id"]] = -1
-        after_count = (workers_mask & (persons.school_taz >= 0)).sum()
+    if "school_zone_id" in persons.columns:
+        before_count = (workers_mask & (persons.school_zone_id >= 0)).sum()
+        persons.loc[
+            workers_mask,
+            ["school_zone_id", "school_taz", "school_location_logsum"],
+        ] = [-1, -1, np.nan]
+        after_count = (workers_mask & (persons.school_zone_id >= 0)).sum()
         logger.info(
             f"Workers with school location: {before_count} before, {after_count} after cleaning"
         )
 
     # Clear work/school locations for non-workers
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        before_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        before_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+    if all(col in persons.columns for col in ["workplace_zone_id", "school_zone_id"]):
+        before_school = (nonwork_mask & (persons.school_zone_id > 0)).sum()
+        before_work = (nonwork_mask & (persons.workplace_zone_id > 0)).sum()
         persons.loc[
             nonwork_mask,
-            ["school_taz", "school_zone_id", "workplace_taz", "work_zone_id"],
+            [
+                "school_zone_id",
+                "school_taz",
+                "workplace_zone_id",
+                "workplace_taz",
+                "work_zone_id",
+            ],
         ] = -1
-        after_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        after_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+        persons.loc[
+            nonwork_mask,
+            ["school_location_logsum", "workplace_location_logsum"],
+        ] = np.nan
+        after_school = (nonwork_mask & (persons.school_zone_id > 0)).sum()
+        after_work = (nonwork_mask & (persons.workplace_zone_id > 0)).sum()
 
         logger.info(
             f"Non-workers/students with school location: {before_school} before, {after_school} after"
@@ -3086,9 +3136,9 @@ def _update_persons_table(
     workplace_share = get_setting(settings, "activitysim.workplace_reassignment_share", 0.0)
     school_share = get_setting(settings, "activitysim.school_reassignment_share", 0.0)
 
-    if "workplace_taz" in persons.columns:
-        missing_work_mask = (persons["worker"] == 1) & (persons["workplace_taz"] < 0)
-        valid_work_mask = (persons["worker"] == 1) & (persons["workplace_taz"] >= 0)
+    if "workplace_zone_id" in persons.columns:
+        missing_work_mask = (persons["worker"] == 1) & (persons["workplace_zone_id"] < 0)
+        valid_work_mask = (persons["worker"] == 1) & (persons["workplace_zone_id"] >= 0)
         persons.loc[missing_work_mask, "needs_workplace_reassignment"] = True
         _mark_sampled_reassignments(
             "needs_workplace_reassignment",
@@ -3102,9 +3152,9 @@ def _update_persons_table(
             int((persons.loc[valid_work_mask, "needs_workplace_reassignment"]).sum()),
         )
 
-    if "school_taz" in persons.columns:
-        missing_school_mask = (persons["student"] == 1) & (persons["school_taz"] < 0)
-        valid_school_mask = (persons["student"] == 1) & (persons["school_taz"] >= 0)
+    if "school_zone_id" in persons.columns:
+        missing_school_mask = (persons["student"] == 1) & (persons["school_zone_id"] < 0)
+        valid_school_mask = (persons["student"] == 1) & (persons["school_zone_id"] >= 0)
         persons.loc[missing_school_mask, "needs_school_reassignment"] = True
         _mark_sampled_reassignments(
             "needs_school_reassignment",

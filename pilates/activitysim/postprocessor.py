@@ -397,6 +397,9 @@ def _prepare_updated_tables(
         )
 
         if not persons_overlay.empty:
+            # Phase 1 migration keeps these aliases equivalent. Phase 2 should
+            # switch this overlay logic to the canonical ActivitySim names
+            # (`workplace_zone_id` / `school_zone_id`) and remove the fallbacks.
             work_zone_source = None
             if _set_from_source(
                 persons_overlay, "work_zone_id", ["workplace_zone_id", "workplace_taz"]
