@@ -105,6 +105,29 @@ def test_build_export_manifest_records_skipped_years(tmp_path: Path) -> None:
     ]
 
 
+def test_build_translation_manifest_records_years_and_source(tmp_path: Path) -> None:
+    manifest = export_script._build_translation_manifest(
+        source_dir=tmp_path / "source",
+        output_dir=tmp_path / "out",
+        years=[2025, 2027],
+        year_manifests=[
+            {"year": 2025},
+            {"year": 2027},
+        ],
+        schema_spec="polaris",
+        scenario="zev_mandate",
+        skipped_years=[
+            {"year": 2023, "reason": "missing input", "error_type": "FileNotFoundError"}
+        ],
+    )
+    assert manifest["export_type"] == "polaris_population_translation"
+    assert manifest["schema_spec"] == "polaris"
+    assert manifest["scenario"] == "zev_mandate"
+    assert manifest["requested_years"] == [2025, 2027]
+    assert manifest["years"] == [2025, 2027]
+    assert manifest["year_manifests"]["2025"] == "years/2025/table_manifest.json"
+
+
 def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: Path) -> None:
     run_dir = tmp_path / "run"
     input_year_dir = run_dir / "atlas" / "atlas_input" / "year2025"

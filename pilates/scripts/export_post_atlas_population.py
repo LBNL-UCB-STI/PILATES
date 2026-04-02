@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
+import shutil
 import sys
 from typing import Any, Mapping, Optional, Sequence
 
@@ -18,6 +19,7 @@ if __package__ in {None, ""}:
 
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.database.schema.registry import get_schema_for_key
+from pilates.scripts.run_polaris_population_translation import run_translation
 from pilates.utils.consist_analysis import create_analysis_tracker
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT, USIM_DATASTORE_H5
@@ -27,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 EXPORT_VERSION = "0.1"
 EXPORT_TYPE = "post_atlas_population_extract"
+TRANSLATION_EXPORT_TYPE = "polaris_population_translation"
 README_TEXT = """# Post-ATLAS Population Extract
 
 This package contains a source-aligned extract of canonical post-ATLAS
@@ -45,6 +48,24 @@ The extract is intentionally source-aligned:
 - only minimal normalization for stable parquet output
 
 Lineage comes from Consist step/run discovery and artifact resolution.
+"""
+TRANSLATION_README_TEXT = """# POLARIS Population Translation
+
+This package contains year-organized POLARIS-style demand files translated
+from a post-ATLAS population extract.
+
+Contents:
+- `years/<year>/household.parquet`
+- `years/<year>/person.parquet`
+- `years/<year>/vehicle.parquet`
+- `years/<year>/vehicle_class.parquet`
+- `years/<year>/vehicle_type.parquet`
+- `years/<year>/translation_sql/`
+- `years/<year>/table_manifest.json`
+- `export_manifest.json`
+
+Each year directory includes the exact SQL package used to produce that year's
+outputs.
 """
 
 
@@ -127,11 +148,40 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     translate = subparsers.add_parser(
         "translate",
-        help="Reserved for future target-schema translation from an intermediate extract.",
+        help="Translate an intermediate extract into a year-organized POLARIS-style package.",
     )
     translate.add_argument("--source-dir", required=True)
     translate.add_argument("--output-dir", required=True)
     translate.add_argument("--schema-spec", required=True)
+    translate.add_argument(
+        "--scenario",
+        required=True,
+        choices=("baseline", "ess_cons", "zev_mandate"),
+        help="ATLAS scenario key used to choose year-specific adopt lookup files.",
+    )
+    translate.add_argument(
+        "--years",
+        nargs="+",
+        required=False,
+        type=int,
+        help="Optional subset of years to translate. Defaults to source export manifest years.",
+    )
+    translate.add_argument(
+        "--translation-dir",
+        default=None,
+        help="Optional override for the SQL translation package directory.",
+    )
+    translate.add_argument(
+        "--hash",
+        choices=("none", "sha256"),
+        default="sha256",
+        help="Hash mode for translated files.",
+    )
+    translate.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing output directory.",
+    )
 
     return parser.parse_args(argv)
 
@@ -497,6 +547,10 @@ def _write_readme(output_dir: Path) -> None:
     (output_dir / "README.md").write_text(README_TEXT, encoding="utf-8")
 
 
+def _write_translation_readme(output_dir: Path) -> None:
+    (output_dir / "README.md").write_text(TRANSLATION_README_TEXT, encoding="utf-8")
+
+
 def _build_export_manifest(
     *,
     run_dir: Path,
@@ -532,6 +586,77 @@ def _build_export_manifest(
         },
         "skipped_years": list(skipped_years),
     }
+
+
+def _translation_output_record(
+    *,
+    table_name: str,
+    output_path: Path,
+    hash_mode: str,
+) -> dict[str, Any]:
+    conn = duckdb.connect()
+    try:
+        relation = conn.read_parquet(str(output_path))
+        columns = _relation_columns(relation)
+        rows = int(conn.sql(f"select count(*) from read_parquet('{str(output_path)}')").fetchone()[0])
+    finally:
+        conn.close()
+    return {
+        "path": output_path.name,
+        "rows": rows,
+        "columns": columns,
+        "sha256": _file_digest(output_path, hash_mode),
+        "table": table_name,
+    }
+
+
+def _build_translation_manifest(
+    *,
+    source_dir: Path,
+    output_dir: Path,
+    years: Sequence[int],
+    year_manifests: Sequence[Mapping[str, Any]],
+    schema_spec: str,
+    scenario: str,
+    skipped_years: Sequence[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    return {
+        "export_version": EXPORT_VERSION,
+        "export_type": TRANSLATION_EXPORT_TYPE,
+        "schema_spec": schema_spec,
+        "scenario": scenario,
+        "source": {
+            "source_dir": str(source_dir),
+            "source_export_manifest": str(source_dir / "export_manifest.json"),
+        },
+        "requested_years": [int(year) for year in years],
+        "years": [int(manifest["year"]) for manifest in year_manifests],
+        "tables": [
+            "household",
+            "person",
+            "vehicle",
+            "vehicle_class",
+            "vehicle_type",
+        ],
+        "year_manifests": {
+            str(manifest["year"]): f"years/{manifest['year']}/table_manifest.json"
+            for manifest in year_manifests
+        },
+        "skipped_years": list(skipped_years),
+        "translation_package": "years/<year>/translation_sql",
+        "output_dir": str(output_dir),
+    }
+
+
+def _copy_translation_lineage(*, source_dir: Path, output_dir: Path) -> None:
+    lineage_dir = output_dir / "lineage"
+    lineage_dir.mkdir(parents=True, exist_ok=True)
+    source_manifest = source_dir / "export_manifest.json"
+    if source_manifest.exists():
+        shutil.copy2(source_manifest, lineage_dir / "source_export_manifest.json")
+    source_provenance = source_dir / "lineage" / "provenance_report.md"
+    if source_provenance.exists():
+        shutil.copy2(source_provenance, lineage_dir / "source_provenance_report.md")
 
 
 def _atlas_input_year_dir(run_dir: Path, year: int) -> Path:
@@ -1031,9 +1156,122 @@ def extract_sql_command(args: argparse.Namespace) -> int:
 
 
 def translate_command(args: argparse.Namespace) -> int:
-    raise NotImplementedError(
-        "Target-schema translation is not implemented yet. Use the extract subcommand first."
+    source_dir = Path(args.source_dir).expanduser().resolve()
+    output_dir = Path(args.output_dir).expanduser().resolve()
+    if output_dir.exists() and any(output_dir.iterdir()) and not args.overwrite:
+        raise FileExistsError(
+            f"Output directory already exists and is not empty: {output_dir}. Use --overwrite to reuse it."
+        )
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    source_manifest_path = source_dir / "export_manifest.json"
+    if not source_manifest_path.exists():
+        raise FileNotFoundError(
+            f"Source export manifest was not found: {source_manifest_path}"
+        )
+    source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+    years = [int(year) for year in (args.years or source_manifest.get("years") or [])]
+    if not years:
+        raise ValueError(
+            "No translation years were provided and none were available in the source export manifest."
+        )
+
+    translation_dir = (
+        Path(args.translation_dir).expanduser().resolve()
+        if args.translation_dir
+        else Path(__file__).resolve().parents[1] / "generated" / "polaris_population_translation"
     )
+
+    year_manifests: list[dict[str, Any]] = []
+    skipped_years: list[dict[str, Any]] = []
+    for year in years:
+        year_output_dir = output_dir / "years" / str(year)
+        try:
+            logger.info("Translating year %s to POLARIS package", year)
+            run_translation(
+                source_dir=source_dir,
+                year=year,
+                scenario=str(args.scenario),
+                output_dir=year_output_dir,
+                translation_dir=translation_dir,
+            )
+            outputs = {
+                "household": _translation_output_record(
+                    table_name="household",
+                    output_path=year_output_dir / "household.parquet",
+                    hash_mode=args.hash,
+                ),
+                "person": _translation_output_record(
+                    table_name="person",
+                    output_path=year_output_dir / "person.parquet",
+                    hash_mode=args.hash,
+                ),
+                "vehicle": _translation_output_record(
+                    table_name="vehicle",
+                    output_path=year_output_dir / "vehicle.parquet",
+                    hash_mode=args.hash,
+                ),
+                "vehicle_class": _translation_output_record(
+                    table_name="vehicle_class",
+                    output_path=year_output_dir / "vehicle_class.parquet",
+                    hash_mode=args.hash,
+                ),
+                "vehicle_type": _translation_output_record(
+                    table_name="vehicle_type",
+                    output_path=year_output_dir / "vehicle_type.parquet",
+                    hash_mode=args.hash,
+                ),
+            }
+            manifest = {
+                "year": int(year),
+                "translation": "polaris",
+                "schema_spec": str(args.schema_spec),
+                "scenario": str(args.scenario),
+                "source": {
+                    "source_dir": str(source_dir),
+                    "source_year_manifest": source_manifest.get("year_manifests", {}).get(
+                        str(year)
+                    ),
+                },
+                "translation_sql": "translation_sql",
+                "outputs": outputs,
+            }
+            _write_json(year_output_dir / "table_manifest.json", manifest)
+            year_manifests.append(manifest)
+        except (FileNotFoundError, OSError, ValueError, duckdb.Error) as exc:
+            logger.warning(
+                "Skipping translation for year %s due to unavailable inputs or translation failure: %s",
+                year,
+                exc,
+            )
+            skipped_years.append(
+                {
+                    "year": int(year),
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+
+    _write_translation_readme(output_dir)
+    _copy_translation_lineage(source_dir=source_dir, output_dir=output_dir)
+    export_manifest = _build_translation_manifest(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        years=years,
+        year_manifests=year_manifests,
+        schema_spec=str(args.schema_spec),
+        scenario=str(args.scenario),
+        skipped_years=skipped_years,
+    )
+    _write_json(output_dir / "export_manifest.json", export_manifest)
+    if skipped_years:
+        logger.warning(
+            "Skipped %s translation year(s): %s",
+            len(skipped_years),
+            ", ".join(str(item["year"]) for item in skipped_years),
+        )
+    logger.info("Wrote translated package to %s", output_dir)
+    return 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
