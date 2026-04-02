@@ -54,4 +54,36 @@ def test_build_export_manifest_records_unique_scenario_run_id(tmp_path: Path) ->
         ],
     )
     assert manifest["source"]["scenario_run_id"] == "scenario-1"
+    assert manifest["requested_years"] == [2025]
+    assert manifest["years"] == [2025]
     assert manifest["year_manifests"]["2025"] == "years/2025/table_manifest.json"
+
+
+def test_build_export_manifest_records_skipped_years(tmp_path: Path) -> None:
+    manifest = export_script._build_export_manifest(
+        run_dir=tmp_path / "run",
+        db_path=tmp_path / "run" / ".consist" / "provenance.duckdb",
+        years=[2023, 2025],
+        year_manifests=[
+            {
+                "year": 2025,
+                "step": {"scenario_run_id": "scenario-1"},
+            }
+        ],
+        skipped_years=[
+            {
+                "year": 2023,
+                "reason": "missing file",
+                "error_type": "FileNotFoundError",
+            }
+        ],
+    )
+    assert manifest["requested_years"] == [2023, 2025]
+    assert manifest["years"] == [2025]
+    assert manifest["skipped_years"] == [
+        {
+            "year": 2023,
+            "reason": "missing file",
+            "error_type": "FileNotFoundError",
+        }
+    ]

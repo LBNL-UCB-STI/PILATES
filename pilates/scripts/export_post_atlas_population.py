@@ -466,6 +466,7 @@ def _build_export_manifest(
     db_path: Path,
     years: Sequence[int],
     year_manifests: Sequence[Mapping[str, Any]],
+    skipped_years: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     scenario_ids = sorted(
         {
@@ -483,12 +484,14 @@ def _build_export_manifest(
             "scenario_run_id": scenario_ids[0] if len(scenario_ids) == 1 else None,
             "scenario_run_ids": scenario_ids,
         },
-        "years": [int(year) for year in years],
+        "requested_years": [int(year) for year in years],
+        "years": [int(manifest["year"]) for manifest in year_manifests],
         "tables": ["households", "persons", "vehicles"],
         "year_manifests": {
             str(manifest["year"]): f"years/{manifest['year']}/table_manifest.json"
             for manifest in year_manifests
         },
+        "skipped_years": list(skipped_years),
     }
 
 
@@ -511,27 +514,43 @@ def extract_command(args: argparse.Namespace) -> int:
 
     scenario_run = tracker.get_run(args.scenario_run_id) if args.scenario_run_id else None
     year_manifests: list[dict[str, Any]] = []
+    skipped_years: list[dict[str, Any]] = []
     for year in args.years:
-        step_run = _step_run_for_year(
-            tracker,
-            year=int(year),
-            scenario_run=scenario_run,
-        )
-        logger.info(
-            "Exporting year %s from atlas_postprocess run %s",
-            year,
-            getattr(step_run, "id", "unknown"),
-        )
-        year_manifests.append(
-            _extract_year(
+        year_int = int(year)
+        try:
+            step_run = _step_run_for_year(
                 tracker,
-                step_run=step_run,
-                year=int(year),
-                output_dir=output_dir,
-                vehicles_source=args.vehicles_source,
-                hash_mode=args.hash,
+                year=year_int,
+                scenario_run=scenario_run,
             )
-        )
+            logger.info(
+                "Exporting year %s from atlas_postprocess run %s",
+                year_int,
+                getattr(step_run, "id", "unknown"),
+            )
+            year_manifests.append(
+                _extract_year(
+                    tracker,
+                    step_run=step_run,
+                    year=year_int,
+                    output_dir=output_dir,
+                    vehicles_source=args.vehicles_source,
+                    hash_mode=args.hash,
+                )
+            )
+        except (FileNotFoundError, OSError, KeyError, ValueError) as exc:
+            logger.warning(
+                "Skipping year %s due to unavailable source artifacts or metadata: %s",
+                year_int,
+                exc,
+            )
+            skipped_years.append(
+                {
+                    "year": year_int,
+                    "reason": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
 
     _write_readme(output_dir)
     export_manifest = _build_export_manifest(
@@ -539,11 +558,12 @@ def extract_command(args: argparse.Namespace) -> int:
         db_path=db_path,
         years=args.years,
         year_manifests=year_manifests,
+        skipped_years=skipped_years,
     )
     _write_json(output_dir / "export_manifest.json", export_manifest)
 
     scenario_ids = export_manifest["source"]["scenario_run_ids"]
-    if args.lineage_mode == "full" and len(scenario_ids) == 1:
+    if args.lineage_mode == "full" and len(scenario_ids) == 1 and year_manifests:
         write_provenance_report(
             tracker=tracker,
             run_id=scenario_ids[0],
@@ -554,6 +574,12 @@ def extract_command(args: argparse.Namespace) -> int:
             "Skipping provenance report because the export spans multiple scenario roots or none could be resolved."
         )
 
+    if skipped_years:
+        logger.warning(
+            "Skipped %s year(s): %s",
+            len(skipped_years),
+            ", ".join(str(item["year"]) for item in skipped_years),
+        )
     logger.info("Wrote export package to %s", output_dir)
     return 0
 
