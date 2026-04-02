@@ -563,8 +563,10 @@ def main(
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
-        partial_run_name = settings.run.output_run_name
-        run_name = f"{partial_run_name}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        custom_label = settings.run.output_run_name
+        region = settings.run.region
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        run_name = f"pilates-run--{region}--{custom_label}--{timestamp}"
         logger.info(f"Starting fresh run. Creating new output folder: {run_name}")
     scenario_id = _resolve_scenario_id(settings)
     run_seed = _resolve_seed(settings)
@@ -661,22 +663,17 @@ def main(
     )
 
     # 4. INITIALIZE WORKSPACE
-    # Use tracker.trace() when available to record workspace setup in lineage,
-    # but keep launcher compatibility with test doubles and limited trackers.
-    workspace_trace = nullcontext()
     trace_fn = getattr(tracker, "trace", None)
-    if callable(trace_fn):
-        workspace_trace = trace_fn(
-            name="workspace_setup",
-            model="pilates_orchestrator",
-            tags=[f"scenario_id:{scenario_id}"],
+    if not callable(trace_fn):
+        raise RuntimeError(
+            f"Tracker {type(tracker).__name__} does not expose trace(); "
+            "PILATES requires a current Consist tracker contract."
         )
-    else:
-        logger.debug(
-            "Tracker %s does not expose trace(); skipping workspace setup trace.",
-            type(tracker).__name__,
-        )
-    with workspace_trace:
+    with trace_fn(
+        name="workspace_setup",
+        model="pilates_orchestrator",
+        tags=[f"scenario_id:{scenario_id}"],
+    ):
         workspace = Workspace(
             settings,
             local_root,

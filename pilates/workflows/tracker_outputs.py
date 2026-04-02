@@ -42,10 +42,15 @@ def load_tracker_run_outputs(
         return {}
     active_tracker = tracker if tracker is not None else cr.current_tracker()
     if active_tracker is None:
-        return {}
+        raise RuntimeError(
+            f"Cannot load {log_context} for run_id={run_id}: no active Consist tracker."
+        )
     get_run_outputs = getattr(active_tracker, "get_run_outputs", None)
     if not callable(get_run_outputs):
-        return {}
+        raise RuntimeError(
+            f"Cannot load {log_context} for run_id={run_id}: tracker does not expose "
+            "get_run_outputs()."
+        )
     try:
         run_outputs = get_run_outputs(run_id) or {}
     except Exception:

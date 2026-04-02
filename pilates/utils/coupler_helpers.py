@@ -1280,7 +1280,7 @@ def log_and_set_output(
         coupler=coupler,
         publish_to_coupler=True,
         enqueue_archive_copy=True,
-        skip_logging_without_active_run=True,
+        skip_logging_without_active_run=False,
     )
 
 
@@ -1350,7 +1350,7 @@ def log_and_set_input(
         coupler=coupler,
         publish_to_coupler=True,
         enqueue_archive_copy=False,
-        skip_logging_without_active_run=True,
+        skip_logging_without_active_run=False,
     )
 
 
