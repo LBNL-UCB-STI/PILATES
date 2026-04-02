@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 from typing import Any, Mapping, Optional, Sequence
 
+import duckdb
 import pandas as pd
 
 if __package__ in {None, ""}:
@@ -46,6 +47,59 @@ Lineage comes from Consist step/run discovery and artifact resolution.
 """
 
 
+def _add_common_extract_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--run-dir",
+        required=True,
+        help="Archive run directory used to resolve workspace:// artifacts.",
+    )
+    parser.add_argument(
+        "--db-path",
+        required=True,
+        help="Consist DuckDB path for the run.",
+    )
+    parser.add_argument(
+        "--years",
+        nargs="+",
+        required=True,
+        type=int,
+        help="Forecast years to export.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        required=True,
+        help="Destination directory for the export package.",
+    )
+    parser.add_argument(
+        "--scenario-run-id",
+        default=None,
+        help="Optional explicit scenario run id. If omitted, atlas_postprocess step runs are discovered by year.",
+    )
+    parser.add_argument(
+        "--vehicles-source",
+        choices=("auto", "vehicles2", "vehicles_raw"),
+        default="auto",
+        help="Preferred ATLAS vehicle source.",
+    )
+    parser.add_argument(
+        "--lineage-mode",
+        choices=("minimal", "full"),
+        default="full",
+        help="Whether to emit only JSON manifests or also a markdown provenance report.",
+    )
+    parser.add_argument(
+        "--hash",
+        choices=("none", "sha256"),
+        default="sha256",
+        help="Hash mode for exported files.",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite an existing output directory.",
+    )
+
+
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export canonical post-ATLAS population tables from an existing PILATES run."
@@ -54,58 +108,21 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
     extract = subparsers.add_parser(
         "extract",
-        help="Extract source-aligned post-ATLAS population tables for one or more years.",
+        help="Compatibility alias for the HDF-backed extractor.",
     )
-    extract.add_argument(
-        "--run-dir",
-        required=True,
-        help="Archive run directory used to resolve workspace:// artifacts.",
+    _add_common_extract_args(extract)
+
+    extract_hdf = subparsers.add_parser(
+        "extract-hdf",
+        help="Extract source-aligned post-ATLAS population tables from HDF + ATLAS vehicle outputs.",
     )
-    extract.add_argument(
-        "--db-path",
-        required=True,
-        help="Consist DuckDB path for the run.",
+    _add_common_extract_args(extract_hdf)
+
+    extract_sql = subparsers.add_parser(
+        "extract-sql",
+        help="Extract canonical post-ATLAS population tables from ATLAS CSVs using DuckDB.",
     )
-    extract.add_argument(
-        "--years",
-        nargs="+",
-        required=True,
-        type=int,
-        help="Forecast years to export.",
-    )
-    extract.add_argument(
-        "--output-dir",
-        required=True,
-        help="Destination directory for the export package.",
-    )
-    extract.add_argument(
-        "--scenario-run-id",
-        default=None,
-        help="Optional explicit scenario run id. If omitted, atlas_postprocess step runs are discovered by year.",
-    )
-    extract.add_argument(
-        "--vehicles-source",
-        choices=("auto", "vehicles2", "vehicles_raw"),
-        default="auto",
-        help="Preferred ATLAS vehicle source.",
-    )
-    extract.add_argument(
-        "--lineage-mode",
-        choices=("minimal", "full"),
-        default="full",
-        help="Whether to emit only JSON manifests or also a markdown provenance report.",
-    )
-    extract.add_argument(
-        "--hash",
-        choices=("none", "sha256"),
-        default="sha256",
-        help="Hash mode for exported files.",
-    )
-    extract.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="Overwrite an existing output directory.",
-    )
+    _add_common_extract_args(extract_sql)
 
     translate = subparsers.add_parser(
         "translate",
@@ -466,6 +483,7 @@ def _build_export_manifest(
     db_path: Path,
     years: Sequence[int],
     year_manifests: Sequence[Mapping[str, Any]],
+    source_mode: str,
     skipped_years: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     scenario_ids = sorted(
@@ -478,6 +496,7 @@ def _build_export_manifest(
     return {
         "export_version": EXPORT_VERSION,
         "export_type": EXPORT_TYPE,
+        "source_mode": source_mode,
         "source": {
             "run_dir": str(run_dir),
             "db_path": str(db_path),
@@ -495,7 +514,253 @@ def _build_export_manifest(
     }
 
 
-def extract_command(args: argparse.Namespace) -> int:
+def _atlas_input_year_dir(run_dir: Path, year: int) -> Path:
+    return run_dir / "atlas" / "atlas_input" / f"year{year}"
+
+
+def _require_existing_path(path: Path, *, label: str) -> Path:
+    if not path.exists():
+        raise FileNotFoundError(f"Required {label} file was not found: {path}")
+    return path
+
+
+def _resolve_householdv_source(tracker: Any, *, step_run: Any, year: int) -> tuple[str, str]:
+    step_artifacts = tracker.get_artifacts_for_run(getattr(step_run, "id"))
+    input_artifacts = getattr(step_artifacts, "inputs", None) or {}
+    artifact_key = f"householdv_{year}"
+    artifact = input_artifacts.get(artifact_key)
+    path = _artifact_path(artifact, tracker)
+    if path and Path(path).exists():
+        return artifact_key, path
+    raise FileNotFoundError(
+        f"Could not resolve household vehicle update artifact for year {year} from atlas_postprocess run {getattr(step_run, 'id', 'unknown')}."
+    )
+
+
+def _quoted_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _relation_columns(relation: Any) -> list[str]:
+    columns = getattr(relation, "columns", None)
+    if columns is not None:
+        return [str(column) for column in columns]
+    return [str(column) for column in relation.limit(0).df().columns]
+
+
+def _create_households_base_stage(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    base_view: str,
+    stage_view: str,
+) -> None:
+    columns = _relation_columns(conn.table(base_view))
+    select_parts = [_quoted_ident(column) for column in columns if column not in {"cars", "hh_cars"}]
+    if "cars" in columns:
+        select_parts.append("try_cast(cars as BIGINT) as cars")
+    else:
+        select_parts.append("NULL::BIGINT as cars")
+    if "hh_cars" in columns:
+        select_parts.append("cast(hh_cars as VARCHAR) as hh_cars")
+    else:
+        select_parts.append("NULL::VARCHAR as hh_cars")
+    conn.execute(
+        f"""
+        create or replace temp view {stage_view} as
+        select
+          {", ".join(select_parts)}
+        from {base_view}
+        """
+    )
+
+
+def _resolve_sql_year_sources(
+    tracker: Any,
+    *,
+    step_run: Any,
+    run_dir: Path,
+    year: int,
+    vehicles_source: str,
+) -> dict[str, dict[str, str]]:
+    year_dir = _atlas_input_year_dir(run_dir, year)
+    households_csv = _require_existing_path(
+        year_dir / "households.csv",
+        label=f"atlas households year {year}",
+    )
+    persons_csv = _require_existing_path(
+        year_dir / "persons.csv",
+        label=f"atlas persons year {year}",
+    )
+    householdv_key, householdv_path = _resolve_householdv_source(
+        tracker,
+        step_run=step_run,
+        year=year,
+    )
+    vehicles_key, vehicles_path = _resolve_vehicle_source(
+        tracker,
+        step_run=step_run,
+        year=year,
+        vehicles_source=vehicles_source,
+    )
+    return {
+        "households_base": {
+            "path": str(households_csv),
+            "artifact_key": "atlas_households_csv",
+            "format": "csv",
+        },
+        "persons": {
+            "path": str(persons_csv),
+            "artifact_key": "atlas_persons_csv",
+            "format": "csv",
+        },
+        "household_vehicle_update": {
+            "path": str(householdv_path),
+            "artifact_key": householdv_key,
+            "format": "csv",
+        },
+        "vehicles": {
+            "path": str(vehicles_path),
+            "artifact_key": vehicles_key,
+            "format": "csv",
+        },
+    }
+
+
+def _extract_year_sql(
+    tracker: Any,
+    *,
+    step_run: Any,
+    run_dir: Path,
+    year: int,
+    output_dir: Path,
+    vehicles_source: str,
+    hash_mode: str,
+) -> dict[str, Any]:
+    step_run_id = str(getattr(step_run, "id"))
+    scenario_run = _scenario_root_for_run(tracker, step_run)
+    scenario_run_id = getattr(scenario_run, "id", None) if scenario_run else None
+    sources = _resolve_sql_year_sources(
+        tracker,
+        step_run=step_run,
+        run_dir=run_dir,
+        year=year,
+        vehicles_source=vehicles_source,
+    )
+
+    conn = duckdb.connect()
+    try:
+        conn.read_csv(sources["households_base"]["path"]).create_view("households_base")
+        conn.read_csv(sources["persons"]["path"]).create_view("persons_post_atlas")
+        conn.read_csv(sources["household_vehicle_update"]["path"]).create_view(
+            "household_vehicle_update_raw"
+        )
+        conn.read_csv(sources["vehicles"]["path"]).create_view("vehicles_post_atlas")
+
+        _create_households_base_stage(
+            conn,
+            base_view="households_base",
+            stage_view="households_base_stage",
+        )
+        conn.execute(
+            """
+            create or replace temp view household_vehicle_update as
+            select
+              cast(household_id as BIGINT) as household_id,
+              cast(nvehicles as BIGINT) as cars,
+              case
+                when cast(nvehicles as BIGINT) <= 0 then 'none'
+                when cast(nvehicles as BIGINT) = 1 then 'one'
+                else 'two or more'
+              end as hh_cars
+            from household_vehicle_update_raw
+            """
+        )
+        conn.execute(
+            """
+            create or replace temp view households_post_atlas as
+            select
+              h.* exclude (cars, hh_cars),
+              v.cars,
+              v.hh_cars
+            from households_base_stage h
+            inner join household_vehicle_update v
+              on try_cast(h.household_id as BIGINT) = v.household_id
+            """
+        )
+
+        year_dir = output_dir / "years" / str(year)
+        year_dir.mkdir(parents=True, exist_ok=True)
+        households_path = year_dir / "households.parquet"
+        persons_path = year_dir / "persons.parquet"
+        vehicles_out_path = year_dir / "vehicles.parquet"
+
+        conn.sql("select * from households_post_atlas").write_parquet(
+            str(households_path),
+            compression="zstd",
+        )
+        conn.sql("select * from persons_post_atlas").write_parquet(
+            str(persons_path),
+            compression="zstd",
+        )
+        conn.sql("select * from vehicles_post_atlas").write_parquet(
+            str(vehicles_out_path),
+            compression="zstd",
+        )
+
+        households_columns = _relation_columns(conn.table("households_post_atlas"))
+        persons_columns = _relation_columns(conn.table("persons_post_atlas"))
+        vehicles_columns = _relation_columns(conn.table("vehicles_post_atlas"))
+
+        households_rows = int(
+            conn.sql("select count(*) from households_post_atlas").fetchone()[0]
+        )
+        persons_rows = int(conn.sql("select count(*) from persons_post_atlas").fetchone()[0])
+        vehicles_rows = int(conn.sql("select count(*) from vehicles_post_atlas").fetchone()[0])
+    finally:
+        conn.close()
+
+    manifest = {
+        "year": int(year),
+        "source_mode": "atlas_csv_sql",
+        "step": {
+            "name": "atlas_postprocess",
+            "run_id": step_run_id,
+            "model": getattr(step_run, "model_name", None) or "atlas_postprocess",
+            "status": getattr(step_run, "status", None),
+            "scenario_run_id": scenario_run_id,
+        },
+        "sources": sources,
+        "outputs": {
+            "households": {
+                "path": households_path.name,
+                "rows": households_rows,
+                "columns": households_columns,
+                "sha256": _file_digest(households_path, hash_mode),
+            },
+            "persons": {
+                "path": persons_path.name,
+                "rows": persons_rows,
+                "columns": persons_columns,
+                "sha256": _file_digest(persons_path, hash_mode),
+            },
+            "vehicles": {
+                "path": vehicles_out_path.name,
+                "rows": vehicles_rows,
+                "columns": vehicles_columns,
+                "sha256": _file_digest(vehicles_out_path, hash_mode),
+            },
+        },
+    }
+    _write_json(year_dir / "table_manifest.json", manifest)
+    return manifest
+
+
+def _shared_extract_command(
+    args: argparse.Namespace,
+    *,
+    extractor: Any,
+    source_mode: str,
+) -> int:
     run_dir = Path(args.run_dir).expanduser().resolve()
     db_path = Path(args.db_path).expanduser().resolve()
     output_dir = Path(args.output_dir).expanduser().resolve()
@@ -529,10 +794,11 @@ def extract_command(args: argparse.Namespace) -> int:
                 getattr(step_run, "id", "unknown"),
             )
             year_manifests.append(
-                _extract_year(
+                extractor(
                     tracker,
                     step_run=step_run,
                     year=year_int,
+                    run_dir=run_dir,
                     output_dir=output_dir,
                     vehicles_source=args.vehicles_source,
                     hash_mode=args.hash,
@@ -558,6 +824,7 @@ def extract_command(args: argparse.Namespace) -> int:
         db_path=db_path,
         years=args.years,
         year_manifests=year_manifests,
+        source_mode=source_mode,
         skipped_years=skipped_years,
     )
     _write_json(output_dir / "export_manifest.json", export_manifest)
@@ -584,6 +851,45 @@ def extract_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _extract_year_hdf_compat(
+    tracker: Any,
+    *,
+    step_run: Any,
+    year: int,
+    run_dir: Path,
+    output_dir: Path,
+    vehicles_source: str,
+    hash_mode: str,
+) -> dict[str, Any]:
+    del run_dir
+    manifest = _extract_year(
+        tracker,
+        step_run=step_run,
+        year=year,
+        output_dir=output_dir,
+        vehicles_source=vehicles_source,
+        hash_mode=hash_mode,
+    )
+    manifest["source_mode"] = "hdf"
+    return manifest
+
+
+def extract_hdf_command(args: argparse.Namespace) -> int:
+    return _shared_extract_command(
+        args,
+        extractor=_extract_year_hdf_compat,
+        source_mode="hdf",
+    )
+
+
+def extract_sql_command(args: argparse.Namespace) -> int:
+    return _shared_extract_command(
+        args,
+        extractor=_extract_year_sql,
+        source_mode="atlas_csv_sql",
+    )
+
+
 def translate_command(args: argparse.Namespace) -> int:
     raise NotImplementedError(
         "Target-schema translation is not implemented yet. Use the extract subcommand first."
@@ -598,7 +904,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     if args.command == "extract":
-        return extract_command(args)
+        return extract_hdf_command(args)
+    if args.command == "extract-hdf":
+        return extract_hdf_command(args)
+    if args.command == "extract-sql":
+        return extract_sql_command(args)
     if args.command == "translate":
         return translate_command(args)
     raise ValueError(f"Unsupported command: {args.command}")

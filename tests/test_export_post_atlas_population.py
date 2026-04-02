@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import duckdb
 import pandas as pd
 
 from pilates.scripts import export_post_atlas_population as export_script
@@ -46,6 +47,7 @@ def test_build_export_manifest_records_unique_scenario_run_id(tmp_path: Path) ->
         run_dir=tmp_path / "run",
         db_path=tmp_path / "run" / ".consist" / "provenance.duckdb",
         years=[2025],
+        source_mode="hdf",
         year_manifests=[
             {
                 "year": 2025,
@@ -64,6 +66,7 @@ def test_build_export_manifest_records_skipped_years(tmp_path: Path) -> None:
         run_dir=tmp_path / "run",
         db_path=tmp_path / "run" / ".consist" / "provenance.duckdb",
         years=[2023, 2025],
+        source_mode="atlas_csv_sql",
         year_manifests=[
             {
                 "year": 2025,
@@ -87,3 +90,90 @@ def test_build_export_manifest_records_skipped_years(tmp_path: Path) -> None:
             "error_type": "FileNotFoundError",
         }
     ]
+
+
+def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: Path) -> None:
+    run_dir = tmp_path / "run"
+    input_year_dir = run_dir / "atlas" / "atlas_input" / "year2025"
+    input_year_dir.mkdir(parents=True)
+    households_csv = input_year_dir / "households.csv"
+    persons_csv = input_year_dir / "persons.csv"
+    householdv_csv = run_dir / "atlas" / "atlas_output" / "householdv_2025.csv"
+    householdv_csv.parent.mkdir(parents=True)
+    vehicles2_csv = run_dir / "atlas" / "atlas_output" / "vehicles2_2025.csv"
+
+    households_csv.write_text(
+        "household_id,income,cars,hh_cars\n1,100,0,none\n2,200,1,one\n",
+        encoding="utf-8",
+    )
+    persons_csv.write_text(
+        "person_id,household_id,age\n10,1,30\n20,2,40\n",
+        encoding="utf-8",
+    )
+    householdv_csv.write_text(
+        "household_id,nvehicles\n1,2\n2,0\n",
+        encoding="utf-8",
+    )
+    vehicles2_csv.write_text(
+        "vehicle_id,household_id,vehicleTypeId\n1000,1,sedan_gas_2015\n",
+        encoding="utf-8",
+    )
+
+    step_run = SimpleNamespace(
+        id="step-1",
+        parent_run_id=None,
+        status="completed",
+        model_name="atlas_postprocess",
+    )
+
+    class _Tracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "step-1"
+            return {
+                "atlas_vehicles2_output": SimpleNamespace(path=str(vehicles2_csv)),
+            }
+
+        def get_artifacts_for_run(self, run_id):
+            assert run_id == "step-1"
+            return SimpleNamespace(
+                inputs={
+                    "householdv_2025": SimpleNamespace(path=str(householdv_csv)),
+                },
+                outputs={},
+            )
+
+        def resolve_uri(self, uri: str) -> str:
+            return uri
+
+        def get_run(self, run_id):
+            return None
+
+    manifest = export_script._extract_year_sql(
+        _Tracker(),
+        step_run=step_run,
+        run_dir=run_dir,
+        year=2025,
+        output_dir=tmp_path / "out",
+        vehicles_source="auto",
+        hash_mode="none",
+    )
+
+    assert manifest["source_mode"] == "atlas_csv_sql"
+    households_parquet = tmp_path / "out" / "years" / "2025" / "households.parquet"
+    persons_parquet = tmp_path / "out" / "years" / "2025" / "persons.parquet"
+    vehicles_parquet = tmp_path / "out" / "years" / "2025" / "vehicles.parquet"
+    assert households_parquet.exists()
+    assert persons_parquet.exists()
+    assert vehicles_parquet.exists()
+
+    conn = duckdb.connect()
+    try:
+        households = conn.sql(f"select * from read_parquet('{households_parquet}') order by household_id").fetchall()
+        persons = conn.sql(f"select * from read_parquet('{persons_parquet}') order by person_id").fetchall()
+        vehicles = conn.sql(f"select * from read_parquet('{vehicles_parquet}')").fetchall()
+    finally:
+        conn.close()
+
+    assert households == [(1, 100, 2, "two or more"), (2, 200, 0, "none")]
+    assert persons == [(10, 1, 30), (20, 2, 40)]
+    assert vehicles == [(1000, 1, "sedan_gas_2015")]
