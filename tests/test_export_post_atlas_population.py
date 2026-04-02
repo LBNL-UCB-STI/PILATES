@@ -50,6 +50,11 @@ def test_match_scenario_step_run_id_prefers_atlas_postprocess_name() -> None:
     )
 
 
+def test_schema_for_artifact_key_uses_registry_mappings() -> None:
+    assert export_script._schema_for_artifact_key("atlas_households_csv").__name__ == "AtlasHousehold"
+    assert export_script._schema_for_artifact_key("householdv_2025").__name__ == "HouseholdVAtlasOut"
+
+
 def test_build_export_manifest_records_unique_scenario_run_id(tmp_path: Path) -> None:
     manifest = export_script._build_export_manifest(
         run_dir=tmp_path / "run",
@@ -196,6 +201,6 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: P
     finally:
         conn.close()
 
-    assert households == [("1", "100", 2, "two or more"), ("2", "200", 0, "none")]
-    assert persons == [("10", "1", "30"), ("20", "2", "40")]
-    assert vehicles == [("1000", "1", "sedan_gas_2015")]
+    assert households == [(1.0, 100.0, 2, "two or more"), (2.0, 200.0, 0, "none")]
+    assert persons == [(10, 30.0, 1.0), (20, 40.0, 2.0)]
+    assert vehicles == [(1, 1000, "sedan_gas_2015")]

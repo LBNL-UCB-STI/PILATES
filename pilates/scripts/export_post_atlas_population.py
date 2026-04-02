@@ -17,12 +17,7 @@ if __package__ in {None, ""}:
         sys.path.insert(0, str(repo_root))
 
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
-from pilates.database.schema.atlas_schema import (
-    AtlasHousehold,
-    AtlasPersons,
-    HouseholdVAtlasOut,
-    VehiclesAtlasOut,
-)
+from pilates.database.schema.registry import get_schema_for_key
 from pilates.utils.consist_analysis import create_analysis_tracker
 from pilates.utils.provenance_report import write_provenance_report
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT, USIM_DATASTORE_H5
@@ -572,6 +567,13 @@ def _relation_columns(relation: Any) -> list[str]:
     return [str(column) for column in relation.limit(0).df().columns]
 
 
+def _schema_for_artifact_key(artifact_key: str) -> Any:
+    schema_cls = get_schema_for_key(artifact_key)
+    if schema_cls is None:
+        raise ValueError(f"No registered schema found for artifact key {artifact_key!r}.")
+    return schema_cls
+
+
 def _duckdb_type_for_schema_column(column: Any) -> str:
     type_name = type(getattr(column, "type", None)).__name__
     if type_name in {"BigInteger", "Integer", "SmallInteger"}:
@@ -768,25 +770,27 @@ def _extract_year_sql(
         _read_csv_with_schema(
             conn,
             path=sources["households_base"]["path"],
-            schema_cls=AtlasHousehold,
+            schema_cls=_schema_for_artifact_key(sources["households_base"]["artifact_key"]),
             view_name="households_base",
         )
         _read_csv_with_schema(
             conn,
             path=sources["persons"]["path"],
-            schema_cls=AtlasPersons,
+            schema_cls=_schema_for_artifact_key(sources["persons"]["artifact_key"]),
             view_name="persons_post_atlas",
         )
         _read_csv_with_schema(
             conn,
             path=sources["household_vehicle_update"]["path"],
-            schema_cls=HouseholdVAtlasOut,
+            schema_cls=_schema_for_artifact_key(
+                sources["household_vehicle_update"]["artifact_key"]
+            ),
             view_name="household_vehicle_update_raw",
         )
         _read_csv_with_schema(
             conn,
             path=sources["vehicles"]["path"],
-            schema_cls=VehiclesAtlasOut,
+            schema_cls=_schema_for_artifact_key(sources["vehicles"]["artifact_key"]),
             view_name="vehicles_post_atlas",
         )
 
