@@ -1319,84 +1319,6 @@ def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
     assert any(path.endswith("beam/input/test/beam.conf") for path in paths)
 
 
-def test_repair_restart_beam_inputs_from_source_repopulates_missing_primary_config(
-    tmp_path, monkeypatch
-):
-    workspace = DummyWorkspace(str(tmp_path / "local-run"))
-    settings = _restart_settings()
-    state = SimpleNamespace()
-
-    calls = []
-
-    class _BeamPreprocessor:
-        def copy_data_to_mutable_location(self, settings_arg, output_dir):
-            calls.append((settings_arg, output_dir))
-            target = (
-                Path(output_dir)
-                / settings_arg.run.region
-                / settings_arg.beam.config
-            )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("beam", encoding="utf-8")
-
-    class _Factory:
-        def get_preprocessor(self, model_name, state_arg):
-            assert model_name == "beam"
-            assert state_arg is state
-            return _BeamPreprocessor()
-
-    repaired = run_module._repair_restart_beam_inputs_from_source(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        model_factory_cls=lambda: _Factory(),
-    )
-
-    assert repaired is True
-    assert calls == [(settings, workspace.get_beam_mutable_data_dir())]
-    assert (
-        Path(workspace.get_beam_mutable_data_dir())
-        / settings.run.region
-        / settings.beam.config
-    ).exists()
-
-
-def test_repair_restart_atlas_inputs_from_archive_restores_missing_year_dirs(tmp_path):
-    archive_run_dir = tmp_path / "archive-run"
-    local_run_dir = tmp_path / "local-run"
-    workspace = DummyWorkspace(str(local_run_dir))
-    settings = _restart_settings()
-    state = SimpleNamespace(
-        Stage=WorkflowState.Stage,
-        current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
-        start_year=2017,
-        current_year=2023,
-    )
-
-    for required_year in (2017, 2021):
-        source_dir = archive_run_dir / "atlas" / "atlas_input" / f"year{required_year}"
-        source_dir.mkdir(parents=True, exist_ok=True)
-        (source_dir / "households.csv").write_text(
-            f"households-{required_year}",
-            encoding="utf-8",
-        )
-
-    repaired = run_module._repair_restart_atlas_inputs_from_archive(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert repaired is True
-    assert (
-        local_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
-    ).read_text(encoding="utf-8") == "households-2017"
-    assert (
-        local_run_dir / "atlas" / "atlas_input" / "year2021" / "households.csv"
-    ).read_text(encoding="utf-8") == "households-2021"
-
-
 def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_assignment(
     tmp_path,
 ):
@@ -1610,80 +1532,6 @@ def test_reconstruct_restart_completed_run_outputs_materializes_manifest_run_ids
     ]
 
 
-def test_restart_repair_rewinds_stale_supply_demand_state_when_atlas_outputs_incomplete(
-    tmp_path,
-):
-    archive_run_dir = tmp_path / "archive-run"
-    atlas_output_dir = archive_run_dir / "atlas" / "atlas_output"
-    atlas_output_dir.mkdir(parents=True, exist_ok=True)
-    (atlas_output_dir / "householdv_2017.csv").write_text("hh\n", encoding="utf-8")
-    (atlas_output_dir / "vehicles_2017.csv").write_text("veh\n", encoding="utf-8")
-
-    writes = []
-    state = SimpleNamespace(
-        Stage=WorkflowState.Stage,
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
-        current_sub_stage=WorkflowState.Stage.activity_demand,
-        current_inner_iter=3,
-        sub_stage_progress="postprocessor",
-        current_year=2017,
-        forecast_year=2023,
-        write_state=lambda: writes.append("written"),
-    )
-
-    repaired = run_module._repair_restart_state_for_incomplete_atlas_outputs(
-        settings=_restart_settings(),
-        state=state,
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert repaired is True
-    assert state.current_major_stage == WorkflowState.Stage.vehicle_ownership_model
-    assert state.current_sub_stage is None
-    assert state.current_inner_iter == 0
-    assert state.sub_stage_progress is None
-    assert writes == ["written"]
-
-
-def test_restart_repair_keeps_supply_demand_when_all_atlas_outputs_complete(tmp_path):
-    archive_run_dir = tmp_path / "archive-run"
-    atlas_output_dir = archive_run_dir / "atlas" / "atlas_output"
-    atlas_output_dir.mkdir(parents=True, exist_ok=True)
-    for atlas_year in (2017, 2019, 2021, 2023):
-        (atlas_output_dir / f"householdv_{atlas_year}.csv").write_text(
-            "hh\n", encoding="utf-8"
-        )
-        (atlas_output_dir / f"vehicles_{atlas_year}.csv").write_text(
-            "veh\n", encoding="utf-8"
-        )
-        (atlas_output_dir / f"vehicles2_{atlas_year}.csv").write_text(
-            "veh2\n", encoding="utf-8"
-        )
-
-    writes = []
-    state = SimpleNamespace(
-        Stage=WorkflowState.Stage,
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
-        current_sub_stage=WorkflowState.Stage.activity_demand,
-        current_inner_iter=0,
-        sub_stage_progress=None,
-        current_year=2017,
-        forecast_year=2023,
-        write_state=lambda: writes.append("written"),
-    )
-
-    repaired = run_module._repair_restart_state_for_incomplete_atlas_outputs(
-        settings=_restart_settings(),
-        state=state,
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert repaired is False
-    assert state.current_major_stage == WorkflowState.Stage.supply_demand_loop
-    assert state.current_sub_stage == WorkflowState.Stage.activity_demand
-    assert writes == []
-
-
 def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_path):
     settings = _restart_settings()
     workspace = DummyWorkspace(str(tmp_path / "local-run"), settings=settings)
@@ -1891,7 +1739,6 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(run_module, "_repair_restart_beam_inputs_from_source", lambda **_kwargs: False)
     monkeypatch.setattr(
         run_module,
         "_reconstruct_restart_completed_run_outputs",
@@ -2023,7 +1870,6 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(run_module, "_repair_restart_beam_inputs_from_source", lambda **_kwargs: False)
     monkeypatch.setattr(
         run_module,
         "_reconstruct_restart_completed_run_outputs",
@@ -2062,11 +1908,9 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         run_module.main()
 
 
-def test_main_restart_strict_repairs_atlas_year_dirs_before_validation(
+def test_main_restart_strict_fails_without_atlas_repair_paths(
     tmp_path, monkeypatch
 ):
-    class StopAfterScenario(RuntimeError):
-        pass
 
     class SnapshotStub:
         def final_snapshot(self):
@@ -2224,20 +2068,15 @@ def test_main_restart_strict_repairs_atlas_year_dirs_before_validation(
             "required_output_keys": (),
         },
     )
-    monkeypatch.setattr(
-        run_module.cr,
-        "scenario",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            StopAfterScenario("reached scenario")
-        ),
-    )
-
-    with pytest.raises(StopAfterScenario, match="reached scenario"):
+    with pytest.raises(
+        RuntimeError,
+        match="Strict restart preflight failed; required restart artifacts are still missing after restart bootstrap",
+    ):
         run_module.main()
 
     local_run_dir = local_root / run_name
-    assert (local_run_dir / "atlas" / "atlas_input" / "year2017").exists()
-    assert (local_run_dir / "atlas" / "atlas_input" / "year2021").exists()
+    assert not (local_run_dir / "atlas" / "atlas_input" / "year2017").exists()
+    assert not (local_run_dir / "atlas" / "atlas_input" / "year2021").exists()
 
 
 def test_resolve_consist_db_paths_uses_local_run_dir_by_default():

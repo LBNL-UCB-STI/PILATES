@@ -24,13 +24,12 @@ from typing import Optional, Dict, Any, Callable, List, Sequence, cast
 
 from pilates.workspace import Workspace
 from pilates.generic.records import sanitize_artifact_key
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
 from pilates.utils.formatting import formatted_print
-from pilates.utils.io import get_traffic_assignment_model, parse_args_and_settings
+from pilates.utils.io import parse_args_and_settings
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
@@ -485,79 +484,6 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _repair_restart_state_for_incomplete_atlas_outputs(
-    *,
-    settings: Any,
-    state: WorkflowState,
-    archive_run_dir: str,
-) -> bool:
-    return restart_runtime.repair_restart_state_for_incomplete_atlas_outputs(
-        settings=settings,
-        state=state,
-        archive_run_dir=archive_run_dir,
-    )
-
-
-def _repair_restart_atlas_inputs_from_archive(
-    *,
-    settings: Any,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: str,
-) -> bool:
-    return restart_runtime.repair_restart_atlas_inputs_from_archive(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        archive_run_dir=archive_run_dir,
-    )
-
-
-def _repair_restart_beam_inputs_from_source(
-    *,
-    settings: Any,
-    state: WorkflowState,
-    workspace: Workspace,
-    model_factory_cls: Callable[[], Any] = ModelFactory,
-) -> bool:
-    if get_traffic_assignment_model(settings) != "beam":
-        return False
-
-    beam_cfg = getattr(settings, "beam", None)
-    region = getattr(getattr(settings, "run", None), "region", None)
-    beam_config_name = getattr(beam_cfg, "config", None)
-    if beam_cfg is None or not region or not beam_config_name:
-        return False
-
-    beam_root = Path(workspace.get_beam_mutable_data_dir())
-    region_dir = beam_root / region
-    config_path = beam_root / region / beam_config_name
-    if beam_root.exists() and region_dir.exists() and config_path.exists():
-        return False
-
-    logger.warning(
-        "[RestartRepair] BEAM primary config missing at %s; repopulating BEAM "
-        "mutable inputs from source production inputs.",
-        config_path,
-    )
-    beam_root.mkdir(parents=True, exist_ok=True)
-    beam_preprocessor = model_factory_cls().get_preprocessor("beam", state)
-    beam_preprocessor.copy_data_to_mutable_location(settings, str(beam_root))
-    repaired = config_path.exists()
-    if repaired:
-        logger.info(
-            "[RestartRepair] Restored BEAM primary config from source: %s",
-            config_path,
-        )
-    else:
-        logger.warning(
-            "[RestartRepair] BEAM source repopulation completed but primary config is "
-            "still missing: %s",
-            config_path,
-        )
-    return repaired
-
-
 def _reconstruct_restart_completed_run_outputs(
     *,
     tracker: Any,
@@ -765,11 +691,6 @@ def main(
             archive_state_path=archive_state_path,
             allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
         )
-        _repair_restart_state_for_incomplete_atlas_outputs(
-            settings=settings,
-            state=state,
-            archive_run_dir=archive_run_dir,
-        )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:
@@ -891,28 +812,6 @@ def main(
                 state=state,
                 workspace=workspace,
             )
-            restart_repairs_applied = False
-            if is_restart_run and _repair_restart_atlas_inputs_from_archive(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                archive_run_dir=archive_run_dir,
-            ):
-                restart_repairs_applied = True
-            if is_restart_run and _repair_restart_beam_inputs_from_source(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            ):
-                restart_repairs_applied = True
-            if restart_repairs_applied:
-                restart_missing_artifacts_after_recovery = (
-                    _find_missing_restart_local_artifacts(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                    )
-                )
             if restart_missing_artifacts_after_recovery:
                 logger.warning(
                     "Restart diagnostic still sees missing local workspace inputs "
