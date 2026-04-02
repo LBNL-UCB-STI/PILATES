@@ -116,6 +116,20 @@ def test_build_translation_manifest_records_years_and_source(tmp_path: Path) -> 
         ],
         schema_spec="polaris",
         scenario="zev_mandate",
+        source_manifest={
+            "export_type": "post_atlas_population_extract",
+            "source_mode": "atlas_csv_sql",
+            "source": {
+                "run_dir": "/tmp/run",
+                "db_path": "/tmp/db.duckdb",
+                "scenario_run_id": "scenario-1",
+                "scenario_run_ids": ["scenario-1"],
+            },
+            "requested_years": [2023, 2025, 2027],
+            "years": [2025, 2027],
+            "tables": ["households", "persons", "vehicles"],
+            "skipped_years": [{"year": 2023}],
+        },
         skipped_years=[
             {"year": 2023, "reason": "missing input", "error_type": "FileNotFoundError"}
         ],
@@ -126,6 +140,9 @@ def test_build_translation_manifest_records_years_and_source(tmp_path: Path) -> 
     assert manifest["requested_years"] == [2025, 2027]
     assert manifest["years"] == [2025, 2027]
     assert manifest["year_manifests"]["2025"] == "years/2025/table_manifest.json"
+    assert manifest["source"]["source_export_manifest_copy"] == "source_export_manifest.json"
+    assert manifest["source"]["source_export_type"] == "post_atlas_population_extract"
+    assert manifest["source"]["run_dir"] == "/tmp/run"
 
 
 def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: Path) -> None:

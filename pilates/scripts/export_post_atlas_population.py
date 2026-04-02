@@ -618,6 +618,7 @@ def _build_translation_manifest(
     year_manifests: Sequence[Mapping[str, Any]],
     schema_spec: str,
     scenario: str,
+    source_manifest: Mapping[str, Any],
     skipped_years: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, Any]:
     return {
@@ -628,6 +629,17 @@ def _build_translation_manifest(
         "source": {
             "source_dir": str(source_dir),
             "source_export_manifest": str(source_dir / "export_manifest.json"),
+            "source_export_manifest_copy": "source_export_manifest.json",
+            "source_export_type": source_manifest.get("export_type"),
+            "source_mode": source_manifest.get("source_mode"),
+            "run_dir": source_manifest.get("source", {}).get("run_dir"),
+            "db_path": source_manifest.get("source", {}).get("db_path"),
+            "scenario_run_id": source_manifest.get("source", {}).get("scenario_run_id"),
+            "scenario_run_ids": source_manifest.get("source", {}).get("scenario_run_ids"),
+            "requested_years": source_manifest.get("requested_years"),
+            "available_years": source_manifest.get("years"),
+            "tables": source_manifest.get("tables"),
+            "skipped_years": source_manifest.get("skipped_years"),
         },
         "requested_years": [int(year) for year in years],
         "years": [int(manifest["year"]) for manifest in year_manifests],
@@ -648,15 +660,29 @@ def _build_translation_manifest(
     }
 
 
-def _copy_translation_lineage(*, source_dir: Path, output_dir: Path) -> None:
+def _copy_translation_lineage(
+    *,
+    source_dir: Path,
+    output_dir: Path,
+    source_manifest_payload: Mapping[str, Any],
+) -> None:
     lineage_dir = output_dir / "lineage"
     lineage_dir.mkdir(parents=True, exist_ok=True)
-    source_manifest = source_dir / "export_manifest.json"
-    if source_manifest.exists():
-        shutil.copy2(source_manifest, lineage_dir / "source_export_manifest.json")
+    source_manifest_path = source_dir / "export_manifest.json"
+    if source_manifest_path.exists():
+        shutil.copy2(source_manifest_path, lineage_dir / "source_export_manifest.json")
+        shutil.copy2(source_manifest_path, output_dir / "source_export_manifest.json")
     source_provenance = source_dir / "lineage" / "provenance_report.md"
     if source_provenance.exists():
         shutil.copy2(source_provenance, lineage_dir / "source_provenance_report.md")
+    source_year_manifests = source_manifest_payload.get("year_manifests", {})
+    for year, relpath in source_year_manifests.items():
+        source_year_manifest = source_dir / str(relpath)
+        if not source_year_manifest.exists():
+            continue
+        target_path = lineage_dir / "source_years" / str(year) / "table_manifest.json"
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_year_manifest, target_path)
 
 
 def _atlas_input_year_dir(run_dir: Path, year: int) -> Path:
@@ -1253,7 +1279,11 @@ def translate_command(args: argparse.Namespace) -> int:
             )
 
     _write_translation_readme(output_dir)
-    _copy_translation_lineage(source_dir=source_dir, output_dir=output_dir)
+    _copy_translation_lineage(
+        source_dir=source_dir,
+        output_dir=output_dir,
+        source_manifest_payload=source_manifest,
+    )
     export_manifest = _build_translation_manifest(
         source_dir=source_dir,
         output_dir=output_dir,
@@ -1261,6 +1291,7 @@ def translate_command(args: argparse.Namespace) -> int:
         year_manifests=year_manifests,
         schema_spec=str(args.schema_spec),
         scenario=str(args.scenario),
+        source_manifest=source_manifest,
         skipped_years=skipped_years,
     )
     _write_json(output_dir / "export_manifest.json", export_manifest)
