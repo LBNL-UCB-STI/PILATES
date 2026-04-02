@@ -103,15 +103,17 @@ def _parquet_columns(path: Path) -> list[str]:
         conn.close()
 
 
-def _resolve_person_mar_column(persons_path: Path) -> str:
+def _resolve_person_mar_expr(persons_path: Path) -> str:
     columns = _parquet_columns(persons_path)
     for candidate in ("mar", "MAR"):
         if candidate in columns:
-            return _quoted_ident(candidate)
-    raise ValueError(
-        f"Could not find a marital-status column in persons parquet. "
-        f"Expected one of ('mar', 'MAR'); found columns: {columns}"
+            return f"p.{_quoted_ident(candidate)}"
+    logger.warning(
+        "Persons parquet %s does not contain a marital-status column; defaulting marital_status to 0. Columns: %s",
+        persons_path,
+        columns,
     )
+    return "NULL"
 
 
 def _placeholder_map(
@@ -138,7 +140,7 @@ def _placeholder_map(
         "__ATLAS_USED_VEHICLES_CSV__": str(used_ref),
         "__OUT_DIR__": str(resolved_output_dir),
         "__EXPORT_YEAR__": str(year),
-        "__PERSON_MAR_COL__": _resolve_person_mar_column(persons),
+        "__PERSON_MAR_EXPR__": _resolve_person_mar_expr(persons),
     }
 
 
