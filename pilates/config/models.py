@@ -80,13 +80,6 @@ class RunConfig(BaseModel):
             "Enable cache probing for the pre-scenario bootstrap initialization phase"
         ),
     )
-    restart_rehydrate_mode: Literal["native", "off"] = Field(
-        "native",
-        description=(
-            "Restart hydration mode: native reconstructs completed runs via "
-            "Consist materialization, off disables restart hydration"
-        ),
-    )
     restart_strict: bool = Field(
         False,
         description=(

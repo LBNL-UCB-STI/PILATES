@@ -135,8 +135,8 @@ When in doubt, capture the failing command, the config file path passed via
   - The exception message names the missing prerequisite step.
   - The expected output directory for that step is missing under the workspace.
 - Fix:
-  - If this is a restart (`-S`), ensure restart hydration is enabled:
-    `run.restart_rehydrate_mode: native` (default).
+  - If this is a restart (`-S`), confirm tracker-backed restart reconstruction
+    is available and the run metadata is queryable.
   - If required local artifacts are missing, copy/restore them into the run
     workspace or restart from a point where bootstrap can re-initialize them.
 

@@ -167,8 +167,6 @@ Output/workspace behavior:
 Restart and hydration behavior:
 
 - `run.bootstrap_cache_enabled`: allow cache probing for the pre-scenario bootstrap phase
-- `run.restart_rehydrate_mode`: `native` or `off`
-  - `native` uses Consist materialization to reconstruct completed outputs on restart
 - `run.restart_strict`: fail startup if required restart artifacts are missing after hydration/preflight
 
 Consist DB behavior (run-local DB mirroring and snapshots):
@@ -381,8 +379,8 @@ At a high level:
   `run.supply_demand_iters`.
 - **Where it runs** is decided by `infrastructure.container_manager` and the
   image mappings.
-- **What gets (re)used on restart** is influenced by `run.restart_rehydrate_mode`,
-  bootstrap and hydration options, and whether required artifacts are present.
+- **What gets (re)used on restart** is influenced by tracker-based completed-run
+  reconstruction, bootstrap behavior, and whether required artifacts are present.
 
 See `docs/workflow_primer.md` for the step/stage lifecycle.
 

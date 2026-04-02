@@ -464,14 +464,6 @@ def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
     return restart_runtime.format_missing_artifact_summary(artifacts)
 
 
-def _resolve_restart_rehydrate_mode(settings: Any) -> str:
-    return restart_runtime.resolve_restart_rehydrate_mode(settings)
-
-
-def _is_restart_strict(settings: Any) -> bool:
-    return restart_runtime.is_restart_strict(settings)
-
-
 def _read_archive_run_state_year(state_path: str) -> Optional[int]:
     return restart_runtime.read_archive_run_state_year(
         state_path,
@@ -581,61 +573,6 @@ def _reconstruct_restart_completed_run_outputs(
         archive_run_dir=archive_run_dir,
         workflow_stage=WorkflowState.Stage,
         query_facet=query_facet,
-    )
-
-
-def _log_resume_doctor_check(
-    *,
-    check: str,
-    ok: bool,
-    detail: str,
-) -> None:
-    restart_runtime.log_resume_doctor_check(check=check, ok=ok, detail=detail)
-
-
-def _run_resume_doctor_diagnostics(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    local_run_dir: str,
-    archive_run_dir: str,
-    archive_state_path: str,
-    local_state_path: str,
-    local_consist_db_path: Optional[str],
-    restart_missing_artifacts_initial: List[Dict[str, str]],
-    restart_missing_artifacts_after_recovery: List[Dict[str, str]],
-    restart_reconstruction: Optional[Dict[str, Any]],
-) -> None:
-    restart_runtime.run_resume_doctor_diagnostics(
-        state=state,
-        workspace=workspace,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path,
-        local_state_path=local_state_path,
-        local_consist_db_path=local_consist_db_path,
-        restart_missing_artifacts_initial=restart_missing_artifacts_initial,
-        restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
-        snapshot_latest_dir_fn=snapshot_latest_dir,
-        build_manifest_path_fn=build_manifest_path,
-        format_missing_artifact_summary_fn=_format_missing_artifact_summary,
-        log_resume_doctor_check_fn=_log_resume_doctor_check,
-        restart_reconstruction=restart_reconstruction,
-    )
-
-
-def _hydrate_restart_local_bookkeeping(
-    *,
-    archive_run_dir: str,
-    local_run_dir: str,
-    archive_state_path: str,
-    local_state_path: str,
-) -> Dict[str, Any]:
-    return restart_runtime.hydrate_restart_local_bookkeeping(
-        archive_run_dir=archive_run_dir,
-        local_run_dir=local_run_dir,
-        archive_state_path=archive_state_path,
-        local_state_path=local_state_path,
     )
 
 
@@ -838,10 +775,7 @@ def main(
     if state.run_info_path != archive_state_path:
         state.set_run_info_path(archive_state_path)
 
-    restart_rehydrate_mode = _resolve_restart_rehydrate_mode(settings)
-    restart_strict = _is_restart_strict(settings)
     restart_reconstruction: Optional[Dict[str, Any]] = None
-    restart_bookkeeping_hydration: Optional[Dict[str, Any]] = None
     restart_missing_artifacts_initial: List[Dict[str, str]] = []
     restart_missing_artifacts_after_recovery: List[Dict[str, str]] = []
     emit_consist_audit_event(
@@ -857,8 +791,6 @@ def main(
         archive_state_path=archive_state_path if is_restart_run else None,
         restart_run=is_restart_run,
         data_initialized=bool(state.data_initialized),
-        restart_rehydrate_mode=restart_rehydrate_mode,
-        restart_strict=restart_strict,
         bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
     )
     restart_query_facet: Dict[str, Any] = {"scenario_id": scenario_id}
@@ -866,115 +798,77 @@ def main(
         restart_query_facet["seed"] = run_seed
 
     if is_restart_run and state.data_initialized:
-        if restart_rehydrate_mode == "off":
-            logger.info(
-                "Restart completed-run reconstruction disabled "
-                "(run.restart_rehydrate_mode=off)."
-            )
-        else:
-            restart_reconstruction = _reconstruct_restart_completed_run_outputs(
-                tracker=tracker,
-                state=state,
-                local_run_dir=local_run_dir,
-                archive_run_dir=archive_run_dir,
-                query_facet=restart_query_facet,
-            )
-            reconstruction_result = restart_reconstruction["materialization_result"]
-            logger.info(
-                "Restart completed-run reconstruction finished: run_ids=%s "
-                "source_root=%s target_root=%s preserve_existing=True %s",
-                len(restart_reconstruction.get("run_ids", [])),
-                restart_reconstruction.get("source_root"),
-                restart_reconstruction.get("target_root"),
-                reconstruction_result.summary,
-            )
-            if not reconstruction_result.complete:
-                logger.warning(
-                    "Restart completed-run reconstruction incomplete: %s "
-                    "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
-                    reconstruction_result.summary,
-                    reconstruction_result.skipped_unmapped,
-                    reconstruction_result.skipped_missing_source,
-                    reconstruction_result.failed,
-                )
-            shadow_compare = dict(restart_reconstruction.get("shadow_compare", {}) or {})
-            tracker_only_run_ids = list(shadow_compare.get("tracker_only_run_ids", []) or [])
-            manifest_only_run_ids = list(
-                shadow_compare.get("manifest_only_run_ids", []) or []
-            )
-            logger.info(
-                "Restart discovery summary: mode=%s run_ids=%s matched_targets=%s "
-                "unmatched_targets=%s fallback_reason=%s atlas_gap_detected=%s "
-                "shadow_compare_enabled=%s shadow_parity=%s tracker_only=%s manifest_only=%s",
-                restart_reconstruction.get("discovery_mode"),
-                len(restart_reconstruction.get("run_ids", [])),
-                len(restart_reconstruction.get("matched_query_targets", [])),
-                len(restart_reconstruction.get("unmatched_query_targets", [])),
-                restart_reconstruction.get("fallback_reason"),
-                restart_reconstruction.get("atlas_gap_detected"),
-                shadow_compare.get("enabled", False),
-                shadow_compare.get("parity"),
-                tracker_only_run_ids,
-                manifest_only_run_ids,
-            )
-            for restored_run in restart_reconstruction.get(
-                "restored_run_diagnostics", []
-            ):
-                logger.info(
-                    "[RestartRestore] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
-                    restored_run.get("source"),
-                    restored_run.get("model"),
-                    restored_run.get("year"),
-                    restored_run.get("iteration"),
-                    restored_run.get("run_id"),
-                    restored_run.get("parent_run_id"),
-                )
-            emit_consist_audit_event(
-                workspace=workspace,
-                event_type="restart_discovery",
-                discovery_mode=restart_reconstruction.get("discovery_mode"),
-                fallback_reason=restart_reconstruction.get("fallback_reason"),
-                discovered_run_count=len(restart_reconstruction.get("run_ids", [])),
-                query_target_count=len(restart_reconstruction.get("query_targets", [])),
-                matched_query_target_count=len(
-                    restart_reconstruction.get("matched_query_targets", [])
-                ),
-                unmatched_query_target_count=len(
-                    restart_reconstruction.get("unmatched_query_targets", [])
-                ),
-                query_targets=restart_reconstruction.get("query_targets", []),
-                matched_run_ids_by_target=restart_reconstruction.get(
-                    "matched_query_targets", []
-                ),
-                unmatched_query_targets=restart_reconstruction.get(
-                    "unmatched_query_targets", []
-                ),
-                atlas_gap_detected=bool(
-                    restart_reconstruction.get("atlas_gap_detected", False)
-                ),
-                shadow_compare=shadow_compare,
-                tracker_only_run_ids=tracker_only_run_ids,
-                manifest_only_run_ids=manifest_only_run_ids,
-                restored_run_diagnostics=restart_reconstruction.get(
-                    "restored_run_diagnostics", []
-                ),
-            )
-
-    if is_restart_run:
-        restart_bookkeeping_hydration = _hydrate_restart_local_bookkeeping(
-            archive_run_dir=archive_run_dir,
+        restart_reconstruction = _reconstruct_restart_completed_run_outputs(
+            tracker=tracker,
+            state=state,
             local_run_dir=local_run_dir,
-            archive_state_path=archive_state_path,
-            local_state_path=local_state_path,
+            archive_run_dir=archive_run_dir,
+            query_facet=restart_query_facet,
         )
+        reconstruction_result = restart_reconstruction["materialization_result"]
         logger.info(
-            "Restart local bookkeeping hydration finished: state_mirror=%s "
-            "workflow_files_copied=%s skipped_existing=%s missing_source=%s failed=%s",
-            restart_bookkeeping_hydration.get("state_mirror"),
-            restart_bookkeeping_hydration.get("workflow_files_copied"),
-            restart_bookkeeping_hydration.get("skipped_existing"),
-            restart_bookkeeping_hydration.get("missing_source"),
-            len(restart_bookkeeping_hydration.get("failed", [])),
+            "Restart completed-run reconstruction finished: run_ids=%s "
+            "source_root=%s target_root=%s preserve_existing=True %s",
+            len(restart_reconstruction.get("run_ids", [])),
+            restart_reconstruction.get("source_root"),
+            restart_reconstruction.get("target_root"),
+            reconstruction_result.summary,
+        )
+        if not reconstruction_result.complete:
+            logger.warning(
+                "Restart completed-run reconstruction incomplete: %s "
+                "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
+                reconstruction_result.summary,
+                reconstruction_result.skipped_unmapped,
+                reconstruction_result.skipped_missing_source,
+                reconstruction_result.failed,
+            )
+        logger.info(
+            "Restart discovery summary: mode=%s run_ids=%s matched_targets=%s "
+            "unmatched_targets=%s fallback_reason=%s atlas_gap_detected=%s",
+            restart_reconstruction.get("discovery_mode"),
+            len(restart_reconstruction.get("run_ids", [])),
+            len(restart_reconstruction.get("matched_query_targets", [])),
+            len(restart_reconstruction.get("unmatched_query_targets", [])),
+            restart_reconstruction.get("fallback_reason"),
+            restart_reconstruction.get("atlas_gap_detected"),
+        )
+        for restored_run in restart_reconstruction.get("restored_run_diagnostics", []):
+            logger.info(
+                "[RestartRestore] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
+                restored_run.get("source"),
+                restored_run.get("model"),
+                restored_run.get("year"),
+                restored_run.get("iteration"),
+                restored_run.get("run_id"),
+                restored_run.get("parent_run_id"),
+            )
+        emit_consist_audit_event(
+            workspace=workspace,
+            event_type="restart_discovery",
+            discovery_mode=restart_reconstruction.get("discovery_mode"),
+            fallback_reason=restart_reconstruction.get("fallback_reason"),
+            discovered_run_count=len(restart_reconstruction.get("run_ids", [])),
+            query_target_count=len(restart_reconstruction.get("query_targets", [])),
+            matched_query_target_count=len(
+                restart_reconstruction.get("matched_query_targets", [])
+            ),
+            unmatched_query_target_count=len(
+                restart_reconstruction.get("unmatched_query_targets", [])
+            ),
+            query_targets=restart_reconstruction.get("query_targets", []),
+            matched_run_ids_by_target=restart_reconstruction.get(
+                "matched_query_targets", []
+            ),
+            unmatched_query_targets=restart_reconstruction.get(
+                "unmatched_query_targets", []
+            ),
+            atlas_gap_detected=bool(
+                restart_reconstruction.get("atlas_gap_detected", False)
+            ),
+            restored_run_diagnostics=restart_reconstruction.get(
+                "restored_run_diagnostics", []
+            ),
         )
 
     if state.data_initialized:
@@ -992,14 +886,11 @@ def main(
                 "data_initialized=True: %s",
                 _format_missing_artifact_summary(restart_missing_artifacts_initial),
             )
-            if restart_rehydrate_mode != "off":
-                restart_missing_artifacts_after_recovery = (
-                    _find_missing_restart_local_artifacts(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                    )
-                )
+            restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )
             restart_repairs_applied = False
             if is_restart_run and _repair_restart_atlas_inputs_from_archive(
                 settings=settings,
@@ -1092,19 +983,9 @@ def main(
                     restart_missing_artifacts_after_recovery
                 ),
             )
-        _run_resume_doctor_diagnostics(
-            state=state,
-            workspace=workspace,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-            archive_state_path=archive_state_path,
-            local_state_path=local_state_path,
-            local_consist_db_path=local_consist_db_path,
-            restart_missing_artifacts_initial=restart_missing_artifacts_initial,
-            restart_missing_artifacts_after_recovery=restart_missing_artifacts_after_recovery,
-            restart_reconstruction=restart_reconstruction,
-        )
-        if restart_missing_artifacts_after_recovery and restart_strict:
+        if restart_missing_artifacts_after_recovery and bool(
+            getattr(getattr(settings, "run", None), "restart_strict", False)
+        ):
             raise RuntimeError(
                 "Strict restart preflight failed; required restart artifacts are "
                 "still missing after restart bootstrap. missing="
