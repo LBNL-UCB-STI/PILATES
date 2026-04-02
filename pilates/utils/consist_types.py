@@ -2,95 +2,60 @@ from __future__ import annotations
 
 from typing import Any, Callable, ContextManager, Dict, Mapping, Optional, Protocol, runtime_checkable
 
-try:
-    from consist.protocols import (  # type: ignore[assignment]
-        ArtifactLike,
-        RunResultLike,
-        ScenarioLike,
-        TrackerLike,
-    )
-except Exception:  # pragma: no cover - optional Consist dependency
+from consist.protocols import (
+    ArtifactLike as ConsistArtifactLike,
+    RunResultLike,
+    ScenarioLike as ConsistScenarioLike,
+    TrackerLike as ConsistTrackerLike,
+)
 
-    @runtime_checkable
-    class ArtifactLike(Protocol):
-        @property
-        def path(self) -> Any: ...
 
-        @property
-        def container_uri(self) -> str: ...
+@runtime_checkable
+class ArtifactLike(ConsistArtifactLike, Protocol):
+    @property
+    def table_path(self) -> Optional[str]: ...
 
-        @property
-        def table_path(self) -> Optional[str]: ...
+    @property
+    def array_path(self) -> Optional[str]: ...
 
-        @property
-        def array_path(self) -> Optional[str]: ...
 
-    @runtime_checkable
-    class RunResultLike(Protocol):
-        outputs: Dict[str, Any]
-        cache_hit: bool
+@runtime_checkable
+class TrackerPersistenceLike(Protocol):
+    def batch_artifact_writes(self) -> ContextManager[Any]: ...
 
-    @runtime_checkable
-    class ScenarioLike(Protocol):
-        def run(
-            self,
-            fn: Optional[Callable[..., Any]] = None,
-            name: Optional[str] = None,
-            *,
-            output_paths: Optional[Mapping[str, Any]] = None,
-            runtime_kwargs: Optional[Dict[str, Any]] = None,
-            **kwargs: Any,
-        ) -> RunResultLike: ...
 
-        def trace(self, *args: Any, **kwargs: Any): ...
+@runtime_checkable
+class ScenarioLike(ConsistScenarioLike, Protocol):
+    def collect_by_keys(
+        self,
+        artifacts: Dict[str, Any],
+        *keys: str,
+        prefix: str = "",
+    ) -> Dict[str, Any]: ...
 
-        def collect_by_keys(
-            self,
-            artifacts: Dict[str, Any],
-            *keys: str,
-            prefix: str = "",
-        ) -> Dict[str, Any]: ...
 
-    @runtime_checkable
-    class TrackerPersistenceLike(Protocol):
-        def batch_artifact_writes(self) -> ContextManager[Any]: ...
+@runtime_checkable
+class TrackerLike(ConsistTrackerLike, Protocol):
+    persistence: TrackerPersistenceLike
 
-    @runtime_checkable
-    class TrackerLike(Protocol):
-        persistence: TrackerPersistenceLike
+    def log_h5_container(
+        self,
+        path: Any,
+        key: Optional[str] = None,
+        *,
+        direction: str = "input",
+        **metadata: Any,
+    ) -> Optional[ArtifactLike]: ...
 
-        def log_output(
-            self, path: Any, key: Optional[str] = None, **metadata: Any
-        ) -> Optional[ArtifactLike]: ...
-
-        def log_input(
-            self, path: Any, key: Optional[str] = None, **metadata: Any
-        ) -> Optional[ArtifactLike]: ...
-
-        def log_artifacts(
-            self, outputs: Mapping[str, Any], **metadata: Any
-        ) -> Mapping[str, ArtifactLike]: ...
-
-        def log_h5_container(
-            self,
-            path: Any,
-            key: Optional[str] = None,
-            *,
-            direction: str = "input",
-            **metadata: Any,
-        ) -> Optional[ArtifactLike]: ...
-
-        def log_h5_table(
-            self,
-            path: Any,
-            key: Optional[str] = None,
-            *,
-            table_path: str,
-            direction: str = "input",
-            **metadata: Any,
-        ) -> Optional[ArtifactLike]: ...
-
-        def scenario(self, name: str, **kwargs: Any): ...
+    def log_h5_table(
+        self,
+        path: Any,
+        key: Optional[str] = None,
+        *,
+        table_path: str,
+        direction: str = "input",
+        **metadata: Any,
+    ) -> Optional[ArtifactLike]: ...
 
 
 @runtime_checkable

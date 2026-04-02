@@ -69,17 +69,6 @@ def create_tracker(
         tracker_factory=tracker_factory,
     )
     if resolved_enabled and _is_noop_tracker(tracker):
-        repaired = _repair_tracker_db_schema_compatibility(tracker_kwargs)
-        if repaired:
-            logger.warning(
-                "Applied compatibility migration for Consist artifact URI columns; "
-                "retrying tracker initialization."
-            )
-            tracker = consist.create_tracker(
-                enabled=resolved_enabled,
-                tracker_factory=tracker_factory,
-            )
-    if resolved_enabled and _is_noop_tracker(tracker):
         logger.error(
             "Consist tracker initialization returned %s while enabled=True. "
             "PILATES requires an active tracker; check preceding Consist tracker "
@@ -122,8 +111,6 @@ def log_input(
     enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
-    if consist is None:
-        return None
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
@@ -136,9 +123,6 @@ def log_input(
         return consist.log_input(path, key=key, enabled=False, **meta)
     try:
         return consist.log_input(path, key=key, enabled=True, **meta)
-    except RuntimeError:
-        logger.debug("Skipping input artifact logging outside active Consist run.")
-        return consist.log_input(path, key=key, enabled=False, **meta)
     except Exception as exc:
         return _retry_without_schema_meta(
             log_fn=consist.log_input,
@@ -157,8 +141,6 @@ def log_output(
     enabled: Optional[bool] = None,
     **meta: Any,
 ) -> Optional[ArtifactLike]:
-    if consist is None:
-        return None
     resolved_enabled = _is_enabled(enabled)
     if key and "schema" not in meta:
         schema = _schema_for_key(key)
@@ -174,9 +156,6 @@ def log_output(
         return consist.log_output(path, key=key, enabled=False, **meta)
     try:
         return consist.log_output(path, key=key, enabled=True, **meta)
-    except RuntimeError:
-        logger.debug("Skipping output artifact logging outside active Consist run.")
-        return consist.log_output(path, key=key, enabled=False, **meta)
     except Exception as exc:
         return _retry_without_schema_meta(
             log_fn=consist.log_output,
@@ -218,14 +197,8 @@ def log_h5_container(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    try:
-        with tracker.persistence.batch_artifact_writes():
-            return tracker.log_h5_container(path, key=key, direction=direction, **meta)
-    except RuntimeError:
-        logger.debug("Skipping HDF5 container logging outside active Consist run.")
-        if direction == "output":
-            return log_output(path, key=key, enabled=False, **meta)
-        return log_input(path, key=key, enabled=False, **meta)
+    with tracker.persistence.batch_artifact_writes():
+        return tracker.log_h5_container(path, key=key, direction=direction, **meta)
 
 
 def log_h5_table(
@@ -260,17 +233,9 @@ def log_h5_table(
         if direction == "output":
             return log_output(path, key=key, enabled=resolved_enabled, **meta)
         return log_input(path, key=key, enabled=resolved_enabled, **meta)
-    try:
-        artifact = tracker.log_h5_table(
-            path, key=key, table_path=table_path, direction=direction, **meta
-        )
-    except RuntimeError:
-        logger.debug("Skipping HDF5 table logging outside active Consist run.")
-        artifact = (
-            log_output(path, key=key, enabled=False, **meta)
-            if direction == "output"
-            else log_input(path, key=key, enabled=False, **meta)
-        )
+    artifact = tracker.log_h5_table(
+        path, key=key, table_path=table_path, direction=direction, **meta
+    )
     return _ensure_legacy_table_path_meta(artifact, table_path=table_path)
 
 
@@ -284,21 +249,13 @@ def log_artifacts(
     normalized = {key: _normalize_path(value) for key, value in mapping.items()}
     if not resolved_enabled:
         return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
-    try:
-        return _log_artifacts_with_enabled(normalized, enabled=True, **meta)
-    except RuntimeError:
-        logger.debug("Skipping artifact logging outside active Consist run.")
-        return _log_artifacts_with_enabled(normalized, enabled=False, **meta)
+    return _log_artifacts_with_enabled(normalized, enabled=True, **meta)
 
 
 def _log_artifacts_with_enabled(
     outputs: Mapping[str, Any], *, enabled: bool, **meta: Any
 ) -> Optional[Dict[str, ArtifactLike]]:
-    try:
-        return consist.log_artifacts(outputs=outputs, enabled=enabled, **meta)
-    except TypeError:
-        # Legacy compatibility for older Consist call forms.
-        return consist.log_artifacts(outputs, enabled=enabled, **meta)
+    return consist.log_artifacts(outputs=outputs, enabled=enabled, **meta)
 
 
 def _schema_for_key(key: str) -> Optional[Any]:
@@ -359,10 +316,7 @@ def _retry_without_schema_meta(
     try:
         return log_fn(path, key=key, enabled=True, **reduced_meta)
     except RuntimeError:
-        logger.debug(
-            "Skipping %s artifact logging outside active Consist run.", direction
-        )
-        return log_fn(path, key=key, enabled=False, **reduced_meta)
+        raise
 
 
 def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
@@ -378,11 +332,7 @@ def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
 def log_meta(**meta: Any) -> None:
     if not _is_enabled():
         return None
-    try:
-        return consist.log_meta(**meta)
-    except RuntimeError:
-        logger.debug("Skipping metadata logging outside active Consist run.")
-        return None
+    return consist.log_meta(**meta)
 
 
 def current_run() -> Optional[Any]:
@@ -406,7 +356,7 @@ def current_tracker() -> Optional[TrackerLike]:
     """Get the current global tracker (or None if not set)."""
     try:
         return consist.current_tracker()
-    except Exception:
+    except RuntimeError:
         return None
 
 
@@ -417,60 +367,6 @@ def _is_noop_tracker(tracker: Optional[Any]) -> bool:
     name = getattr(tracker_type, "__name__", "").lower()
     module = getattr(tracker_type, "__module__", "").lower()
     return "nooptracker" in name or ".noop" in module
-
-
-def _repair_tracker_db_schema_compatibility(tracker_kwargs: Mapping[str, Any]) -> bool:
-    db_path = tracker_kwargs.get("db_path")
-    if not db_path:
-        return False
-    try:
-        db_path_str = os.fspath(db_path)
-    except TypeError:
-        return False
-    if not db_path_str:
-        return False
-    if not os.path.exists(db_path_str):
-        return False
-
-    try:
-        import duckdb
-    except Exception:
-        logger.exception(
-            "DuckDB not available to apply Consist schema compatibility migration."
-        )
-        return False
-
-    conn = None
-    try:
-        conn = duckdb.connect(db_path_str)
-        columns = conn.execute("PRAGMA table_info('artifact')").fetchall()
-        if not columns:
-            return False
-        names = {str(row[1]) for row in columns if len(row) > 1}
-        migrated = False
-        if "uri" in names and "container_uri" not in names:
-            conn.execute("ALTER TABLE artifact ADD COLUMN container_uri VARCHAR")
-            conn.execute(
-                "UPDATE artifact SET container_uri = uri WHERE container_uri IS NULL"
-            )
-            migrated = True
-        if "container_uri" in names and "uri" not in names:
-            conn.execute("ALTER TABLE artifact ADD COLUMN uri VARCHAR")
-            conn.execute("UPDATE artifact SET uri = container_uri WHERE uri IS NULL")
-            migrated = True
-        return migrated
-    except Exception:
-        logger.exception(
-            "Failed applying Consist artifact URI schema compatibility migration for %s.",
-            db_path_str,
-        )
-        return False
-    finally:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
 
 
 def require_runtime_kwargs(

@@ -1,6 +1,8 @@
 import types
 from contextlib import contextmanager
 
+import pytest
+
 from pilates.utils import consist_runtime as cr
 
 
@@ -51,7 +53,7 @@ def test_log_output_does_not_override_explicit_schema(monkeypatch):
     assert meta["schema"] is _ExplicitSchema
 
 
-def test_log_h5_table_falls_back_outside_active_run(monkeypatch, tmp_path):
+def test_log_h5_table_raises_outside_active_run(monkeypatch, tmp_path):
     calls = []
     _install_consist_stub(monkeypatch, calls)
     h5_path = tmp_path / "model_data.h5"
@@ -63,23 +65,19 @@ def test_log_h5_table_falls_back_outside_active_run(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
 
-    artifact = cr.log_h5_table(
-        str(h5_path),
-        key="atlas_postprocess_usim_households_table_updated",
-        table_path="/2023/households",
-        direction="output",
-        enabled=True,
-    )
+    with pytest.raises(RuntimeError, match="outside of a run context"):
+        cr.log_h5_table(
+            str(h5_path),
+            key="atlas_postprocess_usim_households_table_updated",
+            table_path="/2023/households",
+            direction="output",
+            enabled=True,
+        )
 
-    assert artifact["key"] == "atlas_postprocess_usim_households_table_updated"
-    assert calls
-    direction, key, meta = calls[0]
-    assert direction == "output"
-    assert key == "atlas_postprocess_usim_households_table_updated"
-    assert meta["enabled"] is False
+    assert calls == []
 
 
-def test_log_h5_container_falls_back_outside_active_run(monkeypatch, tmp_path):
+def test_log_h5_container_raises_outside_active_run(monkeypatch, tmp_path):
     calls = []
     _install_consist_stub(monkeypatch, calls)
     h5_path = tmp_path / "model_data.h5"
@@ -99,19 +97,15 @@ def test_log_h5_container_falls_back_outside_active_run(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
 
-    artifact = cr.log_h5_container(
-        str(h5_path),
-        key="usim_datastore_h5",
-        direction="output",
-        enabled=True,
-    )
+    with pytest.raises(RuntimeError, match="outside of a run context"):
+        cr.log_h5_container(
+            str(h5_path),
+            key="usim_datastore_h5",
+            direction="output",
+            enabled=True,
+        )
 
-    assert artifact["key"] == "usim_datastore_h5"
-    assert calls
-    direction, key, meta = calls[0]
-    assert direction == "output"
-    assert key == "usim_datastore_h5"
-    assert meta["enabled"] is False
+    assert calls == []
 
 
 def test_log_h5_container_batches_artifact_writes_when_available(monkeypatch, tmp_path):
