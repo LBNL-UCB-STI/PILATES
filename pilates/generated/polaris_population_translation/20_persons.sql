@@ -46,8 +46,8 @@ select
   0 as journey_to_work_vehicle_occupancy,
   cast(
     case
-      when cast(p.mar as integer) = 1 then 1
-      when cast(p.mar as integer) = 5 then 5
+      when cast(p.__PERSON_MAR_COL__ as integer) = 1 then 1
+      when cast(p.__PERSON_MAR_COL__ as integer) = 5 then 5
       else 0
     end as integer
   ) as marital_status,

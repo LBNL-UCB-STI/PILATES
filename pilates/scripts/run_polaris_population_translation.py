@@ -90,6 +90,30 @@ def _require_path(path: Path, *, label: str) -> Path:
     return path.resolve()
 
 
+def _quoted_ident(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def _parquet_columns(path: Path) -> list[str]:
+    conn = duckdb.connect()
+    try:
+        relation = conn.read_parquet(str(path))
+        return [str(column) for column in relation.columns]
+    finally:
+        conn.close()
+
+
+def _resolve_person_mar_column(persons_path: Path) -> str:
+    columns = _parquet_columns(persons_path)
+    for candidate in ("mar", "MAR"):
+        if candidate in columns:
+            return _quoted_ident(candidate)
+    raise ValueError(
+        f"Could not find a marital-status column in persons parquet. "
+        f"Expected one of ('mar', 'MAR'); found columns: {columns}"
+    )
+
+
 def _placeholder_map(
     *,
     source_dir: Path,
@@ -114,6 +138,7 @@ def _placeholder_map(
         "__ATLAS_USED_VEHICLES_CSV__": str(used_ref),
         "__OUT_DIR__": str(resolved_output_dir),
         "__EXPORT_YEAR__": str(year),
+        "__PERSON_MAR_COL__": _resolve_person_mar_column(persons),
     }
 
 
