@@ -111,16 +111,23 @@ def resolve_canonical_zone_source(
         if primary_source["source_file"]
         else None
     )
+    primary_exists = bool(primary_resolved and os.path.exists(primary_resolved))
 
     for candidate, source_config in candidates:
         if os.path.exists(candidate):
             if primary_resolved and os.path.abspath(candidate) != os.path.abspath(
                 primary_resolved
             ):
-                logger.warning(
-                    "Primary canonical zone source unavailable; using fallback source: %s",
-                    candidate,
-                )
+                if not primary_exists:
+                    logger.warning(
+                        "Primary canonical zone source unavailable; using fallback source: %s",
+                        candidate,
+                    )
+                else:
+                    logger.info(
+                        "Using staged canonical zone source: %s",
+                        candidate,
+                    )
             return candidate, source_config
 
     raise FileNotFoundError(

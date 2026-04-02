@@ -94,6 +94,26 @@ def test_build_coupler_schema_uses_atlas_static_keys():
     assert "adopt/baseline/new_vehicles_biannual_values_2023" in schema
 
 
+def test_build_coupler_schema_expands_runtime_year_scoped_keys():
+    schema = build_coupler_schema([], settings=_settings(start=2017, end=2018, freq=1))
+
+    assert "householdv_2017" in schema
+    assert "vehicles_2017" in schema
+    assert "householdv_2018" in schema
+    assert "vehicles_2018" in schema
+    assert "householdv_2019" in schema
+    assert "vehicles_2019" in schema
+    assert "usim_input_archive_2019" in schema
+    assert "usim_input_merged_2019" in schema
+
+
+def test_build_coupler_schema_declares_beam_plans_handoff_alias():
+    schema = build_coupler_schema([], settings=_settings())
+
+    assert "beam_plans_asim_out" in schema
+    assert "beam/beam_plans_asim_out" in schema
+
+
 def test_build_coupler_schema_without_extras_is_empty_for_no_steps():
     schema = build_coupler_schema(
         [],

@@ -2679,23 +2679,26 @@ def _copy_data_to_mutable_location(
     if os.path.exists(zone_source_path):
         zone_fname = os.path.basename(zone_source_path)
         asim_zones_path = os.path.join(input_dir, zone_fname)
-        logger.info(
-            f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
-        )
-        copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
+        if os.path.abspath(zone_source_path) == os.path.abspath(asim_zones_path):
+            logger.info("Canonical zones already at destination: %s", asim_zones_path)
+        else:
+            logger.info(
+                f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
+            )
+            copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
 
-        input_records.add_record(
-            FileRecord(
-                file_path=zone_source_path,
-                short_name="canonical_zones_source",
+            input_records.add_record(
+                FileRecord(
+                    file_path=zone_source_path,
+                    short_name="canonical_zones_source",
+                )
             )
-        )
-        output_records.add_record(
-            FileRecord(
-                file_path=asim_zones_path,
-                short_name="canonical_zones",
+            output_records.add_record(
+                FileRecord(
+                    file_path=asim_zones_path,
+                    short_name="canonical_zones",
+                )
             )
-        )
     else:
         logger.warning(
             f"Canonical zone source file not found at {zone_source_path}, skipping copy."

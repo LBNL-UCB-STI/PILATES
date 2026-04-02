@@ -74,6 +74,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     LINKSTATS: "BEAM linkstats output for downstream runs.",
     BEAM_FULL_SKIMS: "BEAM full-skim background skims output.",
     BEAM_PLANS_OUT: "BEAM plans output for downstream runs.",
+    "beam_plans_asim_out": (
+        "ActivitySim-to-BEAM plans handoff parquet used to stage BEAM plans input."
+    ),
     BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
     BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (
@@ -133,6 +136,42 @@ def _atlas_static_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
     return keys
 
 
+_RUNTIME_YEAR_KEY_FAMILIES: Dict[str, str] = {
+    "householdv_{year}": "ATLAS household-vehicle ownership output for year {year}.",
+    "vehicles_{year}": "ATLAS vehicle ownership output for year {year}.",
+    "usim_input_archive_{year}": "Archived UrbanSim datastore snapshot for year {year}.",
+    "usim_input_merged_{year}": "Merged UrbanSim datastore snapshot for year {year}.",
+}
+
+
+def _runtime_year_candidates(settings: Optional[PilatesConfig]) -> tuple[int, ...]:
+    if settings is None:
+        return ()
+    run_cfg = getattr(settings, "run", None)
+    if run_cfg is None:
+        return ()
+    start_year = getattr(run_cfg, "start_year", None)
+    end_year = getattr(run_cfg, "end_year", None)
+    if start_year is None or end_year is None:
+        return ()
+    max_increment = max(
+        1,
+        int(getattr(run_cfg, "travel_model_freq", 1) or 1),
+        int(getattr(run_cfg, "vehicle_ownership_freq", 1) or 1),
+        int(getattr(run_cfg, "land_use_freq", 1) or 1),
+    )
+    return tuple(range(int(start_year), int(end_year) + max_increment + 1))
+
+
+def _runtime_year_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
+    keys: Dict[str, str] = {}
+    for year in _runtime_year_candidates(settings):
+        for family, description in _RUNTIME_YEAR_KEY_FAMILIES.items():
+            key = family.format(year=year)
+            keys[key] = description.format(year=year)
+    return keys
+
+
 def build_coupler_schema(
     steps: Iterable[Callable[..., Any]],
     settings: Optional[PilatesConfig] = None,
@@ -161,6 +200,7 @@ def build_coupler_schema(
     extras: Dict[str, str] = {}
     if include_extras:
         extras = dict(PILATES_COUPLER_SCHEMA)
+        extras.update(_runtime_year_key_map(settings))
         for key, description in list(PILATES_COUPLER_SCHEMA.items()):
             namespaced_key = namespaced_alias_for_key(key)
             if not namespaced_key:

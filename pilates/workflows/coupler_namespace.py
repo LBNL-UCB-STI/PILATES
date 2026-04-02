@@ -52,6 +52,7 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     BEAM_OUTPUT_DIR: "beam",
     BEAM_MUTABLE_DATA_DIR: "beam",
     BEAM_PLANS_IN: "beam",
+    "beam_plans_asim_out": "beam",
     BEAM_HOUSEHOLDS_IN: "beam",
     BEAM_PERSONS_IN: "beam",
     BEAM_PLANS_OUT: "beam",
