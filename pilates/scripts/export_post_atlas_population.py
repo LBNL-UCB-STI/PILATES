@@ -270,14 +270,10 @@ def _step_run_for_year(
             step_name=step_model,
             phase=phase,
         )
-        if step_run_id is None:
-            raise ValueError(
-                f"Scenario run {getattr(scenario_run, 'id', 'unknown')} did not contain {step_model} for year {year}."
-            )
-        step_run = tracker.get_run(step_run_id)
-        if step_run is None:
-            raise ValueError(f"Step run id {step_run_id} could not be loaded.")
-        return step_run
+        if step_run_id is not None:
+            step_run = tracker.get_run(step_run_id)
+            if step_run is not None:
+                return step_run
 
     matches = tracker.find_runs(
         model=step_model,
