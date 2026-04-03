@@ -38,7 +38,6 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
     ):
         super().__init__(model_name, state)
         self.required_input_files = []
-        self.required_output_files = []
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):
@@ -178,11 +177,6 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             raise RuntimeError(
                 "A Consist tracker must be active for container execution. "
                 "Ensure the call occurs within a Consist scenario/run context."
-            )
-        if not (hasattr(tracker, "mounts") and hasattr(tracker, "start_run")):
-            raise RuntimeError(
-                f"Current tracker type {type(tracker).__name__} does not support "
-                "Consist container execution."
             )
 
         strict_mounts = True

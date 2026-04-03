@@ -785,6 +785,33 @@ OutputLogger = Callable[
     [StepOutputsT, "PilatesConfig", WorkflowState, "Workspace", "StepOutputsHolder"],
     None,
 ]
+OutputRecoverer = Callable[..., Optional[StepOutputsT]]
+
+
+@dataclass(frozen=True)
+class StandardStepSpec:
+    """
+    Declarative shell for the common typed-step pattern.
+
+    Phase 1 of the generic step-builder refactor only uses this for standard
+    step wiring. Model-specific execution, logging, and cache-recovery policy
+    intentionally remain in explicit callback helpers alongside the model code.
+    """
+
+    model_name: str
+    phase: str
+    outputs_class: Type[StepOutputsT]
+    component_getter: Callable[[Any, WorkflowState], Any]
+    component_executor: Callable[..., StepOutputsT]
+    outputs_holder_attr: str
+    input_logger: Optional[InputLogger] = None
+    output_logger: Optional[OutputLogger] = None
+    output_recoverer: Optional[OutputRecoverer] = None
+    declared_outputs: Optional[list[str]] = None
+    schema_outputs: Optional[list[str]] = None
+    step_description: Optional[str] = None
+    tags: Optional[list[str]] = None
+    step_logger: Optional[logging.Logger] = None
 
 
 @dataclass
@@ -1329,6 +1356,42 @@ def _make_logged_typed_step_function(
         step_logger=step_logger or logger,
         step_description=step_description,
         tags=tags,
+    )
+
+
+def build_standard_step(
+    *,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    spec: StandardStepSpec,
+) -> Callable[..., Any]:
+    """
+    Build a standard typed workflow step from a static spec.
+
+    The helper deliberately stays thin: it only removes repeated factory-shell
+    wiring around ``_make_logged_typed_step_function`` while preserving the
+    existing explicit callbacks and holder field names.
+    """
+
+    return _make_logged_typed_step_function(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        model_name=spec.model_name,
+        phase=spec.phase,
+        outputs_class=spec.outputs_class,
+        component_getter=spec.component_getter,
+        component_executor=spec.component_executor,
+        outputs_holder_setter=lambda holder, outputs: setattr(
+            holder, spec.outputs_holder_attr, outputs
+        ),
+        input_logger=spec.input_logger,
+        output_logger=spec.output_logger,
+        output_recoverer=spec.output_recoverer,
+        declared_outputs=spec.declared_outputs,
+        schema_outputs=spec.schema_outputs,
+        step_description=spec.step_description,
+        tags=spec.tags,
+        step_logger=spec.step_logger,
     )
 
 

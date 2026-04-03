@@ -32,12 +32,14 @@ from .shared import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
     CouplerProtocol,
+    StandardStepSpec,
     StepOutputsHolder,
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
     WorkflowState,
     _atlas_artifact_facet_meta,
+    build_standard_step,
     _log_named_h5_tables,
     _log_step_records,
     _make_logged_typed_step_function,
@@ -523,22 +525,22 @@ def make_urbansim_preprocess_step(
                 ),
             )
 
-    return _make_logged_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="preprocess",
-        outputs_class=UrbanSimPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "urbansim", state
+        spec=StandardStepSpec(
+            model_name="urbansim",
+            phase="preprocess",
+            outputs_class=UrbanSimPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_preprocess_typed,
+            outputs_holder_attr="urbansim_preprocess",
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_urbansim_preprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        step_logger=logger,
     )
 
 
@@ -593,20 +595,22 @@ def make_urbansim_run_step(
                 ),
             )
 
-    step_func = _make_logged_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="run",
-        outputs_class=UrbanSimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("urbansim", state),
-        component_executor=_execute_urbansim_run_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_run", outputs
+        spec=StandardStepSpec(
+            model_name="urbansim",
+            phase="run",
+            outputs_class=UrbanSimRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_run_typed,
+            outputs_holder_attr="urbansim_run",
+            output_logger=_log_outputs,
+            output_recoverer=_recover_urbansim_run_outputs,
+            step_logger=logger,
         ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_urbansim_run_outputs,
-        step_logger=logger,
     )
     return step_func
 
@@ -709,22 +713,22 @@ def make_urbansim_postprocess_step(
                     ),
                 )
 
-    return _make_logged_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="postprocess",
-        outputs_class=UrbanSimPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "urbansim", state
+        spec=StandardStepSpec(
+            model_name="urbansim",
+            phase="postprocess",
+            outputs_class=UrbanSimPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_postprocess_typed,
+            outputs_holder_attr="urbansim_postprocess",
+            output_logger=_log_outputs,
+            output_recoverer=_recover_urbansim_postprocess_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_urbansim_postprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_urbansim_postprocess_outputs,
-        step_logger=logger,
     )
 
 

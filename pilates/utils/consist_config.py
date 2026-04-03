@@ -15,13 +15,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
+from consist.types import HasConsistFacet
+
 from pilates.config.models import PilatesConfig
 from pilates.workflows.catalog import provenance_builder_key_for_model_name
-
-try:
-    from consist.types import HasConsistFacet
-except Exception:  # pragma: no cover
-    HasConsistFacet = None  # type: ignore[misc,assignment]
 
 
 IdentityInput = Tuple[str, Path]
@@ -203,7 +200,7 @@ def build_scenario_facet(settings: PilatesConfig) -> Dict[str, Any]:
     """
     run_cfg = getattr(settings, "run", None)
     if run_cfg is not None:
-        if HasConsistFacet is not None and isinstance(run_cfg, HasConsistFacet):
+        if isinstance(run_cfg, HasConsistFacet):
             run_cfg = run_cfg.to_consist_facet()
         elif hasattr(run_cfg, "to_consist_facet") and callable(
             run_cfg.to_consist_facet
@@ -305,7 +302,7 @@ def build_activitysim_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.activitysim
     if cfg is None:
         return {}
-    if HasConsistFacet is not None and isinstance(cfg, HasConsistFacet):
+    if isinstance(cfg, HasConsistFacet):
         return cfg.to_consist_facet()
     if hasattr(cfg, "to_consist_facet") and callable(cfg.to_consist_facet):
         return cfg.to_consist_facet()
@@ -349,7 +346,7 @@ def build_beam_facet(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.beam
     if cfg is None:
         return {}
-    if HasConsistFacet is not None and isinstance(cfg, HasConsistFacet):
+    if isinstance(cfg, HasConsistFacet):
         return cfg.to_consist_facet()
     if hasattr(cfg, "to_consist_facet") and callable(cfg.to_consist_facet):
         return cfg.to_consist_facet()
