@@ -86,33 +86,15 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
-def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatch) -> None:
-    coupler = CouplerWithSetOnly()
-    logged = {"called": False}
-    archived = []
-
+def test_log_and_set_output_raises_without_active_run(monkeypatch) -> None:
     monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_enqueue_archive_copy",
-        lambda key, path: archived.append((key, path)),
-    )
-
-    coupler_helpers.log_and_set_output(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert logged["called"] is False
-    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+    with pytest.raises(RuntimeError):
+        coupler_helpers.log_and_set_output(
+            key="usim_datastore_h5",
+            path="/tmp/path.h5",
+            description="test",
+            coupler=CouplerWithSetOnly(),
+        )
 
 
 def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
@@ -169,26 +151,15 @@ def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
     ]
 
 
-def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch) -> None:
-    coupler = CouplerWithSetOnly()
-    logged = {"called": False}
-
+def test_log_and_set_input_raises_without_active_run(monkeypatch) -> None:
     monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
-    monkeypatch.setattr(
-        coupler_helpers,
-        "_log_with_optional_h5_container",
-        lambda **_kwargs: logged.__setitem__("called", True),
-    )
-
-    coupler_helpers.log_and_set_input(
-        key="usim_datastore_h5",
-        path="/tmp/path.h5",
-        description="test",
-        coupler=coupler,
-    )
-
-    assert logged["called"] is False
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+    with pytest.raises(RuntimeError):
+        coupler_helpers.log_and_set_input(
+            key="usim_datastore_h5",
+            path="/tmp/path.h5",
+            description="test",
+            coupler=CouplerWithSetOnly(),
+        )
 
 
 def test_log_and_set_input_publishes_logged_artifact_with_active_run(monkeypatch) -> None:

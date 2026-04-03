@@ -486,7 +486,7 @@ def test_log_and_set_output_enqueues_archive_copy_and_sets_coupler(monkeypatch, 
     calls = []
     coupler = DummyCoupler()
     monkeypatch.setattr(ch.cr, "log_output", lambda *args, **kwargs: "artifact")
-    monkeypatch.setattr(ch.cr, "current_run", lambda: None)
+    monkeypatch.setattr(ch.cr, "current_run", lambda: object())
     monkeypatch.setattr(ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path)))
 
     out_path = tmp_path / "out.txt"

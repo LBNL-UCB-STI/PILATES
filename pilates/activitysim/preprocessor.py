@@ -3153,8 +3153,12 @@ def _update_persons_table(
         )
 
     if "school_zone_id" in persons.columns:
-        missing_school_mask = (persons["student"] == 1) & (persons["school_zone_id"] < 0)
-        valid_school_mask = (persons["student"] == 1) & (persons["school_zone_id"] >= 0)
+        # Align reassignment eligibility with ActivitySim's effective student
+        # semantics, which are derived from pstudent/is_student rather than the
+        # raw upstream student flag alone.
+        effective_student_mask = persons["pstudent"].isin([1, 2])
+        missing_school_mask = effective_student_mask & (persons["school_zone_id"] < 0)
+        valid_school_mask = effective_student_mask & (persons["school_zone_id"] >= 0)
         persons.loc[missing_school_mask, "needs_school_reassignment"] = True
         _mark_sampled_reassignments(
             "needs_school_reassignment",

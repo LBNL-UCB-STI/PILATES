@@ -96,6 +96,41 @@ def test_update_persons_table_marks_configured_share_of_valid_assignments_for_re
     assert not updated["needs_school_reassignment"].loc[[10, 11, 12, 13]].any()
 
 
+def test_update_persons_table_flags_effective_students_with_missing_school_location():
+    persons = pd.DataFrame(
+        {
+            "household_id": [1, 2, 3],
+            "age": [15, 19, 40],
+            "worker": [0, 0, 0],
+            "student": [0, 0, 0],
+            "work_zone_id": [-1, -1, -1],
+            "school_zone_id": [-1, -1, -1],
+        },
+        index=pd.Index([10, 20, 30], name="person_id"),
+    )
+
+    updated = _update_persons_table(
+        persons,
+        _households(),
+        pd.Series([], dtype=int),
+        _blocks(),
+        settings={
+            "activitysim": {
+                "workplace_reassignment_share": 0.0,
+                "school_reassignment_share": 0.0,
+                "random_seed": 7,
+            }
+        },
+        state=SimpleNamespace(year=2029, iteration=0),
+    )
+
+    assert updated.loc[10, "pstudent"] == 1
+    assert updated.loc[10, "needs_school_reassignment"]
+    assert updated.loc[20, "pstudent"] == 3
+    assert not updated.loc[20, "needs_school_reassignment"]
+    assert not updated.loc[30, "needs_school_reassignment"]
+
+
 def test_update_persons_table_emits_canonical_activitysim_location_columns_and_aliases():
     persons = pd.DataFrame(
         {

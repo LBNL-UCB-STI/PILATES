@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from contextlib import nullcontext
 import json
 import logging
 import os
@@ -124,6 +125,11 @@ class DummySnapshotTracker:
             json.dumps(metadata),
             encoding="utf-8",
         )
+
+
+class TraceCapableTrackerStub:
+    def trace(self, **_kwargs):
+        return nullcontext()
 
 
 def _settings(cache_enabled=True):
@@ -1155,6 +1161,7 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
+            region="seattle",
             output_directory=str(tmp_path / "archive-root"),
             local_workspace_root=str(tmp_path / "local-root"),
             enable_archive_copy=False,
@@ -1192,7 +1199,9 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     )
     monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: 1)
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
+    )
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
@@ -1606,6 +1615,7 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     local_root = tmp_path / "local-root"
     settings = SimpleNamespace(
         run=SimpleNamespace(
+            region="seattle",
             output_directory=str(archive_root),
             local_workspace_root=str(local_root),
             enable_archive_copy=False,
@@ -1618,7 +1628,7 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
 
     def _capture_create_tracker(**kwargs):
         tracker_kwargs.update(kwargs)
-        return object()
+        return TraceCapableTrackerStub()
 
     monkeypatch.setattr(run_module, "parse_args_and_settings", lambda: settings)
     monkeypatch.setattr(run_module.WorkflowState, "from_settings", lambda _s: state)
@@ -1659,7 +1669,9 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     workspace_mount = Path(tracker_kwargs["mounts"]["workspace"])
     project_root = Path(tracker_kwargs["project_root"])
     assert archive_run_dir.parent == archive_root
-    assert archive_run_dir.name.startswith(settings.run.output_run_name)
+    assert archive_run_dir.name.startswith(
+        f"pilates-run--{settings.run.region}--{settings.run.output_run_name}--"
+    )
     assert inputs_mount == repo_root.resolve()
     assert workspace_mount.parent == local_root
     assert workspace_mount.name == archive_run_dir.name
@@ -1735,7 +1747,9 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
     )
     monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
+    )
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
@@ -1866,7 +1880,9 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
     )
     monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
+    )
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
@@ -2031,7 +2047,9 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
     )
     monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
-    monkeypatch.setattr(run_module.cr, "create_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
+    )
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
