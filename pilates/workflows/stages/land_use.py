@@ -27,6 +27,7 @@ from pilates.workflows.orchestration import (
     StepRef,
     run_workflow,
 )
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
@@ -150,14 +151,22 @@ def run_land_use_stage(
     run_inputs = step_output_handoff_mapping(upstream_preprocess, coupler=coupler)
     # Some preprocessors materialize key artifacts via explicit logging rather
     # than RecordStore outputs. Preserve the restart-critical datastore roles
-    # explicitly, but do not leak preprocess-only component-local inputs such as
-    # ``usim_source_data_dir`` into the UrbanSim run binding contract.
+    # explicitly, but prefer the coupler-published artifact when available so
+    # downstream input identity stays stable across workspace restaging. Do not
+    # leak preprocess-only component-local inputs such as ``usim_source_data_dir``
+    # into the UrbanSim run binding contract.
     for key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
-        value = usim_inputs.get(key)
+        resolved = resolve_coupler_value(coupler, key)
+        value = (
+            resolved.value
+            if resolved.value is not None
+            else usim_inputs.get(key)
+        )
         if value is not None:
             run_inputs.setdefault(key, value)
     run_binding = build_binding_plan(
         step_name="urbansim_run",
+        coupler=coupler,
         explicit_inputs=run_inputs,
         optional_keys=list(run_inputs.keys()),
     )
