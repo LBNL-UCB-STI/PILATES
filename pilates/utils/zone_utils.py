@@ -166,10 +166,10 @@ def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
         except OSError:
             pass
         for sibling in source.parent.glob(f"{source.stem}.*"):
-            shutil.copy(sibling, Path(dest_dir) / sibling.name)
+            shutil.copy2(sibling, Path(dest_dir) / sibling.name)
         return str(dest_path)
 
-    shutil.copy(source, dest_path)
+    shutil.copy2(source, dest_path)
     return str(dest_path)
 
 

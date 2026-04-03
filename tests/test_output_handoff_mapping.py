@@ -142,6 +142,16 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         path=str(preprocess_path),
         container_uri="workspace://usim-preprocess.h5",
     )
+    base_artifact = SimpleNamespace(
+        key=USIM_DATASTORE_BASE_H5,
+        path=str(tmp_path / "base.h5"),
+        container_uri="workspace://base.h5",
+    )
+    current_artifact = SimpleNamespace(
+        key=USIM_DATASTORE_CURRENT_H5,
+        path=str(tmp_path / "current.h5"),
+        container_uri="workspace://current.h5",
+    )
 
     original_build_binding_plan = land_use_stage.build_binding_plan
 
@@ -205,9 +215,29 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         land_use_stage, "flush_archive_queue", lambda *args, **kwargs: None
     )
 
-    coupler = SimpleNamespace(
-        get=lambda key, default=None: artifact if key == "run_input" else default
-    )
+    class _Coupler:
+        def get(self, key, default=None):
+            values = {
+                "run_input": artifact,
+                USIM_DATASTORE_BASE_H5: base_artifact,
+                USIM_DATASTORE_CURRENT_H5: current_artifact,
+            }
+            return values.get(key, default)
+
+        def view(self, namespace):
+            class _View:
+                def get(self, key, default=None):
+                    if namespace != "urbansim":
+                        return default
+                    if key == USIM_DATASTORE_BASE_H5:
+                        return base_artifact
+                    if key == USIM_DATASTORE_CURRENT_H5:
+                        return current_artifact
+                    return default
+
+            return _View()
+
+    coupler = _Coupler()
     outputs_holder = StepOutputsHolder()
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
@@ -232,3 +262,8 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         call for call in resolution_calls if call["step_name"] == "urbansim_run"
     )
     assert run_binding_call["explicit_inputs"]["run_input"] is artifact
+    assert run_binding_call["explicit_inputs"][USIM_DATASTORE_BASE_H5] is base_artifact
+    assert (
+        run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5]
+        is current_artifact
+    )

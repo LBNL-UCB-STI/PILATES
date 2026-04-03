@@ -482,7 +482,7 @@ def _stage_atlas_static_inputs(
 
         dest_path = os.path.realpath(os.path.join(output_dir, normalized_relpath))
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        shutil.copy(source_path, dest_path)
+        shutil.copy2(source_path, dest_path)
 
         rel_no_ext = os.path.splitext(normalized_relpath)[0]
         rel_key = rel_no_ext
@@ -682,7 +682,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
             )
             if not os.path.exists(dest_path):
-                shutil.copy(f, dest_path)
+                shutil.copy2(f, dest_path)
                 logger.info(
                     f"[AtlasPreprocessor] Copied global {label} file: {f} to {dest_path}"
                 )

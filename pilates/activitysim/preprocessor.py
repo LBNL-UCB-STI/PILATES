@@ -107,7 +107,7 @@ def _copy_path_if_needed(source_path: str, dest_path: str) -> str:
     except OSError:
         pass
     os.makedirs(os.path.dirname(os.fspath(dest)), exist_ok=True)
-    shutil.copy(os.fspath(source), os.fspath(dest))
+    shutil.copy2(os.fspath(source), os.fspath(dest))
     return os.fspath(dest)
 
 

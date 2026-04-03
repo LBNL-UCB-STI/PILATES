@@ -444,7 +444,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             f"[UrbansimPreprocessor] Copying input urbansim data from {src} to {dest}"
         )
         if os.path.exists(src):
-            shutil.copyfile(src, dest)
+            shutil.copy2(src, dest)
         else:
             # Create an empty HDF5 file if the source does not exist
             with pd.HDFStore(dest, "w"):
@@ -482,7 +482,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 description="Raw BEAM OD skims",
             )
         )
-        shutil.copyfile(skims_src, skims_target)
+        shutil.copy2(skims_src, skims_target)
 
         outputs.append(
             FileRecord(
@@ -510,7 +510,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 logger.info(
                     f"[UrbansimPreprocessor] Copying input urbansim file from {src} to {dest}"
                 )
-                shutil.copyfile(src, dest)
+                shutil.copy2(src, dest)
                 inputs.append(
                     FileRecord(
                         file_path=src,

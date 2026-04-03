@@ -132,8 +132,13 @@ class TraceCapableTrackerStub:
         return nullcontext()
 
 
-def _settings(cache_enabled=True):
-    return SimpleNamespace(run=SimpleNamespace(bootstrap_cache_enabled=cache_enabled))
+def _settings(cache_enabled=True, code_identity=None):
+    return SimpleNamespace(
+        run=SimpleNamespace(
+            bootstrap_cache_enabled=cache_enabled,
+            consist_code_identity=code_identity,
+        )
+    )
 
 
 def _state():
@@ -175,6 +180,64 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert result["bootstrap_cache_hit"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
+    assert "cache_options" not in first_call
+
+
+def test_run_bootstrap_phase_propagates_code_identity_to_probe(monkeypatch):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True, code_identity="callable_module"),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=None,
+    )
+
+    assert len(tracker.calls) == 1
+    cache_options = tracker.calls[0]["cache_options"]
+    assert isinstance(cache_options, CacheOptions)
+    assert cache_options.code_identity == "callable_module"
+
+
+def test_run_bootstrap_phase_warns_when_fast_hashing_with_bootstrap_cache(
+    monkeypatch, caplog
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}
+        ]
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            bootstrap_cache_enabled=True,
+            consist_code_identity=None,
+            consist_hashing_strategy="fast",
+        )
+    )
+
+    with caplog.at_level(logging.WARNING):
+        run_module.run_bootstrap_phase(
+            tracker=tracker,
+            settings=settings,
+            state=_state(),
+            workspace=DummyWorkspace(),
+            scenario_id="seattle-baseline",
+            seed=None,
+        )
+
+    assert "Bootstrap cache is enabled with fast hashing" in caplog.text
 
 
 def test_run_bootstrap_phase_cache_miss_logs_explanation_and_writes_audit_fields(
@@ -498,8 +561,34 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     cache_options = tracker.calls[0]["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_mode == "off"
+    assert cache_options.code_identity is None
     assert result["bootstrap_cache_hit"] is False
     assert result["run_reference"] == {"probe_run_id": "bootstrap_off"}
+
+
+def test_run_bootstrap_phase_cache_disabled_preserves_code_identity(monkeypatch):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=False, code_identity="callable_module"),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=None,
+    )
+
+    cache_options = tracker.calls[0]["cache_options"]
+    assert isinstance(cache_options, CacheOptions)
+    assert cache_options.cache_mode == "off"
+    assert cache_options.code_identity == "callable_module"
 
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):

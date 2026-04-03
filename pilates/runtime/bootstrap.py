@@ -30,6 +30,39 @@ def is_bootstrap_cache_enabled(settings: Any) -> bool:
     return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
 
 
+def _bootstrap_cache_options(
+    settings: Any,
+    *,
+    cache_options_cls: type[CacheOptions],
+    cache_mode: Optional[str] = None,
+) -> Optional[CacheOptions]:
+    run_cfg = getattr(settings, "run", None)
+    code_identity = getattr(run_cfg, "consist_code_identity", None)
+    if cache_mode is None and code_identity is None:
+        return None
+    return cache_options_cls(
+        cache_mode=cache_mode,
+        code_identity=code_identity,
+    )
+
+
+def _warn_on_bootstrap_fast_hashing(settings: Any) -> None:
+    run_cfg = getattr(settings, "run", None)
+    if not bool(getattr(run_cfg, "bootstrap_cache_enabled", True)):
+        return
+    hashing_strategy = str(
+        getattr(run_cfg, "consist_hashing_strategy", "fast")
+    ).lower()
+    if hashing_strategy != "fast":
+        return
+    logger.warning(
+        "Bootstrap cache is enabled with fast hashing. Initialization stages copied "
+        "files whose identity may change on restage due to mtime-sensitive hashing, "
+        "which can force downstream cache misses. Prefer "
+        "run.consist_hashing_strategy: full."
+    )
+
+
 def build_bootstrap_run_reference(
     *,
     probe_run_id: Optional[str] = None,
@@ -114,6 +147,7 @@ def run_bootstrap_phase(
     """
     Execute initialization in a dedicated pre-scenario bootstrap phase.
     """
+    _warn_on_bootstrap_fast_hashing(settings)
     staged_artifact_summary: Dict[str, Any] = {}
 
     def _execute_initialization() -> None:
@@ -211,7 +245,11 @@ def run_bootstrap_phase(
         logger.info("Bootstrap cache disabled; running initialization once.")
         run_result = tracker.run(
             **run_kwargs,
-            cache_options=cache_options_cls(cache_mode="off"),
+            cache_options=_bootstrap_cache_options(
+                settings,
+                cache_options_cls=cache_options_cls,
+                cache_mode="off",
+            ),
         )
         return _finalize_bootstrap_result(
             cache_hit=False,
@@ -219,7 +257,14 @@ def run_bootstrap_phase(
             resolution_mode="cache_disabled_execute",
         )
 
-    probe_result = tracker.run(**run_kwargs)
+    cache_options = _bootstrap_cache_options(
+        settings,
+        cache_options_cls=cache_options_cls,
+    )
+    if cache_options is not None:
+        probe_result = tracker.run(**run_kwargs, cache_options=cache_options)
+    else:
+        probe_result = tracker.run(**run_kwargs)
     probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
     cache_hit = bool(getattr(probe_result, "cache_hit", False))
 
