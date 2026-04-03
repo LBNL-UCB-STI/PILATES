@@ -87,92 +87,97 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     Verify that Initialization.run aggregates input/output records for
     beam and urbansim models using the dummy preprocessor.
     """
-    # Disable consist for this test to avoid needing a run context
     from pilates.utils import consist_runtime as cr
-    monkeypatch.setattr(cr, "consist", None)
+    cr.set_enabled(False)
 
-    # Patch ModelFactory used inside Initialization
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", DummyModelFactory
-    )
+    try:
+        # Patch ModelFactory used inside Initialization
+        monkeypatch.setattr(
+            "pilates.generic.initialization.ModelFactory", DummyModelFactory
+        )
 
-    init = Initialization("init", None)
-    workspace = DummyWorkspace()
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel="beam",
-                activity_demand="dummy_activity",
-                vehicle_ownership="dummy_vehicle",
-                land_use="urbansim",
+        init = Initialization("init", None)
+        workspace = DummyWorkspace()
+        settings = SimpleNamespace(
+            run=SimpleNamespace(
+                models=SimpleNamespace(
+                    travel="beam",
+                    activity_demand="dummy_activity",
+                    vehicle_ownership="dummy_vehicle",
+                    land_use="urbansim",
+                ),
+                start_year=2020,
             ),
-            start_year=2020,
-        ),
-        shared=SimpleNamespace(
-            database=SimpleNamespace(use_consist=False),
-            skims=SimpleNamespace(zone_type="block_group"),
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file="/tmp/canonical_zones.geojson",
-                    activitysim_index_col="TAZ",
-                    zone_type="block_group",
-                    canonical_id_col="zone_key",
+            shared=SimpleNamespace(
+                database=SimpleNamespace(use_consist=False),
+                skims=SimpleNamespace(zone_type="block_group"),
+                geography=SimpleNamespace(
+                    zones=SimpleNamespace(
+                        source_file="/tmp/canonical_zones.geojson",
+                        activitysim_index_col="TAZ",
+                        zone_type="block_group",
+                        canonical_id_col="zone_key",
+                    )
                 )
             ),
-        ),
-    )
+        )
 
-    # Create a dummy canonical_zones.geojson in the mocked mutable directory
-    canonical_zones_path = os.path.join(
-        workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
-    )
-    os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
-    dummy_geojson_content = {"type": "FeatureCollection", "features": []}
-    with open(canonical_zones_path, "w") as f:
-        json.dump(dummy_geojson_content, f)
+        # Create a dummy canonical_zones.geojson in the mocked mutable directory
+        canonical_zones_path = os.path.join(
+            workspace.get_asim_mutable_data_dir(), "canonical_zones.geojson"
+        )
+        os.makedirs(os.path.dirname(canonical_zones_path), exist_ok=True)
+        dummy_geojson_content = {"type": "FeatureCollection", "features": []}
+        with open(canonical_zones_path, "w") as f:
+            json.dump(dummy_geojson_content, f)
 
-    # Update settings to point to this dummy file
-    settings.shared.geography.zones.source_file = canonical_zones_path
+        # Update settings to point to this dummy file
+        settings.shared.geography.zones.source_file = canonical_zones_path
 
-    # Run initialization – should not raise any exception
-    init.run(settings, workspace)
+        # Run initialization – should not raise any exception
+        init.run(settings, workspace)
 
-    # Initialization returns the copied records and does not maintain a
-    # duplicate runtime cache on the workspace.
-    assert workspace.input_data == {}
-    assert workspace.output_data == {}
+        # Initialization returns the copied records and does not maintain a
+        # duplicate runtime cache on the workspace.
+        assert workspace.input_data == {}
+        assert workspace.output_data == {}
+    finally:
+        cr.set_enabled(None)
 
 
 def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatch):
     from pilates.utils import consist_runtime as cr
 
-    monkeypatch.setattr(cr, "consist", None)
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", DummyModelFactory
-    )
+    cr.set_enabled(False)
+    try:
+        monkeypatch.setattr(
+            "pilates.generic.initialization.ModelFactory", DummyModelFactory
+        )
 
-    init = Initialization("init", None)
-    workspace = DummyWorkspace()
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            models=SimpleNamespace(
-                travel=None,
-                traffic_assignment="beam",
-                activity_demand=None,
-                vehicle_ownership=None,
-                land_use=None,
+        init = Initialization("init", None)
+        workspace = DummyWorkspace()
+        settings = SimpleNamespace(
+            run=SimpleNamespace(
+                models=SimpleNamespace(
+                    travel=None,
+                    traffic_assignment="beam",
+                    activity_demand=None,
+                    vehicle_ownership=None,
+                    land_use=None,
+                ),
+                start_year=2020,
             ),
-            start_year=2020,
-        ),
-        shared=SimpleNamespace(
-            database=SimpleNamespace(use_consist=False),
-            geography=SimpleNamespace(zones=None),
-        ),
-    )
+            shared=SimpleNamespace(
+                database=SimpleNamespace(use_consist=False),
+                geography=SimpleNamespace(zones=None),
+            ),
+        )
 
-    records = init.run(settings, workspace)
+        records = init.run(settings, workspace)
 
-    assert len(records.all_records()) == 2
+        assert len(records.all_records()) == 2
+    finally:
+        cr.set_enabled(None)
 
 
 def test_initialization_handles_missing_models_gracefully(monkeypatch):
@@ -357,6 +362,9 @@ def test_build_bootstrap_artifact_summary_counts_records_by_model():
 def test_initialization_summary_counts_canonical_zones_under_activitysim(
     monkeypatch, tmp_path
 ):
+    from pilates.utils import consist_runtime as cr
+
+    cr.set_enabled(False)
     monkeypatch.setattr(
         "pilates.generic.initialization.ModelFactory", DummyModelFactory
     )
@@ -394,18 +402,24 @@ def test_initialization_summary_counts_canonical_zones_under_activitysim(
         ),
     )
 
-    init = Initialization("init", None)
-    copied_records = init.run(settings, workspace)
-    summary = build_bootstrap_artifact_summary(workspace, copied_records)
+    try:
+        init = Initialization("init", None)
+        copied_records = init.run(settings, workspace)
+        summary = build_bootstrap_artifact_summary(workspace, copied_records)
 
-    assert summary["input_records_by_model"]["activitysim"] >= 1
-    assert summary["output_records_by_model"]["activitysim"] >= 1
-    assert "activitysim" in summary["models"]
+        assert summary["input_records_by_model"]["activitysim"] >= 1
+        assert summary["output_records_by_model"]["activitysim"] >= 1
+        assert "activitysim" in summary["models"]
+    finally:
+        cr.set_enabled(None)
 
 
 def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_activitysim_enabled(
     monkeypatch, tmp_path
 ):
+    from pilates.utils import consist_runtime as cr
+
+    cr.set_enabled(False)
     class _CountingPreprocessor:
         def __init__(self, model_name, calls):
             self.model_name = model_name
@@ -451,19 +465,25 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
         ),
     )
 
-    init = Initialization("init", None)
-    init.run(settings, workspace)
+    try:
+        init = Initialization("init", None)
+        init.run(settings, workspace)
 
-    urbansim_calls = [call for call in factory.calls if call[0] == "urbansim"]
-    activitysim_calls = [call for call in factory.calls if call[0] == "activitysim"]
+        urbansim_calls = [call for call in factory.calls if call[0] == "urbansim"]
+        activitysim_calls = [call for call in factory.calls if call[0] == "activitysim"]
 
-    assert len(urbansim_calls) == 1
-    assert len(activitysim_calls) == 1
-    assert activitysim_calls[0][1] == workspace.get_asim_mutable_data_dir()
-    assert activitysim_calls[0][2] is workspace
+        assert len(urbansim_calls) == 1
+        assert len(activitysim_calls) == 1
+        assert activitysim_calls[0][1] == workspace.get_asim_mutable_data_dir()
+        assert activitysim_calls[0][2] is workspace
+    finally:
+        cr.set_enabled(None)
 
 
 def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_path):
+    from pilates.utils import consist_runtime as cr
+
+    cr.set_enabled(False)
     class _ActivitySimPreprocessor:
         def __init__(self, calls):
             self.calls = calls
@@ -511,7 +531,10 @@ def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_pa
         ),
     )
 
-    init = Initialization("init", None)
-    init.run(settings, workspace)
+    try:
+        init = Initialization("init", None)
+        init.run(settings, workspace)
 
-    assert factory.calls == [(workspace.get_asim_mutable_data_dir(), workspace)]
+        assert factory.calls == [(workspace.get_asim_mutable_data_dir(), workspace)]
+    finally:
+        cr.set_enabled(None)

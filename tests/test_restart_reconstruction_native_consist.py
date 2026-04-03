@@ -825,7 +825,7 @@ def test_collect_restart_completed_run_ids_tracker_reports_missing_runs_without_
         )
 
     assert discovery["discovery_mode"] == "tracker"
-    assert discovery["fallback_reason"] == "tracker returned no run_ids"
+    assert discovery["fallback_reason"] is None
     assert discovery["run_ids"] == []
     assert discovery["manifest_paths"] == []
     assert "manifest" not in caplog.text.lower()
@@ -1404,29 +1404,6 @@ def test_collect_restart_completed_run_ids_tracker_uses_contiguous_atlas_prefix_
         "atlas-post-2018",
     }
     assert "atlas-pre-2022" not in discovery["run_ids"]
-
-
-def test_collect_restart_completed_run_ids_tracker_reports_missing_runs_without_manifest_fallback(
-    tmp_path,
-):
-    state = _restart_state(
-        iteration=0,
-        sub_stage=WorkflowState.Stage.traffic_assignment,
-        enabled_stages={WorkflowState.Stage.supply_demand_loop},
-    )
-
-    discovery = restart_runtime.collect_restart_completed_run_ids(
-        state=state,
-        archive_run_dir=str(tmp_path / "archive-run"),
-        workflow_stage=WorkflowState.Stage,
-        tracker=_QueryTrackerStub(),
-    )
-
-    assert discovery["issues"]
-    assert discovery["discovery_mode"] == "tracker"
-    assert discovery["fallback_reason"] is None
-    assert discovery["run_ids"] == []
-    assert discovery["manifest_paths"] == []
 
 
 def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(tmp_path):

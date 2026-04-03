@@ -45,7 +45,11 @@ from pilates.workflows.steps import (
     make_urbansim_postprocess_step,
     make_urbansim_run_step,
 )
+from pilates.workflows.steps import activitysim as steps_activitysim
+from pilates.workflows.steps import beam as steps_beam
+from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 from pilates.beam.outputs import BeamRunOutputs
+import pytest
 
 
 class DummyScenario:
@@ -100,6 +104,20 @@ class DummyCoupler:
 
     def update(self, _mapping):
         self.values.update(_mapping)
+
+
+@pytest.fixture(autouse=True)
+def _stub_recovered_output_publication(monkeypatch):
+    def _set_on_coupler(*, key, path, coupler, **_kwargs):
+        coupler.set(key, path)
+        return SimpleNamespace(path=path, key=key)
+
+    for module in (steps_activitysim, steps_beam, steps_urbansim_atlas):
+        monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
+        monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
+
+    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
+    monkeypatch.setattr(steps_urbansim_atlas, "_log_named_h5_tables", lambda **_kwargs: None)
 
 
 def _write_file(path: Path) -> None:
@@ -622,6 +640,11 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     )
 
     coupler = DummyCoupler()
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda *, key, path, coupler, **_kwargs: coupler.set(key, path),
+    )
     holder = StepOutputsHolder()
     holder.urbansim_preprocess = object()
     step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
@@ -676,6 +699,17 @@ def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
     )
 
     coupler = DummyCoupler()
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda *, key, path, coupler, **_kwargs: coupler.set(key, path),
+    )
+    monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "_log_named_h5_tables",
+        lambda **_kwargs: None,
+    )
     holder = StepOutputsHolder()
     holder.urbansim_run = object()
     step_func = make_urbansim_postprocess_step(coupler=coupler, outputs_holder=holder)
@@ -1332,6 +1366,11 @@ def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(
 ):
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda *, key, path, coupler, **_kwargs: coupler.set(key, path),
+    )
     holder = StepOutputsHolder()
     holder.urbansim_preprocess = object()
 

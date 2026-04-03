@@ -154,22 +154,20 @@ class TestRunContainerConsistDelegation:
 
     @patch("consist.integrations.containers.run_container")
     @patch("pilates.generic.runner.cr.current_tracker")
-    def test_non_capable_tracker_raises(
+    def test_active_tracker_is_passed_through_without_local_capability_probe(
         self,
         mock_current_tracker,
         mock_consist_run_container,
     ):
-        """Trackers without mount/start_run support should fail closed."""
+        """GenericRunner no longer performs a local mount/start_run capability probe."""
 
         class NoopLikeTracker:
             pass
 
+        mock_consist_run_container.return_value = True
         mock_current_tracker.return_value = NoopLikeTracker()
 
-        with pytest.raises(
-            RuntimeError,
-            match="does not support Consist container execution",
-        ):
+        assert (
             GenericRunner.run_container(
                 client=None,
                 settings=MagicMock(),
@@ -178,8 +176,10 @@ class TestRunContainerConsistDelegation:
                 command="cmd",
                 model_name="model",
             )
+            is True
+        )
 
-        assert not mock_consist_run_container.called
+        assert mock_consist_run_container.called
 
     @patch("pilates.generic.runner.get_setting")
     @patch("consist.integrations.containers.run_container")

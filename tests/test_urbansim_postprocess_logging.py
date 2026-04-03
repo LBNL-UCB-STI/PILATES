@@ -15,14 +15,14 @@ def _write_h5_tables(path, tables):
 def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_urbansim_postprocess_step(
@@ -83,14 +83,14 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
 def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_urbansim_postprocess_step(
