@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
-from pilates.workflows.outputs_base import StepOutputsBase
+from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 
 if TYPE_CHECKING:
     pass
@@ -45,6 +45,23 @@ class AtlasPreprocessOutputs(StepOutputsBase):
         """
         for key, path in self.prepared_inputs.items():
             yield key, path, f"ATLAS prepared input: {key}"
+
+    def validate(self, context: Optional[ValidationContext] = None) -> None:
+        super().validate(context)
+        state = getattr(context, "state", None) if context is not None else None
+        if state is None:
+            return
+
+        year = getattr(state, "year", getattr(state, "current_year", None))
+        start_year = getattr(state, "start_year", None)
+        needs_grave_csv = (
+            year is not None and start_year is not None and int(year) > int(start_year)
+        )
+
+        if needs_grave_csv and "atlas_grave_csv" not in self.prepared_inputs:
+            raise AssertionError(
+                "AtlasPreprocessOutputs must include atlas_grave_csv when atlas year exceeds the global start_year."
+            )
 
 
 @dataclass

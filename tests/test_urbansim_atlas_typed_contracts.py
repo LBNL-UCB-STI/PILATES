@@ -11,6 +11,7 @@ from pilates.atlas.runner import AtlasRunner
 from pilates.generic.records import RecordStore
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT
+from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.outputs_base import step_output_mapping
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
@@ -224,6 +225,41 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
     assert outputs is expected
     assert seen["previous_records"] is previous_records
     assert seen["final_skims_omx"] is None
+
+
+def test_atlas_preprocess_outputs_require_grave_csv_for_non_start_year(
+    tmp_path: Path,
+) -> None:
+    prepared_inputs = {}
+    for key, filename in (
+        ("atlas_households_csv", "households.csv"),
+        ("atlas_blocks_csv", "blocks.csv"),
+        ("atlas_persons_csv", "persons.csv"),
+        ("atlas_residential_csv", "residential.csv"),
+        ("atlas_jobs_csv", "jobs.csv"),
+    ):
+        path = tmp_path / "atlas-input" / "year2023" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x\n", encoding="utf-8")
+        prepared_inputs[key] = path
+
+    outputs = AtlasPreprocessOutputs(
+        atlas_mutable_input_dir=tmp_path / "atlas-input",
+        prepared_inputs=prepared_inputs,
+    )
+
+    with pytest.raises(AssertionError, match="atlas_grave_csv"):
+        outputs.validate(
+            context=ValidationContext(
+                step_name="atlas_preprocess",
+                state=SimpleNamespace(
+                    start_year=2017,
+                    year=2023,
+                    current_year=2023,
+                    is_start_year=lambda: True,
+                ),
+            )
+        )
 
 
 def test_atlas_runner_retries_container_exceptions(

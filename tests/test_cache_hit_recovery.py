@@ -819,6 +819,47 @@ def test_recover_atlas_run_outputs_requires_canonical_current_year_files(
     assert holder.atlas_run is None
 
 
+def test_recover_atlas_preprocess_outputs_requires_grave_csv_for_non_start_year(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    households_path = Path(workspace.get_atlas_mutable_input_dir()) / "year2023" / "households.csv"
+    _write_file(households_path)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "atlas-pre-id"
+            return {"atlas_households_csv": str(households_path)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    outputs = _recover_cached_outputs(
+        step_name="atlas_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            start_year=2017,
+            year=2023,
+            current_year=2023,
+        ),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs=None,
+        run_id="atlas-pre-id",
+        publish_outputs=True,
+    )
+
+    assert outputs is None
+    assert holder.atlas_preprocess is None
+
+
 def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     tmp_path, monkeypatch
 ):

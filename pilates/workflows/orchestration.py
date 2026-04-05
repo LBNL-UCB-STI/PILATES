@@ -49,6 +49,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
+    ValidationContext,
     declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     required_outputs_for_step_outputs_class,
@@ -874,7 +875,13 @@ def run_manifested_steps(
     validate_workflow_step_contracts(step_refs=steps)
 
     manifest = load_step_manifest(manifest_config.path) or {}
-    stale_steps = _detect_stale_steps(manifest, outputs_holder, workspace)
+    stale_steps = _detect_stale_steps(
+        manifest,
+        outputs_holder,
+        workspace,
+        settings=settings,
+        state=state,
+    )
     if stale_steps:
         stale_steps = _expand_stale_manifest_steps(
             manifest_step_names=list(manifest.keys()),
@@ -909,7 +916,13 @@ def run_manifested_steps(
                     "used_output_replayer": bool(spec.output_replayer is not None),
                 }
                 if outputs is None:
-                    outputs = _restore_outputs_from_manifest(spec.name, manifest, workspace)
+                    outputs = _restore_outputs_from_manifest(
+                        spec.name,
+                        manifest,
+                        workspace,
+                        settings=settings,
+                        state=state,
+                    )
                     if outputs is not None:
                         outputs_holder.set_attribute(spec.name, outputs)
                 if outputs is not None:
@@ -1262,6 +1275,9 @@ def _detect_stale_steps(
     manifest: Dict[str, Any],
     outputs_holder: StepOutputsHolder,
     workspace: Any,
+    *,
+    settings: Any = None,
+    state: Any = None,
 ) -> Set[str]:
     """
     Check which manifest entries have stale or missing outputs.
@@ -1283,7 +1299,14 @@ def _detect_stale_steps(
             )
             validate = getattr(outputs, "validate", None)
             if callable(validate):
-                validate()
+                validate(
+                    context=ValidationContext(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        step_name=step_name,
+                    )
+                )
             outputs_holder.set_attribute(step_name, outputs)
         except (AssertionError, FileNotFoundError) as exc:
             logger.warning(
@@ -1446,7 +1469,22 @@ def _recover_cached_outputs(
     def _finalize_recovered_outputs(outputs: Any) -> Any:
         validate = getattr(outputs, "validate", None)
         if callable(validate):
-            validate()
+            try:
+                validate(
+                    context=ValidationContext(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        step_name=step_name,
+                    )
+                )
+            except (AssertionError, FileNotFoundError) as exc:
+                logger.warning(
+                    "Cached outputs for %s failed validation; recovery unavailable (%s)",
+                    step_name,
+                    exc,
+                )
+                return None
         outputs_holder.set_attribute(step_name, outputs)
         if publish_outputs:
             _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
@@ -1530,6 +1568,9 @@ def _restore_outputs_from_manifest(
     step_name: str,
     manifest: Dict[str, Any],
     workspace: Any,
+    *,
+    settings: Any = None,
+    state: Any = None,
 ) -> Optional[Any]:
     """
     Restore step outputs from a manifest entry when possible.
@@ -1550,7 +1591,14 @@ def _restore_outputs_from_manifest(
         )
         validate = getattr(outputs, "validate", None)
         if callable(validate):
-            validate()
+            validate(
+                context=ValidationContext(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    step_name=step_name,
+                )
+            )
         return outputs
     except (AssertionError, FileNotFoundError):
         return None

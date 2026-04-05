@@ -901,7 +901,10 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "persons",
                 required=True,
             )
-            if not self.state.is_start_year():
+            # Dynamic ATLAS evolution years need grave.csv whenever the subyear
+            # is beyond the global simulation start year, including the first
+            # subyear in a later forecast interval (e.g. 2023 in a 2017->2029 run).
+            if int(self.state.year) > int(self.state.start_year):
                 process_table(
                     f"{year_prefix}/graveyard",
                     "grave",

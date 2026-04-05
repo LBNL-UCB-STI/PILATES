@@ -1050,3 +1050,114 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     assert (current_atlas_input_dir / "year2021" / "vehicles_output.RData").exists()
     assert (current_atlas_input_dir / "year2021" / "households_output.RData").exists()
     assert getattr(outputs, "_compatibility_fallback_used", False) is True
+
+
+def test_manifest_restore_reruns_atlas_preprocess_when_restart_subyear_grave_csv_missing(
+    tmp_path,
+):
+    old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
+    new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(new_root)
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    for path in (
+        current_atlas_input_dir / "year2023" / "households.csv",
+        current_atlas_input_dir / "year2023" / "blocks.csv",
+        current_atlas_input_dir / "year2023" / "persons.csv",
+        current_atlas_input_dir / "year2023" / "residential.csv",
+        current_atlas_input_dir / "year2023" / "jobs.csv",
+        current_atlas_input_dir / "year2023" / "grave.csv",
+        current_atlas_output_dir / "householdv_2023.csv",
+        current_atlas_output_dir / "vehicles_2023.csv",
+    ):
+        _write_file(path)
+
+    old_atlas_input_dir = old_root / "atlas" / "atlas_input"
+    old_atlas_output_dir = old_root / "atlas" / "atlas_output"
+    manifest = {
+        "atlas_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasPreprocessOutputs(
+                    atlas_mutable_input_dir=old_atlas_input_dir,
+                    prepared_inputs={
+                        "atlas_households_csv": old_atlas_input_dir / "year2023" / "households.csv",
+                        "atlas_blocks_csv": old_atlas_input_dir / "year2023" / "blocks.csv",
+                        "atlas_persons_csv": old_atlas_input_dir / "year2023" / "persons.csv",
+                        "atlas_residential_csv": old_atlas_input_dir / "year2023" / "residential.csv",
+                        "atlas_jobs_csv": old_atlas_input_dir / "year2023" / "jobs.csv",
+                    },
+                )
+            ),
+        },
+        "atlas_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasRunOutputs(
+                    atlas_output_dir=old_atlas_output_dir,
+                    raw_outputs={
+                        "householdv_2023": old_atlas_output_dir / "householdv_2023.csv",
+                        "vehicles_2023": old_atlas_output_dir / "vehicles_2023.csv",
+                    },
+                )
+            ),
+        },
+    }
+    manifest_path = tmp_path / "atlas_manifest_missing_grave.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    scenario = _ManifestScenario(cache_hit=False)
+    state = SimpleNamespace(
+        year=2023,
+        current_year=2023,
+        forecast_year=2029,
+        atlas_year=2023,
+        start_year=2017,
+        iteration=0,
+        is_restart_run=True,
+    )
+
+    def _rerun_preprocess(**_runtime_kwargs):
+        holder.atlas_preprocess = AtlasPreprocessOutputs(
+            atlas_mutable_input_dir=current_atlas_input_dir,
+            prepared_inputs={
+                "atlas_households_csv": current_atlas_input_dir / "year2023" / "households.csv",
+                "atlas_blocks_csv": current_atlas_input_dir / "year2023" / "blocks.csv",
+                "atlas_persons_csv": current_atlas_input_dir / "year2023" / "persons.csv",
+                "atlas_residential_csv": current_atlas_input_dir / "year2023" / "residential.csv",
+                "atlas_jobs_csv": current_atlas_input_dir / "year2023" / "jobs.csv",
+                "atlas_grave_csv": current_atlas_input_dir / "year2023" / "grave.csv",
+            },
+        )
+
+    def _should_not_rerun_run(**_runtime_kwargs):
+        raise AssertionError("atlas_run should restore from manifest")
+
+    run_manifested_steps(
+        stage_name="atlas",
+        steps=[
+            StepRef(name="atlas_preprocess", step_func=_rerun_preprocess),
+            StepRef(name="atlas_run", step_func=_should_not_rerun_run),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2023_i0",
+        iteration=0,
+    )
+
+    assert len(scenario.calls) == 1
+    assert holder.atlas_preprocess is not None
+    assert holder.atlas_preprocess.prepared_inputs["atlas_grave_csv"] == (
+        current_atlas_input_dir / "year2023" / "grave.csv"
+    )
+    assert holder.atlas_run is not None
