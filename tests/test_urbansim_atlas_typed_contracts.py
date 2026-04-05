@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 import pytest
@@ -223,6 +224,68 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
     assert outputs is expected
     assert seen["previous_records"] is previous_records
     assert seen["final_skims_omx"] is None
+
+
+def test_atlas_runner_retries_container_exceptions(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.forecast_year = 2030
+    state.full_settings = SimpleNamespace(
+        atlas=SimpleNamespace(
+            max_retries=2,
+            num_processes=1,
+            sample_size=0,
+            beamac=0,
+            mod=2,
+            adscen="baseline",
+            rebfactor=1,
+            taxfactor=1,
+            discIncent=0,
+        ),
+        run=SimpleNamespace(vehicle_ownership_freq=1),
+    )
+    runner = AtlasRunner("atlas", state)
+    atlas_output_dir = tmp_path / "atlas-output"
+    prepared_input = tmp_path / "atlas-input" / "jobs.csv"
+    prepared_input.parent.mkdir(parents=True, exist_ok=True)
+    prepared_input.write_text("household_id\n1\n", encoding="utf-8")
+    inputs = AtlasPreprocessOutputs(
+        atlas_mutable_input_dir=prepared_input.parent,
+        prepared_inputs={"jobs_csv": prepared_input},
+    )
+    workspace = type(
+        "Workspace",
+        (),
+        {"get_atlas_output_dir": lambda self: str(atlas_output_dir)},
+    )()
+    attempts = []
+
+    monkeypatch.setattr(
+        AtlasRunner,
+        "get_model_and_image",
+        staticmethod(lambda settings, model_type: ("atlas", "atlas-image")),
+    )
+    monkeypatch.setattr("pilates.atlas.runner.get_atlas_docker_vols", lambda *_: {})
+    monkeypatch.setattr("pilates.atlas.runner.get_atlas_cmd", lambda *_: "atlas-cmd")
+
+    def _fake_run_container(**kwargs):
+        attempts.append(kwargs)
+        if len(attempts) == 1:
+            raise RuntimeError("Container execution failed for atlas_container")
+        atlas_output_dir.mkdir(parents=True, exist_ok=True)
+        (atlas_output_dir / "householdv_2030.csv").write_text("hh\n1\n", encoding="utf-8")
+        (atlas_output_dir / "vehicles_2030.csv").write_text("veh\n1\n", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(AtlasRunner, "run_container", staticmethod(_fake_run_container))
+
+    outputs = runner._run(inputs, workspace)
+
+    assert len(attempts) == 2
+    assert outputs.raw_outputs["householdv_2030"] == atlas_output_dir / "householdv_2030.csv"
+    assert outputs.raw_outputs["vehicles_2030"] == atlas_output_dir / "vehicles_2030.csv"
 
 
 def test_atlas_postprocess_fails_closed_without_current_year_run_outputs(tmp_path: Path) -> None:

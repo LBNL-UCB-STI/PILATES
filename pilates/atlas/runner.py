@@ -232,25 +232,38 @@ class AtlasRunner(GenericRunner):
             )
             max_retries = settings.atlas.max_retries
             success = False
+            last_error = None
 
             for i in range(max_retries):
-                success = self.run_container(
-                    client=client,
-                    settings=settings,
-                    image=atlas_image,
-                    volumes=atlas_docker_vols,
-                    command=atlas_cmd,
-                    model_name=self.model_name,
-                    working_dir="/",
-                    # PASS INPUTS HERE
-                    input_artifacts=input_paths,
-                    # Canonical ATLAS outputs are logged by workflow step records
-                    # using short names without file extensions. Avoid container-
-                    # level output logging to prevent duplicate artifacts like
-                    # householdv_2023 and householdv_2023.csv.
-                    output_paths=None,
-                    lineage_mode="none",
-                )
+                try:
+                    success = self.run_container(
+                        client=client,
+                        settings=settings,
+                        image=atlas_image,
+                        volumes=atlas_docker_vols,
+                        command=atlas_cmd,
+                        model_name=self.model_name,
+                        working_dir="/",
+                        # PASS INPUTS HERE
+                        input_artifacts=input_paths,
+                        # Canonical ATLAS outputs are logged by workflow step records
+                        # using short names without file extensions. Avoid container-
+                        # level output logging to prevent duplicate artifacts like
+                        # householdv_2023 and householdv_2023.csv.
+                        output_paths=None,
+                        lineage_mode="none",
+                    )
+                    last_error = None
+                except Exception as exc:
+                    last_error = exc
+                    success = False
+                    logger.error(
+                        "ATLAS container execution failed in attempt %s/%s: %s",
+                        i + 1,
+                        max_retries,
+                        exc,
+                    )
+                    continue
 
                 if not success:
                     logger.error(f"ATLAS container execution failed in attempt {i + 1}")
@@ -261,6 +274,10 @@ class AtlasRunner(GenericRunner):
                     break
 
             if not success:
+                if last_error is not None:
+                    raise RuntimeError(
+                        "ATLAS container execution failed after all retry attempts"
+                    ) from last_error
                 raise RuntimeError(
                     "ATLAS container execution failed after all retry attempts"
                 )
