@@ -38,7 +38,6 @@ from .shared import (
     _schema_outputs_from_class,
     cr,
     find_last_run_output_plans,
-    log_and_set_input,
     log_and_set_output,
     log_input_only,
     log_output_only,
