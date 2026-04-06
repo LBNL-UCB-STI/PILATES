@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.io import locate_beam_file
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import StepOutputsHolder
@@ -19,6 +19,14 @@ _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     "households_asim_out",
     "persons_asim_out",
 )
+
+
+def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optional[str]:
+    return artifact_to_existing_path(
+        value,
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
 
 
 def _find_input_scenario_dir(
@@ -57,22 +65,29 @@ def _restore_activity_demand_outputs_for_resume(
 
     def _require_complete_restore(
         restored_outputs: Dict[str, Any], source: str
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[tuple[Dict[str, Any], Dict[str, Path]]]:
         if not restored_outputs:
             return None
+        resolved_paths = {
+            key: _resolved_existing_restore_path(value, workspace)
+            for key, value in restored_outputs.items()
+        }
         missing_keys = sorted(
             key
             for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS
             if key not in restored_outputs
-            or not artifact_to_path(restored_outputs.get(key), workspace)
-            or not os.path.exists(artifact_to_path(restored_outputs.get(key), workspace))
+            or not resolved_paths.get(key)
         )
         if missing_keys:
             raise RuntimeError(
                 "Restart into traffic_assignment found incomplete ActivitySim "
                 f"outputs from {source}; missing {missing_keys}"
             )
-        return restored_outputs
+        return restored_outputs, {
+            key: Path(path)
+            for key, path in resolved_paths.items()
+            if path is not None
+        }
 
     postprocess_outputs = outputs_holder.activitysim_postprocess
     if postprocess_outputs is not None:
@@ -80,7 +95,11 @@ def _restore_activity_demand_outputs_for_resume(
             postprocess_outputs,
             coupler=coupler,
         )
-        return _require_complete_restore(restored_outputs, "step outputs")
+        validated = _require_complete_restore(restored_outputs, "step outputs")
+        if validated is None:
+            return None
+        restored_outputs, _ = validated
+        return restored_outputs
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
@@ -97,21 +116,17 @@ def _restore_activity_demand_outputs_for_resume(
         value = get_value(key)
         if value is None:
             continue
-        path = artifact_to_path(value, workspace)
-        if path and os.path.exists(path):
+        if _resolved_existing_restore_path(value, workspace):
             restored_outputs[key] = value
-    if restored_outputs:
+    validated = _require_complete_restore(restored_outputs, "coupler artifacts")
+    if validated:
+        restored_outputs, resolved_paths = validated
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
             usim_datastore_h5=None,
             asim_output_dir=None,
-            processed_outputs={
-                key: Path(path)
-                for key, value in restored_outputs.items()
-                for path in [artifact_to_path(value, workspace)]
-                if path is not None
-            },
+            processed_outputs=resolved_paths,
         )
-        return _require_complete_restore(restored_outputs, "coupler artifacts")
+        return restored_outputs
 
     iter_dir = Path(workspace.get_asim_output_dir()) / (
         f"year-{state.current_year}-iteration-{state.current_inner_iter}"
@@ -126,16 +141,15 @@ def _restore_activity_demand_outputs_for_resume(
         for key, path in filesystem_candidates.items()
         if path.exists()
     }
-    restored_outputs = _require_complete_restore(
+    validated = _require_complete_restore(
         restored_outputs,
         "filesystem iteration outputs",
     )
-    if restored_outputs:
+    if validated:
+        restored_outputs, resolved_paths = validated
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
             usim_datastore_h5=None,
             asim_output_dir=iter_dir,
-            processed_outputs={
-                key: Path(path) for key, path in restored_outputs.items()
-            },
+            processed_outputs=resolved_paths,
         )
     return restored_outputs

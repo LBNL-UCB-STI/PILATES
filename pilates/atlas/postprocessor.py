@@ -10,7 +10,7 @@ from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import enqueue_archive_copy
+from pilates.utils.coupler_helpers import artifact_to_existing_path, enqueue_archive_copy
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
@@ -92,18 +92,34 @@ def resolve_atlas_usim_datastore_path(
     settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
 ) -> Path:
     """Resolve the UrbanSim datastore ATLAS should read/update for this subrun."""
-    explicit_path = getattr(state, "atlas_usim_datastore_h5", None)
-    if explicit_path:
-        return Path(explicit_path)
+    explicit_value = getattr(state, "atlas_usim_datastore_h5", None)
+    resolved_explicit = artifact_to_existing_path(explicit_value, workspace=workspace)
+    if resolved_explicit:
+        return Path(resolved_explicit)
+    if isinstance(explicit_value, (str, os.PathLike)):
+        return Path(os.fspath(explicit_value))
 
     usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
-    if state.is_start_year():
+    is_start_year = getattr(state, "is_start_year", None)
+    if callable(is_start_year):
+        use_input_datastore = bool(is_start_year())
+    else:
+        current_year = getattr(state, "current_year", getattr(state, "year", None))
+        forecast_year = getattr(state, "forecast_year", None)
+        use_input_datastore = (
+            current_year is not None
+            and forecast_year is not None
+            and current_year == forecast_year
+        )
+    if use_input_datastore:
         usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
     else:
         usim_datastore_fname = get_usim_datastore_fname(
             settings, io="output", year=state.forecast_year
         )
     return Path(usim_mutable_data_dir) / usim_datastore_fname
+
+
 class AtlasPostprocessor(GenericPostprocessor):
     """
     ATLAS-specific postprocessor that consolidates all postprocessing steps for the ATLAS vehicle ownership model.

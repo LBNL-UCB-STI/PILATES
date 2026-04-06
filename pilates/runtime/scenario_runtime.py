@@ -6,20 +6,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 from pilates.workflows.catalog import enabled_schema_step_models, schema_step_names
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    make_activitysim_compile_step,
-    make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step,
-    make_activitysim_run_step,
-    make_atlas_postprocess_step,
-    make_atlas_preprocess_step,
-    make_atlas_run_step,
-    make_beam_full_skim_step,
-    make_beam_postprocess_step,
-    make_beam_preprocess_step,
-    make_beam_run_step,
-    make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step,
-    make_urbansim_run_step,
+    schema_step_builder_registry,
 )
 
 logger = logging.getLogger(__name__)
@@ -348,24 +335,19 @@ def resolve_cache_epoch(settings: Any) -> int:
 
 
 def build_schema_steps() -> List[Callable[..., Any]]:
+    """
+    Build schema-validation step instances with a schema-only coupler.
+
+    These are intentionally not reused as runtime step instances. Schema and
+    runtime assembly call the same ``make_*`` factories, but they pass
+    different couplers: ``SchemaCoupler`` here for contract discovery, and a
+    live workflow coupler during execution. Keeping them as separate instances
+    preserves that boundary while letting the model-local factories stay
+    closure-based.
+    """
     coupler = SchemaCoupler()
     outputs_holder = StepOutputsHolder()
-    step_factories: Dict[str, Callable[..., Any]] = {
-        "urbansim_preprocess": make_urbansim_preprocess_step,
-        "urbansim_run": make_urbansim_run_step,
-        "urbansim_postprocess": make_urbansim_postprocess_step,
-        "atlas_preprocess": make_atlas_preprocess_step,
-        "atlas_run": make_atlas_run_step,
-        "atlas_postprocess": make_atlas_postprocess_step,
-        "activitysim_preprocess": make_activitysim_preprocess_step,
-        "activitysim_compile": make_activitysim_compile_step,
-        "activitysim_run": make_activitysim_run_step,
-        "activitysim_postprocess": make_activitysim_postprocess_step,
-        "beam_preprocess": make_beam_preprocess_step,
-        "beam_run": make_beam_run_step,
-        "beam_postprocess": make_beam_postprocess_step,
-        "beam_full_skim": make_beam_full_skim_step,
-    }
+    step_factories = schema_step_builder_registry()
     ordered_steps = schema_step_names()
     missing_factories = [name for name in ordered_steps if name not in step_factories]
     if missing_factories:

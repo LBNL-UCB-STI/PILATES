@@ -340,7 +340,7 @@ def current_run() -> Optional[Any]:
         return None
     try:
         return consist.current_run()
-    except RuntimeError:
+    except (AttributeError, RuntimeError):
         return None
 
 
@@ -356,7 +356,7 @@ def current_tracker() -> Optional[TrackerLike]:
     """Get the current global tracker (or None if not set)."""
     try:
         return consist.current_tracker()
-    except RuntimeError:
+    except (AttributeError, RuntimeError):
         return None
 
 

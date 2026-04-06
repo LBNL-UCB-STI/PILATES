@@ -290,7 +290,7 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
         artifact_to_path(coupler.get("households_asim_out"), workspace)
         == str(asim_output_dir / "households.parquet")
     )
-    assert run_outputs.raw_output_hashes["households_asim_out_temp"] == "hash_households_out"
+    assert run_outputs.raw_output_hashes["households_asim_out"] == "hash_households_out"
     assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
     assert run_outputs.source_input_paths[ASIM_HOUSEHOLDS_IN] == households
     assert run_outputs.source_input_paths[ASIM_PERSONS_IN] == persons

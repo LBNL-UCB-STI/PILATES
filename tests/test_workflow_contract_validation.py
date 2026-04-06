@@ -5,7 +5,11 @@ from types import SimpleNamespace
 from consist import define_step
 from pilates.workflows.binding import BindingPlan
 
-from pilates.utils.coupler_helpers import log_and_set_output, log_output_only
+from pilates.utils.coupler_helpers import (
+    artifact_to_path,
+    log_and_set_output,
+    log_output_only,
+)
 from pilates.workflows.input_resolution import resolve_step_inputs
 from pilates.workflows.coupler_namespace import (
     canonical_artifact_key_from_raw_key,
@@ -238,6 +242,43 @@ def test_run_workflow_uses_step_output_path_provider():
     }
 
 
+def test_run_workflow_uses_decorator_output_paths_callable():
+    scenario = _FakeScenario()
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_preprocess = SimpleNamespace()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    coupler = _FakeCoupler()
+
+    @define_step(
+        model="activitysim_compile",
+        output_paths=lambda *, settings, state, workspace: {
+            "zarr_skims": f"{workspace.full_path}/activitysim/cache/skims.zarr"
+        },
+    )
+    def _dummy_step(settings, state, workspace, **kwargs):
+        return None
+
+    step = StepRef(name="activitysim_compile", step_func=_dummy_step)
+
+    run_workflow(
+        stage_name="unit",
+        steps=[step],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    assert scenario.calls[0]["output_paths"] == {
+        "zarr_skims": "/tmp/workspace/activitysim/cache/skims.zarr"
+    }
+
+
 def test_run_workflow_uses_urbansim_run_output_path_provider():
     scenario = _FakeScenario()
     outputs_holder = StepOutputsHolder()
@@ -385,7 +426,7 @@ def test_log_and_set_output_warns_for_undeclared_output_keys(caplog, tmp_path):
         "published undeclared output key 'not_declared_output'" in record.message
         for record in caplog.records
     )
-    assert coupler.data["not_declared_output"] == str(artifact_path)
+    assert artifact_to_path(coupler.data["not_declared_output"]) == str(artifact_path)
 
 
 def test_log_and_set_output_does_not_warn_for_declared_dynamic_output(caplog, tmp_path):

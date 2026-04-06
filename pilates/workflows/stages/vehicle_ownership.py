@@ -4,15 +4,11 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Union, Any, Optional, cast
+from typing import Callable, Dict, Mapping, Union, Optional, cast
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import (
-    artifact_to_path,
-    archive_copy_now,
-    flush_archive_queue,
-)
+from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.atlas.inputs import (
     build_atlas_inputs,
     atlas_static_input_keys_for_interval,
@@ -83,16 +79,6 @@ def _atlas_sub_years(state: WorkflowState) -> list[int]:
         return years
     years.extend(range(state.year + 2, forecast_year + 1, 2))
     return years
-
-
-def _resolve_input_path(value: Any, workspace: Workspace) -> Union[str, None]:
-    resolved = artifact_to_path(value, workspace)
-    if resolved:
-        return resolved
-    if isinstance(value, (str, os.PathLike)):
-        return os.fspath(value)
-    return None
-
 
 def select_atlas_usim_input_path(
     *,
@@ -349,14 +335,13 @@ def run_vehicle_ownership_stage(
         log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path
-        # Keep ATLAS preprocessor H5 selection artifact-driven.
-        atlas_state.atlas_usim_datastore_h5 = _resolve_input_path(
-            step_inputs.get(USIM_DATASTORE_CURRENT_H5),
-            workspace,
+        # Keep ATLAS pre/postprocess H5 selection artifact-driven until the
+        # model code actually needs a concrete existing path.
+        atlas_state.atlas_usim_datastore_h5 = step_inputs.get(
+            USIM_DATASTORE_CURRENT_H5
         )
-        atlas_state.atlas_usim_datastore_base_h5 = _resolve_input_path(
-            step_inputs.get(USIM_DATASTORE_BASE_H5),
-            workspace,
+        atlas_state.atlas_usim_datastore_base_h5 = step_inputs.get(
+            USIM_DATASTORE_BASE_H5
         )
         atlas_preprocess_binding = build_binding_plan(
             step_name="atlas_preprocess",

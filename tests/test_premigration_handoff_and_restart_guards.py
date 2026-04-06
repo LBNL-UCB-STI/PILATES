@@ -21,6 +21,7 @@ if "geopandas" not in sys.modules:
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.atlas.outputs import AtlasRunOutputs
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -217,9 +218,13 @@ def test_recover_activitysim_postprocess_outputs_from_cache_hit_artifacts(tmp_pa
         "beam_plans_asim_out"
     ] == iter_dir / "beam_plans.parquet"
     assert holder.activitysim_postprocess.usim_datastore_h5 == usim_input
-    assert coupler.get("households_asim_out") == str(iter_dir / "households.parquet")
-    assert coupler.get("beam_plans_asim_out") == str(iter_dir / "beam_plans.parquet")
-    assert coupler.get("usim_datastore_h5") == str(usim_input)
+    assert artifact_to_path(coupler.get("households_asim_out")) == str(
+        iter_dir / "households.parquet"
+    )
+    assert artifact_to_path(coupler.get("beam_plans_asim_out")) == str(
+        iter_dir / "beam_plans.parquet"
+    )
+    assert artifact_to_path(coupler.get("usim_datastore_h5")) == str(usim_input)
     holder.activitysim_postprocess.validate()
 
 

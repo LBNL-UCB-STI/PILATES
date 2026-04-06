@@ -11,6 +11,7 @@ from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.binding import BindingPlan
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workflows import steps
+from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps import activitysim as steps_activitysim
 
 
@@ -126,11 +127,14 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
         Stage=SimpleNamespace(land_use="land_use"),
     )
 
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_run = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={},
+    )
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),
-        outputs_holder=SimpleNamespace(
-            activitysim_run=ActivitySimRunOutputs(output_dir=asim_output_dir, raw_outputs={})
-        ),
+        outputs_holder=outputs_holder,
     )
     step_fn(settings=settings, state=state, workspace=workspace)
 
@@ -280,7 +284,7 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
 
     step_fn = steps.make_activitysim_preprocess_step(
         coupler=_dummy_coupler(),
-        outputs_holder=SimpleNamespace(),
+        outputs_holder=StepOutputsHolder(),
     )
 
     step_fn(

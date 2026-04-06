@@ -10,31 +10,12 @@ from consist import MaterializationResult
 
 from pilates.runtime.cache_recovery import materialize_cached_runs
 from pilates.utils.coupler_helpers import resolve_existing_path
+from pilates.workflows.catalog import tracked_step_specs, workflow_step_spec_for_step_name
 from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
 
 _OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES = ("_asim_out_temp",)
-_ACTIVITYSIM_QUERY_TARGETS = (
-    ("activitysim_preprocess", "activity_demand_preprocess", "preprocess"),
-    ("activitysim_run", "activity_demand_run", "run"),
-    ("activitysim_postprocess", "activity_demand_postprocess", "postprocess"),
-)
-_LAND_USE_QUERY_TARGETS = (
-    ("urbansim_preprocess", "land_use", "preprocess"),
-    ("urbansim_run", "land_use", "run"),
-    ("urbansim_postprocess", "land_use", "postprocess"),
-)
-_ATLAS_QUERY_TARGETS = (
-    ("atlas_preprocess", "atlas", "preprocess"),
-    ("atlas_run", "atlas", "run"),
-    ("atlas_postprocess", "atlas", "postprocess"),
-)
-_BEAM_QUERY_TARGETS = (
-    ("beam_preprocess", "beam", "preprocess"),
-    ("beam_run", "beam", "run"),
-    ("beam_postprocess", "beam", "postprocess"),
-)
 
 def _coerce_int(value: Any) -> Optional[int]:
     try:
@@ -292,6 +273,51 @@ def _stage_query_target(
     return target
 
 
+def _restart_query_stage_name(step_name: str) -> str:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None or spec.provenance is None:
+        raise KeyError(f"Unknown restart query step name: {step_name}")
+
+    builder_key = spec.provenance.builder_key
+    if builder_key == "activitysim":
+        return f"activity_demand_{spec.phase}"
+    if builder_key == "urbansim":
+        return "land_use"
+    if builder_key == "atlas":
+        return "atlas"
+    if builder_key == "beam":
+        return "beam"
+    return spec.stage_name
+
+
+def _restart_query_step_names(*, builder_key: str) -> Tuple[str, ...]:
+    return tuple(
+        spec.step_name
+        for spec in tracked_step_specs()
+        if spec.provenance is not None
+        and spec.provenance.builder_key == builder_key
+        and not spec.optional
+    )
+
+
+def _restart_query_target_for_step_name(
+    *,
+    year: int,
+    step_name: str,
+    iteration: Optional[int] = None,
+) -> Dict[str, Any]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        raise KeyError(f"Unknown restart query step name: {step_name}")
+    return _stage_query_target(
+        year=year,
+        iteration=iteration,
+        model=spec.step_name,
+        stage=_restart_query_stage_name(step_name),
+        phase=spec.phase,
+    )
+
+
 def _restart_query_targets(
     *,
     state: Any,
@@ -313,14 +339,12 @@ def _restart_query_targets(
         workflow_stage.supply_demand_loop,
         workflow_stage.postprocessing,
     } and land_use_enabled is not False:
-        for model, stage_name, phase in _LAND_USE_QUERY_TARGETS:
+        for step_name in _restart_query_step_names(builder_key="urbansim"):
             targets.append(
-                _stage_query_target(
+                _restart_query_target_for_step_name(
                     year=year,
                     iteration=0,
-                    model=model,
-                    stage=stage_name,
-                    phase=phase,
+                    step_name=step_name,
                 )
             )
 
@@ -337,24 +361,22 @@ def _restart_query_targets(
         }
         and vehicle_enabled is not False
     ):
-        atlas_targets = _ATLAS_QUERY_TARGETS
+        atlas_target_step_names = _restart_query_step_names(builder_key="atlas")
         if current_stage in {
             workflow_stage.supply_demand_loop,
             workflow_stage.postprocessing,
         }:
-            atlas_targets = (("atlas_postprocess", "atlas", "postprocess"),)
+            atlas_target_step_names = ("atlas_postprocess",)
         for sub_year in _atlas_sub_years(
             current_year=year,
             forecast_year=forecast_year,
         ):
-            for model, stage_name, phase in atlas_targets:
+            for step_name in atlas_target_step_names:
                 targets.append(
-                    _stage_query_target(
+                    _restart_query_target_for_step_name(
                         year=sub_year,
                         iteration=0,
-                        model=model,
-                        stage=stage_name,
-                        phase=phase,
+                        step_name=step_name,
                     )
                 )
 
@@ -366,25 +388,24 @@ def _restart_query_targets(
         )
         completed_iterations = range(0, total_iters) if current_stage == workflow_stage.postprocessing and total_iters > 0 else range(0, resume_iter)
         for iteration in completed_iterations:
-            for model, stage_name, phase in (*_ACTIVITYSIM_QUERY_TARGETS, *_BEAM_QUERY_TARGETS):
+            for step_name in (
+                *_restart_query_step_names(builder_key="activitysim"),
+                *_restart_query_step_names(builder_key="beam"),
+            ):
                 targets.append(
-                    _stage_query_target(
+                    _restart_query_target_for_step_name(
                         year=year,
                         iteration=iteration,
-                        model=model,
-                        stage=stage_name,
-                        phase=phase,
+                        step_name=step_name,
                     )
                 )
         if current_stage == workflow_stage.supply_demand_loop and current_sub_stage == workflow_stage.traffic_assignment:
-            for model, stage_name, phase in _ACTIVITYSIM_QUERY_TARGETS:
+            for step_name in _restart_query_step_names(builder_key="activitysim"):
                 targets.append(
-                    _stage_query_target(
+                    _restart_query_target_for_step_name(
                         year=year,
                         iteration=resume_iter,
-                        model=model,
-                        stage=stage_name,
-                        phase=phase,
+                        step_name=step_name,
                     )
                 )
         if current_stage == workflow_stage.postprocessing:

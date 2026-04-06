@@ -21,6 +21,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
+    USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage
@@ -29,7 +30,6 @@ from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_sta
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_golden_stub_workflow import (
     EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS,
-    EXPECTED_ASIM_TEMP_OUTPUT_KEYS,
     EXPECTED_STAGE_MODELS,
     _artifact_map,
     _write_file,
@@ -134,7 +134,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     )
     beam_run_outputs = set((steps_by_model["beam_run"].get("outputs") or {}).values())
 
-    assert EXPECTED_ASIM_TEMP_OUTPUT_KEYS <= activitysim_run_outputs
+    assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= activitysim_run_outputs
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= activitysim_postprocess_outputs
     assert {LINKSTATS, BEAM_PLANS_OUT} <= beam_run_outputs
 
@@ -143,10 +143,15 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     final_usim_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert final_usim_datastore is not None
-    assert Path(final_usim_datastore).resolve() == Path(after_vehicle_ownership).resolve()
+    assert Path(final_usim_datastore).name == (
+        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    assert Path(final_usim_datastore).parent == Path(after_vehicle_ownership).parent
+    assert Path(final_usim_datastore).resolve() == Path(
+        scenario_outputs[USIM_DATASTORE_H5].path
+    ).resolve()
 
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= scenario_output_keys
-    assert EXPECTED_ASIM_TEMP_OUTPUT_KEYS <= scenario_output_keys
     assert {ZARR_SKIMS, LINKSTATS, BEAM_PLANS_OUT} <= scenario_output_keys
     assert {"householdv_2017", "vehicles_2017", "atlas_vehicles2_output"} <= scenario_output_keys
     assert activitysim_run_outputs <= scenario_output_keys

@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar, cast
+from typing import Any, Callable, Dict, Mapping, Optional, cast
 
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
@@ -46,13 +46,14 @@ from .shared import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     CouplerProtocol,
+    StandardStepSpec,
     StepOutputsHolder,
     WorkflowState,
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
+    build_standard_step,
     _log_named_h5_tables,
     _log_step_records,
-    _make_logged_typed_step_function,
     artifact_to_path,
     cr,
     log_and_set_input,
@@ -71,8 +72,6 @@ from pilates.workflows.tracker_outputs import (
 )
 
 logger = logging.getLogger(__name__)
-
-StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
 def _canonical_activitysim_run_output_key(short_name: str) -> str:
@@ -187,40 +186,6 @@ def _execute_activitysim_postprocess(
             "activitysim_postprocess requires ActivitySimRunOutputs from activitysim_run"
         )
     return postprocessor.postprocess(upstream, workspace)
-
-
-def _make_activitysim_typed_step_function(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., StepOutputsT],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
-    output_logger: Optional[Callable[..., None]] = None,
-    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
-    declared_outputs: Optional[list[str]] = None,
-    schema_outputs: Optional[list[str]] = None,
-) -> Callable[..., None]:
-    return _make_logged_typed_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name=model_name,
-        phase=phase,
-        outputs_class=outputs_class,
-        component_getter=component_getter,
-        component_executor=component_executor,
-        outputs_holder_setter=outputs_holder_setter,
-        input_logger=input_logger,
-        output_logger=output_logger,
-        output_recoverer=output_recoverer,
-        declared_outputs=declared_outputs,
-        schema_outputs=schema_outputs,
-        step_logger=logger,
-    )
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
@@ -752,6 +717,8 @@ def make_activitysim_compile_step(
         description="activitysim compile workflow step",
         outputs=[ZARR_SKIMS],
         schema_outputs=_compile_step_schema_outputs,
+        output_paths=activitysim_compile_output_paths,
+        cache_mode="overwrite",
         tags=["activitysim", "compile"],
     )
     return step_func
@@ -961,22 +928,23 @@ def make_activitysim_preprocess_step(
             profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
         )
 
-    return _make_activitysim_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="preprocess",
-        outputs_class=ActivitySimPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "activitysim", state
+        spec=StandardStepSpec(
+            step_name="activitysim_preprocess",
+            model_name="activitysim",
+            phase="preprocess",
+            outputs_class=ActivitySimPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "activitysim", state
+            ),
+            component_executor=_execute_activitysim_preprocess,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_activitysim_preprocess_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_activitysim_preprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_activitysim_preprocess_outputs,
     )
 
 
@@ -1150,24 +1118,25 @@ def make_activitysim_run_step(
                 outputs.raw_output_hashes[short_name] = content_hash
                 outputs.raw_output_hashes.setdefault(output_key, content_hash)
 
-    return _make_activitysim_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="run",
-        outputs_class=ActivitySimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "activitysim", state
+        spec=StandardStepSpec(
+            step_name="activitysim_run",
+            model_name="activitysim",
+            phase="run",
+            outputs_class=ActivitySimRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner(
+                "activitysim", state
+            ),
+            component_executor=_execute_activitysim_run,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_activitysim_run_outputs,
+            declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+            schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+            step_logger=logger,
         ),
-        component_executor=_execute_activitysim_run,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_activitysim_run_outputs,
-        declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
-        schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
     )
 
 
@@ -1376,20 +1345,21 @@ def make_activitysim_postprocess_step(
                 },
             )
 
-    return _make_activitysim_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="activitysim",
-        phase="postprocess",
-        outputs_class=ActivitySimPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "activitysim", state
+        spec=StandardStepSpec(
+            step_name="activitysim_postprocess",
+            model_name="activitysim",
+            phase="postprocess",
+            outputs_class=ActivitySimPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "activitysim", state
+            ),
+            component_executor=_execute_activitysim_postprocess,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_activitysim_postprocess_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_activitysim_postprocess,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "activitysim_postprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_activitysim_postprocess_outputs,
     )

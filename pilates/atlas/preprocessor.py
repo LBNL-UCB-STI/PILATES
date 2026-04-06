@@ -20,6 +20,7 @@ from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_k
 from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 
@@ -123,6 +124,12 @@ def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
         if path and os.path.exists(path):
             return path
     return None
+
+
+def _resolve_existing_artifact_path(
+    value: Any, *, workspace: "Workspace"
+) -> Optional[str]:
+    return artifact_to_existing_path(value, workspace=workspace)
 
 
 def _restart_required_atlas_input_years(
@@ -742,9 +749,17 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         artifact_current_h5 = getattr(self.state, "atlas_usim_datastore_h5", None)
         artifact_base_h5 = getattr(self.state, "atlas_usim_datastore_base_h5", None)
+        current_h5_path = _resolve_existing_artifact_path(
+            artifact_current_h5,
+            workspace=workspace,
+        )
+        base_h5_path = _resolve_existing_artifact_path(
+            artifact_base_h5,
+            workspace=workspace,
+        )
         preferred_h5 = _first_existing_path(
-            artifact_base_h5 if self.state.is_start_year() else artifact_current_h5,
-            artifact_current_h5 if self.state.is_start_year() else artifact_base_h5,
+            base_h5_path if self.state.is_start_year() else current_h5_path,
+            current_h5_path if self.state.is_start_year() else base_h5_path,
         )
 
         if preferred_h5 is not None:

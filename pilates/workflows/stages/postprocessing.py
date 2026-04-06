@@ -56,9 +56,6 @@ def run_postprocessing_stage(
         StepRef(
             name="postprocessing",
             step_func=make_postprocessing_step(),
-            cache_mode="overwrite",
-            load_inputs=False,
-            model="postprocessing",
             year=year,
             iteration=getattr(state, "iteration", None),
             phase="postprocess",

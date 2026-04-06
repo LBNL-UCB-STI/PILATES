@@ -1,4 +1,4 @@
-from typing import Callable, Optional, TYPE_CHECKING
+from typing import Any, Callable, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -59,8 +59,8 @@ class AtlasSubState:
         self.is_start_year: Callable[[], bool] = (
             lambda: year == self.atlas_interval_start_year
         )
-        self.atlas_usim_datastore_h5: Optional[str] = None
-        self.atlas_usim_datastore_base_h5: Optional[str] = None
+        self.atlas_usim_datastore_h5: Optional[Any] = None
+        self.atlas_usim_datastore_base_h5: Optional[Any] = None
         self._parent_state = parent_state
 
     def set_sub_stage_progress(self, sub_stage_progress: str) -> None:

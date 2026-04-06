@@ -15,9 +15,10 @@ from pilates.workflows.outputs_base import (
     ValidationContext,
     ValidationResult,
 )
-from pilates.workflows.steps.activitysim import _make_activitysim_typed_step_function
 from pilates.workflows.steps.shared import (
+    StandardStepSpec,
     StepOutputsHolder,
+    build_standard_step,
 )
 
 
@@ -155,24 +156,24 @@ def test_cross_step_validator_reads_upstream_outputs_from_context(tmp_path: Path
     outputs_holder = StepOutputsHolder()
     outputs_holder.urbansim_run = SimpleNamespace(token="upstream-ok")
 
-    step_func = _make_activitysim_typed_step_function(
+    step_func = build_standard_step(
         coupler=SimpleNamespace(),
         outputs_holder=outputs_holder,
-        model_name="dummy",
-        phase="run",
-        outputs_class=_CrossStepOutputs,
-        component_getter=lambda _factory, _state: object(),
-        component_executor=lambda _component, _workspace, _holder, **_kwargs: RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(output_path),
-                    short_name="dummy_output",
-                    description="dummy output",
-                )
-            ]
-        ),
-        outputs_holder_setter=lambda holder, outputs: holder.set_attribute(
-            "activitysim_preprocess", outputs
+        spec=StandardStepSpec(
+            step_name="dummy_run",
+            model_name="dummy",
+            phase="run",
+            outputs_class=_CrossStepOutputs,
+            component_getter=lambda _factory, _state: object(),
+            component_executor=lambda _component, _workspace, _holder, **_kwargs: RecordStore(
+                recordList=[
+                    FileRecord(
+                        file_path=str(output_path),
+                        short_name="dummy_output",
+                        description="dummy output",
+                    )
+                ]
+            ),
         ),
     )
 

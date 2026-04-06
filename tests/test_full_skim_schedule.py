@@ -31,5 +31,5 @@ def test_full_skim_schedule_after_final_iteration():
 
 def test_full_skim_schedule_standalone_not_in_loop():
     settings = _make_settings("standalone", total_iters=2)
-    assert _should_run_full_skim(settings, 0) is False
-    assert _should_run_full_skim(settings, 1) is False
+    assert _should_run_full_skim(settings, 0) is True
+    assert _should_run_full_skim(settings, 1) is True

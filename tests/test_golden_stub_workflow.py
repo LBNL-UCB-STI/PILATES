@@ -361,6 +361,27 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
 
     consist = pytest.importorskip("consist")
+    from pilates.workflows import step_consist_meta as step_consist_meta_module
+    from pilates.workflows.steps import shared as shared_steps_module
+
+    original_consist_step_meta = step_consist_meta_module.consist_step_meta
+
+    def _patched_consist_step_meta(model):
+        meta = dict(original_consist_step_meta(model))
+        if str(model).startswith("beam_"):
+            meta["adapter"] = lambda _ctx: None
+        return meta
+
+    monkeypatch.setattr(
+        step_consist_meta_module,
+        "consist_step_meta",
+        _patched_consist_step_meta,
+    )
+    monkeypatch.setattr(
+        shared_steps_module,
+        "consist_step_meta",
+        _patched_consist_step_meta,
+    )
 
     settings = _build_settings(tmp_path)
     settings.land_use_enabled = True
@@ -393,6 +414,9 @@ def golden_stub_env(tmp_path, monkeypatch):
         atlas_output_dir,
     ):
         path.mkdir(parents=True, exist_ok=True)
+
+    beam_config_path = beam_dir / settings.run.region / settings.beam.config
+    _write_file(beam_config_path)
 
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region

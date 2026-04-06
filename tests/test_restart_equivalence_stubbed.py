@@ -314,6 +314,8 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                     "atlas_residential_csv": year_dir / "residential_units.csv",
                     "atlas_jobs_csv": year_dir / "jobs.csv",
                 }
+                if int(state.year) > int(state.start_year):
+                    outputs["atlas_grave_csv"] = year_dir / "grave.csv"
                 for path in outputs.values():
                     _write_csv(path, pd.DataFrame({"id": [1, 2]}))
                 return AtlasPreprocessOutputs(

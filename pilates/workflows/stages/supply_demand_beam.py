@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.binding import (
     BindingPlan,
@@ -181,8 +180,7 @@ def _collect_previous_beam_outputs(
         value = get_value(key)
         if value is None:
             continue
-        path = artifact_to_path(value, workspace)
-        if path and os.path.exists(path):
+        if artifact_to_existing_path(value, workspace):
             promoted_outputs[key] = value
     return promoted_outputs or None
 

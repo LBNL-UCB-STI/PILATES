@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from pilates.config.models import PilatesConfig
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
@@ -14,7 +13,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-from pilates.workflows.outputs_base import StepOutputsBase
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -29,13 +27,14 @@ from .shared import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
     CouplerProtocol,
+    StandardStepSpec,
     StepOutputsHolder,
     WorkflowState,
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
+    build_standard_step,
     _log_beam_r5_osm_input,
     _log_step_records,
-    _make_typed_step_function,
     _schema_outputs_from_class,
     cr,
     find_last_run_output_plans,
@@ -48,8 +47,6 @@ from pilates.workflows.tracker_outputs import (
     load_tracker_run_outputs,
     merge_canonical_output_mappings,
 )
-
-StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
 def _primary_beam_config_path(
@@ -347,38 +344,6 @@ def _execute_beam_full_skim(
     )
 
 
-def _make_beam_step_function(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., StepOutputsT],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
-    output_logger: Optional[Callable[..., None]] = None,
-    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
-    declared_outputs: Optional[list[str]] = None,
-) -> Callable[..., None]:
-    return _make_typed_step_function(
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        model_name=model_name,
-        phase=phase,
-        outputs_class=outputs_class,
-        component_getter=component_getter,
-        component_executor=component_executor,
-        outputs_holder_setter=outputs_holder_setter,
-        input_logger=input_logger,
-        output_logger=output_logger,
-        output_recoverer=output_recoverer,
-        declared_outputs=declared_outputs,
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-    )
-
-
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
     return load_tracker_run_outputs(run_id)
 
@@ -575,26 +540,28 @@ def make_beam_preprocess_step(
             },
         )
 
-    return _make_beam_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="preprocess",
-        outputs_class=BeamPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_preprocess(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
+        spec=StandardStepSpec(
+            step_name="beam_preprocess",
+            model_name="beam",
+            phase="preprocess",
+            outputs_class=BeamPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_preprocess(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamPreprocessOutputs),
+            use_logged_wrapper=False,
         ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
     )
 
 
@@ -766,27 +733,29 @@ def make_beam_run_step(
             extra_meta_fn=_beam_run_extra_meta,
         )
 
-    return _make_beam_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="run",
-        outputs_class=BeamRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("beam", state),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_run(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
+        spec=StandardStepSpec(
+            step_name="beam_run",
+            model_name="beam",
+            phase="run",
+            outputs_class=BeamRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner("beam", state),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_run(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_run_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamRunOutputs),
+            use_logged_wrapper=False,
         ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_run_outputs,
     )
 
 
@@ -854,29 +823,31 @@ def make_beam_postprocess_step(
             return
         _publish_beam_run_outputs(outputs=upstream, coupler=coupler)
 
-    return _make_beam_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="postprocess",
-        outputs_class=BeamPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "beam", state
+        spec=StandardStepSpec(
+            step_name="beam_postprocess",
+            model_name="beam",
+            phase="postprocess",
+            outputs_class=BeamPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "beam", state
+            ),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_postprocess(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            declared_outputs=[ZARR_SKIMS],
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_postprocess_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamPostprocessOutputs),
+            use_logged_wrapper=False,
         ),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_postprocess(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
-        ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_postprocess", outputs
-        ),
-        declared_outputs=[ZARR_SKIMS],
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_postprocess_outputs,
     )
 
 
@@ -908,26 +879,28 @@ def make_beam_full_skim_step(
                 step_name="beam_full_skim",
             )
 
-    return _make_beam_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam_full",
-        phase="skim",
-        outputs_class=BeamFullSkimOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "beam_full_skim", state
+        spec=StandardStepSpec(
+            step_name="beam_full_skim",
+            model_name="beam_full",
+            phase="skim",
+            outputs_class=BeamFullSkimOutputs,
+            component_getter=lambda factory, state: factory.get_runner(
+                "beam_full_skim", state
+            ),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_full_skim(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_full_skim_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamFullSkimOutputs),
+            use_logged_wrapper=False,
         ),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_full_skim(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
-        ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_full_skim", outputs
-        ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_full_skim_outputs,
     )

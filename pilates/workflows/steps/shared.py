@@ -785,6 +785,7 @@ OutputLogger = Callable[
     [StepOutputsT, "PilatesConfig", WorkflowState, "Workspace", "StepOutputsHolder"],
     None,
 ]
+OutputReplayer = OutputLogger
 OutputRecoverer = Callable[..., Optional[StepOutputsT]]
 
 
@@ -793,22 +794,24 @@ class StandardStepSpec:
     """
     Declarative shell for the common typed-step pattern.
 
-    Phase 1 of the generic step-builder refactor only uses this for standard
-    step wiring. Model-specific execution, logging, and cache-recovery policy
-    intentionally remain in explicit callback helpers alongside the model code.
+    Model-specific execution, logging, and cache-recovery policy intentionally
+    remain in explicit callback helpers alongside the model code.
     """
 
+    step_name: str
     model_name: str
     phase: str
     outputs_class: Type[StepOutputsT]
     component_getter: Callable[[Any, WorkflowState], Any]
     component_executor: Callable[..., StepOutputsT]
-    outputs_holder_attr: str
+    outputs_holder_key: Optional[str] = None
     input_logger: Optional[InputLogger] = None
     output_logger: Optional[OutputLogger] = None
+    output_replayer: Optional[OutputReplayer] = None
     output_recoverer: Optional[OutputRecoverer] = None
     declared_outputs: Optional[list[str]] = None
     schema_outputs: Optional[list[str]] = None
+    use_logged_wrapper: bool = True
     step_description: Optional[str] = None
     tags: Optional[list[str]] = None
     step_logger: Optional[logging.Logger] = None
@@ -1193,12 +1196,14 @@ def _make_typed_step_function(
     outputs_holder: StepOutputsHolder,
     model_name: str,
     phase: str,
+    step_name: Optional[str] = None,
     outputs_class: Type[StepOutputsT],
     component_getter: Callable[[Any, WorkflowState], Any],
     component_executor: Callable[..., StepOutputsT],
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Mapping[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
+    output_replayer: Optional[Callable[..., None]] = None,
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
@@ -1210,7 +1215,7 @@ def _make_typed_step_function(
 ) -> Callable[..., Any]:
     from pilates.generic.model_factory import ModelFactory
 
-    step_name = f"{model_name}_{phase}"
+    step_name = step_name or f"{model_name}_{phase}"
     description = step_description or f"{step_name} workflow step"
     step_tags = tags or [model_name, phase]
     step_logger = step_logger or logger
@@ -1287,7 +1292,9 @@ def _make_typed_step_function(
         if log_completion_message:
             step_logger.info("%s %s completed successfully", model_name, phase)
 
-    if output_logger is not None:
+    if output_replayer is not None:
+        setattr(_step_func, "pilates_output_replayer", output_replayer)
+    elif output_logger is not None:
         setattr(
             _step_func,
             "pilates_output_replayer",
@@ -1320,12 +1327,14 @@ def _make_logged_typed_step_function(
     outputs_holder: StepOutputsHolder,
     model_name: str,
     phase: str,
+    step_name: Optional[str] = None,
     outputs_class: Type[StepOutputsT],
     component_getter: Callable[[Any, WorkflowState], Any],
     component_executor: Callable[..., StepOutputsT],
     outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
     input_logger: Optional[Callable[..., Mapping[str, Any]]] = None,
     output_logger: Optional[Callable[..., None]] = None,
+    output_replayer: Optional[Callable[..., None]] = None,
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
@@ -1342,12 +1351,14 @@ def _make_logged_typed_step_function(
         outputs_holder=outputs_holder,
         model_name=model_name,
         phase=phase,
+        step_name=step_name,
         outputs_class=outputs_class,
         component_getter=component_getter,
         component_executor=component_executor,
         outputs_holder_setter=outputs_holder_setter,
         input_logger=input_logger,
         output_logger=output_logger,
+        output_replayer=output_replayer,
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
@@ -1369,23 +1380,39 @@ def build_standard_step(
     Build a standard typed workflow step from a static spec.
 
     The helper deliberately stays thin: it only removes repeated factory-shell
-    wiring around ``_make_logged_typed_step_function`` while preserving the
-    existing explicit callbacks and holder field names.
-    """
+    wiring around the shared typed-step helpers while preserving explicit
+    callback policy and holder compatibility behavior.
 
-    return _make_logged_typed_step_function(
+    The model modules still expose ``make_*`` factories instead of exporting
+    raw ``StandardStepSpec`` objects because those factories bind a live
+    coupler plus model-local nested callbacks for logging, replay, and recovery
+    policy. Schema validation and runtime execution intentionally build
+    different step instances with different couplers, so the closure boundary
+    remains part of the design rather than leftover boilerplate.
+    """
+    step_name = spec.step_name
+    builder = (
+        _make_logged_typed_step_function
+        if spec.use_logged_wrapper
+        else _make_typed_step_function
+    )
+    outputs_holder_key = spec.outputs_holder_key or step_name
+
+    return builder(
         coupler=coupler,
         outputs_holder=outputs_holder,
         model_name=spec.model_name,
         phase=spec.phase,
+        step_name=step_name,
         outputs_class=spec.outputs_class,
         component_getter=spec.component_getter,
         component_executor=spec.component_executor,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, spec.outputs_holder_attr, outputs
+        outputs_holder_setter=lambda holder, outputs: holder.set_attribute(
+            outputs_holder_key, outputs
         ),
         input_logger=spec.input_logger,
         output_logger=spec.output_logger,
+        output_replayer=spec.output_replayer,
         output_recoverer=spec.output_recoverer,
         declared_outputs=spec.declared_outputs,
         schema_outputs=spec.schema_outputs,
@@ -1427,6 +1454,10 @@ def _decorate_step_with_consist(
     description: str,
     schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:
     """
@@ -1449,4 +1480,12 @@ def _decorate_step_with_consist(
         kwargs["schema_outputs"] = schema_outputs
     if outputs:
         kwargs["outputs"] = outputs
+    if output_paths is not None:
+        kwargs["output_paths"] = output_paths
+    if load_inputs is not None:
+        kwargs["load_inputs"] = load_inputs
+    if cache_mode is not None:
+        kwargs["cache_mode"] = cache_mode
+    if cache_hydration is not None:
+        kwargs["cache_hydration"] = cache_hydration
     return define_step(**kwargs)(step_func)

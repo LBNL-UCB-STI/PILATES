@@ -79,6 +79,9 @@ from pilates.workflows.stages.supply_demand import (
     _run_traffic_assignment_phase,
     TrafficAssignmentPhaseInputs,
 )
+from pilates.workflows.stages.supply_demand_resume import (
+    _restore_activity_demand_outputs_for_resume,
+)
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 import h5py
 
@@ -324,9 +327,15 @@ def stage_env(tmp_path, monkeypatch):
                     prepared_inputs={},
                 )
             if model_name == "atlas":
+                prepared_inputs = {}
+                grave_candidates = sorted(
+                    Path(workspace.get_atlas_mutable_input_dir()).glob("year*/grave.csv")
+                )
+                if grave_candidates:
+                    prepared_inputs["atlas_grave_csv"] = grave_candidates[-1]
                 return AtlasPreprocessOutputs(
                     atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
-                    prepared_inputs={},
+                    prepared_inputs=prepared_inputs,
                 )
             if model_name == "activitysim":
                 return ActivitySimPreprocessOutputs(
@@ -723,7 +732,12 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
     coupler = stage_env["coupler"]
 
     state.forecast_year = state.year + 4  # 2017, 2019, 2021
-    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    forecast_usim_path = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / settings.urbansim.output_file_template.format(year=state.forecast_year)
+    )
+    _write_file(forecast_usim_path)
+    coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
 
     atlas_years = [state.year, state.year + 2, state.year + 4]
@@ -733,6 +747,8 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
         )
         year_dir.mkdir(parents=True, exist_ok=True)
         _write_file(year_dir / "vehicles_output.RData")
+        if atlas_year > state.start_year:
+            _write_file(year_dir / "grave.csv")
 
     archive_now_calls = []
     flush_calls = []
@@ -831,7 +847,12 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     scenario = _RunIdScenario(coupler)
 
     state.forecast_year = state.year + 4  # 2017, 2019, 2021
-    coupler.set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    forecast_usim_path = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / settings.urbansim.output_file_template.format(year=state.forecast_year)
+    )
+    _write_file(forecast_usim_path)
+    coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
     monkeypatch.setattr(
@@ -843,6 +864,10 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     atlas_years = [state.year, state.year + 2, state.year + 4]
     run_id_expectations = {}
     for atlas_year in atlas_years:
+        year_dir = Path(workspace.get_atlas_mutable_input_dir()) / f"year{atlas_year}"
+        year_dir.mkdir(parents=True, exist_ok=True)
+        if atlas_year > state.start_year:
+            _write_file(year_dir / "grave.csv")
         run_id_expectations[atlas_year] = {
             "atlas_preprocess": f"atlas_preprocess_y{atlas_year}_i0_ppreprocess",
             "atlas_run": f"atlas_run_y{atlas_year}_i0_prun",
@@ -1502,6 +1527,50 @@ def test_supply_demand_stage_beam_only_clamps_outer_iterations(
     )
     assert beam_preprocess_binding.inputs[BEAM_PERSONS_IN] == str(persons_path)
     assert "Clamping outer supply-demand iterations to 1" in caplog.text
+
+
+def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
+    stage_env,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    holder = StepOutputsHolder()
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+
+    coupler.set("beam_plans_asim_out", str(beam_plans))
+    coupler.set("households_asim_out", str(households))
+    coupler.set("persons_asim_out", str(persons))
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+    )
+
+    assert restored == {
+        "beam_plans_asim_out": str(beam_plans),
+        "households_asim_out": str(households),
+        "persons_asim_out": str(persons),
+    }
+    assert holder.activitysim_postprocess is not None
+    assert holder.activitysim_postprocess.asim_output_dir is None
+    assert holder.activitysim_postprocess.processed_outputs == {
+        "beam_plans_asim_out": beam_plans,
+        "households_asim_out": households,
+        "persons_asim_out": persons,
+    }
 
 
 def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_path):

@@ -29,6 +29,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.orchestration import (
     ManifestConfig,
@@ -169,7 +170,7 @@ def _snapshot_state(
         "type": type(outputs).__name__,
         "serialized": serialize_step_outputs(outputs),
         "mapping": mapping,
-        "coupler": {key: str(coupler.get(key)) for key in coupler_keys},
+        "coupler": {key: str(artifact_to_path(coupler.get(key), None)) for key in coupler_keys},
     }
 
 

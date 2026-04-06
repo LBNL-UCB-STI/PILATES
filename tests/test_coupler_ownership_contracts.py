@@ -39,6 +39,7 @@ COUPLER_METHODS = {
 
 
 ALLOWED_DIRECT_CALL_FILES = {
+    Path("pilates/runtime/bootstrap.py"),
     Path("pilates/workflows/input_resolution.py"),
     Path("pilates/utils/coupler_helpers.py"),
     Path("pilates/workflows/orchestration.py"),
@@ -46,6 +47,7 @@ ALLOWED_DIRECT_CALL_FILES = {
 
 
 ALLOWED_DIRECT_CALLS_BY_FILE = {
+    Path("pilates/runtime/bootstrap.py"): {"set"},
     Path("pilates/workflows/input_resolution.py"): {"get", "view"},
     Path("pilates/utils/coupler_helpers.py"): {"set", "set_from_artifact", "view"},
     Path("pilates/workflows/orchestration.py"): {"keys"},

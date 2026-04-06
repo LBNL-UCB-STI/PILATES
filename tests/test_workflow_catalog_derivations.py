@@ -1,4 +1,5 @@
 from pilates.workflows import catalog
+from pilates.workflows.steps import schema_step_builder_registry
 from pilates.workflows.steps import shared as step_shared
 from pilates.runtime.launcher import _build_schema_steps
 from pilates.runtime.launcher import _is_model_enabled
@@ -39,6 +40,11 @@ def test_schema_steps_follow_catalog_order():
     schema_steps = _build_schema_steps()
     models = [step.__consist_step__.model for step in schema_steps]
     assert models == list(catalog.schema_step_names())
+
+
+def test_schema_step_builder_registry_covers_catalog_schema_steps():
+    registry = schema_step_builder_registry()
+    assert set(catalog.schema_step_names()) <= set(registry)
 
 
 def test_tracked_catalog_steps_define_outputs_class():

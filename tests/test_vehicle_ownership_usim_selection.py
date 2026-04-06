@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
 from pilates.workflows.stages.vehicle_ownership import (
     _validate_atlas_subyear_usim_datastore,
     select_atlas_usim_input_path,
@@ -193,3 +194,30 @@ def test_validate_atlas_subyear_usim_datastore_rejects_older_datastore():
             settings=_settings(),
             state=SimpleNamespace(is_restart_run=True),
         )
+
+
+def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
+    tmp_path,
+):
+    usim_dir = tmp_path / "workspace" / "urbansim" / "data"
+    usim_dir.mkdir(parents=True)
+    explicit = usim_dir / "artifact_current.h5"
+    explicit.write_text("", encoding="utf-8")
+
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "workspace"),
+        get_usim_mutable_data_dir=lambda: str(usim_dir),
+    )
+    state = SimpleNamespace(
+        atlas_usim_datastore_h5=SimpleNamespace(path="urbansim/data/artifact_current.h5"),
+        forecast_year=2029,
+        is_start_year=lambda: False,
+    )
+
+    resolved = resolve_atlas_usim_datastore_path(
+        settings=_settings(output_template="model_data_{year}.h5"),
+        state=state,
+        workspace=workspace,
+    )
+
+    assert resolved == explicit

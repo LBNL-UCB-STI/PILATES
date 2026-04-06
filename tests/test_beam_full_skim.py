@@ -55,9 +55,9 @@ class TestBeamFullSkimMode:
         shared_cfg = SimpleNamespace(skims=SimpleNamespace(fname="skims.omx"))
         return SimpleNamespace(run=run_cfg, beam=beam_cfg, shared=shared_cfg)
 
-    def _setup_runner_test(self, skim_cfg):
+    def _setup_runner_test(self, skim_cfg, *, full_skim=False):
         """Common test setup for runner tests."""
-        from pilates.beam.runner import BeamRunner
+        from pilates.beam.runner import BeamFullSkimRunner, BeamRunner
         from pilates.generic.records import RecordStore
 
         settings = self._make_settings(full_skim_cfg=skim_cfg)
@@ -65,7 +65,9 @@ class TestBeamFullSkimMode:
         state.full_settings = settings
         state.current_year = 2020
         state.current_inner_iter = 0
-        runner = BeamRunner("beam", state)
+        runner_cls = BeamFullSkimRunner if full_skim else BeamRunner
+        model_name = "beam_full_skim" if full_skim else "beam"
+        runner = runner_cls(model_name, state)
 
         workspace = MagicMock()
         workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
@@ -77,7 +79,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_command_construction_all_params(
@@ -105,11 +107,10 @@ class TestBeamFullSkimMode:
             linkstats_file=None,
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         # Verify run_container was called
         assert mock_run_container.called
@@ -139,7 +140,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_without_optional_linkstats(
@@ -161,17 +162,16 @@ class TestBeamFullSkimMode:
             linkstats_file=None,  # No linkstats
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
 
         # Verify linkstats is NOT in command
-        assert "--linkstats=" not in command
+        assert "--linkstatsPath=" not in command
 
         # Verify other required params are present
         assert "--configPath=" in command
@@ -180,7 +180,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_single_mode_enabled(
@@ -202,11 +202,10 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -216,7 +215,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_all_modes_enabled(
@@ -238,11 +237,10 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": True, "transit": True},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -289,7 +287,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_no_modes_enabled(
@@ -311,11 +309,10 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": False, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -325,7 +322,7 @@ class TestBeamFullSkimMode:
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
-    @patch("pilates.beam.runner.BeamRunner.run_container")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_full_skim_multiple_peak_hours(
@@ -347,11 +344,10 @@ class TestBeamFullSkimMode:
             peak_hours=[6.0, 8.5, 12.0, 17.5, 20.0],
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
-            with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+            runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]

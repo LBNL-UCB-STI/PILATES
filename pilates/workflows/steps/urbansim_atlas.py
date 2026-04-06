@@ -42,7 +42,6 @@ from .shared import (
     build_standard_step,
     _log_named_h5_tables,
     _log_step_records,
-    _make_logged_typed_step_function,
     _urbansim_output_facet_meta,
     log_and_set_output,
     log_input_only,
@@ -529,6 +528,7 @@ def make_urbansim_preprocess_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
+            step_name="urbansim_preprocess",
             model_name="urbansim",
             phase="preprocess",
             outputs_class=UrbanSimPreprocessOutputs,
@@ -536,7 +536,6 @@ def make_urbansim_preprocess_step(
                 "urbansim", state
             ),
             component_executor=_execute_urbansim_preprocess_typed,
-            outputs_holder_attr="urbansim_preprocess",
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             step_logger=logger,
@@ -599,6 +598,7 @@ def make_urbansim_run_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
+            step_name="urbansim_run",
             model_name="urbansim",
             phase="run",
             outputs_class=UrbanSimRunOutputs,
@@ -606,7 +606,6 @@ def make_urbansim_run_step(
                 "urbansim", state
             ),
             component_executor=_execute_urbansim_run_typed,
-            outputs_holder_attr="urbansim_run",
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_run_outputs,
             step_logger=logger,
@@ -717,6 +716,7 @@ def make_urbansim_postprocess_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
+            step_name="urbansim_postprocess",
             model_name="urbansim",
             phase="postprocess",
             outputs_class=UrbanSimPostprocessOutputs,
@@ -724,7 +724,6 @@ def make_urbansim_postprocess_step(
                 "urbansim", state
             ),
             component_executor=_execute_urbansim_postprocess_typed,
-            outputs_holder_attr="urbansim_postprocess",
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_postprocess_outputs,
             step_logger=logger,
@@ -808,24 +807,23 @@ def make_atlas_preprocess_step(
         )
         _log_outputs(outputs, settings, state, workspace, holder)
 
-    step = _make_logged_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="preprocess",
-        outputs_class=AtlasPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "atlas", state
+        spec=StandardStepSpec(
+            step_name="atlas_preprocess",
+            model_name="atlas",
+            phase="preprocess",
+            outputs_class=AtlasPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "atlas", state
+            ),
+            component_executor=_execute_atlas_preprocess_typed,
+            output_logger=_log_outputs,
+            output_replayer=_replay_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_atlas_preprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_preprocess", outputs
-        ),
-        output_logger=_log_outputs,
-        step_logger=logger,
     )
-    setattr(step, "pilates_output_replayer", _replay_outputs)
-    return step
 
 
 def make_atlas_run_step(
@@ -903,21 +901,21 @@ def make_atlas_run_step(
             profile_schema_suffixes=(".csv", ".parquet"),
         )
 
-    return _make_logged_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="run",
-        outputs_class=AtlasRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("atlas", state),
-        component_executor=_execute_atlas_run_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_run", outputs
+        spec=StandardStepSpec(
+            step_name="atlas_run",
+            model_name="atlas",
+            phase="run",
+            outputs_class=AtlasRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner("atlas", state),
+            component_executor=_execute_atlas_run_typed,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_atlas_run_outputs,
+            step_logger=logger,
         ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_atlas_run_outputs,
-        step_logger=logger,
     )
 
 
@@ -1063,21 +1061,21 @@ def make_atlas_postprocess_step(
                 },
             )
 
-    return _make_logged_typed_step_function(
+    return build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="postprocess",
-        outputs_class=AtlasPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "atlas", state
+        spec=StandardStepSpec(
+            step_name="atlas_postprocess",
+            model_name="atlas",
+            phase="postprocess",
+            outputs_class=AtlasPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "atlas", state
+            ),
+            component_executor=_execute_atlas_postprocess_typed,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_atlas_postprocess_outputs,
+            step_logger=logger,
         ),
-        component_executor=_execute_atlas_postprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_postprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_atlas_postprocess_outputs,
-        step_logger=logger,
     )

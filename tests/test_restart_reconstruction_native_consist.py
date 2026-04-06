@@ -655,6 +655,48 @@ def test_collect_restart_completed_run_ids_for_supply_demand_resume_merges_land_
     }
 
 
+def test_restart_query_targets_use_catalog_standard_steps_and_runtime_stage_labels():
+    state = _restart_state(
+        iteration=1,
+        sub_stage=WorkflowState.Stage.traffic_assignment,
+        enabled_stages={WorkflowState.Stage.supply_demand_loop},
+    )
+
+    targets = restart_runtime._restart_query_targets(
+        state=state,
+        year=2018,
+        workflow_stage=WorkflowState.Stage,
+    )
+    target_keys = {
+        (
+            target.get("model"),
+            target.get("stage"),
+            target.get("phase"),
+            target.get("iteration"),
+        )
+        for target in targets
+    }
+
+    assert (
+        "activitysim_compile",
+        "activity_demand_compile",
+        "compile",
+        0,
+    ) not in target_keys
+    assert ("beam_full_skim", "beam", "run", 0) not in target_keys
+    assert {
+        ("activitysim_preprocess", "activity_demand_preprocess", "preprocess", 0),
+        ("activitysim_run", "activity_demand_run", "run", 0),
+        ("activitysim_postprocess", "activity_demand_postprocess", "postprocess", 0),
+        ("beam_preprocess", "beam", "preprocess", 0),
+        ("beam_run", "beam", "run", 0),
+        ("beam_postprocess", "beam", "postprocess", 0),
+        ("activitysim_preprocess", "activity_demand_preprocess", "preprocess", 1),
+        ("activitysim_run", "activity_demand_run", "run", 1),
+        ("activitysim_postprocess", "activity_demand_postprocess", "postprocess", 1),
+    } <= target_keys
+
+
 def test_collect_restart_completed_run_ids_tracker_filters_by_scenario_facet(
     tmp_path, caplog
 ):

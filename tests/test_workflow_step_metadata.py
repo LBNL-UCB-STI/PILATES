@@ -33,6 +33,7 @@ from pilates.workflows.orchestration import (
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
+    activitysim_compile_output_paths,
     make_activitysim_compile_step,
     make_atlas_postprocess_step,
     make_atlas_preprocess_step,
@@ -100,6 +101,8 @@ def test_make_step_factories_attach_consist_metadata():
         ASIM_PERSONS_IN,
     ]
     assert compile_meta.outputs == ["zarr_skims"]
+    assert compile_meta.output_paths is activitysim_compile_output_paths
+    assert compile_meta.cache_mode == "overwrite"
     assert preprocess_meta.name_template == "{func_name}__y{year}__i{iteration}__phase_{phase}"
     assert callable(preprocess_meta.adapter)
     assert callable(preprocess_meta.config)
@@ -362,6 +365,44 @@ def test_workflow_stage_uses_top_level_runtime_kwargs_with_load_inputs_option():
         "workspace": workspace,
     }
     assert call["execution_options"].load_inputs is True
+
+
+def test_workflow_stage_uses_decorator_runtime_defaults_for_execution_options():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(full_path="/tmp/workspace")
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        load_inputs=False,
+        cache_mode="overwrite",
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(name="dummy_step", step_func=_decorated_step)
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"].load_inputs is False
+    assert call["cache_options"] == CacheOptions(
+        cache_hydration=None,
+        cache_mode="overwrite",
+        code_identity=None,
+    )
 
 
 def test_workflow_stage_propagates_consist_code_identity_override():

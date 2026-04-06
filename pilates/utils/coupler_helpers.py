@@ -1235,6 +1235,16 @@ def _log_and_maybe_publish_artifact(
         # path/artifact resolution.
         if isinstance(artifact, tuple):
             artifact = artifact[0] if artifact else None
+    elif skip_logging_without_active_run:
+        artifact = _log_with_optional_h5_container(
+            direction=direction,
+            key=key,
+            path=path,
+            description=description,
+            meta={**dict(meta), "enabled": False},
+        )
+        if isinstance(artifact, tuple):
+            artifact = artifact[0] if artifact else None
 
     if enqueue_archive_copy:
         _enqueue_archive_copy(key, path)
@@ -1315,7 +1325,7 @@ def log_output_only(
         meta=meta,
         publish_to_coupler=False,
         enqueue_archive_copy=True,
-        skip_logging_without_active_run=False,
+        skip_logging_without_active_run=True,
     )
 
 
@@ -1381,5 +1391,5 @@ def log_input_only(
         meta=meta,
         publish_to_coupler=False,
         enqueue_archive_copy=False,
-        skip_logging_without_active_run=False,
+        skip_logging_without_active_run=True,
     )

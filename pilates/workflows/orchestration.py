@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import inspect
 import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 import warnings
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
+from consist.core.step_context import StepContext
 from consist.types import BindingResult, CacheOptions, ExecutionOptions, OutputPolicyOptions
 
 from pilates.runtime.cache_recovery import (
@@ -15,6 +18,7 @@ from pilates.runtime.cache_recovery import (
     run_with_cache_recovery,
 )
 from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
@@ -501,21 +505,51 @@ def _build_step_run_kwargs(
     )
     if resolved_output_paths is not None:
         run_kwargs["output_paths"] = dict(resolved_output_paths)
+    resolved_load_inputs = step.load_inputs
+    if resolved_load_inputs is None and step.binding is None:
+        resolved_load_inputs = _resolve_step_metadata_value(
+            getattr(step_meta, "load_inputs", None),
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs=runtime_kwargs,
+        )
     run_kwargs["execution_options"] = ExecutionOptions(
         runtime_kwargs=runtime_kwargs,
-        load_inputs=step.load_inputs,
+        load_inputs=resolved_load_inputs,
     )
 
     run_cfg = getattr(settings, "run", None)
     code_identity = getattr(run_cfg, "consist_code_identity", None)
+    resolved_cache_hydration = step.cache_hydration
+    if resolved_cache_hydration is None:
+        resolved_cache_hydration = _resolve_step_metadata_value(
+            getattr(step_meta, "cache_hydration", None),
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs=runtime_kwargs,
+        )
+    resolved_cache_mode = step.cache_mode
+    if resolved_cache_mode is None:
+        resolved_cache_mode = _resolve_step_metadata_value(
+            getattr(step_meta, "cache_mode", None),
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs=runtime_kwargs,
+        )
     if (
-        step.cache_hydration is not None
-        or step.cache_mode is not None
+        resolved_cache_hydration is not None
+        or resolved_cache_mode is not None
         or code_identity is not None
     ):
         run_kwargs["cache_options"] = CacheOptions(
-            cache_hydration=step.cache_hydration,
-            cache_mode=step.cache_mode,
+            cache_hydration=resolved_cache_hydration,
+            cache_mode=resolved_cache_mode,
             code_identity=code_identity,
         )
 
@@ -707,12 +741,28 @@ def _resolved_step_output_paths(
     if step.output_paths is not None:
         return step.output_paths
     if step.output_paths_provider is None:
-        return None
-    output_paths = step.output_paths_provider(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
+        step_meta = getattr(step.step_func, "__consist_step__", None)
+        metadata_output_paths = _resolve_step_metadata_value(
+            getattr(step_meta, "output_paths", None),
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs={
+                "settings": settings,
+                "state": state,
+                "workspace": workspace,
+            },
+        )
+        if metadata_output_paths is None:
+            return None
+        output_paths = metadata_output_paths
+    else:
+        output_paths = step.output_paths_provider(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
     if output_paths is None:
         return None
     if not isinstance(output_paths, Mapping):
@@ -720,6 +770,98 @@ def _resolved_step_output_paths(
             f"Step '{step.name}' output-path provider must return a mapping or None."
         )
     return output_paths
+
+
+def _build_step_metadata_context(
+    *,
+    step: StepRef,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    runtime_kwargs: Mapping[str, Any],
+) -> StepContext:
+    step_meta = getattr(step.step_func, "__consist_step__", None)
+    step_model = getattr(step_meta, "model", None) or step.name
+    signature = inspect.signature(StepContext)
+    kwargs: Dict[str, Any] = {
+        "func_name": getattr(step.step_func, "__name__", step.name),
+        "model": step_model,
+        "runtime_kwargs": dict(runtime_kwargs),
+    }
+    if "settings" in signature.parameters:
+        kwargs["settings"] = settings
+    if "runtime_settings" in signature.parameters:
+        kwargs["runtime_settings"] = settings
+    if "runtime_workspace" in signature.parameters:
+        kwargs["runtime_workspace"] = workspace
+    if "consist_settings" in signature.parameters:
+        kwargs["consist_settings"] = SimpleNamespace()
+    if "consist_workspace" in signature.parameters:
+        kwargs["consist_workspace"] = Path(getattr(workspace, "full_path", "."))
+    return StepContext(**kwargs)
+
+
+def _resolve_step_metadata_value(
+    value: Any,
+    *,
+    step: StepRef,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    runtime_kwargs: Mapping[str, Any],
+) -> Any:
+    if value is None or not callable(value):
+        return value
+
+    try:
+        parameters = inspect.signature(value).parameters
+    except (TypeError, ValueError):
+        ctx = _build_step_metadata_context(
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs=runtime_kwargs,
+        )
+        return value(ctx)
+
+    if not parameters:
+        return value()
+
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+        return value(settings=settings, state=state, workspace=workspace)
+
+    names = list(parameters)
+    if len(parameters) == 1:
+        name = names[0]
+        if name in {"ctx", "context", "step_context"}:
+            ctx = _build_step_metadata_context(
+                step=step,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                runtime_kwargs=runtime_kwargs,
+            )
+            return value(ctx)
+
+    kwargs: Dict[str, Any] = {}
+    if "settings" in parameters:
+        kwargs["settings"] = settings
+    if "state" in parameters:
+        kwargs["state"] = state
+    if "workspace" in parameters:
+        kwargs["workspace"] = workspace
+    if kwargs:
+        return value(**kwargs)
+
+    ctx = _build_step_metadata_context(
+        step=step,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        runtime_kwargs=runtime_kwargs,
+    )
+    return value(ctx)
 
 
 def _publish_recovered_outputs(
@@ -734,7 +876,15 @@ def _publish_recovered_outputs(
 ) -> None:
     replayer = step.output_replayer
     if replayer is not None:
-        replayer(outputs, settings, state, workspace, outputs_holder)
+        if cr.current_run() is not None:
+            replayer(outputs, settings, state, workspace, outputs_holder)
+            return
+        previous_enabled = getattr(cr, "_enabled_override", None)
+        cr.set_enabled(False)
+        try:
+            replayer(outputs, settings, state, workspace, outputs_holder)
+        finally:
+            cr.set_enabled(previous_enabled)
         return
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
 

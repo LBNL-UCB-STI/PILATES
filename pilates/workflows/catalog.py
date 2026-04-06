@@ -83,6 +83,12 @@ class WorkflowStepSpec:
     """
     Static catalog entry for a workflow step.
 
+    ``step_name`` is the canonical workflow-step identity in the catalog and
+    matches the Consist ``model=...`` value used by the decorated step
+    functions. Older callers may still refer to a catalog "model name", so a
+    compatibility property is provided below, but the catalog no longer stores
+    a second parallel identifier.
+
     Contract fields are intentionally split by meaning:
     - ``input_keys`` and ``optional_input_keys`` describe artifact keys
       consumed by the step during execution, including keys satisfied through
@@ -100,7 +106,6 @@ class WorkflowStepSpec:
     """
 
     step_name: str
-    model_name: str
     phase: str
     stage_name: str
     order: int
@@ -120,6 +125,17 @@ class WorkflowStepSpec:
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
+
+    @property
+    def model_name(self) -> str:
+        """
+        Compatibility alias for callers that still expect a catalog model key.
+
+        After the narrow generic-builder refactor, tracked catalog steps use
+        ``step_name`` as their canonical Consist identity, so the old catalog
+        ``model_name`` is structurally the same value.
+        """
+        return self.step_name
 
 
 @dataclass(frozen=True)
@@ -221,7 +237,6 @@ _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     WorkflowStepSpec(
         step_name="urbansim_preprocess",
-        model_name="urbansim_preprocess",
         phase="preprocess",
         stage_name="land_use",
         order=10,
@@ -241,7 +256,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="urbansim_run",
-        model_name="urbansim_run",
         phase="run",
         stage_name="land_use",
         order=20,
@@ -258,7 +272,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="urbansim_postprocess",
-        model_name="urbansim_postprocess",
         phase="postprocess",
         stage_name="land_use",
         order=30,
@@ -278,7 +291,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="atlas_preprocess",
-        model_name="atlas_preprocess",
         phase="preprocess",
         stage_name="vehicle_ownership_model",
         order=40,
@@ -299,7 +311,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="atlas_run",
-        model_name="atlas_run",
         phase="run",
         stage_name="vehicle_ownership_model",
         order=50,
@@ -324,7 +335,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="atlas_postprocess",
-        model_name="atlas_postprocess",
         phase="postprocess",
         stage_name="vehicle_ownership_model",
         order=60,
@@ -344,7 +354,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="activitysim_preprocess",
-        model_name="activitysim_preprocess",
         phase="preprocess",
         stage_name="activity_demand",
         order=70,
@@ -369,7 +378,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="activitysim_compile",
-        model_name="activitysim_compile",
         phase="compile",
         stage_name="activity_demand",
         order=80,
@@ -386,7 +394,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="activitysim_run",
-        model_name="activitysim_run",
         phase="run",
         stage_name="activity_demand",
         order=90,
@@ -411,7 +418,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="activitysim_postprocess",
-        model_name="activitysim_postprocess",
         phase="postprocess",
         stage_name="activity_demand",
         order=100,
@@ -442,7 +448,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="beam_preprocess",
-        model_name="beam_preprocess",
         phase="preprocess",
         stage_name="traffic_assignment",
         order=110,
@@ -467,7 +472,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="beam_run",
-        model_name="beam_run",
         phase="run",
         stage_name="traffic_assignment",
         order=120,
@@ -510,7 +514,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="beam_postprocess",
-        model_name="beam_postprocess",
         phase="postprocess",
         stage_name="traffic_assignment",
         order=130,
@@ -539,7 +542,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="beam_full_skim",
-        model_name="beam_full_skim",
         phase="run",
         stage_name="traffic_assignment",
         order=140,
@@ -561,7 +563,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     ),
     WorkflowStepSpec(
         step_name="postprocessing",
-        model_name="postprocessing",
         phase="postprocess",
         stage_name="postprocessing",
         order=150,
@@ -575,9 +576,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
 _STEP_SPECS_BY_STEP_NAME: Dict[str, WorkflowStepSpec] = {
     spec.step_name: spec for spec in WORKFLOW_STEP_SPECS
 }
-_STEP_SPECS_BY_MODEL_NAME: Dict[str, WorkflowStepSpec] = {
-    spec.model_name: spec for spec in WORKFLOW_STEP_SPECS
-}
 
 
 def workflow_step_spec_for_step_name(step_name: str) -> Optional[WorkflowStepSpec]:
@@ -585,7 +583,14 @@ def workflow_step_spec_for_step_name(step_name: str) -> Optional[WorkflowStepSpe
 
 
 def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepSpec]:
-    return _STEP_SPECS_BY_MODEL_NAME.get(model_name)
+    """
+    Compatibility lookup for callers that still speak in model-name terms.
+
+    Catalog entries now use ``step_name`` as the single stored identifier, so
+    this helper intentionally aliases model-name lookups onto step-name
+    lookups instead of maintaining a second registry.
+    """
+    return _STEP_SPECS_BY_STEP_NAME.get(model_name)
 
 
 def _specialize_contract_for_settings(
@@ -820,7 +825,11 @@ def enabled_schema_step_models(
     include_optional: bool = True,
 ) -> Set[str]:
     """
-    Resolve enabled schema-step model identifiers for runtime settings.
+    Resolve enabled schema-step identifiers for runtime settings.
+
+    The function name is retained for compatibility with existing callers, but
+    the returned identifiers are the canonical schema ``step_name`` values that
+    Consist sees as step models.
 
     Parameters
     ----------
@@ -836,14 +845,14 @@ def enabled_schema_step_models(
         flag_attr = spec.enabled_flag_attr
         model_attr = spec.enabled_model_attr
         if flag_attr is None or model_attr is None:
-            enabled_models.add(spec.model_name)
+            enabled_models.add(spec.step_name)
             continue
         if is_model_enabled(
             settings,
             flag_attr=flag_attr,
             model_attr=model_attr,
         ):
-            enabled_models.add(spec.model_name)
+            enabled_models.add(spec.step_name)
     return enabled_models
 
 

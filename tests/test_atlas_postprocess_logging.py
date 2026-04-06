@@ -12,14 +12,14 @@ from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_postprocess_step(
@@ -84,14 +84,14 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_postprocess_step(
@@ -146,14 +146,14 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
 ):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_postprocess_step(
@@ -217,14 +217,14 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
 ):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_postprocess_step(
@@ -288,15 +288,15 @@ def test_atlas_postprocess_logs_resolved_fallback_households_table(
 ):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_logged_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_postprocess_step(

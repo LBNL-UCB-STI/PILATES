@@ -198,9 +198,16 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
 
         preprocess = ActivitysimPreprocessor.preprocess
 
-        def _preprocess(self, workspace_arg, previous_records_arg):
+        def _preprocess(
+            self,
+            workspace_arg,
+            previous_records_arg,
+            *,
+            final_skims_omx=None,
+        ):
             assert workspace_arg is workspace
             assert previous_records_arg is previous_records
+            assert final_skims_omx is None
             return record_store
 
     outputs = _Preprocessor("activitysim_preprocess", state).preprocess(

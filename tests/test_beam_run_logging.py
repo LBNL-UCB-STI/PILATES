@@ -7,14 +7,14 @@ from pilates.workflows.steps import beam as steps_beam
 def test_beam_preprocess_fails_early_when_config_file_missing(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_beam_preprocess_step(
@@ -46,14 +46,14 @@ def test_beam_preprocess_fails_early_when_config_file_missing(monkeypatch, tmp_p
 def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_beam_run_step(
@@ -104,14 +104,14 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
 ):
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     output_plans = tmp_path / "published-output-plans.xml.gz"
@@ -180,14 +180,14 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
 def test_beam_run_fails_clearly_when_config_file_missing(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["input_logger"] = kwargs["input_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["input_logger"] = spec.input_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_beam_run_step(
