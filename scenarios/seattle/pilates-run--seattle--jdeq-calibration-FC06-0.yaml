@@ -217,12 +217,12 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260314
+    beam: docker://haitamlaarabi/beam:1.1-beta-v260329
     activitysim: docker://zaneedell/activitysim:0.2.5
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260314
+    beam: haitamlaarabi/beam:1.1-beta-v260329
     activitysim: zaneedell/activitysim:0.2.5
     polaris: tbd
   docker_config:
@@ -253,6 +253,7 @@ beam:
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/seattle-cbg120-ferry-weakConn-network
+  warmstart_linkstats_path: r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/5.linkstats.FC06.v1.csv.gz
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10
