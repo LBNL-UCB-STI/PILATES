@@ -51,6 +51,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
 )
 from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.state_access import current_year as state_current_year, iteration_index
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     ValidationContext,
@@ -249,7 +250,7 @@ def _step_scope_fields(
     run_id: Optional[str] = None,
     cache_hit: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    current_year = getattr(state, "current_year", getattr(state, "year", None))
+    current_year = state_current_year(state)
     forecast_year = getattr(state, "forecast_year", None)
     atlas_year = getattr(state, "atlas_year", None)
 
@@ -265,11 +266,7 @@ def _step_scope_fields(
         "year": target_year,
         "simulation_year": current_year,
         "forecast_year": forecast_year,
-        "iteration": getattr(
-            state,
-            "current_inner_iter",
-            getattr(state, "iteration", None),
-        ),
+        "iteration": iteration_index(state),
         "atlas_year": atlas_year,
         "run_id": run_id,
         "cache_hit": cache_hit,

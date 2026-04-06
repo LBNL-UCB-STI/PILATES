@@ -11,7 +11,7 @@ from pilates.atlas.inputs import (
     atlas_static_input_keys_for_interval,
 )
 from pilates.config.models import PilatesConfig, load_config
-from pilates.utils.io import compute_model_enabled_flags
+from pilates.utils.io import apply_runtime_flags, compute_model_enabled_flags
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
@@ -135,8 +135,7 @@ class StaticExecutionPlan:
 
 def _attach_enabled_flags(settings: PilatesConfig) -> Dict[str, bool]:
     enabled_flags = compute_model_enabled_flags(settings)
-    for attr, value in enabled_flags.items():
-        setattr(settings, attr, value)
+    apply_runtime_flags(settings, enabled_flags)
     return enabled_flags
 
 
@@ -152,7 +151,7 @@ def _interval_step_for_year(settings: PilatesConfig, year: int) -> int:
 
 def _iter_planning_years(settings: PilatesConfig) -> List[Dict[str, int]]:
     years: List[Dict[str, int]] = []
-    land_use_enabled = bool(getattr(settings, "land_use_enabled", False))
+    land_use_enabled = settings.runtime.flags.land_use_enabled
     current_year = int(settings.run.start_year)
     end_year = int(settings.run.end_year)
 
@@ -533,7 +532,7 @@ class _PlanBuilder:
         return self.plan
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
-        if bool(getattr(self.settings, "land_use_enabled", False)):
+        if self.settings.runtime.flags.land_use_enabled:
             self._add_step_run("urbansim_preprocess", year=year, forecast_year=forecast_year)
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
@@ -542,7 +541,7 @@ class _PlanBuilder:
                 forecast_year=forecast_year,
             )
 
-        if bool(getattr(self.settings, "vehicle_ownership_model_enabled", False)):
+        if self.settings.runtime.flags.vehicle_ownership_model_enabled:
             for atlas_year in _atlas_sub_years(year, forecast_year):
                 self._add_step_run(
                     "atlas_preprocess",
@@ -563,8 +562,9 @@ class _PlanBuilder:
                     atlas_year=atlas_year,
                 )
 
-        if bool(getattr(self.settings, "activity_demand_enabled", False)) or bool(
-            getattr(self.settings, "traffic_assignment_enabled", False)
+        if (
+            self.settings.runtime.flags.activity_demand_enabled
+            or self.settings.runtime.flags.traffic_assignment_enabled
         ):
             self._add_supply_demand_steps(year=year, forecast_year=forecast_year)
 
@@ -573,8 +573,8 @@ class _PlanBuilder:
 
     def _add_supply_demand_steps(self, *, year: int, forecast_year: int) -> None:
         total_iters = _effective_supply_demand_iterations(self.settings)
-        activity_enabled = bool(getattr(self.settings, "activity_demand_enabled", False))
-        traffic_enabled = bool(getattr(self.settings, "traffic_assignment_enabled", False))
+        activity_enabled = self.settings.runtime.flags.activity_demand_enabled
+        traffic_enabled = self.settings.runtime.flags.traffic_assignment_enabled
         compile_added = False
         schedule = _full_skim_run_schedule(self.settings)
 
@@ -1057,7 +1057,7 @@ def build_static_execution_plan(
     config_path: Optional[str] = None,
     include_postprocessing: Optional[bool] = None,
 ) -> StaticExecutionPlan:
-    if not hasattr(settings, "land_use_enabled"):
+    if not settings.runtime.flags_initialized:
         _attach_enabled_flags(settings)
 
     include_post = (

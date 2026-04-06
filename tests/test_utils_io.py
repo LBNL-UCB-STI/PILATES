@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 
 from pilates.utils.io import (
     compute_model_enabled_flags,
+    is_activity_demand_enabled,
+    is_land_use_enabled,
     parse_args_and_settings,
 )
 
@@ -151,6 +153,39 @@ class TestComputeModelEnabledFlags:
         settings = MockSettings(mock_settings_data)
         flags = compute_model_enabled_flags(settings)
         assert flags["replanning_enabled"] is False
+
+    def test_is_activity_demand_enabled_prefers_explicit_flag(
+        self, mock_dependencies, mock_settings_data
+    ):
+        mock_get_setting, _ = mock_dependencies
+        mock_settings_data["activity_demand_enabled"] = False
+        mock_get_setting.side_effect = self.side_effect
+
+        settings = MockSettings(mock_settings_data)
+
+        assert is_activity_demand_enabled(settings) is False
+
+    def test_is_activity_demand_enabled_falls_back_to_model_or_config(
+        self, mock_dependencies, mock_settings_data
+    ):
+        mock_get_setting, _ = mock_dependencies
+        mock_settings_data.pop("activity_demand_enabled", None)
+        mock_get_setting.side_effect = self.side_effect
+
+        settings = MockSettings(mock_settings_data)
+
+        assert is_activity_demand_enabled(settings) is True
+
+    def test_is_land_use_enabled_prefers_explicit_flag(
+        self, mock_dependencies, mock_settings_data
+    ):
+        mock_get_setting, _ = mock_dependencies
+        mock_settings_data["land_use_enabled"] = False
+        mock_get_setting.side_effect = self.side_effect
+
+        settings = MockSettings(mock_settings_data)
+
+        assert is_land_use_enabled(settings) is False
 
 
 @pytest.fixture

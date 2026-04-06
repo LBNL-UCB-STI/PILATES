@@ -11,6 +11,7 @@ from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, enqueue_archive_copy
+from pilates.utils.state_access import uses_input_datastore
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
@@ -100,18 +101,7 @@ def resolve_atlas_usim_datastore_path(
         return Path(os.fspath(explicit_value))
 
     usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
-    is_start_year = getattr(state, "is_start_year", None)
-    if callable(is_start_year):
-        use_input_datastore = bool(is_start_year())
-    else:
-        current_year = getattr(state, "current_year", getattr(state, "year", None))
-        forecast_year = getattr(state, "forecast_year", None)
-        use_input_datastore = (
-            current_year is not None
-            and forecast_year is not None
-            and current_year == forecast_year
-        )
-    if use_input_datastore:
+    if uses_input_datastore(state):
         usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
     else:
         usim_datastore_fname = get_usim_datastore_fname(

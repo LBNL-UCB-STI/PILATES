@@ -1,11 +1,19 @@
-from typing import Any, Dict
+from __future__ import annotations
+
+from typing import Any, Dict, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pilates.config import PilatesConfig
+    from pilates.workspace import Workspace
+    from pilates.workflows.atlas_state import AtlasSubState
+    from workflow_state import WorkflowState
 
 
 def common_runtime_kwargs(
     *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
+    settings: "PilatesConfig",
+    state: "WorkflowState | AtlasSubState",
+    workspace: "Workspace",
     **extras: Any,
 ) -> Dict[str, Any]:
     """

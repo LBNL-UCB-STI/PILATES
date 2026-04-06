@@ -228,17 +228,17 @@ class WorkflowState:
         start_year = settings.run.start_year
         end_year = settings.run.end_year
         travel_model_freq = settings.run.travel_model_freq
+        runtime_flags = settings.runtime.flags
+        runtime_options = settings.runtime.options
 
         # These are always added at top-level by parse_args_and_settings()
-        land_use_enabled = getattr(settings, "land_use_enabled", False)
-        vehicle_ownership_model_enabled = getattr(
-            settings, "vehicle_ownership_model_enabled", False
+        land_use_enabled = runtime_flags.land_use_enabled
+        vehicle_ownership_model_enabled = (
+            runtime_flags.vehicle_ownership_model_enabled
         )
-        activity_demand_enabled = getattr(settings, "activity_demand_enabled", False)
-        traffic_assignment_enabled = getattr(
-            settings, "traffic_assignment_enabled", False
-        )
-        file_loc = getattr(settings, "state_file_loc", None)
+        activity_demand_enabled = runtime_flags.activity_demand_enabled
+        traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
+        file_loc = runtime_options.state_file_loc
 
         if file_loc:
             [

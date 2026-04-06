@@ -16,6 +16,7 @@ from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
@@ -229,11 +230,11 @@ class BeamPreprocessor(GenericPreprocessor):
             )[0],
         }
         asim_output_dir = None
-        if getattr(settings, "activity_demand_enabled", False):
+        if settings.runtime.flags.activity_demand_enabled:
             asim_output_dir = workspace.get_asim_output_dir()
 
         atlas_output_dir = None
-        if getattr(settings, "vehicle_ownership_model_enabled", False):
+        if settings.runtime.flags.vehicle_ownership_model_enabled:
             atlas_output_dir = workspace.get_atlas_output_dir()
         beam_config = getattr(getattr(settings, "beam", None), "config", None)
         beam_config_path = (
@@ -439,14 +440,7 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def _activity_demand_enabled(self) -> bool:
         """Return whether ActivitySim is enabled for the current run."""
-        explicit = getattr(self.settings, "activity_demand_enabled", None)
-        if explicit is not None:
-            return bool(explicit)
-        models = getattr(getattr(self.settings, "run", None), "models", None)
-        model_name = getattr(models, "activity_demand", None) if models is not None else None
-        if model_name is not None:
-            return True
-        return getattr(self.settings, "activitysim", None) is not None
+        return is_activity_demand_enabled(self.settings)
 
     def _register_existing_beam_exchange_inputs(
         self,

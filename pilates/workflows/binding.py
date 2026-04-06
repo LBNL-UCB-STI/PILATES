@@ -24,7 +24,8 @@ from consist.types import BindingResult
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
+from pilates.utils.state_access import iteration_index
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
@@ -543,8 +544,7 @@ def _beam_preprocess_exchange_inputs(
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
-    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
+    activity_demand_model = get_activity_demand_model(settings)
     if activity_demand_model is not None:
         return None
 
@@ -610,7 +610,7 @@ def _beam_preprocess_atlas_inputs(
     if not getattr(settings, "vehicle_ownership_model_enabled", False):
         return None
 
-    current_iter = getattr(state, "current_inner_iter", getattr(state, "iteration", 0))
+    current_iter = iteration_index(state, default=0)
     if current_iter != 0:
         return None
 

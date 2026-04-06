@@ -7,6 +7,7 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 import json
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -470,14 +471,8 @@ def _activitysim_postprocess_requires_usim_output(context: ValidationContext) ->
                 return False
 
     settings = getattr(context, "settings", None)
-    if settings is not None:
-        explicit = getattr(settings, "land_use_enabled", None)
-        if explicit is not None:
-            return bool(explicit)
-        run_cfg = getattr(settings, "run", None)
-        model_cfg = getattr(run_cfg, "models", None)
-        if getattr(model_cfg, "land_use", None) == "urbansim":
-            return True
+    if settings is not None and is_land_use_enabled(settings):
+        return True
 
     return False
 

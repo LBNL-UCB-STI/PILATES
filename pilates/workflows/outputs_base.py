@@ -14,6 +14,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    TYPE_CHECKING,
     Tuple,
     Type,
     TypeVar,
@@ -24,6 +25,12 @@ from typing import (
 
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
 from pilates.workflows.coupler_namespace import resolve_coupler_value
+
+if TYPE_CHECKING:
+    from pilates.config import PilatesConfig
+    from pilates.workspace import Workspace
+    from pilates.workflows.atlas_state import AtlasSubState
+    from workflow_state import WorkflowState
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
@@ -66,9 +73,9 @@ class ValidationContext:
         Snapshot view of upstream ``StepOutputsHolder`` entries.
     """
 
-    settings: Any = None
-    state: Any = None
-    workspace: Any = None
+    settings: Optional["PilatesConfig"] = None
+    state: Optional["WorkflowState | AtlasSubState"] = None
+    workspace: Optional["Workspace"] = None
     step_name: Optional[str] = None
     upstream_outputs: Mapping[str, Any] = field(default_factory=dict)
 

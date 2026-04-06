@@ -8,11 +8,41 @@ and provenance tracking.
 
 import os
 import logging
+from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 import yaml
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RuntimeFlags:
+    """Derived runtime enablement flags attached after config load."""
+
+    land_use_enabled: bool = False
+    vehicle_ownership_model_enabled: bool = False
+    activity_demand_enabled: bool = False
+    traffic_assignment_enabled: bool = False
+    replanning_enabled: bool = False
+
+
+@dataclass
+class RuntimeOptions:
+    """Ephemeral runtime options attached outside the persisted config schema."""
+
+    state_file_loc: Optional[str] = None
+    settings_file: Optional[str] = None
+    allow_rewind_resume: bool = False
+
+
+@dataclass
+class PilatesRuntime:
+    """Typed runtime state associated with a loaded ``PilatesConfig`` instance."""
+
+    flags: RuntimeFlags = dataclass_field(default_factory=RuntimeFlags)
+    options: RuntimeOptions = dataclass_field(default_factory=RuntimeOptions)
+    flags_initialized: bool = False
 
 
 # =============================================================================
@@ -657,6 +687,7 @@ class PilatesConfig(BaseModel):
     """
 
     model_config = ConfigDict(extra="allow")
+    _runtime: PilatesRuntime = PrivateAttr(default_factory=PilatesRuntime)
 
     run: RunConfig
     shared: SharedConfig
@@ -683,6 +714,80 @@ class PilatesConfig(BaseModel):
         if self.run.models.travel and not self.beam:
             raise ValueError("travel model is enabled but beam config is missing")
         return self
+
+    @property
+    def runtime(self) -> PilatesRuntime:
+        """Typed runtime metadata derived after config load."""
+        return self._runtime
+
+    @property
+    def land_use_enabled(self) -> bool:
+        return self.runtime.flags.land_use_enabled
+
+    @land_use_enabled.setter
+    def land_use_enabled(self, value: bool) -> None:
+        self.runtime.flags.land_use_enabled = bool(value)
+        self.runtime.flags_initialized = True
+
+    @property
+    def vehicle_ownership_model_enabled(self) -> bool:
+        return self.runtime.flags.vehicle_ownership_model_enabled
+
+    @vehicle_ownership_model_enabled.setter
+    def vehicle_ownership_model_enabled(self, value: bool) -> None:
+        self.runtime.flags.vehicle_ownership_model_enabled = bool(value)
+        self.runtime.flags_initialized = True
+
+    @property
+    def activity_demand_enabled(self) -> bool:
+        return self.runtime.flags.activity_demand_enabled
+
+    @activity_demand_enabled.setter
+    def activity_demand_enabled(self, value: bool) -> None:
+        self.runtime.flags.activity_demand_enabled = bool(value)
+        self.runtime.flags_initialized = True
+
+    @property
+    def traffic_assignment_enabled(self) -> bool:
+        return self.runtime.flags.traffic_assignment_enabled
+
+    @traffic_assignment_enabled.setter
+    def traffic_assignment_enabled(self, value: bool) -> None:
+        self.runtime.flags.traffic_assignment_enabled = bool(value)
+        self.runtime.flags_initialized = True
+
+    @property
+    def replanning_enabled(self) -> bool:
+        return self.runtime.flags.replanning_enabled
+
+    @replanning_enabled.setter
+    def replanning_enabled(self, value: bool) -> None:
+        self.runtime.flags.replanning_enabled = bool(value)
+        self.runtime.flags_initialized = True
+
+    @property
+    def state_file_loc(self) -> Optional[str]:
+        return self.runtime.options.state_file_loc
+
+    @state_file_loc.setter
+    def state_file_loc(self, value: Optional[str]) -> None:
+        self.runtime.options.state_file_loc = value
+
+    @property
+    def settings_file(self) -> Optional[str]:
+        return self.runtime.options.settings_file
+
+    @settings_file.setter
+    def settings_file(self, value: Optional[str]) -> None:
+        self.runtime.options.settings_file = value
+
+    @property
+    def allow_rewind_resume(self) -> bool:
+        return self.runtime.options.allow_rewind_resume
+
+    @allow_rewind_resume.setter
+    def allow_rewind_resume(self, value: bool) -> None:
+        self.runtime.options.allow_rewind_resume = bool(value)
 
     def get_enabled_models(self) -> List[str]:
         """Get list of enabled model names."""
