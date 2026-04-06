@@ -18,6 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from consist import define_step
+import pytest
 import yaml
 
 from pilates.activitysim.outputs import (
@@ -65,7 +66,9 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
+from pilates.workflows.steps import activitysim as steps_activitysim
 from pilates.workflows.steps import beam as steps_beam
+from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 from pilates.runtime import launcher as run_module
 
 
@@ -349,6 +352,18 @@ class _ManifestScenario:
 def _write_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("x")
+
+
+@pytest.fixture(autouse=True)
+def _stub_atlas_output_publication(monkeypatch):
+    def _set_on_coupler(*, key, path, coupler, **_kwargs):
+        coupler.set(key, path)
+        return SimpleNamespace(path=path, key=key)
+
+    for module in (steps_activitysim, steps_urbansim_atlas):
+        monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
+        monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
+        monkeypatch.setattr(module, "_log_named_h5_tables", lambda **_kwargs: None)
 
 
 def _prepare_activitysim_preprocess_manifest(
@@ -1006,6 +1021,12 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "persons.csv")
     _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "residential.csv")
     _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "jobs.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "households.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "blocks.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "persons.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "grave.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "residential.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "jobs.csv")
     _write_file(
         archive_root / "atlas" / "atlas_input" / "year2021" / "vehicles_output.RData"
     )
@@ -1047,12 +1068,14 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     assert (current_atlas_input_dir / "year2017" / "persons.csv").exists()
     assert (current_atlas_input_dir / "year2017" / "residential.csv").exists()
     assert (current_atlas_input_dir / "year2017" / "jobs.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "households.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "grave.csv").exists()
     assert (current_atlas_input_dir / "year2021" / "vehicles_output.RData").exists()
     assert (current_atlas_input_dir / "year2021" / "households_output.RData").exists()
     assert getattr(outputs, "_compatibility_fallback_used", False) is True
 
 
-def test_manifest_restore_reruns_atlas_preprocess_when_restart_subyear_grave_csv_missing(
+def test_manifest_restore_reruns_atlas_stage_when_restart_subyear_grave_csv_missing(
     tmp_path,
 ):
     old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
@@ -1111,7 +1134,6 @@ def test_manifest_restore_reruns_atlas_preprocess_when_restart_subyear_grave_csv
 
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
-    scenario = _ManifestScenario(cache_hit=False)
     state = SimpleNamespace(
         year=2023,
         current_year=2023,
@@ -1135,14 +1157,37 @@ def test_manifest_restore_reruns_atlas_preprocess_when_restart_subyear_grave_csv
             },
         )
 
-    def _should_not_rerun_run(**_runtime_kwargs):
-        raise AssertionError("atlas_run should restore from manifest")
+    def _rerun_run(**_runtime_kwargs):
+        holder.atlas_run = AtlasRunOutputs(
+            atlas_output_dir=current_atlas_output_dir,
+            raw_outputs={
+                "householdv_2023": current_atlas_output_dir / "householdv_2023.csv",
+                "vehicles_2023": current_atlas_output_dir / "vehicles_2023.csv",
+            },
+        )
+
+    for fn, model in (
+        (_rerun_preprocess, "atlas_preprocess"),
+        (_rerun_run, "atlas_run"),
+    ):
+        fn.__consist_step__ = SimpleNamespace(model=model)
+
+    class _ExecutingManifestScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            kwargs["fn"]()
+            return SimpleNamespace(cache_hit=False)
+
+    scenario = _ExecutingManifestScenario()
 
     run_manifested_steps(
         stage_name="atlas",
         steps=[
             StepRef(name="atlas_preprocess", step_func=_rerun_preprocess),
-            StepRef(name="atlas_run", step_func=_should_not_rerun_run),
+            StepRef(name="atlas_run", step_func=_rerun_run),
         ],
         outputs_holder=holder,
         manifest_config=ManifestConfig(path=manifest_path),
@@ -1155,7 +1200,10 @@ def test_manifest_restore_reruns_atlas_preprocess_when_restart_subyear_grave_csv
         iteration=0,
     )
 
-    assert len(scenario.calls) == 1
+    assert [call["fn"].__name__ for call in scenario.calls] == [
+        "_rerun_preprocess",
+        "_rerun_run",
+    ]
     assert holder.atlas_preprocess is not None
     assert holder.atlas_preprocess.prepared_inputs["atlas_grave_csv"] == (
         current_atlas_input_dir / "year2023" / "grave.csv"

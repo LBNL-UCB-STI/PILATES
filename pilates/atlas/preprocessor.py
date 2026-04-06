@@ -32,6 +32,14 @@ _ATLAS_RESTART_START_YEAR_CSVS: Tuple[str, ...] = (
     "residential.csv",
     "jobs.csv",
 )
+_ATLAS_RESTART_PRIOR_SUBYEAR_CSVS: Tuple[str, ...] = (
+    "households.csv",
+    "blocks.csv",
+    "persons.csv",
+    "grave.csv",
+    "residential.csv",
+    "jobs.csv",
+)
 _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA: Tuple[str, ...] = (
     "vehicles_output.RData",
     "households_output.RData",
@@ -163,6 +171,11 @@ def restart_required_atlas_input_paths(
         prior_subyear = atlas_year - 2
         if prior_subyear >= start_year:
             prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
+            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
+                artifact_name = filename.rsplit(".", 1)[0]
+                required[
+                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
+                ] = os.path.join(prior_year_dir, filename)
             for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
                 artifact_name = filename.replace(".", "_")
                 required[
@@ -207,7 +220,12 @@ def _restore_restart_atlas_year_inputs(
         new_year_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(), f"year{required_year}"
         )
-        if os.path.exists(new_year_input_path):
+        year_missing_paths = [
+            path
+            for key, path in required_paths.items()
+            if f"::{required_year}::" in key and not os.path.exists(path)
+        ]
+        if not year_missing_paths:
             continue
         if not os.path.exists(old_year_input_path):
             logger.warning(

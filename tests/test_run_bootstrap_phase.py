@@ -2049,6 +2049,15 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
 
     year2021 = archive_run_dir / "atlas" / "atlas_input" / "year2021"
     year2021.mkdir(parents=True, exist_ok=True)
+    for filename in (
+        "households.csv",
+        "blocks.csv",
+        "persons.csv",
+        "grave.csv",
+        "residential.csv",
+        "jobs.csv",
+    ):
+        (year2021 / filename).write_text("prior\n", encoding="utf-8")
     (year2021 / "vehicles_output.RData").write_text("vehicles\n", encoding="utf-8")
     (year2021 / "households_output.RData").write_text(
         "households\n", encoding="utf-8"
@@ -2098,6 +2107,16 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
                 workspace.get_atlas_mutable_input_dir(),
                 "year2021",
                 "vehicles_output.RData",
+            ),
+            "atlas_restart_prior::2021::households": os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                "year2021",
+                "households.csv",
+            ),
+            "atlas_restart_prior::2021::grave": os.path.join(
+                workspace.get_atlas_mutable_input_dir(),
+                "year2021",
+                "grave.csv",
             ),
             "atlas_restart_prior::2021::households_output_RData": os.path.join(
                 workspace.get_atlas_mutable_input_dir(),
