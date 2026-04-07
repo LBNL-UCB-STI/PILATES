@@ -155,6 +155,16 @@ Typical step-factory responsibilities:
 6. store outputs on `StepOutputsHolder`
 7. expose recovery or replay hooks when needed
 
+Most tracked typed steps now follow the standard builder path:
+
+- model-local `make_*_step(...)` factory
+- `StandardStepSpec`
+- `build_standard_step(...)`
+
+That builder is intentionally narrow. It removes repeated wrapper plumbing, but
+logging policy, warm-start behavior, replay hooks, and recovery behavior still
+live in the model-specific step module.
+
 The main current references are:
 
 - `pilates/workflows/steps/activitysim.py`
@@ -181,6 +191,25 @@ for one invocation, including:
 This lets the orchestration layer execute steps consistently and attach the
 right runtime metadata.
 
+## Schema Steps Are Built Separately
+
+PILATES also builds a schema-validation view of the workflow during startup.
+
+That path uses:
+
+- `schema_step_names()` from `pilates/workflows/catalog.py`
+- `SCHEMA_STEP_BUILDERS` / `schema_step_builder_registry()` from
+  `pilates/workflows/steps/__init__.py`
+- `build_schema_steps()` in `pilates/runtime/scenario_runtime.py`
+
+Those schema steps are intentionally separate instances from runtime steps:
+
+- schema steps use `SchemaCoupler`
+- runtime steps use the live workflow coupler
+
+That separation lets PILATES validate contracts and declare schema surfaces
+without accidentally reusing execution-time step instances.
+
 ## The Contract Layer
 
 The contract layer keeps the workflow honest.
@@ -201,6 +230,12 @@ This layer defines:
 
 It is the main reason integration drift gets caught before an expensive run is
 hours deep.
+
+One current detail that matters for readers of the catalog:
+
+- `step_name` is the canonical tracked-step identity
+- some compatibility helpers still use "model name" terminology, but for
+  tracked catalog steps that now aliases to `step_name`
 
 ## Typed Outputs And `StepOutputsHolder`
 

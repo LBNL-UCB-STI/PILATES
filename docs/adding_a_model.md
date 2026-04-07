@@ -11,6 +11,80 @@ Use it with:
 If this guide and the code disagree, the code wins. Update this file in the
 same change that alters the integration surface.
 
+## Fast Path
+
+If you are adding a normal tracked workflow step family, the shortest current
+path is:
+
+1. add typed outputs in `pilates/<model>/outputs.py`
+2. register the model components in `pilates/generic/model_factory.py`
+3. add `WorkflowStepSpec` entries in `pilates/workflows/catalog.py`
+4. add `StepOutputsHolder` fields in `pilates/workflows/steps/shared.py`
+5. implement `make_*_step(...)` factories in `pilates/workflows/steps/<model>.py`
+   using `build_standard_step(...)` and `StandardStepSpec`
+6. export/register the step builders in `pilates/workflows/steps/__init__.py`
+7. wire the owning stage in `pilates/workflows/stages/<stage>.py`
+8. add tests for contract alignment, step behavior, and at least one realistic
+   execution path
+
+If your new step behaves like `activitysim_compile` or `postprocessing`, it is
+not a standard tracked typed step. In that case, reuse the current custom
+patterns instead of forcing it through `StandardStepSpec`.
+
+## If Restart Does Not Matter
+
+There are two simpler paths when you do not care about custom restart behavior.
+
+### Option A: Keep a normal tracked typed step, but skip custom restart hooks
+
+This is the best default when downstream code still wants a typed in-memory
+handoff through `StepOutputsHolder`.
+
+Use the normal standard-step path:
+
+- `WorkflowStepSpec` in the catalog
+- `StepOutputsHolder` field
+- `make_*_step(...)` using `StandardStepSpec` + `build_standard_step(...)`
+
+But do not add:
+
+- `output_recoverer`
+- `output_replayer`
+
+That still gives you:
+
+- typed outputs
+- normal coupler publication
+- catalog/startup validation
+- manifest restore for straightforward serializable outputs
+
+You only need custom restart hooks when the step cannot be reconstructed
+cleanly from its serialized outputs and default coupler republish behavior.
+
+### Option B: Make it a lighter custom/untracked step
+
+This is the lighter path when the step does not need typed downstream handoff
+or special runtime reconstruction.
+
+This is the current pattern used by steps such as `activitysim_compile`.
+
+Typical shape:
+
+- custom `make_*_step(...)` factory
+- no tracked typed outputs
+- no `StepOutputsHolder` field
+- direct coupler publication for any downstream artifacts
+- catalog entry marked as untracked when appropriate
+
+Choose this path only when all of the following are true:
+
+- downstream steps do not need a typed output object from this step
+- the step can be safely rerun on resume
+- the public contract is small and artifact-based rather than rich and typed
+
+Do not use this path just to avoid writing output classes. If the step is a
+real workflow boundary with non-trivial downstream behavior, keep it typed.
+
 ## What "adding a model" means in PILATES
 
 In the current codebase, a model integration usually means all of the following:
@@ -21,9 +95,10 @@ In the current codebase, a model integration usually means all of the following:
 3. Workflow step metadata in `pilates/workflows/catalog.py`.
 4. A `StepOutputsHolder` field in `pilates/workflows/steps/shared.py`.
 5. One or more step factories in `pilates/workflows/steps/<model>.py`.
-6. Stage wiring in `pilates/workflows/stages/<stage>.py`.
-7. Artifact-key and coupler-schema additions for any new cross-step handoffs.
-8. Tests that cover the typed contract and at least one realistic execution path.
+6. Builder export/registration in `pilates/workflows/steps/__init__.py`.
+7. Stage wiring in `pilates/workflows/stages/<stage>.py`.
+8. Artifact-key and coupler-schema additions for any new cross-step handoffs.
+9. Tests that cover the typed contract and at least one realistic execution path.
 
 If you are only adding a variant of an existing model, you may not need all of
 those pieces. For example, `activitysim_compile` and `beam_full_skim` reuse the
@@ -154,7 +229,6 @@ Add one `WorkflowStepSpec` per step in `pilates/workflows/catalog.py`.
 For each step, define:
 
 - `step_name`
-- `model_name`
 - `phase`
 - `stage_name`
 - `order`
@@ -166,8 +240,15 @@ For each step, define:
 - enablement fields
 - provenance builder metadata if the step should use an existing builder family
 
+Important current detail:
+
+- `step_name` is the canonical workflow-step identity in the catalog.
+- Older helper names may still talk about a "model name", but for catalog
+  entries that is now just a compatibility alias for `step_name`.
+
 Treat the catalog as the static contract for the step. The runtime uses it for
-validation, schema declaration, planning, and documentation.
+validation, schema declaration, planning, restart query derivation, and
+documentation.
 
 ### 5. Add a `StepOutputsHolder` field
 
@@ -181,7 +262,7 @@ Keep the holder field name aligned with:
 
 1. the `step_name` in the catalog
 2. the typed outputs class
-3. the step factory setter
+3. the step factory storage key
 
 `validate_workflow_step_contracts(...)` is supposed to fail early when these
 drift.
@@ -207,7 +288,53 @@ Your step module should usually do four things:
 Prefer the shared helpers in `pilates/workflows/steps/shared.py` over inventing
 new execution shims.
 
-### 7. Wire the owning stage
+For most tracked typed steps, the current default pattern is:
+
+1. write model-local callbacks for:
+   - component lookup
+   - execution
+   - optional input logging
+   - optional output logging
+   - optional output replay/recovery
+2. wrap those callbacks in `StandardStepSpec`
+3. return `build_standard_step(coupler=..., outputs_holder=..., spec=...)`
+
+Use the current standard examples first:
+
+- `make_activitysim_preprocess_step(...)`
+- `make_activitysim_run_step(...)`
+- `make_beam_run_step(...)`
+- `make_urbansim_run_step(...)`
+- `make_atlas_preprocess_step(...)`
+
+Do not overgeneralize the callbacks into shared declarative policy. The builder
+is intentionally narrow; model-specific logging, warm-start, replay, and
+recovery logic should stay near the model code.
+
+Use a custom step instead of `StandardStepSpec` when the step is not a normal
+tracked typed workflow step. Current examples are:
+
+- `activitysim_compile`
+- `postprocessing`
+
+### 7. Register the schema-step builder
+
+If the step should participate in schema declaration and startup validation,
+register its factory in `pilates/workflows/steps/__init__.py`.
+
+Today this means:
+
+1. export the `make_*_step(...)` symbol from the module import block
+2. add the `step_name -> make_*_step` mapping to `SCHEMA_STEP_BUILDERS`
+
+That registry is intentionally separate from the workflow catalog:
+
+- the catalog is static contract metadata
+- `SCHEMA_STEP_BUILDERS` is the executable builder surface
+
+Keep both in sync in the same change.
+
+### 8. Wire the owning stage
 
 Update the appropriate stage module in `pilates/workflows/stages/`.
 
@@ -222,7 +349,7 @@ Do not make a stage module into a hidden state layer that manually mutates the
 coupler in ad hoc ways. Publish workflow-facing artifacts from the producing
 step unless there is a clear stage-boundary durability reason not to.
 
-### 8. Add artifact keys and schema entries only when needed
+### 9. Add artifact keys and schema entries only when needed
 
 If downstream code needs a stable artifact from your step, add it in:
 
@@ -265,15 +392,19 @@ At minimum, add tests for:
 
 1. output dataclass validation and serialization behavior
 2. catalog/holder alignment if you added tracked steps
-3. step factory behavior for required upstream outputs
-4. a happy-path integration test or stubbed workflow test
-5. any restart or cache-recovery behavior unique to the new model
+3. standard-step metadata and builder behavior if you used `StandardStepSpec`
+4. step factory behavior for required upstream outputs
+5. a happy-path integration test or stubbed workflow test
+6. any restart or cache-recovery behavior unique to the new model
 
 Useful starting points in the current suite:
 
-- `tests/test_initialization.py`
-- `tests/test_database_components.py`
-- `tests/test_stub_provenance_flow.py`
+- `tests/test_workflow_catalog_derivations.py`
+- `tests/test_workflow_step_metadata.py`
+- `tests/test_standard_step_builder.py`
+- `tests/test_step_contract_validator.py`
+- `tests/test_stage_contracts.py`
+- `tests/test_golden_stub_workflow.py`
 
 Use the repo-preferred interpreter for local runs:
 
@@ -286,6 +417,10 @@ Use the repo-preferred interpreter for local runs:
 - Adding a model package but forgetting `ModelFactory` registration.
 - Adding a `WorkflowStepSpec` but not adding the matching
   `StepOutputsHolder` field.
+- Treating catalog `step_name` and "model name" as separate identities for a
+  new tracked step.
+- Adding a tracked step factory but forgetting to register it in
+  `SCHEMA_STEP_BUILDERS`.
 - Returning a raw `RecordStore` across the live workflow boundary.
 - Publishing unstable or duplicate coupler keys.
 - Depending on `cwd` instead of `Workspace` paths.

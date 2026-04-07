@@ -161,7 +161,7 @@ workflow steps.
 
 Each `WorkflowStepSpec` defines:
 
-- step identity (`step_name`, `model_name`, `phase`)
+- step identity (`step_name`, `phase`)
 - stage ownership (`stage_name`, `order`)
 - typed output class (`outputs_class`)
 - expected inputs and outputs
@@ -169,6 +169,13 @@ Each `WorkflowStepSpec` defines:
 - optional/dynamic input-output families
 - enablement flags
 - provenance builder family
+
+Current identity rule:
+
+- `step_name` is the canonical catalog identity and matches the Consist
+  `model=...` value on the decorated step
+- older helper names may still say "model name", but in the catalog that is a
+  compatibility alias for `step_name`, not a second independent key
 
 This metadata is consumed by planning, validation, schema declaration, and
 contract enforcement.
@@ -215,6 +222,55 @@ Typical responsibilities are:
 7. expose cache-recovery or output-replay hooks when needed
 8. decorate the step for Consist execution
 
+### The Standard Path: `StandardStepSpec` + `build_standard_step(...)`
+
+Most tracked typed steps now use the narrow shared builder in
+`pilates/workflows/steps/shared.py`.
+
+That path looks like:
+
+1. define model-local callbacks for execution and optional logging/recovery
+2. package them into `StandardStepSpec`
+3. return `build_standard_step(...)`
+
+The important design constraint is that the builder stays narrow:
+
+- it removes repeated wrapper boilerplate
+- it does not centralize model-specific logging policy
+- it does not replace model-local replay/recovery code
+- it does not make stages generic
+
+That is why step modules still expose `make_*_step(...)` functions instead of
+raw spec objects. The factories close over a live coupler and model-local
+callbacks, and schema/runtime assembly intentionally build distinct step
+instances with different couplers.
+
+Current standard examples:
+
+- `activitysim_preprocess`
+- `activitysim_run`
+- `activitysim_postprocess`
+- `beam_preprocess`
+- `beam_run`
+- `beam_postprocess`
+- `beam_full_skim`
+- `urbansim_preprocess`
+- `urbansim_run`
+- `urbansim_postprocess`
+- `atlas_preprocess`
+- `atlas_run`
+- `atlas_postprocess`
+
+### The Custom Path Still Exists
+
+Not every step should use `StandardStepSpec`.
+
+Keep a custom step when the runtime contract is meaningfully different from the
+standard tracked typed-step shell. Current examples are:
+
+- `activitysim_compile`
+- `postprocessing`
+
 Good reference modules:
 
 - `pilates/workflows/steps/activitysim.py`
@@ -244,6 +300,22 @@ Examples:
 
 Do not move stage concerns into the model package. If you need iteration logic,
 manifest checkpoints, or resume behavior, the stage layer is the place for it.
+
+## Schema Steps Versus Runtime Steps
+
+PILATES builds schema-validation steps and runtime-execution steps from the
+same `make_*_step(...)` factories, but they are intentionally different
+instances.
+
+- schema assembly uses `SchemaCoupler` and the `SCHEMA_STEP_BUILDERS` registry
+  in `pilates/workflows/steps/__init__.py`
+- runtime assembly uses a live workflow coupler
+
+This is why the step-builder registry remains separate from the workflow
+catalog:
+
+- the catalog is static contract metadata
+- the registry is executable builder wiring
 
 ## Coupler Ownership
 
