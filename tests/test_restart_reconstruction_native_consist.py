@@ -8,6 +8,7 @@ from consist import MaterializationResult
 
 from pilates.config.models import RunConfig
 from pilates.runtime import restart as restart_runtime
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from workflow_state import WorkflowState
 
 
@@ -1631,6 +1632,10 @@ def test_reconstruct_restart_completed_run_outputs_uses_native_materialization(t
         assert call["target_root"] == str(local_run_dir.resolve())
         assert call["source_root"] == str(archive_run_dir.resolve())
         assert call["preserve_existing"] is True
+    urbansim_run_call = next(
+        call for call in tracker.calls if call["run_id"] == "usim-run-2018"
+    )
+    assert urbansim_run_call["keys"] == [USIM_DATASTORE_H5]
     assert {
         (
             item["run_id"],

@@ -318,6 +318,13 @@ def _restart_query_target_for_step_name(
     )
 
 
+def _restart_materialization_keys_for_step(step_name: str) -> Optional[Tuple[str, ...]]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None or spec.dynamic_output_families or not spec.output_keys:
+        return None
+    return tuple(spec.output_keys)
+
+
 def _restart_query_targets(
     *,
     state: Any,
@@ -668,6 +675,17 @@ def reconstruct_restart_completed_run_outputs(
     issues = list(discovery["issues"])
     source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
     target_root = os.path.realpath(local_run_dir)
+    run_output_keys_by_run_id: Dict[str, Sequence[str]] = {}
+    for query_target in list(discovery.get("matched_query_targets", [])):
+        if not isinstance(query_target, Mapping):
+            continue
+        run_id = query_target.get("run_id")
+        step_name = query_target.get("model")
+        if not isinstance(run_id, str) or not isinstance(step_name, str):
+            continue
+        selected_keys = _restart_materialization_keys_for_step(step_name)
+        if selected_keys:
+            run_output_keys_by_run_id[run_id] = selected_keys
 
     aggregate = materialize_cached_runs(
         tracker=tracker,
@@ -675,6 +693,7 @@ def reconstruct_restart_completed_run_outputs(
         target_root=target_root,
         source_root=source_root,
         preserve_existing=True,
+        run_output_keys_by_run_id=run_output_keys_by_run_id,
         initial_failures=issues,
         missing_api_context="restart_reconstruction",
     )

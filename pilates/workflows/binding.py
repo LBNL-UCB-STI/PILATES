@@ -1461,3 +1461,22 @@ def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirement
             ),
         ),
     )
+
+
+def is_restart_prebootstrap_deferred_artifact_key(key: str) -> bool:
+    """
+    Return True when bootstrap is expected to recreate the missing artifact.
+
+    These keys are still validated after bootstrap in strict restart mode, but
+    pre-bootstrap diagnostics should treat them as deferred hydration work
+    rather than immediate restart failures.
+    """
+    if not key:
+        return False
+    if key.startswith("activitysim_config_settings_yaml_"):
+        return True
+    return key in {
+        "beam_mutable_data_dir",
+        "beam_region_input_dir",
+        "beam_primary_config_file",
+    }

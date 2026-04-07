@@ -532,6 +532,38 @@ def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback
     ]
 
 
+def test_run_bootstrap_phase_ignores_optional_bootstrap_missing_sources(monkeypatch):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    partial_materialization = MaterializationResult(
+        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
+        skipped_missing_source=["canonical_zones", "clipped_geoms"],
+    )
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+        ],
+        materialization_results=[partial_materialization],
+    )
+    workspace = DummyWorkspace()
+
+    result = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert len(tracker.calls) == 1
+    assert result["bootstrap_cache_hit"] is True
+    assert result["fallback_rerun"] is False
+    assert result["materialization"]["complete"] is True
+    assert result["materialization"]["skipped_missing_source_count"] == 0
+
+
 def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
@@ -1614,18 +1646,33 @@ def test_reconstruct_restart_completed_run_outputs_materializes_manifest_run_ids
             "target_root": str(local_run_dir.resolve()),
             "source_root": str(archive_run_dir.resolve()),
             "preserve_existing": True,
+            "keys": list(
+                run_module.restart_runtime._restart_materialization_keys_for_step(
+                    "activitysim_preprocess"
+                )
+            ),
         },
         {
             "run_id": "run-2",
             "target_root": str(local_run_dir.resolve()),
             "source_root": str(archive_run_dir.resolve()),
             "preserve_existing": True,
+            "keys": list(
+                run_module.restart_runtime._restart_materialization_keys_for_step(
+                    "activitysim_run"
+                )
+            ),
         },
         {
             "run_id": "run-3",
             "target_root": str(local_run_dir.resolve()),
             "source_root": str(archive_run_dir.resolve()),
             "preserve_existing": True,
+            "keys": list(
+                run_module.restart_runtime._restart_materialization_keys_for_step(
+                    "activitysim_postprocess"
+                )
+            ),
         },
     ]
 

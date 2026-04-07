@@ -161,6 +161,7 @@ def materialize_cached_runs(
     target_root: str,
     source_root: Optional[str],
     preserve_existing: bool,
+    run_output_keys_by_run_id: Optional[Mapping[str, Sequence[str]]] = None,
     initial_failures: Optional[Sequence[Tuple[str, str]]] = None,
     missing_api_context: str = "restart_reconstruction",
 ) -> MaterializationResult:
@@ -183,12 +184,20 @@ def materialize_cached_runs(
 
     for run_id in run_ids:
         try:
-            result = materialize_run_outputs_fn(
-                run_id=run_id,
-                target_root=target_root,
-                source_root=source_root,
-                preserve_existing=preserve_existing,
+            materialize_kwargs = {
+                "run_id": run_id,
+                "target_root": target_root,
+                "source_root": source_root,
+                "preserve_existing": preserve_existing,
+            }
+            selected_keys = (
+                list(run_output_keys_by_run_id.get(run_id, ()))
+                if run_output_keys_by_run_id is not None
+                else []
             )
+            if selected_keys:
+                materialize_kwargs["keys"] = selected_keys
+            result = materialize_run_outputs_fn(**materialize_kwargs)
         except Exception as exc:
             result = MaterializationResult(
                 failed=[(run_id, f"materialize_run_outputs raised: {exc}")]

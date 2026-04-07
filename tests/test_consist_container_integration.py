@@ -131,6 +131,33 @@ class TestRunContainerConsistDelegation:
 
     @patch("consist.integrations.containers.run_container")
     @patch("pilates.generic.runner.cr.current_tracker")
+    def test_output_mapping_passes_canonical_keys_through(
+        self,
+        mock_current_tracker,
+        mock_consist_run_container,
+    ):
+        mock_consist_run_container.return_value = True
+
+        tracker = Mock()
+        mock_current_tracker.return_value = tracker
+
+        GenericRunner.run_container(
+            client=None,
+            settings=MagicMock(),
+            image="img",
+            volumes={},
+            command="cmd",
+            model_name="model",
+            output_paths={"usim_datastore_h5": "/tmp/model_data_2023.h5"},
+        )
+
+        call_kwargs = mock_consist_run_container.call_args.kwargs
+        assert call_kwargs["outputs"] == {
+            "usim_datastore_h5": "/tmp/model_data_2023.h5"
+        }
+
+    @patch("consist.integrations.containers.run_container")
+    @patch("pilates.generic.runner.cr.current_tracker")
     def test_exception_from_consist_propagates(
         self,
         mock_current_tracker,

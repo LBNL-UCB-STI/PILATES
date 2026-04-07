@@ -535,6 +535,36 @@ def artifact_to_path(
     return path
 
 
+def _normalize_artifact_path_for_match(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    resolved = _resolve_workspace_uri_path(path)
+    if not resolved:
+        return None
+    if "://" in resolved:
+        return resolved
+    return os.path.abspath(resolved)
+
+
+def _find_current_run_output_artifact(*, key: str, path: str) -> Optional[Any]:
+    tracker = cr.current_tracker()
+    current_consist = getattr(tracker, "current_consist", None) if tracker else None
+    if current_consist is None:
+        return None
+
+    target_path = _normalize_artifact_path_for_match(path)
+    if target_path is None:
+        return None
+
+    for artifact in list(getattr(current_consist, "outputs", []) or []):
+        if getattr(artifact, "key", None) != key:
+            continue
+        artifact_path = _normalize_artifact_path_for_match(artifact_to_path(artifact))
+        if artifact_path == target_path:
+            return artifact
+    return None
+
+
 def resolve_existing_path(
     path: Optional[str],
     *,
@@ -1222,7 +1252,10 @@ def _log_and_maybe_publish_artifact(
     has_active_run = cr.current_run() is not None
     artifact: Optional[Any] = None
 
-    if has_active_run or not skip_logging_without_active_run:
+    if has_active_run and direction == "output":
+        artifact = _find_current_run_output_artifact(key=key, path=path)
+
+    if artifact is None and (has_active_run or not skip_logging_without_active_run):
         artifact = _log_with_optional_h5_container(
             direction=direction,
             key=key,
@@ -1235,7 +1268,7 @@ def _log_and_maybe_publish_artifact(
         # path/artifact resolution.
         if isinstance(artifact, tuple):
             artifact = artifact[0] if artifact else None
-    elif skip_logging_without_active_run:
+    elif artifact is None and skip_logging_without_active_run:
         artifact = _log_with_optional_h5_container(
             direction=direction,
             key=key,

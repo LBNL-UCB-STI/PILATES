@@ -5,6 +5,7 @@ import contextlib
 import logging
 import os
 import shlex
+from collections.abc import Mapping, Sequence
 from typing import Optional, List, Union, Dict, Any, Generic, TypeVar
 
 from pilates.config import PilatesConfig
@@ -131,7 +132,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         environment=None,
         args=None,
         input_artifacts: List[Union[str, Any]] = None,
-        output_paths: List[str] = None,
+        output_paths: Optional[Union[Sequence[str], Mapping[str, Any]]] = None,
         lineage_mode: str = None,
     ) -> bool:
         """
@@ -182,11 +183,17 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         strict_mounts = True
         local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
         archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
-        if output_paths and local_root and archive_root:
+        output_values: Sequence[Any]
+        if isinstance(output_paths, Mapping):
+            output_values = list(output_paths.values())
+        else:
+            output_values = list(output_paths or [])
+
+        if output_values and local_root and archive_root:
             local_root = os.path.abspath(local_root)
             archive_root = os.path.abspath(archive_root)
             if local_root != archive_root:
-                for path in output_paths:
+                for path in output_values:
                     if not isinstance(path, str) or "://" in path:
                         continue
                     abs_path = os.path.abspath(path)
@@ -228,7 +235,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 command=full_command_list,
                 volumes=consist_volumes,
                 inputs=input_artifacts or [],
-                outputs=output_paths or [],
+                outputs=output_paths if output_paths is not None else [],
                 environment=environment or {},
                 working_dir=working_dir,
                 backend_type=backend_type,

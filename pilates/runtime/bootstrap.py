@@ -23,6 +23,9 @@ from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+_OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES = frozenset(
+    {"canonical_zones", "clipped_geoms"}
+)
 
 
 def is_bootstrap_cache_enabled(settings: Any) -> bool:
@@ -93,6 +96,42 @@ def _bootstrap_materialization_metadata(
         "skipped_missing_source": list(result.skipped_missing_source),
         "failed": list(result.failed),
     }
+
+
+def _bootstrap_materialization_entry_name(entry: Any) -> str:
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, (tuple, list)) and entry:
+        return str(entry[0])
+    if isinstance(entry, dict):
+        for key in ("key", "name", "short_name"):
+            value = entry.get(key)
+            if value:
+                return str(value)
+    return str(entry)
+
+
+def _prune_optional_bootstrap_missing_sources(
+    result: MaterializationResult,
+) -> MaterializationResult:
+    tolerated = [
+        entry
+        for entry in list(getattr(result, "skipped_missing_source", []) or [])
+        if _bootstrap_materialization_entry_name(entry)
+        in _OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES
+    ]
+    if tolerated:
+        result.skipped_missing_source = [
+            entry
+            for entry in list(getattr(result, "skipped_missing_source", []) or [])
+            if _bootstrap_materialization_entry_name(entry)
+            not in _OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES
+        ]
+        logger.info(
+            "BOOTSTRAP CACHE HIT ignoring optional missing-source artifacts: %s",
+            [_bootstrap_materialization_entry_name(entry) for entry in tolerated],
+        )
+    return result
 
 
 def seed_bootstrap_artifacts_to_coupler(
@@ -305,6 +344,9 @@ def run_bootstrap_phase(
                 probe_run_id,
                 materialization_exc,
             )
+        materialization_result = _prune_optional_bootstrap_missing_sources(
+            materialization_result
+        )
 
         if materialization_result.complete:
             logger.info(

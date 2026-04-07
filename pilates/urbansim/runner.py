@@ -7,6 +7,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim import postprocessor as usim_post
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -174,8 +175,10 @@ class UrbansimRunner(GenericRunner):
                 working_dir=settings.urbansim.client_base_folder,
                 # 2. PASS INPUTS
                 input_artifacts=input_paths,
-                # 3. OUTPUTS ALREADY CORRECT
-                output_paths=[usim_datastore_fpath],
+                # Publish the workflow-facing datastore key directly so
+                # restart/cache materialization does not have to reconcile a
+                # basename-derived alias for the same file.
+                output_paths={USIM_DATASTORE_H5: usim_datastore_fpath},
             )
 
             if not success:

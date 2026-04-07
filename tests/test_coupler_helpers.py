@@ -125,6 +125,29 @@ def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatc
     assert ("set_from_artifact", "linkstats_warmstart", artifact) in coupler.calls
 
 
+def test_log_and_set_output_reuses_matching_current_run_artifact(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    artifact = SimpleNamespace(key="usim_datastore_h5", container_uri="/tmp/path.h5")
+    tracker = SimpleNamespace(current_consist=SimpleNamespace(outputs=[artifact]))
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: pytest.fail("should not log duplicate output"),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
 def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
     monkeypatch,
 ) -> None:

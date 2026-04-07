@@ -56,6 +56,7 @@ from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
+from pilates.workflows.binding import is_restart_prebootstrap_deferred_artifact_key
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.stages import (
     run_land_use_stage,
@@ -799,24 +800,64 @@ def main(
             restart_missing_artifacts_initial
         )
         if restart_missing_artifacts_initial:
-            logger.warning(
-                "Restart diagnostic found missing local workspace inputs while "
-                "data_initialized=True: %s",
-                _format_missing_artifact_summary(restart_missing_artifacts_initial),
-            )
+            blocking_missing = [
+                item
+                for item in restart_missing_artifacts_initial
+                if not is_restart_prebootstrap_deferred_artifact_key(
+                    item.get("key", "")
+                )
+            ]
+            deferred_missing = [
+                item
+                for item in restart_missing_artifacts_initial
+                if is_restart_prebootstrap_deferred_artifact_key(
+                    item.get("key", "")
+                )
+            ]
+            if blocking_missing:
+                logger.warning(
+                    "Restart diagnostic found missing local workspace inputs while "
+                    "data_initialized=True: %s",
+                    _format_missing_artifact_summary(blocking_missing),
+                )
+            if deferred_missing:
+                logger.info(
+                    "Restart diagnostic deferring bootstrap-owned workspace inputs "
+                    "until bootstrap hydration: %s",
+                    _format_missing_artifact_summary(deferred_missing),
+                )
             restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
                 settings=settings,
                 state=state,
                 workspace=workspace,
             )
             if restart_missing_artifacts_after_recovery:
-                logger.warning(
-                    "Restart diagnostic still sees missing local workspace inputs "
-                    "after completed-run reconstruction, before bootstrap: %s",
-                    _format_missing_artifact_summary(
-                        restart_missing_artifacts_after_recovery
-                    ),
-                )
+                blocking_missing = [
+                    item
+                    for item in restart_missing_artifacts_after_recovery
+                    if not is_restart_prebootstrap_deferred_artifact_key(
+                        item.get("key", "")
+                    )
+                ]
+                deferred_missing = [
+                    item
+                    for item in restart_missing_artifacts_after_recovery
+                    if is_restart_prebootstrap_deferred_artifact_key(
+                        item.get("key", "")
+                    )
+                ]
+                if blocking_missing:
+                    logger.warning(
+                        "Restart diagnostic still sees missing local workspace inputs "
+                        "after completed-run reconstruction, before bootstrap: %s",
+                        _format_missing_artifact_summary(blocking_missing),
+                    )
+                if deferred_missing:
+                    logger.info(
+                        "Restart diagnostic still sees bootstrap-owned workspace "
+                        "inputs before bootstrap: %s",
+                        _format_missing_artifact_summary(deferred_missing),
+                    )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap
