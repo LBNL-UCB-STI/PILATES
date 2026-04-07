@@ -514,20 +514,14 @@ class BeamRunner(GenericRunner):
             "-XX:+AlwaysPreTouch "
             # Flexible young gen - WIDE range for adaptability
             "-XX:+UnlockExperimentalVMOptions "
-            "-XX:G1NewSizePercent=40 "  # Min 72 GB young gen
-            "-XX:G1MaxNewSizePercent=60 "  # Max 108 GB young gen
-            "-XX:MaxTenuringThreshold=6 "  # Objects die faster in young gen
-            "-XX:SurvivorRatio=6 "  # 12.5% survivors (helps transit burst)
-            "-XX:MaxGCPauseMillis=5000 "  # Accept 10s pauses for throughput
-            "-XX:G1MixedGCCountTarget=12 "  # Spread old gen work
+            "-XX:MaxGCPauseMillis=3000 "  # Accept 3s pauses for throughput
             # Conservative mixed GC - spread work over more cycles
-            "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
             # Earlier concurrent marking to avoid surprises
-            "-XX:InitiatingHeapOccupancyPercent=30 "
+            "-XX:InitiatingHeapOccupancyPercent=20 "
             # More evacuation buffer for large populations
-            "-XX:G1ReservePercent=15 "  # I (27GB reserve)
+            "-XX:G1ReservePercent=20 "  # I (27GB reserve)
+            "-XX:+ParallelRefProcEnabled "
             # Less aggressive old gen collection
-            "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
             # GC logging
             f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
             f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
