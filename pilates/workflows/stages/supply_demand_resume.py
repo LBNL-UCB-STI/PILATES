@@ -7,8 +7,9 @@ from typing import Any, Dict, Optional
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path, set_coupler_from_artifact
 from pilates.utils.io import locate_beam_file
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
@@ -63,6 +64,34 @@ def _restore_activity_demand_outputs_for_resume(
     sees the same inputs it would have received after a live ActivitySim run.
     """
 
+    def _restore_zarr_skims(
+        restored_outputs: Dict[str, Any],
+        resolved_paths: Optional[Dict[str, Path]] = None,
+    ) -> None:
+        zarr_candidate = None
+        if ZARR_SKIMS in restored_outputs:
+            zarr_candidate = _resolved_existing_restore_path(
+                restored_outputs[ZARR_SKIMS],
+                workspace,
+            )
+        if zarr_candidate is None and resolved_paths is not None:
+            archived_zarr = resolved_paths.get("asim_input_skims_zarr_archived")
+            if archived_zarr is not None and archived_zarr.exists():
+                zarr_candidate = str(archived_zarr)
+        if zarr_candidate is None:
+            output_cache_zarr = (
+                Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+            )
+            if output_cache_zarr.exists():
+                zarr_candidate = str(output_cache_zarr)
+        if zarr_candidate is not None:
+            set_coupler_from_artifact(
+                coupler,
+                ZARR_SKIMS,
+                None,
+                fallback=zarr_candidate,
+            )
+
     def _require_complete_restore(
         restored_outputs: Dict[str, Any], source: str
     ) -> Optional[tuple[Dict[str, Any], Dict[str, Path]]]:
@@ -98,7 +127,8 @@ def _restore_activity_demand_outputs_for_resume(
         validated = _require_complete_restore(restored_outputs, "step outputs")
         if validated is None:
             return None
-        restored_outputs, _ = validated
+        restored_outputs, resolved_paths = validated
+        _restore_zarr_skims(restored_outputs, resolved_paths)
         return restored_outputs
 
     get_value = getattr(coupler, "get", None)
@@ -126,6 +156,7 @@ def _restore_activity_demand_outputs_for_resume(
             asim_output_dir=None,
             processed_outputs=resolved_paths,
         )
+        _restore_zarr_skims(restored_outputs, resolved_paths)
         return restored_outputs
 
     iter_dir = Path(workspace.get_asim_output_dir()) / (
@@ -152,4 +183,5 @@ def _restore_activity_demand_outputs_for_resume(
             asim_output_dir=iter_dir,
             processed_outputs=resolved_paths,
         )
+        _restore_zarr_skims(restored_outputs, resolved_paths)
     return restored_outputs
