@@ -350,6 +350,60 @@ def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     ]
 
 
+def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fallback_rerun(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    materialization_result = MaterializationResult(
+        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
+    )
+    tracker = DummyTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
+        ],
+        materialization_results=[materialization_result],
+    )
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
+    state = SimpleNamespace(
+        start_year=2017,
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+    )
+
+    result = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert len(tracker.calls) == 2
+    fallback_options = tracker.calls[1]["cache_options"]
+    assert isinstance(fallback_options, CacheOptions)
+    assert fallback_options.cache_mode == "off"
+    assert result["bootstrap_cache_hit"] is True
+    assert result["fallback_rerun"] is True
+    assert result["materialization"]["complete"] is True
+    assert result["staged_artifact_summary"]["copied_records_total"] == 2
+    assert result["run_reference"] == {
+        "probe_run_id": "bootstrap_probe",
+        "materialization_run_id": "bootstrap_fallback",
+    }
+    assert tracker.materialization_calls == [
+        {
+            "run_id": "bootstrap_probe",
+            "target_root": workspace.full_path,
+            "source_root": None,
+            "preserve_existing": True,
+        }
+    ]
+
+
 def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
     explanation = {
         "reason": "inputs_changed",

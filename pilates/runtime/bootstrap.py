@@ -7,8 +7,8 @@ from typing import Any, Callable, Dict, Optional
 from consist import MaterializationResult
 from consist.types import CacheOptions
 
+from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -17,8 +17,9 @@ from pilates.runtime.cache_recovery import (
     cache_miss_audit_fields,
     log_cache_miss_explanation,
 )
-from consist import MaterializationResult
 from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
@@ -132,6 +133,86 @@ def _prune_optional_bootstrap_missing_sources(
             [_bootstrap_materialization_entry_name(entry) for entry in tolerated],
         )
     return result
+
+
+def _bootstrap_required_workspace_artifacts(
+    *,
+    settings: Any,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    required: Dict[str, str] = {}
+
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "activity_demand", None) == "activitysim":
+        get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+        if callable(get_asim_configs_dir):
+            asim_configs_dir = get_asim_configs_dir()
+            main_configs_dir = (
+                getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
+                or "configs"
+            )
+            for dirname in required_asim_config_dirs(main_configs_dir):
+                required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
+                    asim_configs_dir,
+                    dirname,
+                    "settings.yaml",
+                )
+
+    if get_traffic_assignment_model(settings) == "beam":
+        get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+        region = getattr(getattr(settings, "run", None), "region", None)
+        if callable(get_beam_input_dir) and region:
+            beam_input_dir = get_beam_input_dir()
+            required["beam_mutable_data_dir"] = beam_input_dir
+            required["beam_region_input_dir"] = os.path.join(beam_input_dir, region)
+            beam_config_name = getattr(getattr(settings, "beam", None), "config", None)
+            if beam_config_name:
+                required["beam_primary_config_file"] = os.path.join(
+                    beam_input_dir,
+                    region,
+                    beam_config_name,
+                )
+
+    return required
+
+
+def _find_missing_bootstrap_workspace_artifacts(
+    *,
+    settings: Any,
+    workspace: Workspace,
+) -> list[Dict[str, str]]:
+    missing: list[Dict[str, str]] = []
+    for key, path in _bootstrap_required_workspace_artifacts(
+        settings=settings,
+        workspace=workspace,
+    ).items():
+        if not path:
+            continue
+        normalized_path = os.path.realpath(path)
+        if os.path.exists(normalized_path):
+            continue
+        missing.append(
+            {
+                "key": key,
+                "path": normalized_path,
+                "reason": (
+                    "Bootstrap cache-hit validation requires this workspace "
+                    "artifact to exist locally after materialization."
+                ),
+            }
+        )
+    return missing
+
+
+def _format_missing_bootstrap_workspace_artifacts(
+    artifacts: list[Dict[str, str]],
+) -> str:
+    if not artifacts:
+        return "none"
+    return ", ".join(
+        f"{item.get('key')}:{item.get('path')}"
+        for item in artifacts
+    )
 
 
 def seed_bootstrap_artifacts_to_coupler(
@@ -348,7 +429,14 @@ def run_bootstrap_phase(
             materialization_result
         )
 
+        missing_workspace_artifacts: list[Dict[str, str]] = []
         if materialization_result.complete:
+            missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
+                settings=settings,
+                workspace=workspace,
+            )
+
+        if materialization_result.complete and not missing_workspace_artifacts:
             logger.info(
                 "BOOTSTRAP CACHE HIT materialization complete. %s",
                 materialization_result.summary,
@@ -358,6 +446,40 @@ def run_bootstrap_phase(
                 probe_run_id=probe_run_id,
                 materialization_result=materialization_result,
                 resolution_mode="cache_hit_materialized",
+            )
+
+        fallback_cache_options = _bootstrap_cache_options(
+            settings,
+            cache_options_cls=cache_options_cls,
+            cache_mode="off",
+        )
+        if missing_workspace_artifacts:
+            logger.warning(
+                "BOOTSTRAP CACHE HIT materialization completed, but required "
+                "workspace artifacts are still missing: %s",
+                _format_missing_bootstrap_workspace_artifacts(
+                    missing_workspace_artifacts
+                ),
+            )
+            logger.warning(
+                "BOOTSTRAP fallback rerun triggered because cached bootstrap outputs "
+                "did not restore required workspace invariants."
+            )
+            fallback_result = tracker.run(
+                **run_kwargs,
+                cache_options=fallback_cache_options,
+            )
+            return _finalize_bootstrap_result(
+                cache_hit=True,
+                probe_run_id=probe_run_id,
+                materialization_run_id=getattr(
+                    getattr(fallback_result, "run", None),
+                    "id",
+                    None,
+                ),
+                materialization_result=materialization_result,
+                fallback_rerun=True,
+                resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
             )
 
         logger.warning(
@@ -373,7 +495,7 @@ def run_bootstrap_phase(
         )
         fallback_result = tracker.run(
             **run_kwargs,
-            cache_options=cache_options_cls(cache_mode="off"),
+            cache_options=fallback_cache_options,
         )
         return _finalize_bootstrap_result(
             cache_hit=True,
