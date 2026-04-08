@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Optional
 from consist import MaterializationResult
 from consist.types import CacheOptions
 
+from pilates.config import PilatesConfig
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.generic.model_factory import ModelFactory
 from pilates.generic.initialization import (
@@ -19,7 +20,7 @@ from pilates.runtime.cache_recovery import (
 )
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.io import get_traffic_assignment_model
+from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
@@ -29,13 +30,13 @@ _OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES = frozenset(
 )
 
 
-def is_bootstrap_cache_enabled(settings: Any) -> bool:
+def is_bootstrap_cache_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
 
 
 def _bootstrap_cache_options(
-    settings: Any,
+    settings: PilatesConfig,
     *,
     cache_options_cls: type[CacheOptions],
     cache_mode: Optional[str] = None,
@@ -50,7 +51,7 @@ def _bootstrap_cache_options(
     )
 
 
-def _warn_on_bootstrap_fast_hashing(settings: Any) -> None:
+def _warn_on_bootstrap_fast_hashing(settings: PilatesConfig) -> None:
     run_cfg = getattr(settings, "run", None)
     if not bool(getattr(run_cfg, "bootstrap_cache_enabled", True)):
         return
@@ -137,13 +138,12 @@ def _prune_optional_bootstrap_missing_sources(
 
 def _bootstrap_required_workspace_artifacts(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     workspace: Workspace,
 ) -> Dict[str, str]:
     required: Dict[str, str] = {}
 
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "activity_demand", None) == "activitysim":
+    if get_activity_demand_model(settings) == "activitysim":
         get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
         if callable(get_asim_configs_dir):
             asim_configs_dir = get_asim_configs_dir()
@@ -178,7 +178,7 @@ def _bootstrap_required_workspace_artifacts(
 
 def _find_missing_bootstrap_workspace_artifacts(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     workspace: Workspace,
 ) -> list[Dict[str, str]]:
     missing: list[Dict[str, str]] = []
@@ -217,7 +217,7 @@ def _format_missing_bootstrap_workspace_artifacts(
 
 def seed_bootstrap_artifacts_to_coupler(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     state: Any,
     workspace: Workspace,
     coupler: CouplerProtocol,
@@ -252,7 +252,7 @@ def seed_bootstrap_artifacts_to_coupler(
 def run_bootstrap_phase(
     *,
     tracker: Any,
-    settings: Any,
+    settings: PilatesConfig,
     state: Any,
     workspace: Workspace,
     scenario_id: str,

@@ -4,6 +4,7 @@ import logging
 import os
 from typing import Dict, List, Optional, Tuple, Any
 
+from pilates.config import PilatesConfig
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.io import locate_beam_file
 from pilates.workflows.artifact_keys import (
@@ -15,7 +16,9 @@ from pilates.workflows.artifact_keys import (
 logger = logging.getLogger(__name__)
 
 
-def default_beam_exchange_scenario_folder(settings: Any, workspace: Any) -> str:
+def default_beam_exchange_scenario_folder(
+    settings: PilatesConfig, workspace: Any
+) -> str:
     base_input_dir = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         settings.run.region,
@@ -24,7 +27,7 @@ def default_beam_exchange_scenario_folder(settings: Any, workspace: Any) -> str:
 
 
 def config_beam_exchange_scenario_folder(
-    settings: Any, workspace: Any
+    settings: PilatesConfig, workspace: Any
 ) -> Optional[str]:
     """
     Parse the generated BEAM config for an exchange.scenario.folder override.
@@ -70,7 +73,9 @@ def config_beam_exchange_scenario_folder(
     return None
 
 
-def resolve_beam_exchange_scenario_folder(settings: Any, workspace: Any) -> str:
+def resolve_beam_exchange_scenario_folder(
+    settings: PilatesConfig, workspace: Any
+) -> str:
     """
     Resolve the effective BEAM exchange folder for staged write operations.
     """
@@ -80,7 +85,7 @@ def resolve_beam_exchange_scenario_folder(settings: Any, workspace: Any) -> str:
 
 
 def beam_exchange_scenario_folder_candidates(
-    settings: Any, workspace: Any
+    settings: PilatesConfig, workspace: Any
 ) -> List[str]:
     """
     Return candidate exchange folders in operator-facing precedence order.
@@ -125,7 +130,7 @@ def locate_existing_beam_exchange_input(
 
 def register_existing_beam_exchange_inputs(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     state: Any,
     workspace: Any,
     required_keys: Optional[Dict[str, str]] = None,

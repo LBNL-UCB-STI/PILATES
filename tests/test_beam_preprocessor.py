@@ -501,6 +501,7 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
         "_handle_linkstats",
         lambda _workspace, _previous_beam_records, _store: None,
     )
+    monkeypatch.setattr(preprocessor, "_activity_demand_enabled", lambda: True)
 
     def _capture_input_records(input_records, _workspace):
         captured["keys"] = [record.short_name for record in input_records.all_records()]

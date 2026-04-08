@@ -24,6 +24,7 @@ from typing import (
 )
 
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 
 if TYPE_CHECKING:
@@ -223,7 +224,7 @@ def step_output_mapping(
 def step_output_handoff_mapping(
     outputs: Any,
     *,
-    coupler: Optional[Any] = None,
+    coupler: Optional[CouplerProtocol] = None,
 ) -> Dict[str, Any]:
     """
     Build a runtime handoff mapping, preserving coupler-published artifacts.

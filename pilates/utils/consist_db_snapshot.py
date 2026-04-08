@@ -14,10 +14,12 @@ import shutil
 import time
 from typing import Any, Dict, Mapping, Optional, Tuple
 
+from pilates.config import PilatesConfig
+
 logger = logging.getLogger(__name__)
 
 
-def is_local_consist_db_enabled(settings: Any) -> bool:
+def is_local_consist_db_enabled(settings: PilatesConfig) -> bool:
     """Return ``True`` when Consist DB should be maintained on node-local storage."""
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_local_run", True))
@@ -25,7 +27,7 @@ def is_local_consist_db_enabled(settings: Any) -> bool:
 
 def resolve_consist_db_paths(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     local_run_dir: str,
     archive_run_dir: str,
 ) -> Tuple[Optional[str], Optional[str]]:
@@ -115,12 +117,12 @@ def mirror_consist_db_to_archive(
             )
 
 
-def _is_db_snapshot_enabled(settings: Any) -> bool:
+def _is_db_snapshot_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_snapshot_enabled", True))
 
 
-def _db_snapshot_interval_seconds(settings: Any) -> int:
+def _db_snapshot_interval_seconds(settings: PilatesConfig) -> int:
     run_cfg = getattr(settings, "run", None)
     value = getattr(run_cfg, "consist_db_snapshot_interval_seconds", 600)
     try:
@@ -129,12 +131,12 @@ def _db_snapshot_interval_seconds(settings: Any) -> int:
         return 600
 
 
-def _db_snapshot_on_outer_iteration(settings: Any) -> bool:
+def _db_snapshot_on_outer_iteration(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_snapshot_on_outer_iteration", True))
 
 
-def _db_snapshot_keep_last(settings: Any) -> int:
+def _db_snapshot_keep_last(settings: PilatesConfig) -> int:
     run_cfg = getattr(settings, "run", None)
     value = getattr(run_cfg, "consist_db_snapshot_keep_last", 3)
     try:
@@ -143,22 +145,22 @@ def _db_snapshot_keep_last(settings: Any) -> int:
         return 3
 
 
-def _db_restore_on_start_enabled(settings: Any) -> bool:
+def _db_restore_on_start_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_restore_on_start", True))
 
 
-def _db_restore_on_start_strict(settings: Any) -> bool:
+def _db_restore_on_start_strict(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_restore_strict", False))
 
 
-def _db_seed_from_shared_on_start_enabled(settings: Any) -> bool:
+def _db_seed_from_shared_on_start_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_seed_from_shared_on_start", False))
 
 
-def _db_seed_from_shared_strict(settings: Any) -> bool:
+def _db_seed_from_shared_strict(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "consist_db_seed_strict", False))
 
@@ -184,7 +186,7 @@ def snapshot_history_dir(archive_run_dir: str) -> Path:
 
 def restore_local_consist_db_from_snapshot(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     local_db_path: Optional[str],
     archive_run_dir: str,
 ) -> bool:
@@ -248,7 +250,7 @@ def restore_local_consist_db_from_snapshot(
 
 def seed_local_consist_db_from_shared(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     local_db_path: Optional[str],
     shared_db_path: Optional[str],
 ) -> bool:
@@ -423,7 +425,7 @@ class ConsistDbSnapshotManager:
     def __init__(
         self,
         *,
-        settings: Any,
+        settings: PilatesConfig,
         tracker: Any,
         local_db_path: Optional[str],
         archive_run_dir: str,

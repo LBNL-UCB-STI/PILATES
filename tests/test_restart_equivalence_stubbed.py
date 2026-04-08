@@ -685,34 +685,7 @@ def _resume_runtime(
     )
     _copy_tracker_db(interrupted.db_path, local_runtime.db_path)
     local_runtime.state = WorkflowState.from_settings(local_runtime.settings)
-    reconstruction = restart_runtime.reconstruct_restart_completed_run_outputs(
-        tracker=local_runtime.tracker,
-        state=local_runtime.state,
-        local_run_dir=local_runtime.workspace.full_path,
-        archive_run_dir=interrupted.workspace.full_path,
-        workflow_stage=WorkflowState.Stage,
-        query_facet=_query_facet(local_runtime),
-    )
-    _debug(
-        f"resume_runtime:reconstruction mode={reconstruction.get('discovery_mode')} "
-        f"run_ids={len(reconstruction.get('run_ids', []))}"
-    )
-    emit_consist_audit_event(
-        workspace=local_runtime.workspace,
-        event_type="restart_discovery",
-        discovery_mode=reconstruction.get("discovery_mode"),
-        fallback_reason=reconstruction.get("fallback_reason"),
-        discovered_run_count=len(reconstruction.get("run_ids", [])),
-        query_target_count=len(reconstruction.get("query_targets", [])),
-        matched_query_target_count=len(reconstruction.get("matched_query_targets", [])),
-        unmatched_query_target_count=len(reconstruction.get("unmatched_query_targets", [])),
-        query_targets=reconstruction.get("query_targets", []),
-        matched_run_ids_by_target=reconstruction.get("matched_query_targets", []),
-        unmatched_query_targets=reconstruction.get("unmatched_query_targets", []),
-        atlas_gap_detected=bool(reconstruction.get("atlas_gap_detected", False)),
-        restored_run_diagnostics=reconstruction.get("restored_run_diagnostics", []),
-    )
-    return {"reconstruction": reconstruction}
+    return {"hydration": None}
 
 
 def _hash_file(path: Path) -> str:
@@ -857,7 +830,7 @@ def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
     return {
         "steps_with_incomplete_hydration": summary.get("steps_with_incomplete_hydration", {}),
         "steps_using_custom_recovery": summary.get("steps_using_custom_recovery", {}),
-        "restart_discovery": summary.get("restart_discovery", {}),
+        "restart_hydration": summary.get("restart_hydration", {}),
     }
 
 
@@ -991,13 +964,6 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                 **scenario_kwargs,
             ) as scenario:
                 tagged = ScenarioParentLinkProxy(scenario)
-                for restored in resume_state["reconstruction"].get("restored_run_diagnostics", []):
-                    tagged.remember_restored_run_id(
-                        model_name=restored.get("model"),
-                        year=restored.get("year"),
-                        iteration=restored.get("iteration"),
-                        run_id=restored.get("run_id"),
-                    )
                 coupler = tagged.coupler
                 coupler.declare_outputs(*coupler_schema.keys(), warn_undefined=True, description=coupler_schema)
                 bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
@@ -1005,6 +971,17 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     state=resumed_runtime.state,
                     workspace=resumed_runtime.workspace,
                     coupler=coupler,
+                )
+                restart_runtime.hydrate_missing_restart_artifacts(
+                    tracker=resumed_runtime.tracker,
+                    settings=resumed_runtime.settings,
+                    state=resumed_runtime.state,
+                    workspace=resumed_runtime.workspace,
+                    coupler=coupler,
+                    local_run_dir=resumed_runtime.workspace.full_path,
+                    archive_run_dir=interrupted.workspace.full_path,
+                    workflow_stage=WorkflowState.Stage,
+                    query_facet=_query_facet(resumed_runtime),
                 )
                 for year in resumed_runtime.state:
                     usim_inputs: Dict[str, Any] = {}

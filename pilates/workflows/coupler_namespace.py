@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
+from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.workflows.artifact_keys import (
@@ -168,7 +169,9 @@ class ResolvedCouplerValue:
     namespace: Optional[str] = None
 
 
-def resolve_coupler_value(coupler: Any, key: str) -> ResolvedCouplerValue:
+def resolve_coupler_value(
+    coupler: Optional[CouplerProtocol], key: str
+) -> ResolvedCouplerValue:
     """
     Resolve a key from a coupler using canonical namespace-aware lookup order.
 

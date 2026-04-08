@@ -2,102 +2,54 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, TypedDict
 
-from consist import MaterializationResult
-
-from pilates.runtime.cache_recovery import materialize_cached_runs
-from pilates.utils.coupler_helpers import resolve_existing_path
-from pilates.workflows.catalog import tracked_step_specs, workflow_step_spec_for_step_name
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    resolve_existing_path,
+    set_coupler_from_artifact,
+)
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.binding import restart_required_local_artifact_policy
+from pilates.workflows.catalog import (
+    RestartProducerCandidate,
+    restart_artifact_producers,
+    restart_query_scope_for_step,
+)
+from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 
 logger = logging.getLogger(__name__)
 
-_OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES = ("_asim_out_temp",)
+
+class WorkflowStageLike(Protocol):
+    supply_demand_loop: Any
+    traffic_assignment: Any
+
+
+class RestartArtifactDiagnostic(TypedDict):
+    key: str
+    path: str
+    reason: str
+
+
+class RestartHydrationSummary(TypedDict):
+    frontier_stage: Optional[str]
+    frontier_step: Optional[str]
+    success: bool
+    hydrated_keys: List[str]
+    missing_keys: List[str]
+    producer_steps_by_key: Dict[str, str]
+    fallback_reason: Optional[str]
+
 
 def _coerce_int(value: Any) -> Optional[int]:
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
-
-
-def _materialization_entry_name(entry: Any) -> str:
-    if isinstance(entry, str):
-        return entry
-    if isinstance(entry, (tuple, list)) and entry:
-        return str(entry[0])
-    if isinstance(entry, dict):
-        for key in ("key", "name", "short_name"):
-            value = entry.get(key)
-            if value:
-                return str(value)
-    return str(entry)
-
-
-def _is_optional_restart_missing_source(entry: Any) -> bool:
-    name = _materialization_entry_name(entry)
-    return any(
-        name.endswith(suffix) for suffix in _OPTIONAL_RESTART_MISSING_SOURCE_SUFFIXES
-    )
-
-
-def _prune_optional_restart_missing_sources(
-    result: MaterializationResult,
-) -> MaterializationResult:
-    tolerated = [
-        entry
-        for entry in list(getattr(result, "skipped_missing_source", []) or [])
-        if _is_optional_restart_missing_source(entry)
-    ]
-    if tolerated:
-        result.skipped_missing_source = [
-            entry
-            for entry in list(getattr(result, "skipped_missing_source", []) or [])
-            if not _is_optional_restart_missing_source(entry)
-        ]
-        logger.info(
-            "Restart reconstruction ignoring optional missing-source artifacts: %s",
-            [_materialization_entry_name(entry) for entry in tolerated],
-        )
-    return result
-
-
-def _activitysim_iteration_output_requirements(
-    *, asim_output_dir: str, year: Any, iteration: Any
-) -> List[Dict[str, str]]:
-    iter_dir = os.path.join(
-        asim_output_dir,
-        f"year-{year}-iteration-{iteration}",
-    )
-    return [
-        {
-            "key": "activitysim_iteration_beam_plans_parquet",
-            "path": os.path.join(iter_dir, "beam_plans.parquet"),
-            "reason": (
-                "ActivitySim beam plans required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-        {
-            "key": "activitysim_iteration_households_parquet",
-            "path": os.path.join(iter_dir, "households.parquet"),
-            "reason": (
-                "ActivitySim households required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-        {
-            "key": "activitysim_iteration_persons_parquet",
-            "path": os.path.join(iter_dir, "persons.parquet"),
-            "reason": (
-                "ActivitySim persons required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-    ]
 
 
 def restart_required_local_artifacts(
@@ -109,11 +61,11 @@ def restart_required_local_artifacts(
     required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
     atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
     workflow_stage: Any,
-) -> List[Dict[str, str]]:
+) -> List[RestartArtifactDiagnostic]:
     """
     Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
     """
-    required: List[Dict[str, str]] = []
+    required: List[RestartArtifactDiagnostic] = []
     for rule in restart_required_local_artifact_policy():
         resolved = rule.resolve(
             settings=settings,
@@ -135,11 +87,7 @@ def restart_required_local_artifacts(
                     "path": path,
                     "reason": (
                         f"Restart policy '{rule.name}' requires {key}"
-                        + (
-                            f" ({rule.notes})"
-                            if rule.notes
-                            else ""
-                        )
+                        + (f" ({rule.notes})" if rule.notes else "")
                     ),
                 }
             )
@@ -151,9 +99,9 @@ def find_missing_restart_local_artifacts(
     settings: Any,
     state: Any,
     workspace: Any,
-    restart_required_local_artifacts_fn: Callable[..., List[Dict[str, str]]],
-) -> List[Dict[str, str]]:
-    missing: List[Dict[str, str]] = []
+    restart_required_local_artifacts_fn: Callable[..., List[RestartArtifactDiagnostic]],
+) -> List[RestartArtifactDiagnostic]:
+    missing: List[RestartArtifactDiagnostic] = []
     for artifact in restart_required_local_artifacts_fn(
         settings=settings, state=state, workspace=workspace
     ):
@@ -174,7 +122,9 @@ def find_missing_restart_local_artifacts(
     return missing
 
 
-def format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
+def format_missing_artifact_summary(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+) -> str:
     if not artifacts:
         return "none"
     return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
@@ -190,7 +140,9 @@ def read_archive_run_state_year(
     try:
         year, *_ = read_current_stage_fn(state_path)
     except Exception as exc:
-        logger.warning("Failed reading archive run_state year from %s: %s", state_path, exc)
+        logger.warning(
+            "Failed reading archive run_state year from %s: %s", state_path, exc
+        )
         return None
     return _coerce_int(year)
 
@@ -220,232 +172,70 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
-def _supply_demand_manifest_path(
-    *,
-    run_dir: str,
-    year: int,
-    iteration: int,
-) -> Path:
-    return Path(os.path.realpath(run_dir)) / ".workflow" / f"year_{year}_iteration_{iteration}.yaml"
+@dataclass(frozen=True)
+class RestartFrontierContract:
+    frontier_stage: str
+    frontier_step: str
+    required_keys: Tuple[str, ...]
 
 
-def _is_stage_explicitly_enabled(
-    *,
-    state: Any,
-    stage: Any,
-) -> Optional[bool]:
-    enabled_stages = getattr(state, "enabled_stages", None)
-    if isinstance(enabled_stages, (set, list, tuple)):
-        return stage in enabled_stages
-    return None
+class RestartHydrationError(RuntimeError):
+    def __init__(self, message: str, *, summary: Mapping[str, Any]):
+        super().__init__(message)
+        self.summary = dict(summary)
 
 
-def _atlas_sub_years(
-    *,
-    current_year: int,
-    forecast_year: Optional[int],
-) -> List[int]:
-    sub_years = [current_year]
-    if forecast_year is None or forecast_year <= current_year:
-        return sub_years
-    sub_years.extend(range(current_year + 2, forecast_year + 1, 2))
-    return sub_years
+def _enabled_restart_models(settings: Any) -> Tuple[str, ...]:
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None:
+        return ()
 
-
-def _stage_query_target(
-    *,
-    year: int,
-    model: str,
-    stage: str,
-    phase: Optional[str],
-    iteration: Optional[int] = None,
-) -> Dict[str, Any]:
-    target = {
-        "year": year,
-        "model": model,
-        "stage": stage,
-        "status": "completed",
-    }
-    if phase is not None:
-        target["phase"] = phase
-    if iteration is not None:
-        target["iteration"] = iteration
-    return target
-
-
-def _restart_query_stage_name(step_name: str) -> str:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is None or spec.provenance is None:
-        raise KeyError(f"Unknown restart query step name: {step_name}")
-
-    builder_key = spec.provenance.builder_key
-    if builder_key == "activitysim":
-        return f"activity_demand_{spec.phase}"
-    if builder_key == "urbansim":
-        return "land_use"
-    if builder_key == "atlas":
-        return "atlas"
-    if builder_key == "beam":
-        return "beam"
-    return spec.stage_name
-
-
-def _restart_query_step_names(*, builder_key: str) -> Tuple[str, ...]:
-    return tuple(
-        spec.step_name
-        for spec in tracked_step_specs()
-        if spec.provenance is not None
-        and spec.provenance.builder_key == builder_key
-        and not spec.optional
-    )
-
-
-def _restart_query_target_for_step_name(
-    *,
-    year: int,
-    step_name: str,
-    iteration: Optional[int] = None,
-) -> Dict[str, Any]:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is None:
-        raise KeyError(f"Unknown restart query step name: {step_name}")
-    return _stage_query_target(
-        year=year,
-        iteration=iteration,
-        model=spec.step_name,
-        stage=_restart_query_stage_name(step_name),
-        phase=spec.phase,
-    )
-
-
-def _restart_materialization_keys_for_step(step_name: str) -> Optional[Tuple[str, ...]]:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is None or spec.dynamic_output_families or not spec.output_keys:
-        return None
-    return tuple(spec.output_keys)
-
-
-def _restart_query_targets(
-    *,
-    state: Any,
-    year: int,
-    workflow_stage: Any,
-) -> List[Dict[str, Any]]:
-    targets: List[Dict[str, Any]] = []
-    current_stage = getattr(state, "current_major_stage", None)
-    current_sub_stage = getattr(state, "current_sub_stage", None)
-    resume_iter = max(_coerce_int(getattr(state, "current_inner_iter", 0)) or 0, 0)
-    forecast_year = _coerce_int(getattr(state, "forecast_year", None))
-
-    land_use_enabled = _is_stage_explicitly_enabled(
-        state=state,
-        stage=workflow_stage.land_use,
-    )
-    if current_stage in {
-        workflow_stage.vehicle_ownership_model,
-        workflow_stage.supply_demand_loop,
-        workflow_stage.postprocessing,
-    } and land_use_enabled is not False:
-        for step_name in _restart_query_step_names(builder_key="urbansim"):
-            targets.append(
-                _restart_query_target_for_step_name(
-                    year=year,
-                    iteration=0,
-                    step_name=step_name,
-                )
-            )
-
-    vehicle_enabled = _is_stage_explicitly_enabled(
-        state=state,
-        stage=workflow_stage.vehicle_ownership_model,
-    )
-    if (
-        current_stage
-        in {
-            workflow_stage.vehicle_ownership_model,
-            workflow_stage.supply_demand_loop,
-            workflow_stage.postprocessing,
-        }
-        and vehicle_enabled is not False
+    enabled: List[str] = []
+    for attr_name in (
+        "land_use",
+        "vehicle_ownership",
+        "activity_demand",
+        "traffic_assignment",
+        "postprocessing",
     ):
-        atlas_target_step_names = _restart_query_step_names(builder_key="atlas")
-        if current_stage in {
-            workflow_stage.supply_demand_loop,
-            workflow_stage.postprocessing,
-        }:
-            atlas_target_step_names = ("atlas_postprocess",)
-        for sub_year in _atlas_sub_years(
-            current_year=year,
-            forecast_year=forecast_year,
-        ):
-            for step_name in atlas_target_step_names:
-                targets.append(
-                    _restart_query_target_for_step_name(
-                        year=sub_year,
-                        iteration=0,
-                        step_name=step_name,
-                    )
-                )
-
-    if current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}:
-        total_iters = max(
-            _coerce_int(getattr(state, "_settings", {}).get("supply_demand_iters", None))
-            or 0,
-            0,
-        )
-        completed_iterations = range(0, total_iters) if current_stage == workflow_stage.postprocessing and total_iters > 0 else range(0, resume_iter)
-        for iteration in completed_iterations:
-            for step_name in (
-                *_restart_query_step_names(builder_key="activitysim"),
-                *_restart_query_step_names(builder_key="beam"),
-            ):
-                targets.append(
-                    _restart_query_target_for_step_name(
-                        year=year,
-                        iteration=iteration,
-                        step_name=step_name,
-                    )
-                )
-        if current_stage == workflow_stage.supply_demand_loop and current_sub_stage == workflow_stage.traffic_assignment:
-            for step_name in _restart_query_step_names(builder_key="activitysim"):
-                targets.append(
-                    _restart_query_target_for_step_name(
-                        year=year,
-                        iteration=resume_iter,
-                        step_name=step_name,
-                    )
-                )
-        if current_stage == workflow_stage.postprocessing:
-            postprocessing_enabled = _is_stage_explicitly_enabled(
-                state=state,
-                stage=workflow_stage.postprocessing,
-            )
-            if postprocessing_enabled is not False:
-                targets.append(
-                    _stage_query_target(
-                        year=year,
-                        model="postprocessing",
-                        stage="postprocessing",
-                        phase=None,
-                    )
-                )
-
-    deduped: List[Dict[str, Any]] = []
-    seen: Set[Tuple[Any, ...]] = set()
-    for target in targets:
-        key = (
-            target.get("year"),
-            target.get("iteration"),
-            target.get("model"),
-            target.get("stage"),
-            target.get("phase"),
-            target.get("status"),
-        )
-        if key in seen:
+        model_name = getattr(models, attr_name, None)
+        if model_name is None:
             continue
-        seen.add(key)
-        deduped.append(target)
-    return deduped
+        text = str(model_name).strip()
+        if text:
+            enabled.append(text)
+    return tuple(dict.fromkeys(enabled))
+
+
+def restart_frontier_contract(
+    *,
+    settings: Any,
+    state: Any,
+    workflow_stage: WorkflowStageLike,
+) -> Optional[RestartFrontierContract]:
+    if getattr(state, "current_major_stage", None) != workflow_stage.supply_demand_loop:
+        return None
+    if getattr(state, "current_sub_stage", None) != workflow_stage.traffic_assignment:
+        return None
+
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None:
+        return None
+    if getattr(models, "activity_demand", None) != "activitysim":
+        return None
+    if getattr(models, "traffic_assignment", None) != "beam":
+        return None
+
+    return RestartFrontierContract(
+        frontier_stage="traffic_assignment",
+        frontier_step="beam_preprocess",
+        required_keys=(
+            "beam_plans_asim_out",
+            "households_asim_out",
+            "persons_asim_out",
+            ZARR_SKIMS,
+        ),
+    )
 
 
 def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
@@ -453,11 +243,13 @@ def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
         return None
 
     def _latest_key(run: Any) -> Tuple[int, float, str]:
+        created_at_value = float("-inf")
         created_at = getattr(run, "created_at", None)
-        if isinstance(created_at, datetime):
-            created_at_value = created_at.timestamp()
-        else:
-            created_at_value = float("-inf")
+        if hasattr(created_at, "timestamp"):
+            try:
+                created_at_value = float(created_at.timestamp())
+            except Exception:
+                created_at_value = float("-inf")
         return (
             _coerce_int(getattr(run, "iteration", None)) or -1,
             created_at_value,
@@ -470,274 +262,368 @@ def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
 def _find_latest_run_for_restart_target(
     *,
     tracker: Any,
-    target: Dict[str, Any],
+    target: Mapping[str, Any],
 ) -> Any:
     find_latest_run = getattr(tracker, "find_latest_run", None)
     if callable(find_latest_run):
-        return find_latest_run(**target)
+        return find_latest_run(**dict(target))
 
     find_runs = getattr(tracker, "find_runs", None)
     if callable(find_runs):
-        runs = find_runs(limit=10_000, **target)
+        runs = find_runs(limit=10_000, **dict(target))
         if isinstance(runs, dict):
             runs = list(runs.values())
-        run = _select_latest_run_from_candidates(runs)
+        run = _select_latest_run_from_candidates(list(runs or ()))
         if run is None:
             raise ValueError(
-                f"No runs found matching criteria for restart target: {target}"
+                f"No runs found matching criteria for restart target: {dict(target)}"
             )
         return run
 
     raise AttributeError("tracker does not support find_latest_run/find_runs")
 
 
-def _collect_restart_completed_run_ids_from_tracker(
+def _materialization_failures(result: Any) -> List[str]:
+    failures: List[str] = []
+    for field_name in ("failed", "skipped_unmapped", "skipped_missing_source"):
+        entries = list(getattr(result, field_name, []) or [])
+        for entry in entries:
+            failures.append(f"{field_name}={entry}")
+    return failures
+
+
+def _remap_workspace_local_path(
+    path_value: str,
+    *,
+    workspace: Any,
+) -> Optional[str]:
+    current_root_raw = getattr(workspace, "full_path", None)
+    if not current_root_raw:
+        return None
+    current_root = Path(str(current_root_raw))
+    current_run_dir_name = current_root.name
+    if not current_run_dir_name:
+        return None
+
+    candidate_path = Path(path_value)
+    matching_indices = [
+        index
+        for index, part in enumerate(candidate_path.parts)
+        if part == current_run_dir_name
+    ]
+    for index in reversed(matching_indices):
+        suffix = candidate_path.parts[index + 1 :]
+        remapped = current_root.joinpath(*suffix)
+        resolved = resolve_existing_path(
+            str(remapped),
+            workspace=workspace,
+            materialize_from_archive=False,
+        )
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_restart_hydrated_path(
+    *,
+    artifact: Any,
+    workspace: Any,
+    materialized_path: Optional[str],
+) -> Optional[str]:
+    resolved = artifact_to_existing_path(artifact, workspace)
+    if resolved is not None:
+        return resolved
+
+    raw_artifact_path = (
+        str(artifact) if isinstance(artifact, (str, os.PathLike)) else None
+    )
+    if raw_artifact_path is not None:
+        remapped = _remap_workspace_local_path(
+            raw_artifact_path,
+            workspace=workspace,
+        )
+        if remapped is not None:
+            return remapped
+
+    if materialized_path is None:
+        return None
+
+    resolved_materialized = resolve_existing_path(
+        str(materialized_path),
+        workspace=workspace,
+        materialize_from_archive=False,
+    )
+    if resolved_materialized is not None:
+        if os.path.isdir(resolved_materialized) and raw_artifact_path is not None:
+            basename = os.path.basename(raw_artifact_path.rstrip(os.sep))
+            if basename:
+                candidate = os.path.join(resolved_materialized, basename)
+                remapped_candidate = resolve_existing_path(
+                    candidate,
+                    workspace=workspace,
+                    materialize_from_archive=False,
+                )
+                if remapped_candidate is not None:
+                    return remapped_candidate
+        return resolved_materialized
+    return None
+
+
+def _build_restart_query_target(
+    *,
+    year: int,
+    iteration: Optional[int],
+    producer: RestartProducerCandidate,
+    query_facet: Optional[Mapping[str, Any]],
+    include_iteration: bool,
+) -> Dict[str, Any]:
+    scope = restart_query_scope_for_step(producer.step_name)
+    target: Dict[str, Any] = {
+        "year": year,
+        "model": scope["model"],
+        "stage": scope["stage"],
+        "status": "completed",
+    }
+    phase = scope.get("phase")
+    if phase is not None:
+        target["phase"] = phase
+    if include_iteration and iteration is not None:
+        target["iteration"] = iteration
+    if query_facet is not None:
+        target["facet"] = dict(query_facet)
+    return target
+
+
+def _raise_restart_hydration_error(
+    *,
+    summary: RestartHydrationSummary,
+    missing_key: str,
+    producer_step: Optional[str],
+    reason: str,
+) -> None:
+    message = (
+        "Restart hydration failed for "
+        f"frontier_stage={summary.get('frontier_stage')} "
+        f"frontier_step={summary.get('frontier_step')} "
+        f"missing_key={missing_key} "
+        f"producer_step={producer_step or 'unresolved'} "
+        f"reason={reason}"
+    )
+    raise RestartHydrationError(message, summary=summary)
+
+
+def hydrate_missing_restart_artifacts(
     *,
     tracker: Any,
+    settings: Any,
     state: Any,
-    workflow_stage: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    local_run_dir: str,
+    archive_run_dir: str,
+    workflow_stage: WorkflowStageLike,
     query_facet: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    year = _coerce_int(getattr(state, "current_year", None))
-    if year is None:
-        return {
-            "run_ids": [],
-            "issues": [("state.current_year", "missing year")],
-            "manifest_paths": [],
-            "query_targets": [],
-            "discovery_mode": "tracker",
-        }
-
-    targets = _restart_query_targets(
+) -> RestartHydrationSummary:
+    contract = restart_frontier_contract(
+        settings=settings,
         state=state,
-        year=year,
         workflow_stage=workflow_stage,
     )
-    run_ids: List[str] = []
-    seen: Set[str] = set()
-    issues: List[Tuple[str, str]] = []
-    matched_targets: List[Dict[str, Any]] = []
-    unmatched_targets: List[Dict[str, Any]] = []
-    current_stage = getattr(state, "current_major_stage", None)
-    vehicle_enabled = _is_stage_explicitly_enabled(
-        state=state,
-        stage=workflow_stage.vehicle_ownership_model,
-    )
-    atlas_require_all_subyears = (
-        current_stage in {workflow_stage.supply_demand_loop, workflow_stage.postprocessing}
-        and vehicle_enabled is True
-    )
-    atlas_gap_detected = False
+    if contract is None:
+        return {
+            "frontier_stage": None,
+            "frontier_step": None,
+            "success": True,
+            "hydrated_keys": [],
+            "missing_keys": [],
+            "producer_steps_by_key": {},
+            "fallback_reason": None,
+        }
 
-    for target in targets:
-        query_target = dict(target)
-        if query_facet is not None:
-            query_target["facet"] = dict(query_facet)
-        is_atlas_target = target.get("stage") == "atlas"
-        logger.info("[RestartQuery] target=%s status=pending", query_target)
-        if atlas_gap_detected and is_atlas_target:
-            if atlas_require_all_subyears:
-                issues.append(
-                    (
-                        repr(query_target),
-                        "required atlas restart target missing after contiguous-prefix gap",
-                    )
-                )
-            unmatched_targets.append(query_target)
-            logger.info(
-                "[RestartQuery] target=%s status=skipped reason=contiguous_prefix_gap",
-                query_target,
+    year = _coerce_int(getattr(state, "current_year", None))
+    iteration = _coerce_int(getattr(state, "current_inner_iter", None))
+    get_value = getattr(coupler, "get", None)
+    missing_keys: List[str] = []
+    if callable(get_value):
+        for key in contract.required_keys:
+            value = get_value(key)
+            if value is None or artifact_to_existing_path(value, workspace) is None:
+                missing_keys.append(key)
+    else:
+        missing_keys.extend(contract.required_keys)
+
+    summary: RestartHydrationSummary = {
+        "frontier_stage": contract.frontier_stage,
+        "frontier_step": contract.frontier_step,
+        "success": False,
+        "hydrated_keys": [],
+        "missing_keys": list(missing_keys),
+        "producer_steps_by_key": {},
+        "fallback_reason": None,
+    }
+    if year is None:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=missing_keys[0] if missing_keys else "unknown",
+            producer_step=None,
+            reason="missing_resume_year",
+        )
+    if not missing_keys:
+        summary["success"] = True
+        return summary
+
+    producers_by_key = restart_artifact_producers(
+        frontier_stage=contract.frontier_stage,
+        enabled_models=_enabled_restart_models(settings),
+    )
+    materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+    if not callable(materialize_run_outputs):
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=missing_keys[0],
+            producer_step=None,
+            reason="tracker_missing_materialize_run_outputs",
+        )
+
+    target_root = os.path.realpath(local_run_dir)
+    source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
+
+    for key in missing_keys:
+        candidates = tuple(producers_by_key.get(key, ()))
+        if not candidates:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=None,
+                reason="no_registered_producer",
             )
-            continue
+        producer = candidates[0]
+        summary["producer_steps_by_key"][key] = producer.step_name
+
+        query_target = _build_restart_query_target(
+            year=year,
+            iteration=iteration,
+            producer=producer,
+            query_facet=query_facet,
+            include_iteration=True,
+        )
+        used_iteration_fallback = False
         try:
             run = _find_latest_run_for_restart_target(
                 tracker=tracker,
                 target=query_target,
             )
         except ValueError:
-            unmatched_targets.append(query_target)
-            logger.info(
-                "[RestartQuery] target=%s status=unmatched reason=no_completed_run",
-                query_target,
+            query_target = _build_restart_query_target(
+                year=year,
+                iteration=iteration,
+                producer=producer,
+                query_facet=query_facet,
+                include_iteration=False,
             )
-            if is_atlas_target:
-                atlas_gap_detected = True
-                if atlas_require_all_subyears:
-                    issues.append(
-                        (
-                            repr(query_target),
-                            "no completed run found for required atlas restart target",
-                        )
-                    )
-                continue
-            issues.append(
-                (repr(query_target), "no completed run found for restart target")
-            )
-            continue
-        except Exception as exc:
-            logger.info(
-                "[RestartQuery] target=%s status=error reason=%s",
-                query_target,
-                exc,
-            )
-            issues.append(
-                (
-                    repr(query_target),
-                    f"tracker query failed: {exc}",
+            try:
+                run = _find_latest_run_for_restart_target(
+                    tracker=tracker,
+                    target=query_target,
                 )
+            except ValueError:
+                _raise_restart_hydration_error(
+                    summary=summary,
+                    missing_key=key,
+                    producer_step=producer.step_name,
+                    reason="no_completed_run_found",
+                )
+            used_iteration_fallback = True
+        except Exception as exc:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason=f"tracker_query_failed:{exc}",
             )
-            continue
+
         run_id = str(getattr(run, "id", "")).strip()
-        if not run_id or run_id in seen:
-            continue
-        seen.add(run_id)
-        run_ids.append(run_id)
-        matched_targets.append({**query_target, "run_id": run_id})
-        logger.info(
-            "[RestartQuery] target=%s status=matched run_id=%s",
-            query_target,
+        if not run_id:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="matched_run_missing_id",
+            )
+
+        outputs = load_tracker_run_outputs(
             run_id,
+            tracker=tracker,
+            logger=logger,
+            log_context=f"restart hydration output lookup for {key}",
         )
-
-    return {
-        "run_ids": run_ids,
-        "issues": issues,
-        "manifest_paths": [],
-        "query_targets": [
-            (
-                {**dict(target), "facet": dict(query_facet)}
-                if query_facet is not None
-                else dict(target)
+        artifact = outputs.get(key)
+        if artifact is None:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="producer_run_missing_declared_output",
             )
-            for target in targets
-        ],
-        "matched_query_targets": matched_targets,
-        "unmatched_query_targets": unmatched_targets,
-        "atlas_gap_detected": atlas_gap_detected,
-        "fallback_reason": None,
-        "discovery_mode": "tracker",
-    }
 
-
-def collect_restart_completed_run_ids(
-    *,
-    state: Any,
-    archive_run_dir: str,
-    workflow_stage: Any,
-    tracker: Any = None,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    if tracker is None:
-        return {
-            "run_ids": [],
-            "issues": [("tracker", "tracker is required for restart discovery")],
-            "manifest_paths": [],
-            "query_targets": [],
-            "matched_query_targets": [],
-            "unmatched_query_targets": [],
-            "atlas_gap_detected": False,
-            "fallback_reason": "tracker unavailable",
-            "discovery_mode": "tracker",
-        }
-
-    tracker_discovery = _collect_restart_completed_run_ids_from_tracker(
-        tracker=tracker,
-        state=state,
-        workflow_stage=workflow_stage,
-        query_facet=query_facet,
-    )
-    if not tracker_discovery["run_ids"] and tracker_discovery["issues"]:
-        logger.warning(
-            "Restart completed-run discovery returned no tracker runs issues=%s run_ids=%s",
-            tracker_discovery["issues"],
-            tracker_discovery["run_ids"],
-        )
-    return tracker_discovery
-
-
-def reconstruct_restart_completed_run_outputs(
-    *,
-    tracker: Any,
-    state: Any,
-    local_run_dir: str,
-    archive_run_dir: str,
-    workflow_stage: Any,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, Any]:
-    discovery = collect_restart_completed_run_ids(
-        state=state,
-        archive_run_dir=archive_run_dir,
-        workflow_stage=workflow_stage,
-        tracker=tracker,
-        query_facet=query_facet,
-    )
-    run_ids = list(discovery["run_ids"])
-    issues = list(discovery["issues"])
-    source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
-    target_root = os.path.realpath(local_run_dir)
-    run_output_keys_by_run_id: Dict[str, Sequence[str]] = {}
-    for query_target in list(discovery.get("matched_query_targets", [])):
-        if not isinstance(query_target, Mapping):
-            continue
-        run_id = query_target.get("run_id")
-        step_name = query_target.get("model")
-        if not isinstance(run_id, str) or not isinstance(step_name, str):
-            continue
-        selected_keys = _restart_materialization_keys_for_step(step_name)
-        if selected_keys:
-            run_output_keys_by_run_id[run_id] = selected_keys
-
-    aggregate = materialize_cached_runs(
-        tracker=tracker,
-        run_ids=run_ids,
-        target_root=target_root,
-        source_root=source_root,
-        preserve_existing=True,
-        run_output_keys_by_run_id=run_output_keys_by_run_id,
-        initial_failures=issues,
-        missing_api_context="restart_reconstruction",
-    )
-    aggregate = _prune_optional_restart_missing_sources(aggregate)
-    restored_run_diagnostics = []
-    matched_query_targets = list(discovery.get("matched_query_targets", []))
-    if matched_query_targets:
-        for query_target in matched_query_targets:
-            if not isinstance(query_target, Mapping):
-                continue
-            restored_run_diagnostics.append(
-                {
-                    "model": query_target.get("model"),
-                    "year": query_target.get("year"),
-                    "iteration": query_target.get("iteration"),
-                    "run_id": query_target.get("run_id"),
-                    "parent_run_id": None,
-                    "source": "restore_reconstruction",
-                }
+        try:
+            result = materialize_run_outputs(
+                run_id=run_id,
+                target_root=target_root,
+                source_root=source_root,
+                preserve_existing=True,
+                keys=[key],
             )
-    else:
-        restored_run_diagnostics.extend(
-            {
-                "model": None,
-                "year": None,
-                "iteration": None,
-                "run_id": run_id,
-                "parent_run_id": None,
-                "source": "restore_reconstruction",
-            }
-            for run_id in run_ids
-        )
+        except Exception as exc:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason=f"materialize_run_outputs_failed:{exc}",
+            )
 
-    return {
-        "run_ids": run_ids,
-        "source_root": source_root,
-        "target_root": target_root,
-        "manifest_paths": list(discovery["manifest_paths"]),
-        "query_targets": list(discovery.get("query_targets", [])),
-        "matched_query_targets": list(discovery.get("matched_query_targets", [])),
-        "unmatched_query_targets": list(discovery.get("unmatched_query_targets", [])),
-        "discovery_mode": discovery.get("discovery_mode"),
-        "fallback_reason": discovery.get("fallback_reason"),
-        "atlas_gap_detected": bool(discovery.get("atlas_gap_detected", False)),
-        "restored_run_diagnostics": restored_run_diagnostics,
-        "materialization_result": aggregate,
-    }
+        failures = _materialization_failures(result)
+        if failures:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="materialization_incomplete:" + ";".join(failures),
+            )
+
+        materialized_path = None
+        materialized_from_filesystem = getattr(
+            result, "materialized_from_filesystem", {}
+        ) or {}
+        if isinstance(materialized_from_filesystem, Mapping):
+            materialized_path = materialized_from_filesystem.get(run_id)
+
+        resolved_path = _resolve_restart_hydrated_path(
+            artifact=artifact,
+            workspace=workspace,
+            materialized_path=str(materialized_path) if materialized_path is not None else None,
+        )
+        artifact_for_coupler = artifact
+        if isinstance(artifact, (str, os.PathLike)):
+            artifact_for_coupler = None
+        set_coupler_from_artifact(
+            coupler,
+            key,
+            artifact_for_coupler,
+            fallback=resolved_path,
+        )
+        coupler_value = get_value(key) if callable(get_value) else artifact
+        if artifact_to_existing_path(coupler_value, workspace) is None:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="hydrated_value_not_resolved_in_workspace",
+            )
+
+        summary["hydrated_keys"].append(key)
+        if used_iteration_fallback:
+            summary["fallback_reason"] = "iteration_agnostic_retry"
+
+    summary["success"] = True
+    return summary

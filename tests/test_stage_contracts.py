@@ -1544,13 +1544,16 @@ def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
     beam_plans = iter_dir / "beam_plans.parquet"
     households = iter_dir / "households.parquet"
     persons = iter_dir / "persons.parquet"
+    zarr = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
     _write_file(beam_plans)
     _write_file(households)
     _write_file(persons)
+    _write_file(zarr)
 
     coupler.set("beam_plans_asim_out", str(beam_plans))
     coupler.set("households_asim_out", str(households))
     coupler.set("persons_asim_out", str(persons))
+    coupler.set(ZARR_SKIMS, str(zarr))
 
     restored = _restore_activity_demand_outputs_for_resume(
         coupler=coupler,
@@ -1563,6 +1566,7 @@ def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
         "beam_plans_asim_out": str(beam_plans),
         "households_asim_out": str(households),
         "persons_asim_out": str(persons),
+        ZARR_SKIMS: str(zarr),
     }
     assert holder.activitysim_postprocess is not None
     assert holder.activitysim_postprocess.asim_output_dir is None
@@ -1570,6 +1574,7 @@ def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
         "beam_plans_asim_out": beam_plans,
         "households_asim_out": households,
         "persons_asim_out": persons,
+        ZARR_SKIMS: zarr,
     }
 
 
@@ -1605,7 +1610,7 @@ def test_restore_activity_demand_outputs_for_resume_republishes_zarr_skims(
             "beam_plans_asim_out": beam_plans,
             "households_asim_out": households,
             "persons_asim_out": persons,
-            "asim_input_skims_zarr_archived": archived_zarr,
+            ZARR_SKIMS: archived_zarr,
         },
     )
 

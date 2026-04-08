@@ -498,7 +498,7 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
     assert summary["event_counts"]["bootstrap_resolution"] == 1
 
 
-def test_consist_audit_summary_tracks_restart_discovery_snapshot(tmp_path):
+def test_consist_audit_summary_tracks_restart_hydration_snapshot(tmp_path):
     reset_consist_audit_state()
     workspace = DummyWorkspace(full_path=str(tmp_path / "restart-audit"))
 
@@ -509,14 +509,14 @@ def test_consist_audit_summary_tracks_restart_discovery_snapshot(tmp_path):
     )
     emit_consist_audit_event(
         workspace=workspace,
-        event_type="restart_discovery",
-        discovery_mode="tracker",
+        event_type="restart_hydration",
+        frontier_stage="traffic_assignment",
+        frontier_step="beam_preprocess",
+        success=True,
+        hydrated_keys=["beam_plans_asim_out", "households_asim_out"],
+        missing_keys=[],
+        producer_steps_by_key={"beam_plans_asim_out": "activitysim_postprocess"},
         fallback_reason=None,
-        discovered_run_count=7,
-        query_target_count=7,
-        matched_query_target_count=7,
-        unmatched_query_target_count=0,
-        atlas_gap_detected=False,
     )
 
     summary_path = (
@@ -527,13 +527,13 @@ def test_consist_audit_summary_tracks_restart_discovery_snapshot(tmp_path):
     )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
 
-    assert summary["event_counts"]["restart_discovery"] == 1
-    assert summary["restart_discovery"]["event_count"] == 1
-    assert summary["restart_discovery"]["latest_discovery_mode"] == "tracker"
-    assert summary["restart_discovery"]["latest_run_id_count"] == 7
-    assert summary["restart_discovery"]["latest_target_count"] == 7
-    assert summary["restart_discovery"]["latest_matched_target_count"] == 7
-    assert summary["restart_discovery"]["latest_unmatched_target_count"] == 0
+    assert summary["event_counts"]["restart_hydration"] == 1
+    assert summary["restart_hydration"]["event_count"] == 1
+    assert summary["restart_hydration"]["latest_frontier_stage"] == "traffic_assignment"
+    assert summary["restart_hydration"]["latest_frontier_step"] == "beam_preprocess"
+    assert summary["restart_hydration"]["latest_success"] is True
+    assert summary["restart_hydration"]["latest_hydrated_key_count"] == 2
+    assert summary["restart_hydration"]["latest_missing_key_count"] == 0
 
 
 def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback_rerun(monkeypatch):
@@ -1503,111 +1503,6 @@ def test_restart_preflight_requires_beam_region_dir_when_resuming_supply_demand(
     assert any(path.endswith("beam/input/test/beam.conf") for path in paths)
 
 
-def test_restart_preflight_requires_activitysim_iteration_outputs_for_traffic_assignment(
-    tmp_path,
-):
-    workspace = DummyWorkspace(str(tmp_path / "local-run"))
-    state = SimpleNamespace(
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
-        current_sub_stage=WorkflowState.Stage.traffic_assignment,
-        current_year=2017,
-        current_inner_iter=0,
-        asim_compiled=True,
-    )
-
-    missing = run_module._find_missing_restart_local_artifacts(
-        settings=_restart_settings(),
-        state=state,
-        workspace=workspace,
-    )
-
-    keys = {item["key"] for item in missing}
-    paths = {item["path"] for item in missing}
-    assert "activitysim_iteration_beam_plans_parquet" in keys
-    assert "activitysim_iteration_households_parquet" in keys
-    assert "activitysim_iteration_persons_parquet" in keys
-    assert any(
-        path.endswith("activitysim/output/year-2017-iteration-0/beam_plans.parquet")
-        for path in paths
-    )
-    assert any(
-        path.endswith("activitysim/output/year-2017-iteration-0/households.parquet")
-        for path in paths
-    )
-    assert any(
-        path.endswith("activitysim/output/year-2017-iteration-0/persons.parquet")
-        for path in paths
-    )
-
-
-def test_restart_preflight_materializes_activitysim_iteration_outputs_from_archive(
-    tmp_path, monkeypatch
-):
-    archive_root = tmp_path / "archive-root"
-    local_root = tmp_path / "local-root"
-    run_name = "restart-asim-archive"
-    archive_run_dir = archive_root / run_name
-    local_run_dir = local_root / run_name
-    workspace = DummyWorkspace(str(local_run_dir))
-    state = SimpleNamespace(
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
-        current_sub_stage=WorkflowState.Stage.traffic_assignment,
-        current_year=2017,
-        current_inner_iter=0,
-        asim_compiled=True,
-    )
-
-    archive_iter_dir = (
-        archive_run_dir
-        / "activitysim"
-        / "output"
-        / "year-2017-iteration-0"
-    )
-    archive_iter_dir.mkdir(parents=True, exist_ok=True)
-    for filename in ("beam_plans.parquet", "households.parquet", "persons.parquet"):
-        (archive_iter_dir / filename).write_text(filename, encoding="utf-8")
-
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_run_dir))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run_dir))
-    monkeypatch.setattr(
-        run_module,
-        "_restart_required_local_artifacts",
-        lambda **_kwargs: [
-            {
-                "key": "activitysim_iteration_beam_plans_parquet",
-                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "beam_plans.parquet"),
-                "reason": "test",
-            },
-            {
-                "key": "activitysim_iteration_households_parquet",
-                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "households.parquet"),
-                "reason": "test",
-            },
-            {
-                "key": "activitysim_iteration_persons_parquet",
-                "path": str(local_run_dir / "activitysim" / "output" / "year-2017-iteration-0" / "persons.parquet"),
-                "reason": "test",
-            },
-        ],
-    )
-
-    missing = run_module._find_missing_restart_local_artifacts(
-        settings=_restart_settings(),
-        state=state,
-        workspace=workspace,
-    )
-
-    assert missing == []
-    for filename in ("beam_plans.parquet", "households.parquet", "persons.parquet"):
-        assert (
-            local_run_dir
-            / "activitysim"
-            / "output"
-            / "year-2017-iteration-0"
-            / filename
-        ).read_text(encoding="utf-8") == filename
-
-
 def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     policy_path = tmp_path / "policy" / "seed.txt"
@@ -1639,95 +1534,6 @@ def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
             "path": str(policy_path.resolve()),
             "reason": "Restart policy 'custom_restart_artifact' requires custom_restart_artifact (test policy)",
         }
-    ]
-
-
-def test_reconstruct_restart_completed_run_outputs_materializes_manifest_run_ids(tmp_path):
-    archive_run_dir = tmp_path / "archive-run"
-    local_run_dir = tmp_path / "local-run"
-    tracker = DummyTracker(
-        responses=[],
-        materialization_results=[
-            MaterializationResult(materialized_from_filesystem={"run-1": "/tmp/a"}),
-            MaterializationResult(materialized_from_filesystem={"run-2": "/tmp/b"}),
-            MaterializationResult(materialized_from_filesystem={"run-3": "/tmp/c"}),
-        ],
-    )
-    tracker.find_latest_run_calls = []
-
-    def _find_latest_run(**kwargs):
-        tracker.find_latest_run_calls.append(dict(kwargs))
-        key = (
-            kwargs["year"],
-            kwargs.get("iteration"),
-            kwargs["model"],
-            kwargs["stage"],
-            kwargs.get("phase"),
-            kwargs["status"],
-        )
-        if key == (2018, 0, "activitysim_preprocess", "activity_demand_preprocess", "preprocess", "completed"):
-            return SimpleNamespace(id="run-1")
-        if key == (2018, 0, "activitysim_run", "activity_demand_run", "run", "completed"):
-            return SimpleNamespace(id="run-2")
-        if key == (2018, 0, "activitysim_postprocess", "activity_demand_postprocess", "postprocess", "completed"):
-            return SimpleNamespace(id="run-3")
-        raise ValueError(f"no run for target {kwargs}")
-
-    tracker.find_latest_run = _find_latest_run
-    state = SimpleNamespace(
-        current_year=2018,
-        current_inner_iter=0,
-        current_major_stage=WorkflowState.Stage.supply_demand_loop,
-        current_sub_stage=WorkflowState.Stage.traffic_assignment,
-        _settings={"supply_demand_iters": 1},
-        enabled_stages={WorkflowState.Stage.supply_demand_loop},
-    )
-
-    result = run_module._reconstruct_restart_completed_run_outputs(
-        tracker=tracker,
-        state=state,
-        local_run_dir=str(local_run_dir),
-        archive_run_dir=str(archive_run_dir),
-    )
-
-    assert result["run_ids"] == ["run-1", "run-2", "run-3"]
-    assert result["source_root"] == str(archive_run_dir.resolve())
-    assert result["target_root"] == str(local_run_dir.resolve())
-    assert result["materialization_result"].complete is True
-    assert tracker.materialization_calls == [
-        {
-            "run_id": "run-1",
-            "target_root": str(local_run_dir.resolve()),
-            "source_root": str(archive_run_dir.resolve()),
-            "preserve_existing": True,
-            "keys": list(
-                run_module.restart_runtime._restart_materialization_keys_for_step(
-                    "activitysim_preprocess"
-                )
-            ),
-        },
-        {
-            "run_id": "run-2",
-            "target_root": str(local_run_dir.resolve()),
-            "source_root": str(archive_run_dir.resolve()),
-            "preserve_existing": True,
-            "keys": list(
-                run_module.restart_runtime._restart_materialization_keys_for_step(
-                    "activitysim_run"
-                )
-            ),
-        },
-        {
-            "run_id": "run-3",
-            "target_root": str(local_run_dir.resolve()),
-            "source_root": str(archive_run_dir.resolve()),
-            "preserve_existing": True,
-            "keys": list(
-                run_module.restart_runtime._restart_materialization_keys_for_step(
-                    "activitysim_postprocess"
-                )
-            ),
-        },
     ]
 
 
@@ -1943,19 +1749,6 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(
-        run_module,
-        "_reconstruct_restart_completed_run_outputs",
-        lambda **_kwargs: {
-            "run_ids": ["run-1"],
-            "source_root": str(archive_run_dir),
-            "target_root": str(local_root / run_name),
-            "materialization_result": MaterializationResult(
-                materialized_from_filesystem={"run-1": "/restored/run-1"},
-                skipped_missing_source=["households_asim_out_temp"],
-            ),
-        },
-    )
     missing_before_bootstrap = [
         {
             "key": "activitysim_config_settings_yaml_configs",
@@ -1964,7 +1757,6 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
         }
     ]
     missing_sequences = [
-        list(missing_before_bootstrap),
         list(missing_before_bootstrap),
         [],
     ]
@@ -2076,19 +1868,6 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(
-        run_module,
-        "_reconstruct_restart_completed_run_outputs",
-        lambda **_kwargs: {
-            "run_ids": ["run-1"],
-            "source_root": str(archive_run_dir),
-            "target_root": str(local_root / run_name),
-            "materialization_result": MaterializationResult(
-                materialized_from_filesystem={"run-1": "/restored/run-1"},
-                skipped_missing_source=["households_asim_out_temp"],
-            ),
-        },
-    )
 
     missing = [{"key": "usim_datastore_base_h5", "path": "/missing/base.h5", "reason": "test"}]
 
@@ -2262,18 +2041,6 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
     monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(
-        run_module,
-        "_reconstruct_restart_completed_run_outputs",
-        lambda **_kwargs: {
-            "run_ids": ["run-1"],
-            "source_root": str(archive_run_dir),
-            "target_root": str(local_root / run_name),
-            "materialization_result": MaterializationResult(
-                materialized_from_filesystem={"run-1": "/restored/run-1"},
-            ),
-        },
-    )
     monkeypatch.setattr(run_module, "_find_missing_restart_local_artifacts", _atlas_only_missing)
     monkeypatch.setattr(
         run_module,

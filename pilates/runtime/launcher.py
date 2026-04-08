@@ -4,7 +4,7 @@ Runtime launcher for PILATES simulations.
 This module assembles and runs the full simulation lifecycle:
 - settings and workflow state initialization
 - Consist tracker and scenario setup
-- restart reconstruction and bootstrap initialization
+- restart hydration and bootstrap initialization
 - multi-stage yearly orchestration
 
 `run.py` is the thin CLI entrypoint. This module owns the runtime assembly.
@@ -20,8 +20,9 @@ import sys
 import shutil
 import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
 
+from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.generic.records import sanitize_artifact_key
 from pilates.generic.initialization import (
@@ -51,7 +52,7 @@ from pilates.utils.coupler_helpers import (
 from pilates.atlas.inputs import atlas_static_input_relpaths
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
-from pilates.utils.consist_types import ScenarioWithCoupler
+from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.runtime import restart as restart_runtime
@@ -83,11 +84,11 @@ _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
 _RUN_FAILURE_CONTEXT: Dict[str, Any] = {}
 
 
-def _resolve_scenario_id(settings: Any) -> str:
+def _resolve_scenario_id(settings: PilatesConfig) -> str:
     return scenario_runtime.resolve_scenario_id(settings)
 
 
-def _resolve_seed(settings: Any) -> Optional[int]:
+def _resolve_seed(settings: PilatesConfig) -> Optional[int]:
     return scenario_runtime.resolve_seed(settings)
 
 
@@ -195,7 +196,7 @@ def _merge_epoch_facet(
 _ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
 
 
-def _resolve_cache_epoch(settings: Any) -> int:
+def _resolve_cache_epoch(settings: PilatesConfig) -> int:
     return scenario_runtime.resolve_cache_epoch(settings)
 
 
@@ -203,7 +204,12 @@ def _build_schema_steps() -> List[Callable[..., Any]]:
     return scenario_runtime.build_schema_steps()
 
 
-def _is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
+def _is_model_enabled(
+    settings: PilatesConfig,
+    *,
+    flag_attr: str,
+    model_attr: str,
+) -> bool:
     return scenario_runtime.is_model_enabled(
         settings,
         flag_attr=flag_attr,
@@ -213,7 +219,7 @@ def _is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool
 
 def _filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
-    settings: Any,
+    settings: PilatesConfig,
     *,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
@@ -235,7 +241,7 @@ def _get_consist_schemas() -> Optional[list[type[Any]]]:
 
 def _build_scenario_runtime_contract(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
@@ -270,7 +276,7 @@ def _atlas_static_input_key(relpath: str) -> str:
 
 
 def _iter_existing_atlas_static_inputs(
-    settings: Any,
+    settings: PilatesConfig,
     atlas_input_dir: str,
 ):
     for relpath in atlas_static_input_relpaths(settings):
@@ -401,7 +407,7 @@ def _log_local_storage_info() -> None:
 def run_bootstrap_phase(
     *,
     tracker: Any,
-    settings: Any,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
     scenario_id: str,
@@ -431,10 +437,10 @@ def _assert_bootstrap_output_invariant(
 
 def _restart_required_local_artifacts(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-) -> List[Dict[str, str]]:
+) -> List[restart_runtime.RestartArtifactDiagnostic]:
     return restart_runtime.restart_required_local_artifacts(
         settings=settings,
         state=state,
@@ -448,10 +454,10 @@ def _restart_required_local_artifacts(
 
 def _find_missing_restart_local_artifacts(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-) -> List[Dict[str, str]]:
+) -> List[restart_runtime.RestartArtifactDiagnostic]:
     return restart_runtime.find_missing_restart_local_artifacts(
         settings=settings,
         state=state,
@@ -460,7 +466,9 @@ def _find_missing_restart_local_artifacts(
     )
 
 
-def _format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
+def _format_missing_artifact_summary(
+    artifacts: Sequence[restart_runtime.RestartArtifactDiagnostic],
+) -> str:
     return restart_runtime.format_missing_artifact_summary(artifacts)
 
 
@@ -485,17 +493,35 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _reconstruct_restart_completed_run_outputs(
+def _restart_frontier_contract(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+) -> Optional[restart_runtime.RestartFrontierContract]:
+    return restart_runtime.restart_frontier_contract(
+        settings=settings,
+        state=state,
+        workflow_stage=WorkflowState.Stage,
+    )
+
+
+def _hydrate_missing_restart_artifacts(
     *,
     tracker: Any,
+    settings: PilatesConfig,
     state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
     local_run_dir: str,
     archive_run_dir: str,
-    query_facet: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    return restart_runtime.reconstruct_restart_completed_run_outputs(
+    query_facet: Optional[Mapping[str, Any]] = None,
+) -> restart_runtime.RestartHydrationSummary:
+    return restart_runtime.hydrate_missing_restart_artifacts(
         tracker=tracker,
+        settings=settings,
         state=state,
+        workspace=workspace,
+        coupler=coupler,
         local_run_dir=local_run_dir,
         archive_run_dir=archive_run_dir,
         workflow_stage=WorkflowState.Stage,
@@ -505,7 +531,7 @@ def _reconstruct_restart_completed_run_outputs(
 
 def main(
     *,
-    settings: Optional[Any] = None,
+    settings: Optional[PilatesConfig] = None,
     state: Optional[WorkflowState] = None,
     clear_failure_context: bool = True,
 ):
@@ -531,7 +557,7 @@ def main(
     - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
     - Model outputs: Cached per iteration (convergence check)
     - Bootstrap: pre-scenario cached run with native materialization on cache hit
-    - Restart: reconstructs completed historical runs before scenario execution
+    - Restart: hydrates only the frontier artifacts required to resume execution
     """
     if clear_failure_context:
         _RUN_FAILURE_CONTEXT.clear()
@@ -694,9 +720,6 @@ def main(
     if state.run_info_path != archive_state_path:
         state.set_run_info_path(archive_state_path)
 
-    restart_reconstruction: Optional[Dict[str, Any]] = None
-    restart_missing_artifacts_initial: List[Dict[str, str]] = []
-    restart_missing_artifacts_after_recovery: List[Dict[str, str]] = []
     emit_consist_audit_event(
         workspace=workspace,
         event_type="run_context",
@@ -716,88 +739,11 @@ def main(
     if run_seed is not None:
         restart_query_facet["seed"] = run_seed
 
-    if is_restart_run and state.data_initialized:
-        restart_reconstruction = _reconstruct_restart_completed_run_outputs(
-            tracker=tracker,
-            state=state,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-            query_facet=restart_query_facet,
-        )
-        reconstruction_result = restart_reconstruction["materialization_result"]
-        logger.info(
-            "Restart completed-run reconstruction finished: run_ids=%s "
-            "source_root=%s target_root=%s preserve_existing=True %s",
-            len(restart_reconstruction.get("run_ids", [])),
-            restart_reconstruction.get("source_root"),
-            restart_reconstruction.get("target_root"),
-            reconstruction_result.summary,
-        )
-        if not reconstruction_result.complete:
-            logger.warning(
-                "Restart completed-run reconstruction incomplete: %s "
-                "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
-                reconstruction_result.summary,
-                reconstruction_result.skipped_unmapped,
-                reconstruction_result.skipped_missing_source,
-                reconstruction_result.failed,
-            )
-        logger.info(
-            "Restart discovery summary: mode=%s run_ids=%s matched_targets=%s "
-            "unmatched_targets=%s fallback_reason=%s atlas_gap_detected=%s",
-            restart_reconstruction.get("discovery_mode"),
-            len(restart_reconstruction.get("run_ids", [])),
-            len(restart_reconstruction.get("matched_query_targets", [])),
-            len(restart_reconstruction.get("unmatched_query_targets", [])),
-            restart_reconstruction.get("fallback_reason"),
-            restart_reconstruction.get("atlas_gap_detected"),
-        )
-        for restored_run in restart_reconstruction.get("restored_run_diagnostics", []):
-            logger.info(
-                "[RestartRestore] source=%s model=%s year=%s iteration=%s run_id=%s parent_run_id=%s",
-                restored_run.get("source"),
-                restored_run.get("model"),
-                restored_run.get("year"),
-                restored_run.get("iteration"),
-                restored_run.get("run_id"),
-                restored_run.get("parent_run_id"),
-            )
-        emit_consist_audit_event(
-            workspace=workspace,
-            event_type="restart_discovery",
-            discovery_mode=restart_reconstruction.get("discovery_mode"),
-            fallback_reason=restart_reconstruction.get("fallback_reason"),
-            discovered_run_count=len(restart_reconstruction.get("run_ids", [])),
-            query_target_count=len(restart_reconstruction.get("query_targets", [])),
-            matched_query_target_count=len(
-                restart_reconstruction.get("matched_query_targets", [])
-            ),
-            unmatched_query_target_count=len(
-                restart_reconstruction.get("unmatched_query_targets", [])
-            ),
-            query_targets=restart_reconstruction.get("query_targets", []),
-            matched_run_ids_by_target=restart_reconstruction.get(
-                "matched_query_targets", []
-            ),
-            unmatched_query_targets=restart_reconstruction.get(
-                "unmatched_query_targets", []
-            ),
-            atlas_gap_detected=bool(
-                restart_reconstruction.get("atlas_gap_detected", False)
-            ),
-            restored_run_diagnostics=restart_reconstruction.get(
-                "restored_run_diagnostics", []
-            ),
-        )
-
     if state.data_initialized:
         restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
-        )
-        restart_missing_artifacts_after_recovery = list(
-            restart_missing_artifacts_initial
         )
         if restart_missing_artifacts_initial:
             blocking_missing = [
@@ -826,38 +772,6 @@ def main(
                     "until bootstrap hydration: %s",
                     _format_missing_artifact_summary(deferred_missing),
                 )
-            restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )
-            if restart_missing_artifacts_after_recovery:
-                blocking_missing = [
-                    item
-                    for item in restart_missing_artifacts_after_recovery
-                    if not is_restart_prebootstrap_deferred_artifact_key(
-                        item.get("key", "")
-                    )
-                ]
-                deferred_missing = [
-                    item
-                    for item in restart_missing_artifacts_after_recovery
-                    if is_restart_prebootstrap_deferred_artifact_key(
-                        item.get("key", "")
-                    )
-                ]
-                if blocking_missing:
-                    logger.warning(
-                        "Restart diagnostic still sees missing local workspace inputs "
-                        "after completed-run reconstruction, before bootstrap: %s",
-                        _format_missing_artifact_summary(blocking_missing),
-                    )
-                if deferred_missing:
-                    logger.info(
-                        "Restart diagnostic still sees bootstrap-owned workspace "
-                        "inputs before bootstrap: %s",
-                        _format_missing_artifact_summary(deferred_missing),
-                    )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap
@@ -869,8 +783,9 @@ def main(
         if is_restart_run and state.data_initialized:
             logger.info(
                 "Running bootstrap pre-scenario hydration for restart. "
-                "completed-run reconstruction handles stage outputs; bootstrap "
-                "re-hydrates workspace invariants through the normal cached run path."
+                "bootstrap re-hydrates workspace invariants through the normal "
+                "cached run path before restart frontier hydration runs inside "
+                "the scenario context."
             )
         else:
             logger.info("Running bootstrap initialization phase.")
@@ -907,27 +822,27 @@ def main(
                 bootstrap_result.get("staged_artifact_summary"),
             )
     if is_restart_run:
-        restart_missing_artifacts_after_recovery = _find_missing_restart_local_artifacts(
+        restart_missing_artifacts_after_bootstrap = _find_missing_restart_local_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
         )
-        if restart_missing_artifacts_after_recovery:
+        if restart_missing_artifacts_after_bootstrap:
             logger.warning(
                 "Restart diagnostic still sees missing local workspace inputs "
                 "after restart bootstrap: %s",
                 _format_missing_artifact_summary(
-                    restart_missing_artifacts_after_recovery
+                    restart_missing_artifacts_after_bootstrap
                 ),
             )
-        if restart_missing_artifacts_after_recovery and bool(
+        if restart_missing_artifacts_after_bootstrap and bool(
             getattr(getattr(settings, "run", None), "restart_strict", False)
         ):
             raise RuntimeError(
                 "Strict restart preflight failed; required restart artifacts are "
                 "still missing after restart bootstrap. missing="
                 + _format_missing_artifact_summary(
-                    restart_missing_artifacts_after_recovery
+                    restart_missing_artifacts_after_bootstrap
                 )
             )
 
@@ -992,6 +907,45 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            restart_frontier_contract = (
+                _restart_frontier_contract(settings=settings, state=state)
+                if is_restart_run and state.data_initialized
+                else None
+            )
+            if restart_frontier_contract is not None:
+                try:
+                    restart_hydration = _hydrate_missing_restart_artifacts(
+                        tracker=tracker,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        coupler=coupler,
+                        local_run_dir=local_run_dir,
+                        archive_run_dir=archive_run_dir,
+                        query_facet=restart_query_facet,
+                    )
+                except restart_runtime.RestartHydrationError as exc:
+                    emit_consist_audit_event(
+                        workspace=workspace,
+                        event_type="restart_hydration",
+                        **exc.summary,
+                    )
+                    raise
+                emit_consist_audit_event(
+                    workspace=workspace,
+                    event_type="restart_hydration",
+                    **restart_hydration,
+                )
+                logger.info(
+                    "Restart frontier hydration complete: frontier_stage=%s "
+                    "frontier_step=%s hydrated_keys=%s missing_keys=%s "
+                    "fallback_reason=%s",
+                    restart_hydration.get("frontier_stage"),
+                    restart_hydration.get("frontier_step"),
+                    restart_hydration.get("hydrated_keys"),
+                    restart_hydration.get("missing_keys"),
+                    restart_hydration.get("fallback_reason"),
+                )
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

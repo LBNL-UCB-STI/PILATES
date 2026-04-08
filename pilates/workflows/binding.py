@@ -1277,47 +1277,6 @@ def _restart_activitysim_required_artifacts(
     return required or None
 
 
-def _restart_activitysim_iteration_outputs(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    workflow_stage: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "activity_demand", None) != "activitysim":
-        return None
-
-    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    if not callable(get_asim_output_dir):
-        return None
-
-    if not (
-        getattr(state, "current_major_stage", None) == workflow_stage.supply_demand_loop
-        and getattr(state, "current_sub_stage", None) == workflow_stage.traffic_assignment
-    ):
-        return None
-
-    return {
-        "activitysim_iteration_beam_plans_parquet": os.path.join(
-            get_asim_output_dir(),
-            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
-            "beam_plans.parquet",
-        ),
-        "activitysim_iteration_households_parquet": os.path.join(
-            get_asim_output_dir(),
-            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
-            "households.parquet",
-        ),
-        "activitysim_iteration_persons_parquet": os.path.join(
-            get_asim_output_dir(),
-            f"year-{getattr(state, 'current_year', 'unknown')}-iteration-{getattr(state, 'current_inner_iter', 0)}",
-            "persons.parquet",
-        ),
-    }
-
-
 def _restart_beam_required_artifacts(
     *,
     settings: Any,
@@ -1427,19 +1386,6 @@ def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirement
             notes=(
                 "ActivitySim restart should keep the mutable config tree for "
                 "stage entries that can re-enter ActivitySim directly."
-            ),
-        ),
-        RestartArtifactRequirementRule(
-            name="activitysim_iteration_outputs",
-            semantic_keys=(
-                "activitysim_iteration_beam_plans_parquet",
-                "activitysim_iteration_households_parquet",
-                "activitysim_iteration_persons_parquet",
-            ),
-            resolve=_restart_activitysim_iteration_outputs,
-            notes=(
-                "Traffic-assignment restart should preserve the ActivitySim "
-                "iteration outputs that BEAM consumes for the resumed loop."
             ),
         ),
         RestartArtifactRequirementRule(

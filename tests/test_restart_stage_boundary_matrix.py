@@ -645,9 +645,11 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
         tmp_path / "restored" / "households_asim_out.parquet"
     )
     restored_persons = _write_file(tmp_path / "restored" / "persons_asim_out.parquet")
+    restored_zarr = _write_file(tmp_path / "restored" / "zarr_skims.zarr")
     coupler.set("beam_plans_asim_out", str(restored_plans))
     coupler.set("households_asim_out", str(restored_households))
     coupler.set("persons_asim_out", str(restored_persons))
+    coupler.set(ZARR_SKIMS, str(restored_zarr))
 
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
@@ -682,8 +684,8 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
     assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
 
 
-def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_filesystem(
-    restart_stage_env,
+def test_restart_traffic_assignment_boundary_rejects_partial_hydrated_restore(
+    restart_stage_env, tmp_path
 ):
     settings = restart_stage_env["settings"]
     state = restart_stage_env["state"]
@@ -695,70 +697,16 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_f
     settings.activity_demand_enabled = True
     state._settings["activity_demand_enabled"] = True
     settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="disabled")
-
-    iter_dir = Path(workspace.get_asim_output_dir()) / "year-2017-iteration-0"
-    restored_plans = _write_file(iter_dir / "beam_plans.parquet")
-    restored_households = _write_file(iter_dir / "households.parquet")
-    restored_persons = _write_file(iter_dir / "persons.parquet")
+    coupler.set("beam_plans_asim_out", str(_write_file(tmp_path / "partial" / "beam_plans.parquet")))
 
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
     state.current_inner_iter = 0
 
-    run_supply_demand_stage(
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        year=state.forecast_year,
-        usim_inputs={
-            USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
-            USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
-        },
-        build_manifest_path=lambda _workspace, year, iteration: iter_dir.parent
-        / f"restart_traffic_asim_fs_{year}_{iteration}.yaml",
-    )
-
-    beam_preprocess_calls = [
-        call
-        for call in scenario.calls
-        if "plans_beam_in" in call["inputs"]
-        and "households_beam_in" in call["inputs"]
-        and "persons_beam_in" in call["inputs"]
-    ]
-    assert beam_preprocess_calls, (
-        "Expected BEAM preprocess to recover ActivitySim outputs from the "
-        "restored local iteration directory."
-    )
-    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
-    assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
-    assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
-
-
-def test_restart_traffic_assignment_boundary_rejects_partial_filesystem_restore(
-    restart_stage_env,
-):
-    settings = restart_stage_env["settings"]
-    state = restart_stage_env["state"]
-    workspace = restart_stage_env["workspace"]
-    coupler = restart_stage_env["coupler"]
-    scenario = restart_stage_env["scenario"]
-
-    settings.run.models.activity_demand = "activitysim"
-    settings.activity_demand_enabled = True
-    state._settings["activity_demand_enabled"] = True
-    settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="disabled")
-
-    iter_dir = Path(workspace.get_asim_output_dir()) / "year-2017-iteration-0"
-    _write_file(iter_dir / "beam_plans.parquet")
-
-    state.current_major_stage = state.Stage.supply_demand_loop
-    state.current_sub_stage = state.Stage.traffic_assignment
-    state.current_inner_iter = 0
-
-    with pytest.raises(RuntimeError, match="incomplete ActivitySim outputs"):
+    with pytest.raises(
+        RuntimeError,
+        match="incomplete ActivitySim outputs from coupler artifacts",
+    ):
         run_supply_demand_stage(
             scenario=scenario,
             state=state,
@@ -770,7 +718,7 @@ def test_restart_traffic_assignment_boundary_rejects_partial_filesystem_restore(
                 USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
                 USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
             },
-            build_manifest_path=lambda _workspace, year, iteration: iter_dir.parent
+            build_manifest_path=lambda _workspace, year, iteration: tmp_path
             / f"restart_traffic_asim_partial_{year}_{iteration}.yaml",
         )
 

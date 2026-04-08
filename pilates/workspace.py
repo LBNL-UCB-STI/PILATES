@@ -1,7 +1,8 @@
 import os
 import logging
-from typing import Any, Dict
+from typing import Dict
 
+from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore
 from pilates.utils.settings_helper import get as get_setting
 
@@ -17,7 +18,7 @@ class Workspace:
 
     def __init__(
         self,
-        settings: Any,
+        settings: PilatesConfig,
         output_path: str,
         folder_name: str,
     ):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from pilates.config import PilatesConfig
 from pilates.workflows.catalog import enabled_schema_step_models, schema_step_names
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -19,7 +20,7 @@ def coerce_int(value: Any) -> Optional[int]:
         return None
 
 
-def resolve_scenario_id(settings: Any) -> str:
+def resolve_scenario_id(settings: PilatesConfig) -> str:
     run_cfg = getattr(settings, "run", None)
     candidates = [
         getattr(run_cfg, "scenario", None),
@@ -32,7 +33,7 @@ def resolve_scenario_id(settings: Any) -> str:
     return "unknown_scenario"
 
 
-def resolve_seed(settings: Any) -> Optional[int]:
+def resolve_seed(settings: PilatesConfig) -> Optional[int]:
     candidates = [
         getattr(getattr(settings, "activitysim", None), "random_seed", None),
         getattr(getattr(settings, "run", None), "seed", None),
@@ -326,7 +327,7 @@ class SchemaCoupler:
         return None
 
 
-def resolve_cache_epoch(settings: Any) -> int:
+def resolve_cache_epoch(settings: PilatesConfig) -> int:
     value = getattr(getattr(settings, "run", None), "cache_epoch", 1)
     try:
         return int(value)
@@ -360,7 +361,12 @@ def build_schema_steps() -> List[Callable[..., Any]]:
     ]
 
 
-def is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
+def is_model_enabled(
+    settings: PilatesConfig,
+    *,
+    flag_attr: str,
+    model_attr: str,
+) -> bool:
     explicit_flag = getattr(settings, flag_attr, None)
     if explicit_flag is not None:
         return bool(explicit_flag)
@@ -371,7 +377,7 @@ def is_model_enabled(settings: Any, *, flag_attr: str, model_attr: str) -> bool:
 
 def filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
-    settings: Any,
+    settings: PilatesConfig,
     *,
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
@@ -393,7 +399,7 @@ def filter_schema_steps_for_enabled_models(
 
 def build_scenario_runtime_contract(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,

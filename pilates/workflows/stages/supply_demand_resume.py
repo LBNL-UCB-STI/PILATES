@@ -19,6 +19,7 @@ _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     "beam_plans_asim_out",
     "households_asim_out",
     "persons_asim_out",
+    ZARR_SKIMS,
 )
 
 
@@ -64,33 +65,20 @@ def _restore_activity_demand_outputs_for_resume(
     sees the same inputs it would have received after a live ActivitySim run.
     """
 
-    def _restore_zarr_skims(
+    def _publish_restored_zarr_skims(
         restored_outputs: Dict[str, Any],
-        resolved_paths: Optional[Dict[str, Path]] = None,
+        resolved_paths: Dict[str, Path],
     ) -> None:
-        zarr_candidate = None
-        if ZARR_SKIMS in restored_outputs:
-            zarr_candidate = _resolved_existing_restore_path(
-                restored_outputs[ZARR_SKIMS],
-                workspace,
-            )
-        if zarr_candidate is None and resolved_paths is not None:
-            archived_zarr = resolved_paths.get("asim_input_skims_zarr_archived")
-            if archived_zarr is not None and archived_zarr.exists():
-                zarr_candidate = str(archived_zarr)
-        if zarr_candidate is None:
-            output_cache_zarr = (
-                Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-            )
-            if output_cache_zarr.exists():
-                zarr_candidate = str(output_cache_zarr)
-        if zarr_candidate is not None:
-            set_coupler_from_artifact(
-                coupler,
-                ZARR_SKIMS,
-                None,
-                fallback=zarr_candidate,
-            )
+        zarr_value = restored_outputs.get(ZARR_SKIMS)
+        zarr_path = resolved_paths.get(ZARR_SKIMS)
+        if zarr_value is None or zarr_path is None:
+            return
+        set_coupler_from_artifact(
+            coupler,
+            ZARR_SKIMS,
+            None if isinstance(zarr_value, (str, os.PathLike)) else zarr_value,
+            fallback=str(zarr_path),
+        )
 
     def _require_complete_restore(
         restored_outputs: Dict[str, Any], source: str
@@ -118,6 +106,7 @@ def _restore_activity_demand_outputs_for_resume(
             if path is not None
         }
 
+    _ = state
     postprocess_outputs = outputs_holder.activitysim_postprocess
     if postprocess_outputs is not None:
         restored_outputs = step_output_handoff_mapping(
@@ -128,21 +117,18 @@ def _restore_activity_demand_outputs_for_resume(
         if validated is None:
             return None
         restored_outputs, resolved_paths = validated
-        _restore_zarr_skims(restored_outputs, resolved_paths)
+        _publish_restored_zarr_skims(restored_outputs, resolved_paths)
         return restored_outputs
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
-        return None
+        raise RuntimeError(
+            "Restart into traffic_assignment requires coupler access to restored "
+            "ActivitySim outputs, but the coupler does not expose get()."
+        )
 
     restored_outputs: Dict[str, Any] = {}
-    for key in (
-        "beam_plans_asim_out",
-        "beam_plans_out",
-        "households_asim_out",
-        "linkstats",
-        "persons_asim_out",
-    ):
+    for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS:
         value = get_value(key)
         if value is None:
             continue
@@ -156,32 +142,10 @@ def _restore_activity_demand_outputs_for_resume(
             asim_output_dir=None,
             processed_outputs=resolved_paths,
         )
-        _restore_zarr_skims(restored_outputs, resolved_paths)
+        _publish_restored_zarr_skims(restored_outputs, resolved_paths)
         return restored_outputs
-
-    iter_dir = Path(workspace.get_asim_output_dir()) / (
-        f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    raise RuntimeError(
+        "Restart into traffic_assignment requires hydrated ActivitySim outputs "
+        "in the coupler; missing one or more of "
+        f"{sorted(_TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS)}."
     )
-    filesystem_candidates = {
-        "beam_plans_asim_out": iter_dir / "beam_plans.parquet",
-        "households_asim_out": iter_dir / "households.parquet",
-        "persons_asim_out": iter_dir / "persons.parquet",
-    }
-    restored_outputs = {
-        key: str(path)
-        for key, path in filesystem_candidates.items()
-        if path.exists()
-    }
-    validated = _require_complete_restore(
-        restored_outputs,
-        "filesystem iteration outputs",
-    )
-    if validated:
-        restored_outputs, resolved_paths = validated
-        outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-            usim_datastore_h5=None,
-            asim_output_dir=iter_dir,
-            processed_outputs=resolved_paths,
-        )
-        _restore_zarr_skims(restored_outputs, resolved_paths)
-    return restored_outputs

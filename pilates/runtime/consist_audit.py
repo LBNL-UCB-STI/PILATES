@@ -83,15 +83,14 @@ def _new_state(event: Mapping[str, Any], attempt_number: int) -> Dict[str, Any]:
         "resolution_mode_counts_by_step": defaultdict(lambda: defaultdict(int)),
         "steps_with_incomplete_hydration": defaultdict(int),
         "steps_using_custom_recovery": defaultdict(lambda: defaultdict(int)),
-        "restart_discovery": {
+        "restart_hydration": {
             "event_count": 0,
-            "latest_discovery_mode": None,
+            "latest_frontier_stage": None,
+            "latest_frontier_step": None,
+            "latest_success": None,
+            "latest_hydrated_key_count": 0,
+            "latest_missing_key_count": 0,
             "latest_fallback_reason": None,
-            "latest_target_count": 0,
-            "latest_matched_target_count": 0,
-            "latest_unmatched_target_count": 0,
-            "latest_run_id_count": 0,
-            "latest_atlas_gap_detected": False,
         },
         "last_event_at": None,
     }
@@ -140,7 +139,7 @@ def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
                 state["steps_using_custom_recovery"].items()
             )
         },
-        "restart_discovery": _json_safe(state.get("restart_discovery", {})),
+        "restart_hydration": _json_safe(state.get("restart_hydration", {})),
     }
 
 
@@ -148,21 +147,16 @@ def _update_summary_state(state: Dict[str, Any], event: Mapping[str, Any]) -> No
     event_type = str(event.get("event_type"))
     state["event_counts"][event_type] += 1
     state["last_event_at"] = event.get("recorded_at")
-    if event_type == "restart_discovery":
-        state["restart_discovery"] = {
-            "event_count": int(state.get("restart_discovery", {}).get("event_count", 0))
+    if event_type == "restart_hydration":
+        state["restart_hydration"] = {
+            "event_count": int(state.get("restart_hydration", {}).get("event_count", 0))
             + 1,
-            "latest_discovery_mode": event.get("discovery_mode"),
+            "latest_frontier_stage": event.get("frontier_stage"),
+            "latest_frontier_step": event.get("frontier_step"),
+            "latest_success": bool(event.get("success", False)),
+            "latest_hydrated_key_count": len(list(event.get("hydrated_keys") or ())),
+            "latest_missing_key_count": len(list(event.get("missing_keys") or ())),
             "latest_fallback_reason": event.get("fallback_reason"),
-            "latest_target_count": int(event.get("query_target_count") or 0),
-            "latest_matched_target_count": int(
-                event.get("matched_query_target_count") or 0
-            ),
-            "latest_unmatched_target_count": int(
-                event.get("unmatched_query_target_count") or 0
-            ),
-            "latest_run_id_count": int(event.get("discovered_run_count") or 0),
-            "latest_atlas_gap_detected": bool(event.get("atlas_gap_detected", False)),
         }
 
     step_name = event.get("step_name")
