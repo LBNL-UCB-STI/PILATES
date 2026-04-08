@@ -245,6 +245,16 @@ _ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS = (
     "asim_input_skims_omx_archived",
     "asim_input_skims_zarr_archived",
 )
+_BEAM_RUN_ARCHIVE_OUTPUT_KEYS = (
+    "beam_input_plans_archived",
+    "beam_input_households_archived",
+    "beam_input_persons_archived",
+    "beam_input_config_archived",
+    "beam_input_vehicles_archived",
+    "beam_input_linkstats_warmstart_archived",
+    "beam_input_plans_warmstart_archived",
+    "beam_input_experienced_plans_warmstart_archived",
+)
 _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     _BEAM_RUN_OUTPUT_KEYS,
     (BEAM_OUTPUT_PLANS_XML, BEAM_OUTPUT_EXPERIENCED_PLANS_XML, BEAM_EXPERIENCED_PLANS_XML, ZARR_SKIMS, FINAL_SKIMS_OMX),
@@ -508,6 +518,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             BEAM_OUTPUT_PLANS_XML,
             BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
             BEAM_EXPERIENCED_PLANS_XML,
+            *_BEAM_RUN_ARCHIVE_OUTPUT_KEYS,
         ),
         dynamic_output_families=(
             "linkstats_{year}_{iteration}",

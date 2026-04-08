@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+import shutil
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
     BEAM_NETWORK_FINAL,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -115,6 +127,220 @@ def _beam_linkstats_publication_meta(
             "facet_index": True,
         }
     return {}
+
+
+_BEAM_RUN_ARCHIVE_KEY_MAP: Dict[str, str] = {
+    BEAM_PLANS_IN: BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_HOUSEHOLDS_IN: BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_PERSONS_IN: BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_CONFIG_FILE: BEAM_INPUT_CONFIG_ARCHIVED,
+    "vehicles_beam_in": BEAM_INPUT_VEHICLES_ARCHIVED,
+    LINKSTATS_WARMSTART: BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_PLANS_OUT: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_OUTPUT_PLANS_XML: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_EXPERIENCED_PLANS_XML: BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED
+    ),
+}
+
+_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
+    BEAM_INPUT_PLANS_ARCHIVED: "Archived BEAM runner plans input snapshot",
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED: "Archived BEAM runner households input snapshot",
+    BEAM_INPUT_PERSONS_ARCHIVED: "Archived BEAM runner persons input snapshot",
+    BEAM_INPUT_CONFIG_ARCHIVED: "Archived BEAM runner config input snapshot",
+    BEAM_INPUT_VEHICLES_ARCHIVED: "Archived BEAM runner vehicles input snapshot",
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start linkstats input snapshot"
+    ),
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start plans input snapshot"
+    ),
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start experienced plans input snapshot"
+    ),
+}
+
+
+def _beam_run_snapshot_dir(
+    *,
+    workspace: Workspace,
+    state: WorkflowState,
+) -> Path:
+    return (
+        Path(workspace.get_beam_output_dir())
+        / f"inputs-year-{state.year}-iteration-{state.iteration}"
+    )
+
+
+def _beam_input_archive_meta(
+    *,
+    archive_key: str,
+    year: int,
+    iteration: int,
+) -> Dict[str, Any]:
+    input_name = archive_key.removeprefix("beam_input_").removesuffix("_archived")
+    return {
+        "facet": {
+            "artifact_family": "beam_input_archived",
+            "input_name": input_name,
+            "year": year,
+            "iteration": iteration,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
+def _resolve_existing_coupler_input(
+    *,
+    coupler: CouplerProtocol,
+    key: str,
+    workspace: Workspace,
+) -> Optional[tuple[str, str]]:
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None
+    resolved_path = artifact_to_existing_path(
+        get_value(key),
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
+    if resolved_path is None:
+        return None
+    return key, resolved_path
+
+
+def _resolve_beam_run_warmstart_inputs(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> tuple[Optional[tuple[str, str]], Optional[tuple[str, str]]]:
+    plans_match = (
+        _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_OUTPUT_PLANS_XML,
+            workspace=workspace,
+        )
+        or _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_PLANS_OUT,
+            workspace=workspace,
+        )
+    )
+    experienced_match = (
+        _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            workspace=workspace,
+        )
+        or _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_EXPERIENCED_PLANS_XML,
+            workspace=workspace,
+        )
+    )
+
+    output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
+    if plans_match is None or experienced_match is None:
+        scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
+            output_root, "year-"
+        )
+        if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
+            scanned_plans_key = (
+                BEAM_OUTPUT_PLANS_XML
+                if scanned_plans_path.name == "output_plans.xml.gz"
+                else BEAM_PLANS_OUT
+            )
+            plans_match = (scanned_plans_key, str(scanned_plans_path))
+        if (
+            experienced_match is None
+            and scanned_experienced_path is not None
+            and scanned_experienced_path.exists()
+        ):
+            scanned_experienced_key = (
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+                if scanned_experienced_path.name == "output_experienced_plans.xml.gz"
+                else BEAM_EXPERIENCED_PLANS_XML
+            )
+            experienced_match = (scanned_experienced_key, str(scanned_experienced_path))
+    return plans_match, experienced_match
+
+
+def _collect_beam_run_snapshot_sources(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    holder: StepOutputsHolder,
+    coupler: CouplerProtocol,
+) -> Dict[str, Path]:
+    upstream = holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+
+    snapshot_sources: Dict[str, Path] = {
+        BEAM_INPUT_CONFIG_ARCHIVED: _require_primary_beam_config(settings, workspace),
+    }
+    for short_name, path, _description in upstream._iter_record_items():
+        archive_key = _BEAM_RUN_ARCHIVE_KEY_MAP.get(short_name)
+        if archive_key is None:
+            continue
+        snapshot_sources[archive_key] = Path(path)
+
+    plans_match, experienced_match = _resolve_beam_run_warmstart_inputs(
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+    )
+    if plans_match is not None and Path(plans_match[1]).exists():
+        snapshot_sources[BEAM_INPUT_PLANS_WARMSTART_ARCHIVED] = Path(plans_match[1])
+    if experienced_match is not None and Path(experienced_match[1]).exists():
+        snapshot_sources[BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED] = Path(
+            experienced_match[1]
+        )
+    return snapshot_sources
+
+
+def _archive_beam_run_inputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    holder: StepOutputsHolder,
+    coupler: CouplerProtocol,
+) -> None:
+    snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    for archive_key, source_path in _collect_beam_run_snapshot_sources(
+        settings=settings,
+        workspace=workspace,
+        holder=holder,
+        coupler=coupler,
+    ).items():
+        if not source_path.exists():
+            raise FileNotFoundError(
+                f"BEAM run input snapshot source is missing for {archive_key}: {source_path}"
+            )
+        target_path = snapshot_dir / f"{archive_key}{''.join(source_path.suffixes)}"
+        if source_path.is_dir():
+            if target_path.exists():
+                shutil.rmtree(target_path)
+            shutil.copytree(source_path, target_path)
+        else:
+            shutil.copy2(source_path, target_path)
+        log_output_only(
+            key=archive_key,
+            path=str(target_path),
+            description=_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP[archive_key],
+            step_name="beam_run",
+            **_beam_input_archive_meta(
+                archive_key=archive_key,
+                year=state.year,
+                iteration=state.iteration,
+            ),
+        )
 
 
 def _publish_beam_run_outputs(
@@ -619,54 +845,11 @@ def make_beam_run_step(
                 description=description,
             )
 
-        def _resolved_existing_coupler_input(key: str) -> Optional[tuple[str, str]]:
-            get_value = getattr(coupler, "get", None)
-            if not callable(get_value):
-                return None
-            resolved_path = artifact_to_existing_path(
-                get_value(key),
-                workspace=workspace,
-                materialize_from_archive=True,
-            )
-            if resolved_path is None:
-                return None
-            return key, resolved_path
-
-        plans_match = (
-            _resolved_existing_coupler_input(BEAM_OUTPUT_PLANS_XML)
-            or _resolved_existing_coupler_input(BEAM_PLANS_OUT)
+        plans_match, experienced_match = _resolve_beam_run_warmstart_inputs(
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
         )
-        experienced_match = (
-            _resolved_existing_coupler_input(BEAM_OUTPUT_EXPERIENCED_PLANS_XML)
-            or _resolved_existing_coupler_input(BEAM_EXPERIENCED_PLANS_XML)
-        )
-
-        output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-        if plans_match is None or experienced_match is None:
-            scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
-                output_root, "year-"
-            )
-            if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
-                scanned_plans_key = (
-                    BEAM_OUTPUT_PLANS_XML
-                    if scanned_plans_path.name == "output_plans.xml.gz"
-                    else BEAM_PLANS_OUT
-                )
-                plans_match = (scanned_plans_key, str(scanned_plans_path))
-            if (
-                experienced_match is None
-                and scanned_experienced_path is not None
-                and scanned_experienced_path.exists()
-            ):
-                scanned_experienced_key = (
-                    BEAM_OUTPUT_EXPERIENCED_PLANS_XML
-                    if scanned_experienced_path.name == "output_experienced_plans.xml.gz"
-                    else BEAM_EXPERIENCED_PLANS_XML
-                )
-                experienced_match = (
-                    scanned_experienced_key,
-                    str(scanned_experienced_path),
-                )
         if plans_match is not None and Path(plans_match[1]).exists():
             log_input_only(
                 key=plans_match[0],
@@ -719,6 +902,14 @@ def make_beam_run_step(
                 if beam_network_schema is not None:
                     meta["schema"] = beam_network_schema
             return meta
+
+        _archive_beam_run_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            holder=holder,
+            coupler=coupler,
+        )
 
         _log_step_records(
             record_items=outputs._iter_record_items(),

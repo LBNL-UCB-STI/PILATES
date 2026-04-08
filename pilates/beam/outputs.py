@@ -13,6 +13,14 @@ from pilates.workflows.outputs_base import (
     ValidationResult,
 )
 from pilates.workflows.artifact_keys import (
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
     BEAM_EXPERIENCED_PLANS_XML,
@@ -183,6 +191,19 @@ class BeamRunOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "beam_output_dir"
     declared_outputs: ClassVar[Tuple[str, ...]] = (LINKSTATS, BEAM_PLANS_OUT)
+    optional_outputs: ClassVar[Tuple[str, ...]] = (
+        BEAM_OUTPUT_PLANS_XML,
+        BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        BEAM_EXPERIENCED_PLANS_XML,
+        BEAM_INPUT_PLANS_ARCHIVED,
+        BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+        BEAM_INPUT_PERSONS_ARCHIVED,
+        BEAM_INPUT_CONFIG_ARCHIVED,
+        BEAM_INPUT_VEHICLES_ARCHIVED,
+        BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+        BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     beam_output_dir: Path
