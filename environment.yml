@@ -81,4 +81,3 @@ dependencies:
     # Local packages (install consist library in editable mode)
     # Note: Run separately after env creation: pip install -e ../consist
     # - -e ../consist
-

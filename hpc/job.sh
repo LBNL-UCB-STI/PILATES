@@ -25,6 +25,7 @@ REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hp
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
+DEFAULT_CONSIST_PYPI_PACKAGE="consist==0.1.1"
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
@@ -61,19 +62,24 @@ install_python_deps() {
 
 
 resolve_consist_package_spec() {
-    local req_file="$1"
     if [ -n "$CONSIST_PYPI_PACKAGE" ]; then
         echo "$CONSIST_PYPI_PACKAGE"
         return
     fi
 
     local package_spec
-    package_spec="$(grep -E '^[[:space:]]*consist([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-    if [ -n "$package_spec" ]; then
-        echo "$package_spec"
-    else
-        echo "consist"
-    fi
+    local req_file
+    for req_file in "$@"; do
+        if [ -f "$req_file" ]; then
+            package_spec="$(grep -E '^[[:space:]]*consist([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            if [ -n "$package_spec" ]; then
+                echo "$package_spec"
+                return
+            fi
+        fi
+    done
+
+    echo "$DEFAULT_CONSIST_PYPI_PACKAGE"
 }
 
 

@@ -14,7 +14,7 @@ run:
   land_use_freq: 1
   travel_model_freq: 1
   vehicle_ownership_freq: 1
-  supply_demand_iters: 8
+  supply_demand_iters: 1
   output_directory: /Users/zaneedell/git/PILATES/tmp
   output_run_name: new-asim-consist
   use_stubs: true
