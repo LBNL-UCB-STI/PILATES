@@ -16,6 +16,7 @@ from pilates.activitysim.outputs import (
     normalize_asim_output_key,
     has_asim_run_marker,
 )
+from pilates.activitysim.runner import asim_runtime_zarr_path
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -959,9 +960,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
 
         # Archive skims.zarr from activitysim/output/cache/
-        zarr_source_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        zarr_source_path = asim_runtime_zarr_path(workspace)
         if os.path.exists(zarr_source_path):
             zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
             if os.path.exists(zarr_target_path):

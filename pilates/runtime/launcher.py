@@ -493,6 +493,34 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
+def _hydrate_rewind_runner_inputs(
+    *,
+    tracker: Any,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    local_run_dir: str,
+    archive_run_dir: str,
+    archive_state_path: str,
+    query_facet: Optional[Mapping[str, Any]] = None,
+) -> Optional[restart_runtime.RestartHydrationSummary]:
+    return restart_runtime.hydrate_rewind_runner_inputs(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+        archive_state_path=archive_state_path,
+        allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+        workflow_stage=WorkflowState.Stage,
+        read_current_stage_fn=WorkflowState.read_current_stage,
+        query_facet=query_facet,
+    )
+
+
 def _restart_frontier_contract(
     *,
     settings: PilatesConfig,
@@ -912,6 +940,40 @@ def main(
                 if is_restart_run and state.data_initialized
                 else None
             )
+            if is_restart_run and state.data_initialized:
+                try:
+                    rewind_restore = _hydrate_rewind_runner_inputs(
+                        tracker=tracker,
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                        coupler=coupler,
+                        local_run_dir=local_run_dir,
+                        archive_run_dir=archive_run_dir,
+                        archive_state_path=archive_state_path,
+                        query_facet=restart_query_facet,
+                    )
+                except restart_runtime.RestartHydrationError as exc:
+                    emit_consist_audit_event(
+                        workspace=workspace,
+                        event_type="restart_rewind_restore",
+                        **exc.summary,
+                    )
+                    raise
+                if rewind_restore is not None:
+                    emit_consist_audit_event(
+                        workspace=workspace,
+                        event_type="restart_rewind_restore",
+                        **rewind_restore,
+                    )
+                    logger.info(
+                        "Restart exact rewind restore complete: frontier_stage=%s "
+                        "frontier_step=%s hydrated_keys=%s overlay_root=%s",
+                        rewind_restore.get("frontier_stage"),
+                        rewind_restore.get("frontier_step"),
+                        rewind_restore.get("hydrated_keys"),
+                        rewind_restore.get("overlay_root"),
+                    )
             if restart_frontier_contract is not None:
                 try:
                     restart_hydration = _hydrate_missing_restart_artifacts(

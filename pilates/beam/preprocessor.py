@@ -397,7 +397,18 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            beam_output_record = self._copy_vehicles_from_atlas(workspace)
+            restored_vehicle_source = next(
+                (
+                    record.file_path
+                    for record in input_records.all_records()
+                    if getattr(record, "short_name", None) == ATLAS_VEHICLES2_OUTPUT
+                ),
+                None,
+            )
+            beam_output_record = self._copy_vehicles_from_atlas(
+                workspace,
+                source_path=restored_vehicle_source,
+            )
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
 
@@ -590,12 +601,16 @@ class BeamPreprocessor(GenericPreprocessor):
         return output_shapefile_path
 
     def _copy_vehicles_from_atlas(
-        self, workspace: "Workspace"
+        self,
+        workspace: "Workspace",
+        *,
+        source_path: Optional[str] = None,
     ) -> Optional[FileRecord]:
         return beam_input_staging.copy_vehicles_from_atlas(
             workspace=workspace,
             state=self.state,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            source_path=source_path,
         )
 
     def _copy_plans_from_asim(

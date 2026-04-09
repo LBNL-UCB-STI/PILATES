@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, cast
 
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
+    asim_runtime_zarr_path,
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
@@ -391,9 +392,10 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
+    runtime_zarr_candidate = Path(asim_runtime_zarr_path(workspace))
     zarr_candidate = Path(
-        _existing_local_path(asim_output_dir / "cache" / "skims.zarr", workspace)
-        or (asim_output_dir / "cache" / "skims.zarr")
+        _existing_local_path(runtime_zarr_candidate, workspace)
+        or runtime_zarr_candidate
     )
     if zarr_candidate.exists():
         source_input_paths[ZARR_SKIMS] = zarr_candidate
@@ -1064,9 +1066,7 @@ def make_activitysim_run_step(
 
         get_value = getattr(coupler, "get", None)
         zarr_value = get_value(ZARR_SKIMS) if callable(get_value) else None
-        runtime_zarr_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        runtime_zarr_path = asim_runtime_zarr_path(workspace)
         zarr_path = (
             runtime_zarr_path
             if os.path.exists(runtime_zarr_path)
@@ -1196,7 +1196,7 @@ def make_activitysim_postprocess_step(
             ),
             (
                 ZARR_SKIMS,
-                os.path.join(asim_output_dir, "cache", "skims.zarr"),
+                asim_runtime_zarr_path(workspace),
                 "ActivitySim postprocess source input skims.zarr",
             ),
         ]

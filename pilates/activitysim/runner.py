@@ -119,6 +119,23 @@ def asim_sharrow_cache_dir(workspace: Workspace) -> str:
     return os.path.join(workspace.full_path, "shared_cache", "numba")
 
 
+def asim_runtime_cache_dir(workspace: Workspace) -> str:
+    """
+    Canonical ActivitySim runtime cache directory for skims.zarr.
+    """
+    get_runtime_cache_dir = getattr(workspace, "get_asim_runtime_cache_dir", None)
+    if callable(get_runtime_cache_dir):
+        return get_runtime_cache_dir()
+    get_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if callable(get_output_dir):
+        return os.path.join(get_output_dir(), "cache")
+    return os.path.join(getattr(workspace, "full_path", os.getcwd()), "cache")
+
+
+def asim_runtime_zarr_path(workspace: Workspace) -> str:
+    return os.path.join(asim_runtime_cache_dir(workspace), "skims.zarr")
+
+
 def _dir_contains_files(path: str) -> bool:
     if not os.path.isdir(path):
         return False
@@ -139,7 +156,7 @@ def _remove_path_if_present(path: str) -> None:
 
 def _cleanup_activitysim_compile_artifacts(workspace: Workspace) -> None:
     stale_paths = [
-        os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr"),
+        asim_runtime_zarr_path(workspace),
         os.path.join(workspace.get_asim_output_dir(), "cache", "numba"),
         asim_sharrow_cache_dir(workspace),
     ]
@@ -160,7 +177,7 @@ def _stage_runtime_input_path(
     workspace: Workspace,
 ) -> str:
     if key == "zarr_skims":
-        runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        runtime_path = asim_runtime_zarr_path(workspace)
     elif key == ASIM_SHARROW_CACHE_DIR:
         runtime_path = asim_sharrow_cache_dir(workspace)
     else:
@@ -201,8 +218,17 @@ class ActivitysimCompileRunner(GenericRunner):
         )
 
     @staticmethod
-    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
-        return ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
+    def get_asim_docker_vols(
+        settings: PilatesConfig,
+        working_dir=None,
+        *,
+        workspace: Optional[Workspace] = None,
+    ):
+        return ActivitysimRunner.get_asim_docker_vols(
+            settings,
+            working_dir=working_dir,
+            workspace=workspace,
+        )
 
     @staticmethod
     def expected_inputs(
@@ -284,7 +310,9 @@ class ActivitysimCompileRunner(GenericRunner):
         os.makedirs(shared_tmp_dir, exist_ok=True)
 
         asim_docker_vols = self.get_asim_docker_vols(
-            settings, working_dir=workspace.full_path
+            settings,
+            workspace=workspace,
+            working_dir=workspace.full_path,
         )
         asim_docker_vols.update(
             {
@@ -304,9 +332,7 @@ class ActivitysimCompileRunner(GenericRunner):
             os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
         )
 
-        all_skims_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        all_skims_path = asim_runtime_zarr_path(workspace)
 
         asim_cmd = self.get_base_asim_cmd(
             settings, household_sample_size=2500, num_processes=1
@@ -405,7 +431,7 @@ class ActivitysimRunner(GenericRunner):
         """
         Declare the input paths/artifacts this runner expects from the workflow.
         """
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        zarr_path = asim_runtime_zarr_path(workspace)
         return {
             "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
         }
@@ -524,11 +550,41 @@ class ActivitysimRunner(GenericRunner):
         return additional_args
 
     @staticmethod
-    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
+    def get_asim_docker_vols(
+        settings: PilatesConfig,
+        working_dir=None,
+        *,
+        workspace: Optional[Workspace] = None,
+    ):
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
-        if working_dir is not None:
+        runtime_cache_dir = None
+        if workspace is not None:
+            asim_local_mutable_data_folder = os.path.abspath(
+                workspace.get_asim_mutable_data_dir()
+            )
+            asim_local_output_folder = os.path.abspath(workspace.get_asim_output_dir())
+            asim_local_configs_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    settings.activitysim.main_configs_dir,
+                )
+            )
+            asim_local_configs_compile_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    "configs_sh_compile",
+                )
+            )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    "configs_mp",
+                )
+            )
+            runtime_cache_dir = os.path.abspath(workspace.get_asim_runtime_cache_dir())
+        elif working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
                 os.path.join(
                     working_dir, settings.activitysim.local_mutable_data_folder
@@ -591,6 +647,10 @@ class ActivitysimRunner(GenericRunner):
             asim_remote_workdir, "configs_sh_compile"
         )
         asim_remote_configs_mp_folder = os.path.join(asim_remote_workdir, "configs_mp")
+        asim_remote_runtime_cache_folder = os.path.join(
+            asim_remote_output_folder,
+            "cache",
+        )
         asim_docker_vols = {
             asim_local_mutable_data_folder: {
                 "bind": asim_remote_input_folder,
@@ -610,6 +670,14 @@ class ActivitysimRunner(GenericRunner):
                 "mode": "rw",
             },
         }
+        default_runtime_cache_dir = os.path.abspath(
+            os.path.join(asim_local_output_folder, "cache")
+        )
+        if runtime_cache_dir and runtime_cache_dir != default_runtime_cache_dir:
+            asim_docker_vols[runtime_cache_dir] = {
+                "bind": asim_remote_runtime_cache_folder,
+                "mode": "rw",
+            }
         return asim_docker_vols
 
     def _parse_year_iteration_from_short_name(self, short_name: str) -> Tuple[int, int]:
@@ -659,7 +727,9 @@ class ActivitysimRunner(GenericRunner):
         client = None  # Handled by Consist
 
         asim_docker_vols = self.get_asim_docker_vols(
-            settings, working_dir=workspace.full_path
+            settings,
+            workspace=workspace,
+            working_dir=workspace.full_path,
         )
 
         asim_docker_vols.update(
@@ -673,9 +743,7 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
-        all_skims_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        all_skims_path = asim_runtime_zarr_path(workspace)
 
         asim_local_output_folder = os.path.abspath(
             os.path.join(workspace.full_path, settings.activitysim.local_output_folder)

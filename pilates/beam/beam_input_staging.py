@@ -113,20 +113,22 @@ def copy_vehicles_from_atlas(
     workspace: Any,
     state: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    source_path: Optional[str] = None,
 ) -> Optional[FileRecord]:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     os.makedirs(beam_scenario_folder, exist_ok=True)
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
-    atlas_output_data_dir = workspace.get_atlas_output_dir()
-
-    atlas_vehicle_file_loc = os.path.join(
-        atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
-    )
-    if not os.path.exists(atlas_vehicle_file_loc):
+    atlas_vehicle_file_loc = source_path
+    if not atlas_vehicle_file_loc:
+        atlas_output_data_dir = workspace.get_atlas_output_dir()
         atlas_vehicle_file_loc = os.path.join(
-            atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
+            atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
         )
+        if not os.path.exists(atlas_vehicle_file_loc):
+            atlas_vehicle_file_loc = os.path.join(
+                atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
+            )
 
     if not os.path.exists(atlas_vehicle_file_loc):
         logger.warning(

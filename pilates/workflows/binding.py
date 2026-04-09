@@ -343,6 +343,13 @@ def beam_preprocess_binding_plan(
         state=state,
         workspace=workspace,
     )
+    get_value = getattr(coupler, "get", None)
+    if callable(get_value):
+        restored_atlas_vehicle = artifact_to_path(
+            get_value(ATLAS_VEHICLES2_OUTPUT), workspace
+        )
+        if restored_atlas_vehicle:
+            explicit_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, restored_atlas_vehicle)
     if atlas_inputs:
         for key, value in atlas_inputs.items():
             explicit_inputs.setdefault(key, value)
@@ -1059,11 +1066,16 @@ def _bootstrap_activitysim_durable_artifacts(
         return None
 
     artifacts: Dict[str, str] = {}
-    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    if callable(get_asim_output_dir):
-        zarr_candidate = os.path.join(get_asim_output_dir(), "cache", "skims.zarr")
-        if os.path.exists(zarr_candidate):
-            artifacts[ZARR_SKIMS] = zarr_candidate
+    get_asim_runtime_cache_dir = getattr(workspace, "get_asim_runtime_cache_dir", None)
+    zarr_candidate = None
+    if callable(get_asim_runtime_cache_dir):
+        zarr_candidate = os.path.join(get_asim_runtime_cache_dir(), "skims.zarr")
+    else:
+        get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
+        if callable(get_asim_output_dir):
+            zarr_candidate = os.path.join(get_asim_output_dir(), "cache", "skims.zarr")
+    if zarr_candidate and os.path.exists(zarr_candidate):
+        artifacts[ZARR_SKIMS] = zarr_candidate
 
     sharrow_cache_dir = os.path.join(
         getattr(workspace, "full_path", ""),

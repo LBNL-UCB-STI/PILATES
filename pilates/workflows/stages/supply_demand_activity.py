@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 
 from pilates.config.models import PilatesConfig
@@ -40,7 +41,10 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.activitysim.runner import persist_sharrow_cache_enabled
-from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    normalize_asim_output_key,
+)
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -89,6 +93,41 @@ def _should_force_restart_activitysim_compile(state: WorkflowState) -> bool:
     return not bool(getattr(state, "_restart_activitysim_compile_done", False))
 
 
+def _activitysim_exact_rewind_restore(
+    workspace: Workspace,
+    *,
+    year: int,
+    iteration: int,
+) -> Optional[Dict[str, Any]]:
+    metadata = getattr(workspace, "_activitysim_exact_rewind_restore", None)
+    if not isinstance(metadata, dict):
+        return None
+    if metadata.get("year") != year or metadata.get("iteration") != iteration:
+        return None
+    return metadata
+
+
+def _seed_exact_rewind_activitysim_preprocess_outputs(
+    *,
+    workspace: Workspace,
+    outputs_holder: StepOutputsHolder,
+) -> ActivitySimPreprocessOutputs:
+    input_dir = workspace.get_asim_mutable_data_dir()
+    preprocess_outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(input_dir),
+        land_use_table=Path(input_dir) / "land_use.csv",
+        households_table=Path(input_dir) / "households.csv",
+        persons_table=Path(input_dir) / "persons.csv",
+        omx_skims=(
+            (Path(input_dir) / "skims.omx")
+            if (Path(input_dir) / "skims.omx").exists()
+            else None
+        ),
+    )
+    outputs_holder.activitysim_preprocess = preprocess_outputs
+    return preprocess_outputs
+
+
 def _run_activity_demand_phase(
     *,
     scenario: ScenarioWithCoupler,
@@ -134,39 +173,50 @@ def _run_activity_demand_phase(
         iteration=-1,
         run_workflow_fn=run_workflow,
     )
+    exact_rewind_restore = _activitysim_exact_rewind_restore(
+        workspace,
+        year=inputs.year,
+        iteration=inputs.iteration,
+    )
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
     # 2) Compile (per-year) outside manifest checkpointing.
     # 3) Run/Postprocess (per-iteration) for demand outputs.
-    preprocess_binding = build_binding_plan(
-        step_name="activitysim_preprocess",
-        coupler=coupler,
-        explicit_inputs=inputs.usim_inputs,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=inputs.year,
-    )
-
-    if preprocess_binding.missing_required:
-        raise RuntimeError(
-            "ActivitySim preprocess requires a resolved UrbanSim datastore input "
-            "(explicit, coupler, or fallback), but none were available."
+    if exact_rewind_restore is not None:
+        _seed_exact_rewind_activitysim_preprocess_outputs(
+            workspace=workspace,
+            outputs_holder=outputs_holder,
+        )
+    else:
+        preprocess_binding = build_binding_plan(
+            step_name="activitysim_preprocess",
+            coupler=coupler,
+            explicit_inputs=inputs.usim_inputs,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=inputs.year,
         )
 
-    stage_runner.run_step(
-        stage_name="activity_demand_preprocess",
-        step=StepRef(
-            name="activitysim_preprocess",
-            step_func=make_activitysim_preprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
+        if preprocess_binding.missing_required:
+            raise RuntimeError(
+                "ActivitySim preprocess requires a resolved UrbanSim datastore input "
+                "(explicit, coupler, or fallback), but none were available."
+            )
+
+        stage_runner.run_step(
+            stage_name="activity_demand_preprocess",
+            step=StepRef(
+                name="activitysim_preprocess",
+                step_func=make_activitysim_preprocess_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                binding=preprocess_binding,
+                year=state.forecast_year,
             ),
-            binding=preprocess_binding,
-            year=state.forecast_year,
-        ),
-    )
+        )
 
     def _resolved_existing_zarr_skims_path() -> Optional[str]:
         get_value = getattr(coupler, "get", None)
@@ -182,11 +232,7 @@ def _run_activity_demand_phase(
             )
             if zarr_path:
                 return zarr_path
-        candidate = os.path.join(
-            workspace.get_asim_output_dir(),
-            "cache",
-            "skims.zarr",
-        )
+        candidate = os.path.join(workspace.get_asim_runtime_cache_dir(), "skims.zarr")
         return resolve_existing_path(
             candidate,
             workspace=workspace,
@@ -279,6 +325,8 @@ def _run_activity_demand_phase(
             )
             needs_compile = True
 
+    if exact_rewind_restore is not None:
+        needs_compile = False
     if needs_compile:
         upstream = outputs_holder.activitysim_preprocess
         if upstream is None:
@@ -319,13 +367,18 @@ def _run_activity_demand_phase(
             ),
         )
         setattr(state, "_restart_activitysim_compile_done", True)
-    else:
+    elif exact_rewind_restore is None:
         _republish_existing_compile_artifacts()
     final_zarr_path = _resolved_existing_zarr_skims_path()
     final_cache_path = (
         _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
     )
-    if not final_zarr_path or (requires_numba_cache and not final_cache_path):
+    if (
+        exact_rewind_restore is None
+        and (
+            not final_zarr_path or (requires_numba_cache and not final_cache_path)
+        )
+    ):
         missing_parts = []
         if not final_zarr_path:
             missing_parts.append("zarr_skims")
@@ -344,11 +397,18 @@ def _run_activity_demand_phase(
         short_name for short_name, _, _ in upstream_preprocess._iter_record_items()
     ]
     asim_run_input_keys = [key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS]
-    asim_run_input_keys.append(ZARR_SKIMS)
-    if requires_numba_cache:
+    if exact_rewind_restore is None:
+        asim_run_input_keys.append(ZARR_SKIMS)
+    elif exact_rewind_restore.get("zarr_available"):
+        asim_run_input_keys.append(ZARR_SKIMS)
+    if requires_numba_cache and exact_rewind_restore is None:
         asim_run_input_keys.append(ASIM_SHARROW_CACHE_DIR)
 
-    optional_run_keys = [ASIM_SHARROW_CACHE_DIR] if requires_numba_cache else []
+    optional_run_keys = (
+        [ASIM_SHARROW_CACHE_DIR]
+        if requires_numba_cache and exact_rewind_restore is None
+        else []
+    )
 
     stage_runner.run_step(
         stage_name="activity_demand_run",
@@ -424,5 +484,13 @@ def _run_activity_demand_phase(
         if postprocess_outputs is not None
         else None
     )
+    if exact_rewind_restore is not None:
+        try:
+            delattr(workspace, "_activitysim_exact_rewind_restore")
+        except Exception:
+            logger.debug(
+                "Failed clearing ActivitySim exact rewind metadata after use",
+                exc_info=True,
+            )
 
     return ActivityDemandPhaseOutputs(activity_demand_outputs=activity_demand_outputs)

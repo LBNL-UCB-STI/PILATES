@@ -23,6 +23,7 @@ from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, BEAM_NETWORK_FINAL
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
+from pilates.activitysim.runner import asim_runtime_zarr_path
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +238,7 @@ class BeamRunner(GenericRunner):
         """
         zarr_path = None
         if getattr(settings, "activitysim", None) is not None:
-            zarr_path = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
+            zarr_path = asim_runtime_zarr_path(workspace)
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
             "zarr_skims": zarr_path,
@@ -254,9 +253,7 @@ class BeamRunner(GenericRunner):
         """
         zarr_path = None
         if getattr(settings, "activitysim", None) is not None:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
+            candidate = asim_runtime_zarr_path(workspace)
             if os.path.exists(candidate):
                 zarr_path = candidate
         return {

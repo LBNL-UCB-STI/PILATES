@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, TypedDict
@@ -12,7 +13,32 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.workflows.artifact_keys import ZARR_SKIMS
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
+)
 from pilates.workflows.binding import restart_required_local_artifact_policy
 from pilates.workflows.catalog import (
     RestartProducerCandidate,
@@ -43,6 +69,8 @@ class RestartHydrationSummary(TypedDict):
     missing_keys: List[str]
     producer_steps_by_key: Dict[str, str]
     fallback_reason: Optional[str]
+    rewind_restore: bool
+    overlay_root: Optional[str]
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -147,6 +175,77 @@ def read_archive_run_state_year(
     return _coerce_int(year)
 
 
+def read_archive_run_state_snapshot(
+    state_path: str,
+    *,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+) -> RestartStateSnapshot:
+    if not state_path:
+        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
+    try:
+        year, stage, iteration, *_ = read_current_stage_fn(state_path)
+    except Exception as exc:
+        logger.warning(
+            "Failed reading archive run_state snapshot from %s: %s", state_path, exc
+        )
+        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
+    return RestartStateSnapshot(
+        year=_coerce_int(year),
+        stage_name=getattr(stage, "name", None) if stage is not None else None,
+        iteration=_coerce_int(iteration),
+    )
+
+
+def _runtime_state_snapshot(state: Any) -> RestartStateSnapshot:
+    current_stage = getattr(state, "current_sub_stage", None) or getattr(
+        state, "current_major_stage", None
+    )
+    return RestartStateSnapshot(
+        year=_coerce_int(getattr(state, "current_year", None)),
+        stage_name=getattr(current_stage, "name", None)
+        if current_stage is not None
+        else None,
+        iteration=_coerce_int(getattr(state, "current_inner_iter", None)),
+    )
+
+
+def _stage_progress_rank(stage_name: Optional[str]) -> int:
+    order = {
+        "initialize_data": 0,
+        "land_use": 10,
+        "vehicle_ownership_model": 20,
+        "activity_demand": 30,
+        "activity_demand_directly_from_land_use": 30,
+        "traffic_assignment": 40,
+        "postprocessing": 50,
+    }
+    return order.get(str(stage_name), -1)
+
+
+def _progress_tuple(snapshot: RestartStateSnapshot) -> Tuple[int, int, int]:
+    return (
+        snapshot.year if snapshot.year is not None else -1,
+        snapshot.iteration if snapshot.iteration is not None else 0,
+        _stage_progress_rank(snapshot.stage_name),
+    )
+
+
+def is_rewind_resume_request(
+    *,
+    state: Any,
+    archive_state_path: str,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+) -> bool:
+    requested = _runtime_state_snapshot(state)
+    archive = read_archive_run_state_snapshot(
+        archive_state_path,
+        read_current_stage_fn=read_current_stage_fn,
+    )
+    if requested.year is None or archive.year is None:
+        return False
+    return _progress_tuple(requested) < _progress_tuple(archive)
+
+
 def enforce_resume_rewind_guardrail(
     *,
     state: Any,
@@ -183,6 +282,23 @@ class RestartHydrationError(RuntimeError):
     def __init__(self, message: str, *, summary: Mapping[str, Any]):
         super().__init__(message)
         self.summary = dict(summary)
+
+
+@dataclass(frozen=True)
+class RestartStateSnapshot:
+    year: Optional[int]
+    stage_name: Optional[str]
+    iteration: Optional[int]
+
+
+@dataclass(frozen=True)
+class RestartExactRewindContract:
+    stage_name: str
+    target_step: str
+    producer_step: str
+    overlay_family: str
+    required_snapshot_keys: Tuple[str, ...]
+    optional_snapshot_keys: Tuple[str, ...] = ()
 
 
 def _enabled_restart_models(settings: Any) -> Tuple[str, ...]:
@@ -236,6 +352,65 @@ def restart_frontier_contract(
             ZARR_SKIMS,
         ),
     )
+
+
+def restart_exact_rewind_contract(
+    *,
+    settings: Any,
+    state: Any,
+    workflow_stage: WorkflowStageLike,
+) -> Optional[RestartExactRewindContract]:
+    current_stage = getattr(state, "current_sub_stage", None) or getattr(
+        state, "current_major_stage", None
+    )
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None or current_stage is None:
+        return None
+
+    if (
+        current_stage == workflow_stage.activity_demand
+        and getattr(models, "activity_demand", None) == "activitysim"
+    ):
+        return RestartExactRewindContract(
+            stage_name="activity_demand",
+            target_step="activitysim_run",
+            producer_step="activitysim_postprocess",
+            overlay_family="activitysim",
+            required_snapshot_keys=(
+                "asim_input_households_csv_archived",
+                "asim_input_persons_csv_archived",
+                "asim_input_land_use_csv_archived",
+            ),
+            optional_snapshot_keys=(
+                "asim_input_skims_zarr_archived",
+                "asim_input_skims_omx_archived",
+            ),
+        )
+
+    if (
+        current_stage == workflow_stage.traffic_assignment
+        and getattr(models, "traffic_assignment", None) == "beam"
+    ):
+        return RestartExactRewindContract(
+            stage_name="traffic_assignment",
+            target_step="beam_run",
+            producer_step="beam_run",
+            overlay_family="beam",
+            required_snapshot_keys=(
+                BEAM_INPUT_PLANS_ARCHIVED,
+                BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+                BEAM_INPUT_PERSONS_ARCHIVED,
+                BEAM_INPUT_CONFIG_ARCHIVED,
+            ),
+            optional_snapshot_keys=(
+                BEAM_INPUT_VEHICLES_ARCHIVED,
+                BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+                BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+                BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+            ),
+        )
+
+    return None
 
 
 def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
@@ -412,6 +587,467 @@ def _raise_restart_hydration_error(
     raise RestartHydrationError(message, summary=summary)
 
 
+def _copy_to_target(source: Path, target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    if source.is_dir():
+        shutil.copytree(source, target)
+    else:
+        shutil.copy2(source, target)
+    return target
+
+
+def _set_coupler_path(coupler: CouplerProtocol, key: str, path: Path) -> None:
+    set_coupler_from_artifact(
+        coupler,
+        key,
+        None,
+        fallback=str(path),
+    )
+
+
+def _clear_coupler_key(coupler: CouplerProtocol, key: str) -> None:
+    view_fn = getattr(coupler, "view", None)
+    if callable(view_fn):
+        try:
+            from pilates.workflows.coupler_namespace import namespaced_view_target
+
+            target = namespaced_view_target(key)
+            if target is not None:
+                namespace, local_key = target
+                view = view_fn(namespace)
+                set_value = getattr(view, "set", None)
+                if callable(set_value):
+                    set_value(local_key, None)
+        except Exception:
+            logger.debug("Failed clearing namespaced coupler key %s", key, exc_info=True)
+    set_value = getattr(coupler, "set", None)
+    if callable(set_value):
+        set_value(key, None)
+
+
+def _materialize_run_output_paths(
+    *,
+    tracker: Any,
+    run_id: str,
+    workspace: Any,
+    local_run_dir: str,
+    archive_run_dir: str,
+    requested_keys: Sequence[str],
+) -> Dict[str, str]:
+    outputs = load_tracker_run_outputs(
+        run_id,
+        tracker=tracker,
+        logger=logger,
+        log_context=f"rewind restore output lookup for {run_id}",
+    )
+    available_keys = [key for key in requested_keys if outputs.get(key) is not None]
+    materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+    if not callable(materialize_run_outputs):
+        raise RuntimeError("tracker_missing_materialize_run_outputs")
+    if not available_keys:
+        return {}
+
+    result = materialize_run_outputs(
+        run_id=run_id,
+        target_root=os.path.realpath(local_run_dir),
+        source_root=os.path.realpath(archive_run_dir) if archive_run_dir else None,
+        preserve_existing=True,
+        keys=list(available_keys),
+    )
+    failures = _materialization_failures(result)
+    if failures:
+        raise RuntimeError("materialization_incomplete:" + ";".join(failures))
+
+    materialized_path = None
+    materialized_from_filesystem = getattr(
+        result, "materialized_from_filesystem", {}
+    ) or {}
+    if isinstance(materialized_from_filesystem, Mapping):
+        materialized_path = materialized_from_filesystem.get(run_id)
+
+    resolved: Dict[str, str] = {}
+    for key in available_keys:
+        artifact = outputs.get(key)
+        restored = _resolve_restart_hydrated_path(
+            artifact=artifact,
+            workspace=workspace,
+            materialized_path=(
+                str(materialized_path) if materialized_path is not None else None
+            ),
+        )
+        if restored is not None and os.path.exists(restored):
+            resolved[key] = restored
+    return resolved
+
+
+def _find_exact_rewind_source_run(
+    *,
+    tracker: Any,
+    contract: RestartExactRewindContract,
+    year: int,
+    iteration: int,
+    query_facet: Optional[Mapping[str, Any]],
+) -> Any:
+    scope = restart_query_scope_for_step(contract.producer_step)
+    target: Dict[str, Any] = {
+        "year": year,
+        "iteration": iteration,
+        "model": scope["model"],
+        "stage": scope["stage"],
+        "status": "completed",
+    }
+    if scope.get("phase") is not None:
+        target["phase"] = scope["phase"]
+    if query_facet is not None:
+        target["facet"] = dict(query_facet)
+    return _find_latest_run_for_restart_target(
+        tracker=tracker,
+        target=target,
+    )
+
+
+def _restore_activitysim_rewind_overlay(
+    *,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    overlay_root: Path,
+    restored_snapshot_paths: Mapping[str, str],
+    year: int,
+    iteration: int,
+) -> None:
+    data_dir = overlay_root / "data"
+    cache_dir = overlay_root / "cache"
+
+    required_targets = {
+        "asim_input_households_csv_archived": data_dir / "households.csv",
+        "asim_input_persons_csv_archived": data_dir / "persons.csv",
+        "asim_input_land_use_csv_archived": data_dir / "land_use.csv",
+    }
+    for key, target in required_targets.items():
+        _copy_to_target(Path(restored_snapshot_paths[key]), target)
+
+    if "asim_input_skims_omx_archived" in restored_snapshot_paths:
+        _copy_to_target(
+            Path(restored_snapshot_paths["asim_input_skims_omx_archived"]),
+            data_dir / "skims.omx",
+        )
+    if "asim_input_skims_zarr_archived" in restored_snapshot_paths:
+        _copy_to_target(
+            Path(restored_snapshot_paths["asim_input_skims_zarr_archived"]),
+            cache_dir / "skims.zarr",
+        )
+
+    workspace.set_asim_mutable_data_dir_override(str(data_dir))
+    workspace.set_asim_runtime_cache_dir_override(str(cache_dir))
+
+    _set_coupler_path(coupler, ASIM_HOUSEHOLDS_IN, data_dir / "households.csv")
+    _set_coupler_path(coupler, ASIM_PERSONS_IN, data_dir / "persons.csv")
+    _set_coupler_path(coupler, ASIM_LAND_USE_IN, data_dir / "land_use.csv")
+    omx_path = data_dir / "skims.omx"
+    if omx_path.exists():
+        _set_coupler_path(coupler, ASIM_OMX_SKIMS, omx_path)
+    zarr_path = cache_dir / "skims.zarr"
+    if zarr_path.exists():
+        _set_coupler_path(coupler, ZARR_SKIMS, zarr_path)
+    else:
+        _clear_coupler_key(coupler, ZARR_SKIMS)
+    _clear_coupler_key(coupler, ASIM_SHARROW_CACHE_DIR)
+    setattr(
+        workspace,
+        "_activitysim_exact_rewind_restore",
+        {
+            "overlay_root": str(overlay_root),
+            "mutable_data_dir": str(data_dir),
+            "runtime_cache_dir": str(cache_dir),
+            "zarr_available": zarr_path.exists(),
+            "omx_path": str(omx_path) if omx_path.exists() else None,
+            "year": year,
+            "iteration": iteration,
+        },
+    )
+
+
+def _restore_beam_rewind_overlay(
+    *,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    overlay_root: Path,
+    restored_snapshot_paths: Mapping[str, str],
+    year: int,
+    iteration: int,
+) -> None:
+    from pilates.beam import beam_exchange
+
+    beam_input_root = overlay_root / "input"
+    workspace.set_beam_mutable_data_dir_override(str(beam_input_root))
+
+    region_dir = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    config_target = region_dir / str(getattr(settings.beam, "config", "beam.conf"))
+    _copy_to_target(
+        Path(restored_snapshot_paths[BEAM_INPUT_CONFIG_ARCHIVED]),
+        config_target,
+    )
+
+    scenario_dir = Path(
+        beam_exchange.resolve_beam_exchange_scenario_folder(settings, workspace)
+    )
+    runtime_targets = {
+        BEAM_INPUT_PLANS_ARCHIVED: "plans",
+        BEAM_INPUT_HOUSEHOLDS_ARCHIVED: "households",
+        BEAM_INPUT_PERSONS_ARCHIVED: "persons",
+        BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles",
+        BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: "linkstats",
+    }
+    restored_runtime_paths: Dict[str, Path] = {}
+    for archive_key, stem in runtime_targets.items():
+        snapshot_path = restored_snapshot_paths.get(archive_key)
+        if snapshot_path is None:
+            continue
+        source = Path(snapshot_path)
+        target = scenario_dir / f"{stem}{''.join(source.suffixes)}"
+        restored_runtime_paths[archive_key] = _copy_to_target(source, target)
+
+    warmstart_dir = overlay_root / "warmstart"
+    warmstart_restored: Dict[str, Path] = {}
+    for archive_key, stem in (
+        (BEAM_INPUT_PLANS_WARMSTART_ARCHIVED, "beam_warmstart_plans"),
+        (
+            BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+            "beam_warmstart_experienced_plans",
+        ),
+    ):
+        snapshot_path = restored_snapshot_paths.get(archive_key)
+        if snapshot_path is None:
+            continue
+        source = Path(snapshot_path)
+        warmstart_restored[archive_key] = _copy_to_target(
+            source,
+            warmstart_dir / f"{stem}{''.join(source.suffixes)}",
+        )
+
+    _set_coupler_path(coupler, BEAM_CONFIG_FILE, config_target)
+    _set_coupler_path(
+        coupler,
+        BEAM_PLANS_IN,
+        restored_runtime_paths[BEAM_INPUT_PLANS_ARCHIVED],
+    )
+    _set_coupler_path(
+        coupler,
+        BEAM_HOUSEHOLDS_IN,
+        restored_runtime_paths[BEAM_INPUT_HOUSEHOLDS_ARCHIVED],
+    )
+    _set_coupler_path(
+        coupler,
+        BEAM_PERSONS_IN,
+        restored_runtime_paths[BEAM_INPUT_PERSONS_ARCHIVED],
+    )
+    if BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED in restored_runtime_paths:
+        _set_coupler_path(
+            coupler,
+            LINKSTATS_WARMSTART,
+            restored_runtime_paths[BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED],
+        )
+    if BEAM_INPUT_VEHICLES_ARCHIVED in restored_runtime_paths:
+        _set_coupler_path(
+            coupler,
+            "vehicles_beam_in",
+            restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED],
+        )
+        _set_coupler_path(
+            coupler,
+            ATLAS_VEHICLES2_OUTPUT,
+            restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED],
+        )
+    warmstart_plans = warmstart_restored.get(BEAM_INPUT_PLANS_WARMSTART_ARCHIVED)
+    if warmstart_plans is not None:
+        if warmstart_plans.suffixes[-2:] == [".xml", ".gz"] or warmstart_plans.suffix == ".xml":
+            _set_coupler_path(coupler, BEAM_OUTPUT_PLANS_XML, warmstart_plans)
+        else:
+            _set_coupler_path(coupler, BEAM_PLANS_OUT, warmstart_plans)
+    warmstart_experienced = warmstart_restored.get(
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED
+    )
+    if warmstart_experienced is not None:
+        _set_coupler_path(coupler, BEAM_EXPERIENCED_PLANS_XML, warmstart_experienced)
+        _set_coupler_path(
+            coupler,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            warmstart_experienced,
+        )
+    setattr(
+        workspace,
+        "_beam_exact_rewind_restore",
+        {
+            "overlay_root": str(overlay_root),
+            "beam_input_root": str(beam_input_root),
+            "vehicles_path": str(restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED])
+            if BEAM_INPUT_VEHICLES_ARCHIVED in restored_runtime_paths
+            else None,
+            "year": year,
+            "iteration": iteration,
+        },
+    )
+
+
+def hydrate_rewind_runner_inputs(
+    *,
+    tracker: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    local_run_dir: str,
+    archive_run_dir: str,
+    archive_state_path: str,
+    allow_rewind_resume: bool,
+    workflow_stage: WorkflowStageLike,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+    query_facet: Optional[Mapping[str, Any]] = None,
+) -> Optional[RestartHydrationSummary]:
+    contract = restart_exact_rewind_contract(
+        settings=settings,
+        state=state,
+        workflow_stage=workflow_stage,
+    )
+    if contract is None or not allow_rewind_resume:
+        return None
+    if not is_rewind_resume_request(
+        state=state,
+        archive_state_path=archive_state_path,
+        read_current_stage_fn=read_current_stage_fn,
+    ):
+        return None
+
+    year = _coerce_int(getattr(state, "current_year", None))
+    iteration = _coerce_int(getattr(state, "current_inner_iter", None))
+    summary: RestartHydrationSummary = {
+        "frontier_stage": contract.stage_name,
+        "frontier_step": contract.target_step,
+        "success": False,
+        "hydrated_keys": [],
+        "missing_keys": [],
+        "producer_steps_by_key": {},
+        "fallback_reason": None,
+        "rewind_restore": True,
+        "overlay_root": None,
+    }
+    if year is None or iteration is None:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason="missing_resume_year_or_iteration",
+        )
+
+    try:
+        run = _find_exact_rewind_source_run(
+            tracker=tracker,
+            contract=contract,
+            year=year,
+            iteration=iteration,
+            query_facet=query_facet,
+        )
+    except Exception as exc:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason=f"no_completed_run_found:{exc}",
+        )
+
+    run_id = str(getattr(run, "id", "")).strip()
+    if not run_id:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason="matched_run_missing_id",
+        )
+
+    requested_snapshot_keys = (
+        *contract.required_snapshot_keys,
+        *contract.optional_snapshot_keys,
+    )
+    try:
+        restored_snapshot_paths = _materialize_run_output_paths(
+            tracker=tracker,
+            run_id=run_id,
+            workspace=workspace,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            requested_keys=requested_snapshot_keys,
+        )
+    except Exception as exc:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason=str(exc),
+        )
+
+    for key in contract.required_snapshot_keys:
+        summary["producer_steps_by_key"][key] = contract.producer_step
+        if key not in restored_snapshot_paths:
+            summary["missing_keys"].append(key)
+    for key in contract.optional_snapshot_keys:
+        if key in restored_snapshot_paths:
+            summary["producer_steps_by_key"][key] = contract.producer_step
+
+    if contract.overlay_family == "activitysim" and not any(
+        key in restored_snapshot_paths
+        for key in ("asim_input_skims_zarr_archived", "asim_input_skims_omx_archived")
+    ):
+        summary["missing_keys"].append("asim_input_skims_{zarr|omx}_archived")
+    if summary["missing_keys"]:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=summary["missing_keys"][0],
+            producer_step=contract.producer_step,
+            reason="producer_run_missing_declared_output",
+        )
+
+    overlay_root = (
+        Path(workspace.full_path)
+        / ".restart_overlays"
+        / contract.overlay_family
+        / f"year-{year}-iteration-{iteration}"
+    )
+    if overlay_root.exists():
+        shutil.rmtree(overlay_root)
+    overlay_root.mkdir(parents=True, exist_ok=True)
+
+    if contract.overlay_family == "activitysim":
+        _restore_activitysim_rewind_overlay(
+            workspace=workspace,
+            coupler=coupler,
+            overlay_root=overlay_root,
+            restored_snapshot_paths=restored_snapshot_paths,
+            year=year,
+            iteration=iteration,
+        )
+    else:
+        _restore_beam_rewind_overlay(
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            overlay_root=overlay_root,
+            restored_snapshot_paths=restored_snapshot_paths,
+            year=year,
+            iteration=iteration,
+        )
+
+    summary["success"] = True
+    summary["overlay_root"] = str(overlay_root)
+    summary["hydrated_keys"] = list(dict.fromkeys(restored_snapshot_paths.keys()))
+    return summary
+
+
 def hydrate_missing_restart_artifacts(
     *,
     tracker: Any,
@@ -438,6 +1074,8 @@ def hydrate_missing_restart_artifacts(
             "missing_keys": [],
             "producer_steps_by_key": {},
             "fallback_reason": None,
+            "rewind_restore": False,
+            "overlay_root": None,
         }
 
     year = _coerce_int(getattr(state, "current_year", None))
@@ -460,6 +1098,8 @@ def hydrate_missing_restart_artifacts(
         "missing_keys": list(missing_keys),
         "producer_steps_by_key": {},
         "fallback_reason": None,
+        "rewind_restore": False,
+        "overlay_root": None,
     }
     if year is None:
         _raise_restart_hydration_error(

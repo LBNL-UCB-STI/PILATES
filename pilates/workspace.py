@@ -1,6 +1,6 @@
 import os
 import logging
-from typing import Dict
+from typing import Dict, Optional
 
 from pilates.config import PilatesConfig
 from pilates.generic.records import RecordStore
@@ -27,6 +27,9 @@ class Workspace:
         self.folder_name = folder_name
         self.input_data: Dict[str, RecordStore] = {}
         self.output_data: Dict[str, RecordStore] = {}
+        self._asim_mutable_data_dir_override: Optional[str] = None
+        self._asim_runtime_cache_dir_override: Optional[str] = None
+        self._beam_mutable_data_dir_override: Optional[str] = None
         self._setup_directories()
 
     @property
@@ -56,6 +59,8 @@ class Workspace:
         )
 
     def get_asim_mutable_data_dir(self) -> str:
+        if self._asim_mutable_data_dir_override:
+            return self._asim_mutable_data_dir_override
         return os.path.join(
             self.full_path,
             get_setting(self.settings, "activitysim.local_mutable_data_folder"),
@@ -73,7 +78,14 @@ class Workspace:
             get_setting(self.settings, "activitysim.local_output_folder"),
         )
 
+    def get_asim_runtime_cache_dir(self) -> str:
+        if self._asim_runtime_cache_dir_override:
+            return self._asim_runtime_cache_dir_override
+        return os.path.join(self.get_asim_output_dir(), "cache")
+
     def get_beam_mutable_data_dir(self) -> str:
+        if self._beam_mutable_data_dir_override:
+            return self._beam_mutable_data_dir_override
         return os.path.join(
             self.full_path, get_setting(self.settings, "beam.local_mutable_data_folder")
         )
@@ -93,3 +105,14 @@ class Workspace:
         return os.path.join(
             self.full_path, get_setting(self.settings, "atlas.host_output_folder")
         )
+
+    def set_asim_mutable_data_dir_override(self, path: Optional[str]) -> None:
+        self._asim_mutable_data_dir_override = os.path.abspath(path) if path else None
+
+    def set_asim_runtime_cache_dir_override(self, path: Optional[str]) -> None:
+        self._asim_runtime_cache_dir_override = (
+            os.path.abspath(path) if path else None
+        )
+
+    def set_beam_mutable_data_dir_override(self, path: Optional[str]) -> None:
+        self._beam_mutable_data_dir_override = os.path.abspath(path) if path else None
