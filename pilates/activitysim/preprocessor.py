@@ -2580,6 +2580,68 @@ def _compute_area_type(zones: pd.DataFrame) -> pd.Series:
     return area_types
 
 
+def _coerce_integer_like_columns(df: pd.DataFrame) -> List[str]:
+    """
+    Convert float columns that only contain whole numbers back to int64.
+
+    GeoPandas can promote nullable integer columns to float when reading the
+    canonical zone source. If those columns are later written as values like
+    ``0.0``, ActivitySim may reject them when it reads the CSV with an integer
+    dtype.
+    """
+    coerced: List[str] = []
+    for col in df.columns:
+        series = df[col]
+        if not pd.api.types.is_float_dtype(series):
+            continue
+
+        numeric = pd.to_numeric(series, errors="coerce")
+        valid = numeric.dropna()
+        if valid.empty:
+            continue
+
+        values = valid.to_numpy(dtype=float, copy=False)
+        if not np.isfinite(values).all():
+            continue
+        if not np.allclose(values, np.round(values)):
+            continue
+
+        df[col] = np.round(numeric.fillna(0)).astype("int64")
+        coerced.append(col)
+
+    return coerced
+
+
+def _log_land_use_table_schema(df: pd.DataFrame) -> None:
+    """
+    Emit a compact debug summary of the land_use CSV schema.
+
+    This is intended for diagnosing CSV dtype mismatches without changing the
+    runtime behavior of the preprocess step.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    logger.debug("Land use table schema before CSV write (%d columns):", len(df.columns))
+    for start in range(0, len(df.columns), 8):
+        parts: List[str] = []
+        for pos, col in enumerate(df.columns[start : start + 8], start=start + 1):
+            series = df[col]
+            nulls = int(series.isna().sum())
+            dtype = str(series.dtype)
+            annotation = ""
+            if pd.api.types.is_float_dtype(series):
+                numeric = pd.to_numeric(series, errors="coerce").dropna()
+                if not numeric.empty:
+                    values = numeric.to_numpy(dtype=float, copy=False)
+                    if np.isfinite(values).all() and np.allclose(
+                        values, np.round(values)
+                    ):
+                        annotation = ", integer_like_float"
+            parts.append(f"{pos}:{col}({dtype}, nulls={nulls}{annotation})")
+        logger.debug("  %s", " | ".join(parts))
+
+
 def enrollment_tables(
     settings: PilatesConfig,
     zones: gpd.GeoDataFrame,
@@ -3720,6 +3782,14 @@ def _create_land_use_table(
             zones[col] = zones[col].fillna(0.0)
         except Exception as e:
             logger.info(f"Generated exception when trying to fillna in zones: {e}")
+
+    _log_land_use_table_schema(zones)
+    coerced_columns = _coerce_integer_like_columns(zones)
+    if coerced_columns:
+        logger.info(
+            "Coerced integer-like land use columns to int64 before CSV write: %s",
+            ", ".join(coerced_columns),
+        )
 
     return zones
 

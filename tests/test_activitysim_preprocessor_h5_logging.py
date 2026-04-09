@@ -1,3 +1,7 @@
+import logging
+
+import pandas as pd
+
 from pilates.activitysim import preprocessor as asim_preprocessor
 
 
@@ -62,3 +66,41 @@ def test_log_activitysim_usim_input_tables_logs_expected_keys(monkeypatch) -> No
     ]
     assert all(call[3] == "input" for call in calls)
     assert all(call[4]["profile_file_schema"] is True for call in calls)
+
+
+def test_coerce_integer_like_columns_converts_only_whole_number_floats() -> None:
+    df = pd.DataFrame(
+        {
+            "whole_numbers": [1.0, 2.0, 3.0],
+            "mixed_floats": [1.25, 2.0, 3.5],
+            "already_int": [1, 2, 3],
+        }
+    )
+
+    coerced = asim_preprocessor._coerce_integer_like_columns(df)
+
+    assert coerced == ["whole_numbers"]
+    assert str(df["whole_numbers"].dtype) == "int64"
+    assert str(df["mixed_floats"].dtype) == "float64"
+    assert str(df["already_int"].dtype) == "int64"
+
+
+def test_log_land_use_table_schema_reports_column_positions_and_float_flags(
+    caplog,
+) -> None:
+    df = pd.DataFrame(
+        {
+            "whole_numbers": [1.0, 2.0, 3.0],
+            "mixed_floats": [1.25, 2.0, 3.5],
+            "with_nulls": [1, None, 3],
+        }
+    )
+
+    caplog.set_level(logging.DEBUG, logger=asim_preprocessor.logger.name)
+    asim_preprocessor._log_land_use_table_schema(df)
+
+    text = caplog.text
+    assert "Land use table schema before CSV write (3 columns):" in text
+    assert "1:whole_numbers(float64, nulls=0, integer_like_float)" in text
+    assert "2:mixed_floats(float64, nulls=0)" in text
+    assert "3:with_nulls(float64, nulls=1, integer_like_float)" in text
