@@ -231,6 +231,120 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
     )
 
 
+def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
+    stage_env, monkeypatch, tmp_path
+):
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    data_dir = tmp_path / "rewind" / "data"
+    cache_dir = tmp_path / "rewind" / "cache"
+    for rel in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
+        _write_file(data_dir / rel)
+    stage_env["workspace"].set_asim_mutable_data_dir_override(str(data_dir))
+    stage_env["workspace"].set_asim_runtime_cache_dir_override(str(cache_dir))
+    setattr(
+        stage_env["workspace"],
+        "_activitysim_exact_rewind_restore",
+        {
+            "overlay_root": str(tmp_path / "rewind"),
+            "mutable_data_dir": str(data_dir),
+            "runtime_cache_dir": str(cache_dir),
+            "zarr_available": False,
+            "omx_path": str(data_dir / "skims.omx"),
+            "year": state.forecast_year,
+            "iteration": 0,
+        },
+    )
+
+    original_get_preprocessor = ModelFactory.get_preprocessor
+    original_get_runner = ModelFactory.get_runner
+    original_get_postprocessor = ModelFactory.get_postprocessor
+
+    class _ActivitySimRunner:
+        def run(self, input_store, workspace, *, extra_inputs=None):
+            assert input_store.omx_skims == data_dir / "skims.omx"
+            assert extra_inputs == {}
+            output_dir = Path(workspace.get_asim_output_dir())
+            raw_outputs = {
+                "beam_plans_asim_out": output_dir / "beam_plans.csv",
+                "households_asim_out": output_dir / "households.csv",
+                "persons_asim_out": output_dir / "persons.csv",
+            }
+            for path in raw_outputs.values():
+                _write_file(path)
+            return ActivitySimRunOutputs(
+                output_dir=output_dir,
+                raw_outputs=raw_outputs,
+            )
+
+    class _ActivitySimPostprocessor:
+        def postprocess(self, raw_outputs, workspace):
+            output_dir = Path(workspace.get_asim_output_dir()) / "postprocess"
+            processed_outputs = {
+                "beam_plans_asim_out": output_dir / "beam_plans.parquet",
+                "households_asim_out": output_dir / "households.parquet",
+                "persons_asim_out": output_dir / "persons.parquet",
+            }
+            updated_usim = (
+                Path(workspace.get_usim_mutable_data_dir())
+                / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+            )
+            for path in (*processed_outputs.values(), updated_usim):
+                _write_file(path)
+            return ActivitySimPostprocessOutputs(
+                usim_datastore_h5=updated_usim,
+                asim_output_dir=output_dir,
+                processed_outputs=processed_outputs,
+                usim_datastore_key=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
+            )
+
+    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "activitysim":
+            raise AssertionError("activitysim_preprocess should be skipped on exact rewind")
+        return original_get_preprocessor(self, model_name, state)
+
+    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "activitysim":
+            return _ActivitySimRunner()
+        return original_get_runner(self, model_name, state)
+
+    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
+        if model_name == "activitysim":
+            return _ActivitySimPostprocessor()
+        return original_get_postprocessor(self, model_name, state)
+
+    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
+    monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
+    monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
+
+    outputs_holder = StepOutputsHolder()
+
+    _run_activity_demand_phase(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        inputs=ActivityDemandPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            usim_inputs={
+                USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+                USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+            },
+        ),
+        outputs_holder=outputs_holder,
+        manifest_config=ManifestConfig(path=tmp_path / "activity_demand_manifest.yaml"),
+    )
+
+    assert outputs_holder.activitysim_preprocess is not None
+    assert outputs_holder.activitysim_preprocess.households_table == data_dir / "households.csv"
+    assert ZARR_SKIMS not in _coupler_keys(stage_env["coupler"])
+
+
 def test_traffic_assignment_boundary_publishes_beam_key_family(
     stage_env, monkeypatch, tmp_path
 ):
