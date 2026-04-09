@@ -7,6 +7,7 @@ import json
 import pandas as pd
 
 from pilates.beam.postprocessor import (
+    BeamPostprocessor,
     _merge_beam_skims_to_zarr,
     split_events_parquet_by_type,
     write_zarr_skim_as_omx_new,
@@ -437,6 +438,26 @@ def test_write_zarr_skim_as_omx_new_reconstructs_zone_ids_from_workspace(
         np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
     )
     mock_load_canonical_zones.assert_called_once_with(mock_settings, workspace)
+
+
+def test_beam_postprocessor_expected_outputs_uses_omx_name_for_zarr_shared_skims(
+    tmp_path, mock_settings
+):
+    mock_settings.shared.skims.fname = "skims.zarr"
+    mock_settings.run.models.land_use = "urbansim"
+
+    workspace = MagicMock()
+    workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
+
+    outputs = BeamPostprocessor.expected_outputs(
+        mock_settings,
+        state=MagicMock(),
+        workspace=workspace,
+    )
+
+    assert outputs == {
+        "final_skims_omx": str(tmp_path / "beam" / "input" / "seattle" / "skims.omx")
+    }
 
 
 @pytest.fixture

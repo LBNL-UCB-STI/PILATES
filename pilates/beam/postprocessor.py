@@ -24,6 +24,7 @@ from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
+from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -3733,7 +3734,7 @@ class BeamPostprocessor(GenericPostprocessor):
         )
         if write_omx:
             region = settings.run.region
-            omx_name = settings.shared.skims.fname
+            omx_name = get_beam_omx_skims_name(settings)
             final_omx_path = os.path.join(
                 workspace.get_beam_mutable_data_dir(), region, omx_name
             )
@@ -3954,7 +3955,7 @@ class BeamPostprocessor(GenericPostprocessor):
                     final_omx_path = write_zarr_skim_as_omx_new(
                         all_skims_path,
                         settings,
-                        get_setting(settings, "shared.skims.fname"),
+                        get_beam_omx_skims_name(settings),
                         exclude_tables=vars_to_exclude,
                         workspace=workspace,
                     )
