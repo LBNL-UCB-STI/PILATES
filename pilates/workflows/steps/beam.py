@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import inspect
+import json
+import logging
 from pathlib import Path
+import re
 import shutil
 from typing import Any, Callable, Dict, Mapping, Optional
 
@@ -11,6 +14,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
     BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
     BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
@@ -58,6 +62,13 @@ from pilates.workflows.tracker_outputs import (
     load_tracker_run_outputs,
     merge_canonical_output_mappings,
 )
+
+logger = logging.getLogger(__name__)
+
+_BEAM_INCLUDE_RE = re.compile(
+    r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))'
+)
+_BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 
 
 def _primary_beam_config_path(
@@ -149,6 +160,9 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     BEAM_INPUT_HOUSEHOLDS_ARCHIVED: "Archived BEAM runner households input snapshot",
     BEAM_INPUT_PERSONS_ARCHIVED: "Archived BEAM runner persons input snapshot",
     BEAM_INPUT_CONFIG_ARCHIVED: "Archived BEAM runner config input snapshot",
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: (
+        "Archived BEAM config include/reference inputs snapshot"
+    ),
     BEAM_INPUT_VEHICLES_ARCHIVED: "Archived BEAM runner vehicles input snapshot",
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: (
         "Archived BEAM runner warm-start linkstats input snapshot"
@@ -190,6 +204,260 @@ def _beam_input_archive_meta(
         "facet_schema_version": "v1",
         "facet_index": True,
     }
+
+
+def _beam_config_root(settings: PilatesConfig, workspace: Workspace) -> Path:
+    return Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+
+
+def _beam_config_pwd_root(settings: PilatesConfig, workspace: Workspace) -> Path:
+    beam_input_root = _beam_config_root(settings, workspace).resolve()
+    pwd_candidates = [
+        beam_input_root.parent,
+        beam_input_root,
+        beam_input_root.parent.parent,
+    ]
+    expected_suffix = Path("input") / settings.run.region
+    return next(
+        (root for root in pwd_candidates if (root / expected_suffix).exists()),
+        beam_input_root.parent,
+    )
+
+
+def _scan_beam_config_includes(root: Path) -> list[Path]:
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    queue = [root.resolve()]
+    while queue:
+        current = queue.pop(0)
+        if current in seen or not current.exists() or not current.is_file():
+            continue
+        seen.add(current)
+        ordered.append(current)
+        try:
+            lines = current.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            match = _BEAM_INCLUDE_RE.match(line)
+            if not match:
+                continue
+            rel = match.group(1) or match.group(2)
+            if not rel:
+                continue
+            queue.append((current.parent / rel).resolve())
+    return ordered
+
+
+def _load_beam_config_tree(
+    config_path: Path,
+    *,
+    env_overrides: Mapping[str, str],
+) -> Optional[Dict[str, Any]]:
+    try:
+        from pyhocon import ConfigFactory, HOCONConverter
+        from pyhocon.config_parser import ConfigParser
+        from pyhocon.config_tree import NonExistentKey
+    except Exception:
+        return None
+
+    config = ConfigFactory.parse_file(str(config_path), resolve=False)
+    inserted_keys: list[str] = []
+    for key, value in env_overrides.items():
+        if not key:
+            continue
+        if config.get(key, NonExistentKey) is not NonExistentKey:
+            continue
+        config.put(key, value)
+        inserted_keys.append(key)
+    ConfigParser.resolve_substitutions(config, accept_unresolved=False)
+    for key in inserted_keys:
+        _remove_beam_config_key(config, key)
+    return json.loads(HOCONConverter.to_json(config))
+
+
+def _remove_beam_config_key(config: Any, key: str) -> None:
+    parts = [part for part in str(key).split(".") if part]
+    if not parts:
+        return
+    cursor = config
+    parents: list[tuple[dict[str, Any], str]] = []
+    for part in parts[:-1]:
+        if not isinstance(cursor, dict):
+            return
+        child = cursor.get(part)
+        if not isinstance(child, dict):
+            return
+        parents.append((cursor, part))
+        cursor = child
+    if not isinstance(cursor, dict):
+        return
+    cursor.pop(parts[-1], None)
+    for parent, part in reversed(parents):
+        child = parent.get(part)
+        if isinstance(child, dict) and not child:
+            parent.pop(part, None)
+        else:
+            break
+
+
+def _collect_beam_config_path_references(config_tree: Mapping[str, Any]) -> set[str]:
+    refs: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str):
+            candidate = node.strip()
+            if _looks_like_beam_path_reference(candidate):
+                refs.add(candidate)
+
+    walk(config_tree)
+    return refs
+
+
+def _looks_like_beam_path_reference(candidate: str) -> bool:
+    ignore_tokens = {
+        "csv",
+        "csv.gz",
+        "xml",
+        "xml.gz",
+        "parquet",
+        "omx",
+        "h5",
+    }
+    if not candidate or candidate in ignore_tokens:
+        return False
+    if candidate.startswith(("http://", "https://", "tcp://")):
+        return False
+    return "/" in candidate or candidate.endswith(
+        (
+            ".csv",
+            ".csv.gz",
+            ".xml",
+            ".xml.gz",
+            ".gz",
+            ".parquet",
+            ".zip",
+            ".omx",
+            ".h5",
+        )
+    )
+
+
+def _resolve_beam_config_reference(value: str, root_dir: Path) -> Optional[Path]:
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    resolved = (root_dir / candidate).resolve()
+    return resolved
+
+
+def _beam_config_reference_relative_path(path: Path, config_root: Path) -> Path:
+    resolved = path.resolve()
+    root_resolved = config_root.resolve()
+    if resolved.is_relative_to(root_resolved):
+        return resolved.relative_to(root_resolved)
+    parts = list(resolved.parts)
+    if parts and parts[0] == resolved.anchor:
+        parts = parts[1:]
+    return Path("__external__", *parts)
+
+
+def _copy_tree_contents(source_root: Path, target_root: Path) -> None:
+    if not source_root.exists() or not source_root.is_dir():
+        return
+    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
+        target = target_root / child.name
+        if child.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(child, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _archive_beam_config_references(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    snapshot_dir: Path,
+) -> Optional[Path]:
+    config_path = _require_primary_beam_config(settings, workspace).resolve()
+    config_root = _beam_config_root(settings, workspace).resolve()
+    archive_root = snapshot_dir / BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+    sources_by_target: Dict[Path, Path] = {}
+    config_files = _scan_beam_config_includes(config_path)
+
+    for include_path in config_files:
+        if include_path == config_path:
+            continue
+        sources_by_target[
+            _beam_config_reference_relative_path(include_path, config_root)
+        ] = include_path
+
+    env_overrides = {"PWD": str(_beam_config_pwd_root(settings, workspace))}
+    try:
+        config_tree = _load_beam_config_tree(
+            config_path,
+            env_overrides=env_overrides,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to resolve BEAM config references for archival from %s: %s",
+            config_path,
+            exc,
+        )
+        config_tree = None
+    if config_tree is None:
+        if not sources_by_target:
+            return None
+        logger.debug(
+            "pyhocon unavailable while archiving BEAM config references; "
+            "archiving include files only."
+        )
+    else:
+        raw_refs = _collect_beam_config_path_references(config_tree)
+
+        for raw_ref in sorted(raw_refs):
+            resolved = _resolve_beam_config_reference(raw_ref, config_root)
+            if resolved is None or not resolved.exists() or resolved == config_path:
+                continue
+            sources_by_target.setdefault(
+                _beam_config_reference_relative_path(resolved, config_root),
+                resolved,
+            )
+
+    if not sources_by_target:
+        return None
+
+    if archive_root.exists():
+        shutil.rmtree(archive_root)
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    manifest: Dict[str, str] = {}
+    for rel_target, source_path in sorted(
+        sources_by_target.items(),
+        key=lambda item: (0 if item[1].is_dir() else 1, len(item[0].parts), item[0].as_posix()),
+    ):
+        target_path = archive_root / rel_target
+        if source_path.is_dir():
+            _copy_tree_contents(source_path, target_path)
+        else:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target_path)
+        manifest[rel_target.as_posix()] = str(source_path)
+
+    (archive_root / _BEAM_CONFIG_REFERENCE_MANIFEST).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return archive_root
 
 
 def _resolve_existing_coupler_input(
@@ -312,6 +580,26 @@ def _archive_beam_run_inputs(
 ) -> None:
     snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    config_reference_snapshot = _archive_beam_config_references(
+        settings=settings,
+        workspace=workspace,
+        snapshot_dir=snapshot_dir,
+    )
+    if config_reference_snapshot is not None:
+        log_output_only(
+            key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+            path=str(config_reference_snapshot),
+            description=_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP[
+                BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+            ],
+            step_name="beam_run",
+            **_beam_input_archive_meta(
+                archive_key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+                year=state.year,
+                iteration=state.iteration,
+            ),
+        )
 
     for archive_key, source_path in _collect_beam_run_snapshot_sources(
         settings=settings,

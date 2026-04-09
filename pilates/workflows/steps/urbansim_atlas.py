@@ -14,6 +14,7 @@ from pilates.atlas.preprocessor import (
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -277,9 +278,9 @@ def _recover_atlas_postprocess_outputs(
     )
     if "atlas_vehicles2_output" not in recovered_paths:
         return None
-    usim_datastore_h5 = recovered_paths.get(USIM_H5_UPDATED) or recovered_paths.get(
-        USIM_DATASTORE_H5
-    )
+    usim_datastore_h5 = recovered_paths.get(USIM_POPULATION_SOURCE_H5) or recovered_paths.get(
+        USIM_H5_UPDATED
+    ) or recovered_paths.get(USIM_DATASTORE_H5)
     if usim_datastore_h5 is None:
         return None
     return AtlasPostprocessOutputs(
@@ -588,6 +589,21 @@ def make_urbansim_run_step(
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
+                ),
+            )
+            log_and_set_output(
+                key=USIM_FORECAST_OUTPUT,
+                path=str(outputs.usim_datastore_h5),
+                description=(
+                    f"UrbanSim forecast datastore output for year {forecast_year}"
+                ),
+                coupler=coupler,
+                step_name="urbansim_run",
+                profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_FORECAST_OUTPUT, forecast_year=forecast_year
                 ),
             )
 
@@ -1011,7 +1027,7 @@ def make_atlas_postprocess_step(
             record_items=(
                 (short_name, path, description)
                 for short_name, path, description in outputs._iter_record_items()
-                if short_name not in {USIM_H5_UPDATED, USIM_DATASTORE_H5}
+                if short_name not in {USIM_H5_UPDATED, USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5}
             ),
             log_fn=lambda key, path, description, **meta: log_output_only(
                 key=key,
@@ -1024,10 +1040,10 @@ def make_atlas_postprocess_step(
         )
         if outputs.usim_datastore_h5 is not None:
             log_and_set_output(
-                key=USIM_DATASTORE_H5,
+                key=USIM_POPULATION_SOURCE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
-                    f"UrbanSim datastore updated by ATLAS for year {forecast_year}"
+                    f"UrbanSim datastore selected as the ActivitySim population source after ATLAS for year {forecast_year}"
                 ),
                 coupler=coupler,
                 step_name="atlas_postprocess",
@@ -1035,7 +1051,7 @@ def make_atlas_postprocess_step(
                 h5_container=True,
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=forecast_year
+                    USIM_POPULATION_SOURCE_H5, forecast_year=forecast_year
                 ),
             )
             households_table_path = (

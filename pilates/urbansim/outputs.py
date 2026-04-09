@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import ClassVar, Dict, Iterable, Tuple, TYPE_CHECKING
 
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT
 from pilates.workflows.outputs_base import StepOutputsBase
 
 if TYPE_CHECKING:
@@ -69,7 +69,7 @@ class UrbanSimRunOutputs(StepOutputsBase):
             f"UrbanSim raw output: {USIM_DATASTORE_H5}",
         )
         for key, path in self.raw_outputs.items():
-            if resolve_artifact_key(key) == USIM_DATASTORE_H5:
+            if key == USIM_FORECAST_OUTPUT or resolve_artifact_key(key) == USIM_DATASTORE_H5:
                 continue
             yield key, path, f"UrbanSim raw output: {key}"
 

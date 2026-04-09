@@ -56,12 +56,25 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
     )
 
     captured = {}
+    current_h5 = tmp_path / "current.h5"
+    forecast_h5 = tmp_path / "forecast.h5"
+    current_h5.write_text("current", encoding="utf-8")
+    forecast_h5.write_text("forecast", encoding="utf-8")
 
     class _Postprocessor:
-        def postprocess(self, raw_outputs, workspace, model_run_hash=None):
+        def postprocess(
+            self,
+            raw_outputs,
+            workspace,
+            model_run_hash=None,
+            usim_datastore_h5=None,
+            usim_forecast_output=None,
+        ):
             captured["postprocessor"] = self
             captured["raw_outputs"] = raw_outputs
             captured["workspace"] = workspace
+            captured["usim_datastore_h5"] = usim_datastore_h5
+            captured["usim_forecast_output"] = usim_forecast_output
             return raw_outputs
 
     workspace = type(
@@ -74,6 +87,8 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
         postprocessor=_Postprocessor(),
         workspace=workspace,
         outputs_holder=holder,
+        usim_datastore_h5=str(current_h5),
+        usim_forecast_output=str(forecast_h5),
     )
 
     assert result is holder.activitysim_run
@@ -89,16 +104,21 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
         "households_asim_in": tmp_path / "households.csv",
         "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr",
     }
+    assert captured["usim_datastore_h5"] == str(current_h5)
+    assert captured["usim_forecast_output"] is None
 
 
 def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
     tmp_path: Path,
 ) -> None:
     captured = {}
+    current_h5 = tmp_path / "current.h5"
+    current_h5.write_text("current", encoding="utf-8")
 
     class _Preprocessor:
-        def preprocess(self, workspace):
+        def preprocess(self, workspace, usim_datastore_h5=None):
             captured["workspace"] = workspace
+            captured["usim_datastore_h5"] = usim_datastore_h5
             return ActivitySimPreprocessOutputs(
                 mutable_data_dir=tmp_path,
                 land_use_table=tmp_path / "land_use.csv",
@@ -113,9 +133,11 @@ def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
         outputs_holder=StepOutputsHolder(),
         coupler=object(),
         context="activitysim_preprocess",
+        usim_datastore_h5=str(current_h5),
     )
 
     assert result.mutable_data_dir == tmp_path
+    assert captured["usim_datastore_h5"] == str(current_h5)
 
 
 def test_execute_beam_postprocess_forwards_explicit_zarr_skims_when_supported(

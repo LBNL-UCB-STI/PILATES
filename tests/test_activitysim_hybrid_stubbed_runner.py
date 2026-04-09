@@ -72,8 +72,9 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     )
     _write_file(beam_skims, b"beam-od-skims")
 
-    def _fake_create_asim_data_from_h5(_settings, _state, ws):
+    def _fake_create_asim_data_from_h5(_settings, _state, ws, usim_store_path):
         asim_data_dir = Path(ws.get_asim_mutable_data_dir())
+        assert usim_store_path == str(tmp_path / "bound-usim.h5")
         land_use = asim_data_dir / "land_use.csv"
         households = asim_data_dir / "households.csv"
         persons = asim_data_dir / "persons.csv"
@@ -131,9 +132,14 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         "pilates.activitysim.preprocessor.create_asim_data_from_h5",
         _fake_create_asim_data_from_h5,
     )
+    bound_usim_h5 = tmp_path / "bound-usim.h5"
+    bound_usim_h5.write_text("h5", encoding="utf-8")
 
     preprocessor = ActivitysimPreprocessor("activitysim", state)
-    preprocess_outputs = preprocessor.preprocess(workspace)
+    preprocess_outputs = preprocessor.preprocess(
+        workspace,
+        usim_datastore_h5=str(bound_usim_h5),
+    )
 
     preprocess_keys = {
         short_name

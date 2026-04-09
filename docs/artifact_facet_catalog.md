@@ -86,6 +86,18 @@ Fields:
 - `year` (int)
 - `iteration` (int)
 
+### `artifact_family = "beam_input_archived"`
+For BEAM runner input snapshots such as:
+- `beam_input_plans_archived`
+- `beam_input_households_archived`
+- `beam_input_persons_archived`
+- `beam_input_config_archived`
+
+Fields:
+- `input_name` (string)
+- `year` (int)
+- `iteration` (int)
+
 ## ActivitySim
 
 ### `artifact_family = "<table_name>"`
@@ -200,4 +212,3 @@ consist artifacts \
   --param beam.iteration=7 \
   --param beam.phys_sim_iteration=2
 ```
-

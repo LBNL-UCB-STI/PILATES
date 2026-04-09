@@ -505,7 +505,10 @@ class ActivitySimConfig(BaseModel):
         default_factory=ActivitySimDatabaseConfig,
         description="Database input configuration",
     )
-    warm_start_activities: bool = Field(False, description="Warm start activities")
+    warm_start_activities: bool = Field(
+        False,
+        description="Deprecated legacy warm-start flag; no longer supported.",
+    )
     replan_iters: int = Field(0, description="Replanning iterations")
     replan_hh_samp_size: int = Field(0, description="Replanning household sample size")
     replan_after: str = Field(

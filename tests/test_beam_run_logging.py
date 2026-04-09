@@ -249,7 +249,17 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     beam_output_root.mkdir(parents=True)
 
     config_path = beam_input_root / "seattle" / "seattle-pilates.conf"
-    config_path.write_text("beam.test = 1\n", encoding="utf-8")
+    config_path.write_text(
+        'include "extra.conf"\n'
+        'beam.test = 1\n'
+        'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n',
+        encoding="utf-8",
+    )
+    (beam_input_root / "seattle" / "extra.conf").write_text(
+        "beam.extra = 2\n",
+        encoding="utf-8",
+    )
+    (scenario_dir / "network.csv").write_text("network", encoding="utf-8")
 
     plans_path = scenario_dir / "plans.csv.gz"
     plans_path.write_text("plans", encoding="utf-8")
@@ -316,7 +326,20 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     ) == "persons"
     assert (archive_dir / "beam_input_config_archived.conf").read_text(
         encoding="utf-8"
-    ) == "beam.test = 1\n"
+    ) == (
+        'include "extra.conf"\n'
+        'beam.test = 1\n'
+        'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n'
+    )
+    assert (
+        archive_dir / "beam_input_config_references_archived" / "extra.conf"
+    ).read_text(encoding="utf-8") == "beam.extra = 2\n"
+    assert (
+        archive_dir
+        / "beam_input_config_references_archived"
+        / "scenario"
+        / "network.csv"
+    ).read_text(encoding="utf-8") == "network"
     assert (archive_dir / "beam_input_vehicles_archived.csv.gz").read_text(
         encoding="utf-8"
     ) == "vehicles"
@@ -332,6 +355,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
 
     keys = [key for key, _path, _description, _meta in calls]
     assert keys == [
+        "beam_input_config_references_archived",
         "beam_input_config_archived",
         "beam_input_plans_archived",
         "beam_input_households_archived",

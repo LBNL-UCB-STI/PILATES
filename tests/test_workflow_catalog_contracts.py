@@ -49,6 +49,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_INPUT_NEXT,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workflows import catalog
@@ -91,7 +92,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "school_districts",
             ),
             "optional_input_keys": ("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
-            "optional_output_keys": (),
+            "optional_output_keys": (USIM_FORECAST_OUTPUT,),
             "dynamic_input_families": (),
             "output_keys": (USIM_DATASTORE_H5,),
             "dynamic_output_families": (),
@@ -166,7 +167,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "vehicles_{year}",
             ),
             "output_keys": (
-                USIM_DATASTORE_H5,
+                USIM_POPULATION_SOURCE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
             ),
             "dynamic_output_families": (),
@@ -174,8 +175,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "upstream_step_inputs": ("atlas_run",),
         },
         "activitysim_preprocess": {
-            "input_keys": (USIM_DATASTORE_CURRENT_H5,),
-            "optional_input_keys": (USIM_DATASTORE_BASE_H5, FINAL_SKIMS_OMX),
+            "input_keys": (USIM_POPULATION_SOURCE_H5,),
+            "optional_input_keys": (FINAL_SKIMS_OMX,),
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (
@@ -222,11 +223,12 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ASIM_LAND_USE_IN,
                 ASIM_OMX_SKIMS,
                 ZARR_SKIMS,
-                USIM_DATASTORE_CURRENT_H5,
                 *ActivitySimRunOutputs.required_output_keys(),
             ),
             "optional_input_keys": (
                 *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
                 USIM_DATASTORE_BASE_H5,
             ),
             "optional_output_keys": (
@@ -276,6 +278,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 BEAM_OUTPUT_PLANS_XML,
                 BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
                 BEAM_EXPERIENCED_PLANS_XML,
+                *catalog._BEAM_RUN_ARCHIVE_OUTPUT_KEYS,
             ),
             "dynamic_input_families": (),
             "output_keys": (
@@ -386,7 +389,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             "school_districts",
         ],
         "optional_input_keys": ["usim_skims_input_updated", USIM_DATASTORE_BASE_H5],
-        "optional_output_keys": [],
+        "optional_output_keys": [USIM_FORECAST_OUTPUT],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["urbansim_preprocess"],
         "output_keys": [USIM_DATASTORE_H5],
@@ -407,7 +410,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         ],
         "upstream_step_inputs": ["atlas_run"],
         "output_keys": [
-            USIM_DATASTORE_H5,
+            USIM_POPULATION_SOURCE_H5,
             ATLAS_VEHICLES2_OUTPUT,
         ],
         "dynamic_output_families": [],
@@ -424,14 +427,14 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ASIM_LAND_USE_IN,
             ASIM_OMX_SKIMS,
             ZARR_SKIMS,
-            USIM_DATASTORE_CURRENT_H5,
             *ActivitySimRunOutputs.required_output_keys(),
         ],
         "optional_input_keys": [
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
             USIM_DATASTORE_BASE_H5,
         ],
-        "optional_output_keys": [*ASIM_OPTIONAL_RUN_OUTPUT_KEYS],
         "optional_output_keys": [
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             "asim_input_households_csv_archived",
@@ -487,6 +490,7 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             BEAM_OUTPUT_PLANS_XML,
             BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
             BEAM_EXPERIENCED_PLANS_XML,
+            *catalog._BEAM_RUN_ARCHIVE_OUTPUT_KEYS,
         ],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["beam_preprocess"],

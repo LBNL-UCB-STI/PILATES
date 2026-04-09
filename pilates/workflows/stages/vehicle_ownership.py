@@ -32,6 +32,7 @@ from pilates.workflows.steps import (
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workspace import Workspace
@@ -456,6 +457,17 @@ def run_vehicle_ownership_stage(
                     ),
                 )
             )
+            atlas_postprocess_outputs = outputs_holder_atlas.atlas_postprocess
+            if (
+                atlas_postprocess_outputs is not None
+                and atlas_postprocess_outputs.usim_datastore_h5 is not None
+            ):
+                set_value = getattr(coupler, "set", None)
+                if callable(set_value):
+                    set_value(
+                        USIM_POPULATION_SOURCE_H5,
+                        str(atlas_postprocess_outputs.usim_datastore_h5),
+                    )
 
             atlas_input_root = workspace.get_atlas_mutable_input_dir()
             atlas_year_input_dir = os.path.join(atlas_input_root, f"year{atlas_year}")

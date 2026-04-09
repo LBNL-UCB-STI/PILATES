@@ -65,6 +65,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
+    USIM_POPULATION_SOURCE_H5,
     USIM_INPUT_NEXT,
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
@@ -250,6 +251,7 @@ _BEAM_RUN_ARCHIVE_OUTPUT_KEYS = (
     "beam_input_households_archived",
     "beam_input_persons_archived",
     "beam_input_config_archived",
+    "beam_input_config_references_archived",
     "beam_input_vehicles_archived",
     "beam_input_linkstats_warmstart_archived",
     "beam_input_plans_warmstart_archived",
@@ -290,6 +292,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         input_keys=_URBANSIM_PREPROCESS_PREPARED_KEYS,
         optional_input_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
         output_keys=(USIM_DATASTORE_H5,),
+        optional_output_keys=(USIM_FORECAST_OUTPUT,),
         depends_on=("urbansim_preprocess",),
         holder_inputs=("urbansim_preprocess",),
         upstream_step_inputs=("urbansim_preprocess",),
@@ -368,7 +371,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=AtlasPostprocessOutputs,
         input_keys=(USIM_DATASTORE_CURRENT_H5,),
         output_keys=(
-            USIM_DATASTORE_H5,
+            USIM_POPULATION_SOURCE_H5,
             ATLAS_VEHICLES2_OUTPUT,
         ),
         dynamic_input_families=("householdv_{year}", "vehicles_{year}"),
@@ -385,9 +388,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         stage_name="activity_demand",
         order=70,
         outputs_class=ActivitySimPreprocessOutputs,
-        input_keys=(USIM_DATASTORE_CURRENT_H5,),
+        input_keys=(USIM_POPULATION_SOURCE_H5,),
         optional_input_keys=(
-            USIM_DATASTORE_BASE_H5,
             FINAL_SKIMS_OMX,
         ),
         output_keys=(
@@ -455,13 +457,17 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ASIM_LAND_USE_IN,
             ASIM_OMX_SKIMS,
             ZARR_SKIMS,
-            USIM_DATASTORE_CURRENT_H5,
             *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
         output_keys=(
             *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
         ),
-        optional_input_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, USIM_DATASTORE_BASE_H5),
+        optional_input_keys=(
+            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_DATASTORE_BASE_H5,
+        ),
         optional_output_keys=(
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             *_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS,

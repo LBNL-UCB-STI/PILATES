@@ -22,6 +22,7 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_INPUT_MERGED_PREFIX,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import (
@@ -602,6 +603,22 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
+    beam_input_dir = Path(workspace.get_beam_mutable_data_dir()) / "seattle"
+    scenario_dir = beam_input_dir / "scenario"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    config_path = beam_input_dir / "seattle.conf"
+    _write_file(config_path)
+    prepared_inputs = {
+        BEAM_PLANS_IN: scenario_dir / "plans.csv",
+        BEAM_HOUSEHOLDS_IN: scenario_dir / "households.csv",
+        BEAM_PERSONS_IN: scenario_dir / "persons.csv",
+    }
+    for path in prepared_inputs.values():
+        _write_file(path)
+    holder.beam_preprocess = BeamPreprocessOutputs(
+        beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+        prepared_inputs=prepared_inputs,
+    )
     step_func = make_beam_run_step(coupler=coupler, outputs_holder=holder)
     outputs = _recover_beam_step_outputs(
         step_name="beam_run",
@@ -609,6 +626,11 @@ def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatc
         holder=holder,
         workspace=workspace,
         coupler=coupler,
+        settings=SimpleNamespace(
+            run=SimpleNamespace(region="seattle"),
+            beam=SimpleNamespace(config="seattle.conf"),
+        ),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
         cached_outputs={
             LINKSTATS: str(linkstats_path),
             BEAM_PLANS_OUT: str(plans_path),
@@ -665,9 +687,9 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     assert outputs is not None
     assert holder.urbansim_run is not None
     assert holder.urbansim_run.usim_datastore_h5 == usim_output
-    assert holder.urbansim_run.raw_outputs[USIM_DATASTORE_H5] == usim_output
+    assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
     assert coupler.get(USIM_DATASTORE_H5) is not None
-    assert coupler.get(USIM_FORECAST_OUTPUT) is None
+    assert coupler.get(USIM_FORECAST_OUTPUT) is not None
 
 
 def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
@@ -910,7 +932,7 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     assert holder.atlas_postprocess.usim_datastore_h5 == updated_h5
     assert holder.atlas_postprocess.processed_outputs[USIM_DATASTORE_H5] == updated_h5
     assert holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"] == vehicles2
-    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_POPULATION_SOURCE_H5) is not None
     assert coupler.get(USIM_H5_UPDATED) is None
 
 
@@ -1326,6 +1348,10 @@ def test_run_workflow_cache_hit_beam_run_preserves_optional_warmstart_binding(tm
     workspace = DummyWorkspace(tmp_path)
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="seattle.conf"),
+    )
 
     beam_dir = Path(workspace.get_beam_mutable_data_dir())
     plans = beam_dir / "plans.csv"
@@ -1334,6 +1360,7 @@ def test_run_workflow_cache_hit_beam_run_preserves_optional_warmstart_binding(tm
     warmstart = beam_dir / "linkstats.csv.gz"
     for path in (plans, households, persons, warmstart):
         _write_file(path)
+    _write_file(beam_dir / "seattle" / "seattle.conf")
 
     output_dir = Path(workspace.get_beam_output_dir())
     cached_outputs = {
@@ -1388,7 +1415,7 @@ def test_run_workflow_cache_hit_beam_run_preserves_optional_warmstart_binding(tm
         steps=[StepRef(name="beam_run", step_func=step_func, binding=binding)],
         scenario=scenario,
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
-        settings=SimpleNamespace(),
+        settings=settings,
         workspace=workspace,
         coupler=coupler,
         outputs_holder=holder,
@@ -1448,7 +1475,7 @@ def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(
 
     assert holder.urbansim_run is not None
     assert coupler.get(USIM_DATASTORE_H5) is not None
-    assert coupler.get(USIM_FORECAST_OUTPUT) is None
+    assert coupler.get(USIM_FORECAST_OUTPUT) is not None
 
 
 def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_key(
@@ -1504,5 +1531,5 @@ def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_ke
     )
 
     assert holder.atlas_postprocess is not None
-    assert coupler.get(USIM_DATASTORE_H5) is not None
+    assert coupler.get(USIM_POPULATION_SOURCE_H5) is not None
     assert coupler.get(USIM_H5_UPDATED) is None

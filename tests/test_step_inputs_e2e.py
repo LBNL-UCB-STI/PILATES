@@ -7,7 +7,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_PERSONS_IN,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_DATASTORE_H5,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 
@@ -36,7 +36,7 @@ def test_build_activitysim_inputs_merges_coupler_and_usim(tmp_path) -> None:
     (asim_dir / "land_use.csv").write_text("")
 
     coupler = {"zarr_skims": "skims.zarr"}
-    usim_inputs = {"usim_datastore_h5": "/tmp/usim.h5"}
+    usim_inputs = {USIM_DATASTORE_CURRENT_H5: "/tmp/usim.h5"}
 
     inputs, descriptions = build_activitysim_inputs(
         settings=SimpleNamespace(),
@@ -51,7 +51,7 @@ def test_build_activitysim_inputs_merges_coupler_and_usim(tmp_path) -> None:
     assert inputs[ASIM_HOUSEHOLDS_IN] == str(asim_dir / "households.csv")
     assert inputs[ASIM_PERSONS_IN] == str(asim_dir / "persons.csv")
     assert inputs[ASIM_LAND_USE_IN] == str(asim_dir / "land_use.csv")
-    assert inputs[USIM_DATASTORE_H5] == "/tmp/usim.h5"
+    assert inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/usim.h5"
     assert inputs[ZARR_SKIMS] == "skims.zarr"
     assert ASIM_HOUSEHOLDS_IN in descriptions
 
@@ -77,11 +77,12 @@ def test_build_activitysim_inputs_uses_base_datastore_fallback(tmp_path) -> None
         usim_inputs=usim_inputs,
     )
 
-    assert inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/usim_base.h5"
-    assert inputs[USIM_DATASTORE_H5] == "/tmp/usim_base.h5"
+    assert inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/usim_base.h5"
 
 
-def test_build_activitysim_inputs_prefers_explicit_current_over_coupler(tmp_path) -> None:
+def test_build_activitysim_inputs_prefers_explicit_base_over_stale_coupler_current(
+    tmp_path,
+) -> None:
     workspace = DummyWorkspace(tmp_path)
     asim_dir = tmp_path / "activitysim" / "data"
     asim_dir.mkdir(parents=True)
@@ -105,4 +106,4 @@ def test_build_activitysim_inputs_prefers_explicit_current_over_coupler(tmp_path
         usim_inputs=usim_inputs,
     )
 
-    assert inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/explicit_current.h5"
+    assert inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/explicit_base.h5"

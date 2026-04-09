@@ -327,12 +327,15 @@ class SchemaCoupler:
         return None
 
 
+DEFAULT_CACHE_EPOCH = 2
+
+
 def resolve_cache_epoch(settings: PilatesConfig) -> int:
-    value = getattr(getattr(settings, "run", None), "cache_epoch", 1)
+    value = getattr(getattr(settings, "run", None), "cache_epoch", DEFAULT_CACHE_EPOCH)
     try:
         return int(value)
     except (TypeError, ValueError):
-        return 1
+        return DEFAULT_CACHE_EPOCH
 
 
 def build_schema_steps() -> List[Callable[..., Any]]:

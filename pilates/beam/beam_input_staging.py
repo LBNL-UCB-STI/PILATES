@@ -154,6 +154,52 @@ def copy_vehicles_from_atlas(
     )
 
 
+def validate_population_consistency(
+    *,
+    workspace: Any,
+    settings: Any,
+    resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+) -> None:
+    beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
+    file_format = settings.activitysim.file_format if settings.activitysim else "csv"
+    households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
+    vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
+
+    if not os.path.exists(households_path) or not os.path.exists(vehicles_path):
+        return
+
+    households = BeamDataHelper.read_and_clean(households_path, "households", file_format)
+    vehicles = pd.read_csv(vehicles_path, compression="gzip")
+
+    household_ids = pd.Index(households.index).dropna()
+    household_ids = pd.Index(pd.to_numeric(household_ids, errors="coerce")).dropna().astype(int)
+
+    vehicle_household_col = None
+    for candidate in ("household_id", "householdId"):
+        if candidate in vehicles.columns:
+            vehicle_household_col = candidate
+            break
+    if vehicle_household_col is None:
+        raise ValueError(
+            "BEAM staged vehicles.csv.gz is missing a household reference column. "
+            f"Expected one of ['household_id', 'householdId'], found {vehicles.columns.tolist()}"
+        )
+
+    vehicle_household_ids = pd.to_numeric(
+        vehicles[vehicle_household_col],
+        errors="coerce",
+    ).dropna().astype(int)
+    missing_households = pd.Index(vehicle_household_ids.unique()).difference(household_ids)
+    if len(missing_households):
+        raise RuntimeError(
+            "BEAM staged vehicles reference households that are absent from staged "
+            "households. "
+            f"missing_households={len(missing_households)} "
+            f"sample_missing_households={missing_households.tolist()[:10]} "
+            f"households_path={households_path} vehicles_path={vehicles_path}"
+        )
+
+
 def format_specific_output_records(
     *,
     file_stem: str,

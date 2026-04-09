@@ -186,6 +186,7 @@ from __future__ import annotations
 #                               - raw_od_skims_zarr_<year>_<iter>[ _sub* ]                    - beam_plans_out (promoted latest)
 #                               + zarr_skims (if present)
 #
+import inspect as pyinspect
 import logging
 import os
 from dataclasses import dataclass, fields
@@ -1234,7 +1235,26 @@ def _make_typed_step_function(
 
         extra_kwargs: Dict[str, Any] = {}
         if input_logger is not None:
-            extra_kwargs = dict(input_logger(settings, state, workspace, outputs_holder) or {})
+            input_logger_kwargs: Dict[str, Any] = {}
+            input_logger_signature = pyinspect.signature(input_logger)
+            if (
+                "step_inputs" in input_logger_signature.parameters
+                or any(
+                    param.kind == pyinspect.Parameter.VAR_KEYWORD
+                    for param in input_logger_signature.parameters.values()
+                )
+            ):
+                input_logger_kwargs["step_inputs"] = dict(kwargs)
+            extra_kwargs = dict(
+                input_logger(
+                    settings,
+                    state,
+                    workspace,
+                    outputs_holder,
+                    **input_logger_kwargs,
+                )
+                or {}
+            )
 
         step_outputs = component_executor(
             component,

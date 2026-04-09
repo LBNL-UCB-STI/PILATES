@@ -18,6 +18,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import (
     ArtifactBindingRule,
@@ -285,8 +286,8 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
 
     monkeypatch.setitem(
         binding_module._FALLBACK_PROVIDERS,
-        "urbansim_inputs_for_year",
-        lambda **_: {USIM_DATASTORE_BASE_H5: "/tmp/base.h5"},
+        "activitysim_population_source",
+        lambda **_: {USIM_POPULATION_SOURCE_H5: "/tmp/base.h5"},
     )
 
     plan = build_binding_plan(
@@ -297,9 +298,25 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
         year=2030,
     )
 
-    assert plan.inputs[USIM_DATASTORE_CURRENT_H5] == "/tmp/base.h5"
-    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "fallback"
+    assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/base.h5"
+    assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "fallback"
     assert not plan.missing_required
+
+
+def test_activitysim_preprocess_binding_prefers_explicit_population_source_over_stale_coupler_current():
+    plan = build_binding_plan(
+        step_name="activitysim_preprocess",
+        coupler=_CouplerStub({USIM_DATASTORE_CURRENT_H5: "/tmp/stale-current.h5"}),
+        explicit_inputs={USIM_POPULATION_SOURCE_H5: "/tmp/base.h5"},
+        fallback_inputs={USIM_DATASTORE_BASE_H5: "/tmp/base.h5"},
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+    )
+
+    assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/base.h5"
+    assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "explicit"
 
 
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(
@@ -328,6 +345,30 @@ def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider
     assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/input.h5"
     assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
     assert not plan.missing_required
+
+
+def test_activitysim_postprocess_current_datastore_does_not_fallback_to_local_input(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setitem(
+        binding_module._FALLBACK_PROVIDERS,
+        "activitysim_input_datastore",
+        lambda **_: {USIM_DATASTORE_CURRENT_H5: "/tmp/input.h5"},
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+    )
+
+    assert USIM_DATASTORE_CURRENT_H5 not in (plan.inputs or {})
+    assert plan.missing_required == [USIM_DATASTORE_CURRENT_H5]
 
 
 def test_build_binding_plan_supports_ad_hoc_preferred_key_rules():
@@ -421,6 +462,8 @@ def test_build_binding_plan_records_urbansim_candidate_paths_metadata(tmp_path):
     state = SimpleNamespace(
         year=2030,
         is_start_year=lambda: False,
+        is_enabled=lambda stage: stage == "land_use",
+        Stage=SimpleNamespace(land_use="land_use"),
         run_info_path=str(archive_root / "workflow.json"),
     )
     workspace = SimpleNamespace(

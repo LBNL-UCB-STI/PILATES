@@ -435,6 +435,8 @@ class BeamPreprocessor(GenericPreprocessor):
                     "beam_preprocess expected ActivitySim to stage the canonical "
                     f"BEAM input trio, but missing outputs were {sorted(missing_keys)}"
                 )
+            if self.state.current_inner_iter == 0:
+                self._validate_population_consistency(workspace)
         else:
             store += self._register_existing_beam_exchange_inputs(workspace)
 
@@ -697,6 +699,13 @@ class BeamPreprocessor(GenericPreprocessor):
             store=store,
             state=self.state,
             settings=self.settings,
+        )
+
+    def _validate_population_consistency(self, workspace: "Workspace") -> None:
+        beam_input_staging.validate_population_consistency(
+            workspace=workspace,
+            settings=self.settings,
+            resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
         )
 
     @staticmethod

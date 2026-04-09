@@ -67,6 +67,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workspace import Workspace
@@ -448,6 +449,8 @@ def stage_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _make_postprocessor)
 
     coupler = CouplerStub()
+    coupler.set(USIM_FORECAST_OUTPUT, str(usim_output_path))
+    coupler.set(USIM_POPULATION_SOURCE_H5, str(usim_output_path))
     scenario = FakeScenario(coupler)
 
     env = {
@@ -457,6 +460,7 @@ def stage_env(tmp_path, monkeypatch):
         "coupler": coupler,
         "scenario": scenario,
         "usim_input_path": str(usim_input_path),
+        "usim_output_path": str(usim_output_path),
     }
     try:
         yield env
@@ -1216,6 +1220,76 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
     assert FINAL_SKIMS_OMX not in (binding.inputs or {})
 
 
+def test_supply_demand_activitysim_preprocess_uses_base_population_source_when_land_use_disabled(
+    stage_env, tmp_path
+):
+    stale_current = Path(stage_env["workspace"].get_usim_mutable_data_dir()) / "stale_2023.h5"
+    _write_file(stale_current)
+
+    stage_env["settings"].land_use_enabled = False
+    stage_env["state"].enabled_stages.discard(stage_env["state"].Stage.land_use)
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, str(stale_current))
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+    }
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    preprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_preprocess"
+    ]
+    assert preprocess_calls, "Expected an ActivitySim preprocess step call."
+    binding = preprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == stage_env["usim_input_path"]
+
+
+def test_supply_demand_activitysim_restart_requires_explicit_population_roles(
+    stage_env, tmp_path
+):
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    stage_env["coupler"].pop(USIM_POPULATION_SOURCE_H5, None)
+    stage_env["coupler"].pop(USIM_DATASTORE_CURRENT_H5, None)
+
+    with pytest.raises(RuntimeError, match="role split"):
+        run_supply_demand_stage(
+            scenario=stage_env["scenario"],
+            state=state,
+            settings=stage_env["settings"],
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+            year=state.forecast_year,
+            usim_inputs={
+                USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+            },
+            build_manifest_path=lambda _workspace, year, iteration: tmp_path
+            / f"manifest_{year}_{iteration}.json",
+        )
+
+
 def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_input(
     stage_env, tmp_path
 ):
@@ -1251,7 +1325,11 @@ def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_inpu
     assert postprocess_calls, "Expected an ActivitySim postprocess step call."
     binding = postprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert binding.inputs[USIM_DATASTORE_BASE_H5] == stage_env["usim_input_path"]
+    assert (
+        (binding.inputs or {}).get(USIM_DATASTORE_BASE_H5) == stage_env["usim_input_path"]
+        or USIM_DATASTORE_BASE_H5 in (binding.input_keys or [])
+        or USIM_DATASTORE_BASE_H5 in (binding.optional_input_keys or [])
+    )
 
 
 def test_supply_demand_activitysim_postprocess_uses_local_usim_base_fallback(
@@ -1288,7 +1366,51 @@ def test_supply_demand_activitysim_postprocess_uses_local_usim_base_fallback(
     assert postprocess_calls, "Expected an ActivitySim postprocess step call."
     binding = postprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert binding.inputs[USIM_DATASTORE_BASE_H5] == stage_env["usim_input_path"]
+    assert USIM_DATASTORE_BASE_H5 not in (binding.input_keys or [])
+
+
+def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_use(
+    stage_env, tmp_path
+):
+    stage_env["settings"].land_use_enabled = False
+    stage_env["state"].enabled_stages.discard(stage_env["state"].Stage.land_use)
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, stage_env["usim_output_path"])
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs={USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"]},
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    postprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_postprocess"
+    ]
+    assert postprocess_calls, "Expected an ActivitySim postprocess step call."
+    binding = postprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    binding_inputs = binding.inputs or {}
+    binding_input_keys = set(binding.input_keys or [])
+    binding_optional_keys = set(binding.optional_input_keys or [])
+    assert USIM_POPULATION_SOURCE_H5 not in binding_inputs
+    assert USIM_DATASTORE_CURRENT_H5 not in binding_inputs
+    assert USIM_POPULATION_SOURCE_H5 not in binding_input_keys
+    assert USIM_DATASTORE_CURRENT_H5 not in binding_input_keys
+    assert USIM_POPULATION_SOURCE_H5 not in binding_optional_keys
+    assert USIM_DATASTORE_CURRENT_H5 not in binding_optional_keys
 
 
 def test_supply_demand_activitysim_run_keeps_numba_cache_optional(

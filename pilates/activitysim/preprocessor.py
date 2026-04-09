@@ -28,7 +28,6 @@ from pilates.utils.zone_utils import (
     load_canonical_zones,
     resolve_canonical_zone_source_path,
 )
-from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from workflow_state import WorkflowState
@@ -2005,7 +2004,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
         return {
             "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
-            "usim_datastore_h5": os.path.join(
+            "usim_population_source_h5": os.path.join(
                 workspace.get_usim_mutable_data_dir(), usim_input_fname
             ),
         }
@@ -2020,8 +2019,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         inputs = ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
         )
-        usim_input_path = inputs["usim_datastore_h5"]
-        inputs["usim_datastore_h5"] = (
+        usim_input_path = inputs["usim_population_source_h5"]
+        inputs["usim_population_source_h5"] = (
             usim_input_path if os.path.exists(usim_input_path) else None
         )
         return inputs
@@ -2078,12 +2077,30 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
+        population_source_h5_path: Optional[str] = None,
+        usim_datastore_h5: Optional[Any] = None,
+        usim_datastore_base_h5: Optional[Any] = None,
     ) -> ActivitySimPreprocessOutputs:
         self.state.set_sub_stage_progress("preprocessor")
+        preprocess_kwargs: Dict[str, Any] = {}
+        if final_skims_omx is not None:
+            preprocess_kwargs["final_skims_omx"] = final_skims_omx
+        if population_source_h5_path is None:
+            population_source_h5_path = (
+                str(usim_datastore_h5)
+                if usim_datastore_h5 is not None
+                else (
+                    str(usim_datastore_base_h5)
+                    if usim_datastore_base_h5 is not None
+                    else None
+                )
+            )
+        if population_source_h5_path is not None:
+            preprocess_kwargs["population_source_h5_path"] = population_source_h5_path
         record_store = self._preprocess(
             workspace,
             previous_records if previous_records is not None else RecordStore(),
-            final_skims_omx=final_skims_omx,
+            **preprocess_kwargs,
         )
         records_by_key = {
             getattr(record, "short_name", None): record
@@ -2111,6 +2128,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
+        population_source_h5_path: Optional[str] = None,
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -2220,10 +2238,15 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         # 2. Create ActivitySim input data from UrbanSim H5
         logger.info("Using H5 input mode for ActivitySim")
+        if not population_source_h5_path:
+            raise ValueError(
+                "ActivitySim preprocess requires an explicit population_source_h5_path."
+            )
         data_from_usim = create_asim_data_from_h5(
             settings,
             self.state,
             workspace,
+            usim_store_path=population_source_h5_path,
         )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
@@ -3701,10 +3724,41 @@ def _create_land_use_table(
     return zones
 
 
+def _detect_activitysim_h5_prefix(
+    store: pd.HDFStore,
+    *,
+    required_tables: Tuple[str, ...],
+    preferred_prefixes: Tuple[Optional[Union[str, int]], ...] = (),
+) -> Optional[str]:
+    normalized_keys = {key.strip("/") for key in store.keys()}
+    candidate_prefixes: List[str] = []
+    for prefix in preferred_prefixes:
+        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
+        if normalized not in candidate_prefixes:
+            candidate_prefixes.append(normalized)
+    for key in normalized_keys:
+        if "/" not in key:
+            continue
+        prefix = key.split("/", 1)[0]
+        if prefix not in candidate_prefixes:
+            candidate_prefixes.append(prefix)
+
+    for prefix in candidate_prefixes:
+        if all(
+            (
+                f"{prefix}/{table_name}" if prefix else table_name
+            ) in normalized_keys
+            for table_name in required_tables
+        ):
+            return prefix
+    return None
+
+
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
+    usim_store_path: str,
 ) -> List[FileRecord]:
     """
     Create ActivitySim input data from UrbanSim H5 outputs.
@@ -3758,47 +3812,27 @@ def create_asim_data_from_h5(
     #     model_run_id=model_run_hash,
     # )
 
-    # Read tables from UrbanSim H5.
-    # Prefer the rolling UrbanSim input datastore path directly to avoid
-    # accidentally selecting a stale year-specific snapshot (e.g., *_2017.h5)
-    # when it exists alongside the current in-place updated input datastore.
-    region = settings.run.region
-    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-    usim_input_fname = settings.urbansim.input_file_template.format(region_id=region_id)
-    usim_input_path = os.path.join(workspace.get_usim_mutable_data_dir(), usim_input_fname)
-
-    if os.path.exists(usim_input_path):
-        logger.info(
-            "ActivitySim preprocess using UrbanSim rolling input datastore: %s",
-            usim_input_path,
+    logger.info(
+        "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
+        usim_store_path,
+    )
+    store = pd.HDFStore(usim_store_path, mode="r")
+    prefix = _detect_activitysim_h5_prefix(
+        store,
+        required_tables=("households", "persons", "jobs", "blocks"),
+        preferred_prefixes=(getattr(state, "start_year", None), ""),
+    )
+    if prefix is None:
+        available_keys = sorted(store.keys())
+        store.close()
+        raise KeyError(
+            "ActivitySim preprocess could not resolve required UrbanSim tables "
+            f"from bound datastore {usim_store_path}. Available keys: {available_keys}"
         )
-        store = pd.HDFStore(usim_input_path, mode="r")
-        prefix = ""
-        if "households" not in store:
-            start_year_prefix = str(state.start_year)
-            if f"{start_year_prefix}/households" in store:
-                prefix = start_year_prefix
-            else:
-                raise KeyError(
-                    "No households table found in rolling UrbanSim input datastore "
-                    f"{usim_input_path}. Tables: {store.keys()}"
-                )
-        logger.info(
-            "ActivitySim preprocess UrbanSim table prefix: %s",
-            prefix if prefix else "<root>",
-        )
-    else:
-        logger.warning(
-            "Rolling UrbanSim input datastore not found at %s; "
-            "falling back to legacy read_datastore(year=start_year) resolution.",
-            usim_input_path,
-        )
-        store, prefix = read_datastore(
-            settings,
-            state.start_year,
-            mutable_data_dir=workspace.get_usim_mutable_data_dir(),
-            mode="r",
-        )
+    logger.info(
+        "ActivitySim preprocess UrbanSim table prefix: %s",
+        prefix if prefix else "<root>",
+    )
     try:
         resolved_h5_table_paths = {
             "households": _activitysim_h5_table_path(prefix, "households"),
@@ -3813,7 +3847,7 @@ def create_asim_data_from_h5(
     finally:
         store.close()
     _log_activitysim_usim_input_tables(
-        h5_path=usim_input_path,
+        h5_path=usim_store_path,
         resolved_table_paths=resolved_h5_table_paths,
         start_year=getattr(state, "start_year", None),
     )

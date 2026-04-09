@@ -5,6 +5,7 @@ import pytest
 
 from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
+from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
 from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 
@@ -73,7 +74,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     )
 
     assert output_only_keys == ["atlas_vehicles2_output"]
-    assert set_output_keys == ["usim_datastore_h5"]
+    assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
     assert len(h5_table_calls) == 1
     assert h5_table_calls[0]["direction"] == "output"
     assert h5_table_calls[0]["table_keys"] == {
@@ -546,3 +547,31 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
             ),
             workspace,
         )
+
+
+def test_atlas_update_h5_vehicle_rejects_household_id_set_mismatch(tmp_path, caplog):
+    h5_path = tmp_path / "model_data_2023.h5"
+    hh_csv = tmp_path / "householdv_2023.csv"
+
+    pd.DataFrame(
+        {"cars": [0, 1]},
+        index=pd.Index([1, 2], name="household_id"),
+    ).to_hdf(str(h5_path), key="/2023/households", mode="w")
+    hh_csv.write_text("household_id,nvehicles\n1,1\n3,2\n", encoding="utf-8")
+
+    state = SimpleNamespace(
+        is_start_year=lambda: False,
+    )
+    postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
+
+    with caplog.at_level("ERROR"):
+        updated = postprocessor.atlas_update_h5_vehicle(
+            settings=SimpleNamespace(),
+            output_year=2023,
+            h5_file_path=str(h5_path),
+            household_v_csv_path=str(hh_csv),
+        )
+
+    assert updated is False
+    assert "missing_in_h5=1" in caplog.text
+    assert "missing_in_atlas=1" in caplog.text

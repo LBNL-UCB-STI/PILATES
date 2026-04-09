@@ -343,20 +343,30 @@ class AtlasPostprocessor(GenericPostprocessor):
                 return False
 
             olddf.index = olddf.index.astype(int)
-            olddf = olddf.reindex(df.index.astype(int))
+            atlas_ids = pd.Index(df.index.astype(int))
+            h5_ids = pd.Index(olddf.index.astype(int))
+            missing_in_h5 = atlas_ids.difference(h5_ids)
+            missing_in_atlas = h5_ids.difference(atlas_ids)
 
-            if olddf.shape[0] != df.shape[0]:
+            if len(missing_in_h5) or len(missing_in_atlas):
                 logger.error(
-                    "ATLAS household_id mismatch found - NOT updating h5 datastore"
+                    "ATLAS household_id mismatch found - NOT updating h5 datastore. "
+                    "missing_in_h5=%s missing_in_atlas=%s sample_missing_in_h5=%s "
+                    "sample_missing_in_atlas=%s",
+                    len(missing_in_h5),
+                    len(missing_in_atlas),
+                    missing_in_h5.tolist()[:10],
+                    missing_in_atlas.tolist()[:10],
                 )
                 return False
-            else:
-                olddf["cars"] = df["cars"].values
-                olddf["hh_cars"] = df["hh_cars"].values
-                for col in olddf.columns:
-                    if olddf[col].dtype.name == "category":
-                        logger.info(f"Converting column {col} from category to str")
-                        olddf[col] = olddf[col].astype(str)
-                h5[key] = olddf
-                logger.info(f"ATLAS update h5 datastore table {key} - done")
-                return True
+
+            olddf = olddf.reindex(atlas_ids)
+            olddf["cars"] = df["cars"].values
+            olddf["hh_cars"] = df["hh_cars"].values
+            for col in olddf.columns:
+                if olddf[col].dtype.name == "category":
+                    logger.info(f"Converting column {col} from category to str")
+                    olddf[col] = olddf[col].astype(str)
+            h5[key] = olddf
+            logger.info(f"ATLAS update h5 datastore table {key} - done")
+            return True

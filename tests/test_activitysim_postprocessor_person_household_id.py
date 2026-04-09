@@ -39,8 +39,6 @@ def test_prepare_updated_tables_preserves_usim_person_household_ids_when_asim_id
 
     settings = _settings()
     state = SimpleNamespace(forecast_year=2023)
-    workspace = SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path))
-
     asim_output_dict = {
         "households": pd.DataFrame(
             {"auto_ownership": [1, 2], "block_id": ["0001", "0002"]},
@@ -55,9 +53,9 @@ def test_prepare_updated_tables_preserves_usim_person_household_ids_when_asim_id
     prepared = _prepare_updated_tables(
         settings=settings,
         state=state,
-        workspace=workspace,
         asim_output_dict=asim_output_dict,
         tables_updated_by_asim=["households", "persons"],
+        population_source_store_path=str(h5_path),
         prefix=None,
     )
 
@@ -90,7 +88,6 @@ def test_prepare_updated_tables_warns_on_household_member_person_alignment_fallb
         _prepare_updated_tables(
             settings=_settings(vehicle_ownership="atlas"),
             state=SimpleNamespace(forecast_year=2023),
-            workspace=SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path)),
             asim_output_dict={
                 "households": pd.DataFrame(
                     {"auto_ownership": [1, 2], "block_id": ["0001", "0002"]},
@@ -106,6 +103,7 @@ def test_prepare_updated_tables_warns_on_household_member_person_alignment_fallb
                 ),
             },
             tables_updated_by_asim=["households", "persons"],
+            population_source_store_path=str(h5_path),
             prefix=None,
         )
 
@@ -126,8 +124,6 @@ def test_prepare_updated_tables_falls_back_to_current_input_store(tmp_path):
 
     settings = _settings()
     state = SimpleNamespace(forecast_year=2023)
-    workspace = SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path))
-
     asim_output_dict = {
         "households": pd.DataFrame(
             {"auto_ownership": [3, 4], "block_id": ["0001", "0002"]},
@@ -142,9 +138,9 @@ def test_prepare_updated_tables_falls_back_to_current_input_store(tmp_path):
     prepared = _prepare_updated_tables(
         settings=settings,
         state=state,
-        workspace=workspace,
         asim_output_dict=asim_output_dict,
         tables_updated_by_asim=["households", "persons"],
+        population_source_store_path=str(h5_path),
         prefix=2023,
     )
 
@@ -170,8 +166,6 @@ def test_create_usim_input_data_falls_back_to_current_input_store(tmp_path):
 
     settings = _settings()
     state = SimpleNamespace(forecast_year=2023)
-    workspace = SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path))
-
     asim_output_dict = {
         "households": pd.DataFrame(
             {"cars": [3, 4], "block_id": ["0001", "0002"]},
@@ -186,10 +180,11 @@ def test_create_usim_input_data_falls_back_to_current_input_store(tmp_path):
     new_input_path, output_record = create_usim_input_data(
         settings=settings,
         state=state,
-        workspace=workspace,
         asim_output_dict=asim_output_dict,
         tables_updated_by_asim=["households", "persons"],
         asim_source_paths=[],
+        current_input_store_path=str(input_h5),
+        population_source_store_path=None,
     )
 
     assert new_input_path == str(input_h5)
@@ -210,6 +205,57 @@ def test_create_usim_input_data_falls_back_to_current_input_store(tmp_path):
         )
 
 
+def test_create_usim_input_data_uses_population_source_when_it_matches_current_input(
+    tmp_path,
+):
+    input_h5 = tmp_path / "custom_mpo_001_model_data.h5"
+    with pd.HDFStore(str(input_h5), mode="w") as store:
+        store["households"] = pd.DataFrame(
+            {"cars": [7, 8], "block_id": ["0001", "0002"]},
+            index=pd.Index([1, 2], name="household_id"),
+        )
+        store["persons"] = pd.DataFrame(
+            {"household_id": [1, 2], "member_id": [1, 1]},
+            index=pd.Index([11, 21], name="person_id"),
+        )
+        store["jobs"] = pd.DataFrame(
+            {"block_id": ["0001", "0002"]},
+            index=pd.Index([101, 102], name="job_id"),
+        )
+
+    asim_output_dict = {
+        "households": pd.DataFrame(
+            {"cars": [3, 4], "block_id": ["0001", "0002"]},
+            index=pd.Index([1, 2], name="household_id"),
+        ),
+        "persons": pd.DataFrame(
+            {"household_id": [1, 2], "member_id": [1, 1]},
+            index=pd.Index([11, 21], name="person_id"),
+        ),
+    }
+
+    new_input_path, output_record = create_usim_input_data(
+        settings=_settings(),
+        state=SimpleNamespace(forecast_year=2023),
+        asim_output_dict=asim_output_dict,
+        tables_updated_by_asim=["households", "persons"],
+        asim_source_paths=[],
+        current_input_store_path=str(input_h5),
+        population_source_store_path=str(input_h5),
+    )
+
+    assert new_input_path == str(input_h5)
+    assert output_record is not None
+
+    archive_path = tmp_path / "input_data_for_2023_outputs.h5"
+    with pd.HDFStore(str(archive_path), mode="r") as store:
+        assert store["households"]["cars"].tolist() == [7, 8]
+
+    with pd.HDFStore(str(input_h5), mode="r") as store:
+        assert store["households"]["cars"].tolist() == [3, 4]
+        assert store["jobs"].index.tolist() == [101, 102]
+
+
 def test_prepare_updated_tables_preserves_usim_owned_household_fields_when_atlas_enabled(
     tmp_path,
 ):
@@ -227,7 +273,6 @@ def test_prepare_updated_tables_preserves_usim_owned_household_fields_when_atlas
     prepared = _prepare_updated_tables(
         settings=_settings(vehicle_ownership="atlas"),
         state=SimpleNamespace(forecast_year=2023),
-        workspace=SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path)),
         asim_output_dict={
             "households": pd.DataFrame(
                 {"hhsize": [9, 10], "num_workers": [5, 6], "auto_ownership": [1, 2]},
@@ -239,6 +284,7 @@ def test_prepare_updated_tables_preserves_usim_owned_household_fields_when_atlas
             ),
         },
         tables_updated_by_asim=["households", "persons"],
+        population_source_store_path=str(h5_path),
         prefix=None,
     )
 
@@ -263,7 +309,6 @@ def test_prepare_updated_tables_updates_cars_from_asim_when_atlas_disabled(tmp_p
     prepared = _prepare_updated_tables(
         settings=_settings(vehicle_ownership=None),
         state=SimpleNamespace(forecast_year=2023),
-        workspace=SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path)),
         asim_output_dict={
             "households": pd.DataFrame(
                 {"hhsize": [9, 10], "num_workers": [5, 6], "auto_ownership": [1, 2]},
@@ -275,6 +320,7 @@ def test_prepare_updated_tables_updates_cars_from_asim_when_atlas_disabled(tmp_p
             ),
         },
         tables_updated_by_asim=["households", "persons"],
+        population_source_store_path=str(h5_path),
         prefix=None,
     )
 
@@ -306,7 +352,6 @@ def test_prepare_updated_tables_preserves_usim_person_fields_but_updates_zone_id
     prepared = _prepare_updated_tables(
         settings=_settings(vehicle_ownership="atlas"),
         state=SimpleNamespace(forecast_year=2023),
-        workspace=SimpleNamespace(get_usim_mutable_data_dir=lambda: str(tmp_path)),
         asim_output_dict={
             "households": pd.DataFrame(
                 {"auto_ownership": [3, 4], "block_id": ["0001", "0002"]},
@@ -325,6 +370,7 @@ def test_prepare_updated_tables_preserves_usim_person_fields_but_updates_zone_id
             ),
         },
         tables_updated_by_asim=["households", "persons"],
+        population_source_store_path=str(h5_path),
         prefix=None,
     )
 

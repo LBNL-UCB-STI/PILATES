@@ -33,6 +33,8 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
 
@@ -207,6 +209,9 @@ def run_land_use_stage(
 
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
     run_outputs = outputs_holder_year.urbansim_run
+    if run_outputs is not None and run_outputs.usim_datastore_h5:
+        usim_inputs[USIM_FORECAST_OUTPUT] = str(run_outputs.usim_datastore_h5)
+        usim_inputs[USIM_POPULATION_SOURCE_H5] = str(run_outputs.usim_datastore_h5)
     if postprocess_outputs is not None and postprocess_outputs.usim_datastore_h5:
         usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(
             postprocess_outputs.usim_datastore_h5
@@ -230,6 +235,14 @@ def run_land_use_stage(
     archive_copy_now(
         key=USIM_DATASTORE_CURRENT_H5,
         path=usim_inputs.get(USIM_DATASTORE_CURRENT_H5),
+    )
+    archive_copy_now(
+        key=USIM_FORECAST_OUTPUT,
+        path=usim_inputs.get(USIM_FORECAST_OUTPUT),
+    )
+    archive_copy_now(
+        key=USIM_POPULATION_SOURCE_H5,
+        path=usim_inputs.get(USIM_POPULATION_SOURCE_H5),
     )
     urbansim_settings = settings.urbansim
     if urbansim_settings is None:

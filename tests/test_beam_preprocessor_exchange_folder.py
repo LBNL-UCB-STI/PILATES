@@ -3,9 +3,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+import pandas as pd
 
 from pilates.beam.preprocessor import BeamPreprocessor
-from pilates.generic.records import RecordStore
+from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -176,4 +177,67 @@ def test_beam_preprocess_does_not_fallback_to_defaults_when_activitysim_enabled(
     )
 
     with pytest.raises(RuntimeError, match="expected ActivitySim to stage the canonical"):
+        preprocessor.preprocess(workspace)
+
+
+def test_beam_preprocess_rejects_vehicle_households_missing_from_staged_households(
+    monkeypatch, tmp_path
+):
+    preprocessor = _make_preprocessor(
+        scenario_folder="urbansim",
+        activity_demand_enabled=True,
+    )
+    preprocessor.settings.vehicle_ownership_model_enabled = True
+    workspace = _make_workspace(tmp_path)
+
+    scenario_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
+
+    def _fake_copy_plans(_input_records, _workspace):
+        pd.DataFrame({"household_id": [1, 2], "cars": [1, 1]}).to_parquet(
+            scenario_dir / "households.parquet",
+            index=False,
+        )
+        pd.DataFrame({"person_id": [11, 21], "household_id": [1, 2]}).to_parquet(
+            scenario_dir / "persons.parquet",
+            index=False,
+        )
+        pd.DataFrame({"trip_id": [1], "person_id": [11]}).to_parquet(
+            scenario_dir / "plans.parquet",
+            index=False,
+        )
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(scenario_dir / "households.parquet"),
+                    short_name=BEAM_HOUSEHOLDS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "persons.parquet"),
+                    short_name=BEAM_PERSONS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "plans.parquet"),
+                    short_name=BEAM_PLANS_IN,
+                ),
+            ]
+        )
+
+    def _fake_copy_vehicles(_workspace, source_path=None):
+        _ = source_path
+        pd.DataFrame(
+            {"vehicle_id": [100], "household_id": [999], "vehicleTypeId": ["sedan_gas_2015"]}
+        ).to_csv(scenario_dir / "vehicles.csv.gz", index=False, compression="gzip")
+        return FileRecord(
+            file_path=str(scenario_dir / "vehicles.csv.gz"),
+            short_name="vehicles_beam_in",
+        )
+
+    monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
+    monkeypatch.setattr(preprocessor, "_copy_vehicles_from_atlas", _fake_copy_vehicles)
+
+    with pytest.raises(RuntimeError, match="vehicles reference households that are absent"):
         preprocessor.preprocess(workspace)

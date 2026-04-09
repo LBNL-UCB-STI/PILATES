@@ -36,7 +36,7 @@ def test_resolve_artifact_key_usim_current_aliases():
     )
     assert (
         resolve_artifact_key("usim_forecast_output")
-        == ArtifactKeys.USIM_DATASTORE_CURRENT_H5
+        == ArtifactKeys.USIM_FORECAST_OUTPUT
     )
     assert (
         resolve_artifact_key("usim_h5_updated")

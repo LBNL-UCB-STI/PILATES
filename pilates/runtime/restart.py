@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, TypedDict
 
+from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
@@ -24,6 +25,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_HOUSEHOLDS_IN,
     BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
     BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
     BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
@@ -403,6 +405,7 @@ def restart_exact_rewind_contract(
                 BEAM_INPUT_CONFIG_ARCHIVED,
             ),
             optional_snapshot_keys=(
+                BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
                 BEAM_INPUT_VEHICLES_ARCHIVED,
                 BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
                 BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
@@ -546,6 +549,7 @@ def _resolve_restart_hydrated_path(
 
 def _build_restart_query_target(
     *,
+    settings: Any,
     year: int,
     iteration: Optional[int],
     producer: RestartProducerCandidate,
@@ -558,6 +562,7 @@ def _build_restart_query_target(
         "model": scope["model"],
         "stage": scope["stage"],
         "status": "completed",
+        "cache_epoch": resolve_cache_epoch(settings),
     }
     phase = scope.get("phase")
     if phase is not None:
@@ -599,6 +604,15 @@ def _copy_to_target(source: Path, target: Path) -> Path:
     else:
         shutil.copy2(source, target)
     return target
+
+
+def _merge_tree_into_target(source_root: Path, target_root: Path) -> None:
+    if not source_root.exists() or not source_root.is_dir():
+        return
+    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
+        if child.name == "__archive_manifest.json":
+            continue
+        _copy_to_target(child, target_root / child.name)
 
 
 def _set_coupler_path(coupler: CouplerProtocol, key: str, path: Path) -> None:
@@ -688,6 +702,7 @@ def _materialize_run_output_paths(
 def _find_exact_rewind_source_run(
     *,
     tracker: Any,
+    settings: Any,
     contract: RestartExactRewindContract,
     year: int,
     iteration: int,
@@ -700,6 +715,7 @@ def _find_exact_rewind_source_run(
         "model": scope["model"],
         "stage": scope["stage"],
         "status": "completed",
+        "cache_epoch": resolve_cache_epoch(settings),
     }
     if scope.get("phase") is not None:
         target["phase"] = scope["phase"]
@@ -788,6 +804,11 @@ def _restore_beam_rewind_overlay(
     workspace.set_beam_mutable_data_dir_override(str(beam_input_root))
 
     region_dir = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    config_reference_dir = restored_snapshot_paths.get(
+        BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+    )
+    if config_reference_dir is not None:
+        _merge_tree_into_target(Path(config_reference_dir), region_dir)
     config_target = region_dir / str(getattr(settings.beam, "config", "beam.conf"))
     _copy_to_target(
         Path(restored_snapshot_paths[BEAM_INPUT_CONFIG_ARCHIVED]),
@@ -948,6 +969,7 @@ def hydrate_rewind_runner_inputs(
     try:
         run = _find_exact_rewind_source_run(
             tracker=tracker,
+            settings=settings,
             contract=contract,
             year=year,
             iteration=iteration,
@@ -1141,6 +1163,7 @@ def hydrate_missing_restart_artifacts(
         summary["producer_steps_by_key"][key] = producer.step_name
 
         query_target = _build_restart_query_target(
+            settings=settings,
             year=year,
             iteration=iteration,
             producer=producer,
@@ -1155,6 +1178,7 @@ def hydrate_missing_restart_artifacts(
             )
         except ValueError:
             query_target = _build_restart_query_target(
+                settings=settings,
                 year=year,
                 iteration=iteration,
                 producer=producer,

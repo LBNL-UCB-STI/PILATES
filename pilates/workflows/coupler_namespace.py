@@ -28,6 +28,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
+    USIM_POPULATION_SOURCE_H5,
     USIM_MUTABLE_DATA_DIR,
 )
 
@@ -43,6 +44,7 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     USIM_H5_UPDATED: "urbansim",
     USIM_MUTABLE_DATA_DIR: "urbansim",
     USIM_FORECAST_OUTPUT: "urbansim",
+    USIM_POPULATION_SOURCE_H5: "urbansim",
     # ActivitySim
     ASIM_MUTABLE_DATA_DIR: "activitysim",
     ASIM_LAND_USE_IN: "activitysim",

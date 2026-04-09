@@ -153,66 +153,12 @@ def test_postprocessor_protocol_shape_forwards_model_run_hash():
     assert result is raw_outputs
 
 
-def test_warm_start_activities_forwards_preprocess_outputs_to_runner_and_updates_usim_inputs(
-    monkeypatch,
-):
-    settings = SimpleNamespace()
-    state = SimpleNamespace()
-    workspace = object()
-    preprocess_outputs = object()
-    captured = {}
-
-    class _Preprocessor:
-        def preprocess(self, workspace_arg):
-            captured["preprocess_workspace"] = workspace_arg
-            return preprocess_outputs
-
-    class _Runner:
-        def run(self, input_data_arg, workspace_arg):
-            captured["runner_input_data"] = input_data_arg
-            captured["runner_workspace"] = workspace_arg
-            return object()
-
-    def _capture_update(settings_arg, state_arg, workspace_arg, model_run_hash=None):
-        captured["update_call"] = {
-            "settings": settings_arg,
-            "state": state_arg,
-            "workspace": workspace_arg,
-            "model_run_hash": model_run_hash,
-        }
-
-    monkeypatch.setattr(
-        step_exec.GenericRunner,
-        "get_model_and_image",
-        staticmethod(lambda settings, model_type: ("activitysim", "fake-image")),
-    )
-    monkeypatch.setattr(
-        step_exec.ModelFactory,
-        "get_preprocessor",
-        lambda self, model_name, state: _Preprocessor(),
-    )
-    monkeypatch.setattr(
-        step_exec.ModelFactory,
-        "get_runner",
-        lambda self, model_name, state: _Runner(),
-    )
-    monkeypatch.setattr(
-        step_exec.asim_post,
-        "update_usim_inputs_after_warm_start",
-        _capture_update,
-    )
-
-    step_exec.warm_start_activities(settings, state, workspace)
-
-    assert captured["preprocess_workspace"] is workspace
-    assert captured["runner_input_data"] is preprocess_outputs
-    assert captured["runner_workspace"] is workspace
-    assert captured["update_call"] == {
-        "settings": settings,
-        "state": state,
-        "workspace": workspace,
-        "model_run_hash": None,
-    }
+def test_warm_start_activities_is_deprecated():
+    with pytest.raises(
+        RuntimeError,
+        match="ActivitySim warm-start is deprecated and no longer supported",
+    ):
+        step_exec.warm_start_activities(SimpleNamespace(), SimpleNamespace(), object())
 
 
 class _StageTrackingState:

@@ -942,7 +942,7 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         restart_run=True,
         archive_run_dir=Path(archive_runtime.workspace.full_path),
     )
-    resume_state = _resume_runtime(archive_runtime, resumed_runtime)
+    _resume_runtime(archive_runtime, resumed_runtime)
 
     contract = launcher_runtime._build_scenario_runtime_contract(
         settings=resumed_runtime.settings,
@@ -979,7 +979,7 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     workspace=resumed_runtime.workspace,
                     coupler=coupler,
                     local_run_dir=resumed_runtime.workspace.full_path,
-                    archive_run_dir=interrupted.workspace.full_path,
+                    archive_run_dir=archive_runtime.workspace.full_path,
                     workflow_stage=WorkflowState.Stage,
                     query_facet=_query_facet(resumed_runtime),
                 )

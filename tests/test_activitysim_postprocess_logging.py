@@ -9,7 +9,12 @@ from pilates.activitysim.outputs import (
 )
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.binding import BindingPlan
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows import steps
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps import activitysim as steps_activitysim
@@ -132,8 +137,18 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
         output_dir=asim_output_dir,
         raw_outputs={},
     )
+    coupler = SimpleNamespace(
+        get=lambda key, default=None: {
+            USIM_POPULATION_SOURCE_H5: str(usim_data_dir / "model_data_2023.h5"),
+            USIM_DATASTORE_CURRENT_H5: str(usim_data_dir / "model_data_06197001.h5"),
+            USIM_FORECAST_OUTPUT: str(usim_data_dir / "model_data_2023.h5"),
+        }.get(key, default),
+        set=lambda *args, **kwargs: None,
+        update=lambda *args, **kwargs: None,
+        set_from_artifact=lambda *args, **kwargs: None,
+    )
     step_fn = steps.make_activitysim_postprocess_step(
-        coupler=_dummy_coupler(),
+        coupler=coupler,
         outputs_holder=outputs_holder,
     )
     step_fn(settings=settings, state=state, workspace=workspace)
@@ -144,8 +159,8 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     assert "land_use_asim_in" in keys
     assert "omx_skims" in keys
     assert "zarr_skims" in keys
+    assert "usim_population_source_h5" in keys
     assert "usim_datastore_h5" in keys
-    assert "usim_forecast_output" in keys
 
 
 def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
@@ -253,19 +268,9 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         steps_activitysim,
         "build_binding_plan",
         lambda **_kwargs: BindingPlan(
-            source_by_key={"usim_datastore_h5": "explicit"},
-            inputs={"usim_datastore_h5": str(tmp_path / "model_data.h5")},
-            metadata={
-                "selected_key_by_semantic_key": {
-                    "usim_datastore_h5": "usim_datastore_base_h5"
-                }
-            },
+            source_by_key={USIM_POPULATION_SOURCE_H5: "explicit"},
+            inputs={USIM_POPULATION_SOURCE_H5: str(tmp_path / "model_data.h5")},
         ),
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "selected_candidate_key",
-        lambda _resolved, _key: "usim_datastore_base_h5",
     )
     monkeypatch.setattr(steps_activitysim, "log_and_set_input", lambda **_kwargs: None)
     monkeypatch.setattr(
