@@ -1189,11 +1189,7 @@ def set_coupler_from_artifact(
     # Preferred path: if available, also publish through model namespace view.
     target = namespaced_view_target(canonical_key)
     view_fn = getattr(coupler, "view", None)
-    if (
-        target is not None
-        and callable(view_fn)
-        and not _preserve_artifact_identity(value)
-    ):
+    if target is not None and callable(view_fn):
         namespace, local_key = target
         try:
             view = view_fn(namespace)

@@ -37,6 +37,37 @@ class CouplerWithNamespaceView(CouplerWithSetFromArtifact):
         return self._View(self, namespace)
 
 
+class RecordingCoupler:
+    def __init__(self) -> None:
+        self.storage = {}
+
+    class _View:
+        def __init__(self, outer, namespace) -> None:
+            self._outer = outer
+            self._namespace = namespace
+
+        def set_from_artifact(self, key, value) -> None:
+            self._outer.storage[f"{self._namespace}/{key}"] = value
+
+        def set(self, key, value) -> None:
+            self._outer.storage[f"{self._namespace}/{key}"] = value
+
+        def get(self, key, default=None):
+            return self._outer.storage.get(f"{self._namespace}/{key}", default)
+
+    def view(self, namespace):
+        return self._View(self, namespace)
+
+    def set_from_artifact(self, key, value) -> None:
+        self.storage[key] = value
+
+    def set(self, key, value) -> None:
+        self.storage[key] = value
+
+    def get(self, key, default=None):
+        return self.storage.get(key, default)
+
+
 def test_set_coupler_from_artifact_prefers_set_from_artifact() -> None:
     coupler = CouplerWithSetFromArtifact()
     coupler_helpers.set_coupler_from_artifact(
@@ -73,7 +104,7 @@ def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> Non
     assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
 
 
-def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() -> None:
+def test_set_coupler_from_artifact_publishes_namespaced_alias_for_artifact_values() -> None:
     coupler = CouplerWithNamespaceView()
     artifact = SimpleNamespace(id="artifact-1")
 
@@ -84,7 +115,35 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
         fallback="/tmp/path.h5",
     )
 
-    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+    assert ("view.set", "urbansim/usim_datastore_h5", artifact) in coupler.calls
+    assert ("set_from_artifact", "usim_datastore_h5", artifact) in coupler.calls
+
+
+def test_set_coupler_from_artifact_overwrites_stale_namespaced_string_with_artifact() -> None:
+    from pilates.workflows.coupler_namespace import resolve_coupler_value
+
+    coupler = RecordingCoupler()
+    stale_path = "/tmp/stale-path.h5"
+    artifact = SimpleNamespace(
+        id="artifact-1",
+        container_uri="workspace://fresh-path.h5",
+        path="/tmp/fresh-path.h5",
+    )
+
+    coupler.view("urbansim").set("usim_datastore_h5", stale_path)
+
+    coupler_helpers.set_coupler_from_artifact(
+        coupler,
+        "usim_datastore_h5",
+        artifact,
+        fallback="/tmp/fresh-path.h5",
+    )
+
+    resolved = resolve_coupler_value(coupler, "usim_datastore_h5")
+
+    assert coupler.storage["urbansim/usim_datastore_h5"] is artifact
+    assert coupler.storage["usim_datastore_h5"] is artifact
+    assert resolved.value is artifact
 
 
 def test_set_coupler_from_artifact_falls_back_from_noop_artifact() -> None:
