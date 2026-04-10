@@ -171,6 +171,15 @@ class ResolvedCouplerValue:
     namespace: Optional[str] = None
 
 
+def _is_noop_artifact_placeholder(value: Any) -> bool:
+    if value is None:
+        return False
+    value_type = type(value)
+    name = getattr(value_type, "__name__", "").lower()
+    module = getattr(value_type, "__module__", "").lower()
+    return "noopartifact" in name or ".noop" in module
+
+
 def resolve_coupler_value(
     coupler: Optional[CouplerProtocol], key: str
 ) -> ResolvedCouplerValue:
@@ -200,7 +209,7 @@ def resolve_coupler_value(
             view_get = getattr(namespaced_view, "get", None)
             if callable(view_get):
                 value = view_get(local_key)
-                if value is not None:
+                if value is not None and not _is_noop_artifact_placeholder(value):
                     return ResolvedCouplerValue(
                         requested_key=key,
                         canonical_key=canonical_key,
@@ -225,7 +234,7 @@ def resolve_coupler_value(
         )
 
     value = get_value(key)
-    if value is not None:
+    if value is not None and not _is_noop_artifact_placeholder(value):
         return ResolvedCouplerValue(
             requested_key=key,
             canonical_key=canonical_key,
@@ -238,7 +247,7 @@ def resolve_coupler_value(
 
     if canonical_key != key:
         value = get_value(canonical_key)
-        if value is not None:
+        if value is not None and not _is_noop_artifact_placeholder(value):
             return ResolvedCouplerValue(
                 requested_key=key,
                 canonical_key=canonical_key,
@@ -252,7 +261,7 @@ def resolve_coupler_value(
     alias = namespaced_alias_for_key(key)
     if alias is not None:
         value = get_value(alias)
-        if value is not None:
+        if value is not None and not _is_noop_artifact_placeholder(value):
             return ResolvedCouplerValue(
                 requested_key=key,
                 canonical_key=canonical_key,

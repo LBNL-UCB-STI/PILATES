@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import consist
 import pytest
 from consist import define_step
 
@@ -103,6 +104,28 @@ def test_build_binding_plan_applies_beam_preprocess_preferred_key_overrides():
     assert plan.optional_input_keys == [LINKSTATS]
     assert plan.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert not plan.missing_required
+
+
+def test_build_binding_plan_ignores_noop_coupler_placeholders() -> None:
+    noop = consist.NoopArtifact(
+        key=LINKSTATS,
+        path="/tmp/noop-linkstats.csv.gz",
+        container_uri="workspace://noop-linkstats.csv.gz",
+    )
+
+    plan = build_binding_plan(
+        step_name="beam_preprocess",
+        explicit_inputs={
+            "beam_plans_asim_out": "/tmp/plans.parquet",
+            "households_asim_out": "/tmp/households.parquet",
+            "persons_asim_out": "/tmp/persons.parquet",
+            BEAM_CONFIG_FILE: "/tmp/beam.conf",
+        },
+        coupler=_CouplerStub({LINKSTATS: noop}),
+    )
+
+    assert plan.optional_input_keys == []
+    assert plan.source_by_key[LINKSTATS_WARMSTART] == "missing"
 
 
 def test_beam_preprocess_binding_plan_seeds_default_exchange_and_atlas_inputs(

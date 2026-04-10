@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import consist
 import pytest
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
@@ -109,6 +110,32 @@ def test_step_output_handoff_mapping_warns_without_coupler(
 
     assert mapping["beam_plans_asim_out"] == str(output_path)
     assert "called without a readable coupler" in caplog.text
+
+
+def test_step_output_handoff_mapping_ignores_noop_artifact_placeholders(
+    tmp_path: Path,
+) -> None:
+    output_path = tmp_path / "beam_plans.parquet"
+    output_path.write_text("x", encoding="utf-8")
+    outputs = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=tmp_path,
+        processed_outputs={"beam_plans_asim_out": output_path},
+    )
+    noop_artifact = consist.NoopArtifact(
+        key="beam_plans_asim_out",
+        path=output_path,
+        container_uri=f"workspace://{output_path.name}",
+    )
+    coupler = SimpleNamespace(
+        get=lambda key, default=None: (
+            noop_artifact if key == "beam_plans_asim_out" else default
+        )
+    )
+
+    mapping = step_output_handoff_mapping(outputs, coupler=coupler)
+
+    assert mapping["beam_plans_asim_out"] == str(output_path)
 
 
 def test_step_output_mapping_warns_that_it_is_lossy(
@@ -266,4 +293,128 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
     assert (
         run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5]
         is current_artifact
+    )
+
+
+def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs(
+    monkeypatch, tmp_path: Path
+) -> None:
+    preprocess_path = tmp_path / "usim-preprocess.h5"
+    preprocess_path.write_text("preprocess", encoding="utf-8")
+    upstream = _TrackingOutputs(preprocess_path, "run_input")
+    resolution_calls = []
+    workflow_call_count = {"count": 0}
+    noop_base = consist.NoopArtifact(
+        key=USIM_DATASTORE_BASE_H5,
+        path=tmp_path / "noop-base.h5",
+        container_uri="workspace://noop-base.h5",
+    )
+    noop_current = consist.NoopArtifact(
+        key=USIM_DATASTORE_CURRENT_H5,
+        path=tmp_path / "noop-current.h5",
+        container_uri="workspace://noop-current.h5",
+    )
+
+    original_build_binding_plan = land_use_stage.build_binding_plan
+
+    def _capturing_build_binding_plan(**kwargs):
+        resolution_calls.append(
+            {
+                "step_name": kwargs["step_name"],
+                "explicit_inputs": kwargs.get("explicit_inputs"),
+            }
+        )
+        return original_build_binding_plan(**kwargs)
+
+    def _fake_run_workflow(**kwargs) -> None:
+        workflow_call_count["count"] += 1
+        outputs_holder = kwargs["outputs_holder"]
+        if workflow_call_count["count"] == 1:
+            outputs_holder.urbansim_preprocess = upstream
+        else:
+            outputs_holder.urbansim_run = SimpleNamespace(usim_datastore_h5=None)
+            outputs_holder.urbansim_postprocess = SimpleNamespace(
+                usim_datastore_h5=None
+            )
+
+    usim_base = tmp_path / "base.h5"
+    usim_current = tmp_path / "current.h5"
+    usim_base.write_text("base", encoding="utf-8")
+    usim_current.write_text("current", encoding="utf-8")
+
+    monkeypatch.setattr(
+        land_use_stage,
+        "build_urbansim_inputs",
+        lambda settings, state, workspace, year: (
+            {
+                USIM_DATASTORE_BASE_H5: str(usim_base),
+                USIM_DATASTORE_CURRENT_H5: str(usim_current),
+            },
+            {},
+        ),
+    )
+    monkeypatch.setattr(land_use_stage, "log_inputs", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        land_use_stage, "merge_model_expected_inputs", lambda *args: args[1]
+    )
+    monkeypatch.setattr(
+        land_use_stage, "build_binding_plan", _capturing_build_binding_plan
+    )
+    monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)
+    monkeypatch.setattr(
+        land_use_stage, "make_urbansim_preprocess_step", lambda **kwargs: object()
+    )
+    monkeypatch.setattr(
+        land_use_stage, "make_urbansim_run_step", lambda **kwargs: object()
+    )
+    monkeypatch.setattr(
+        land_use_stage, "make_urbansim_postprocess_step", lambda **kwargs: object()
+    )
+    monkeypatch.setattr(land_use_stage, "archive_copy_now", lambda **kwargs: None)
+    monkeypatch.setattr(
+        land_use_stage, "flush_archive_queue", lambda *args, **kwargs: None
+    )
+
+    class _Coupler:
+        def get(self, key, default=None):
+            values = {
+                USIM_DATASTORE_BASE_H5: noop_base,
+                USIM_DATASTORE_CURRENT_H5: noop_current,
+            }
+            return values.get(key, default)
+
+        def view(self, namespace):
+            class _View:
+                def get(self, key, default=None):
+                    if namespace != "urbansim":
+                        return default
+                    if key == USIM_DATASTORE_BASE_H5:
+                        return noop_base
+                    if key == USIM_DATASTORE_CURRENT_H5:
+                        return noop_current
+                    return default
+
+            return _View()
+
+    land_use_stage.run_land_use_stage(
+        scenario=object(),
+        state=SimpleNamespace(forecast_year=2035),
+        settings=SimpleNamespace(
+            urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
+        ),
+        workspace=SimpleNamespace(
+            full_path=str(tmp_path),
+            get_usim_mutable_data_dir=lambda: str(tmp_path),
+        ),
+        coupler=_Coupler(),
+        year=2035,
+        outputs_holder_year=StepOutputsHolder(),
+    )
+
+    run_binding_call = next(
+        call for call in resolution_calls if call["step_name"] == "urbansim_run"
+    )
+    assert run_binding_call["explicit_inputs"][USIM_DATASTORE_BASE_H5] == str(usim_base)
+    assert run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5] == str(
+        usim_current
     )

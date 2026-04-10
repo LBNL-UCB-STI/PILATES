@@ -6,11 +6,12 @@ from unittest.mock import MagicMock
 import pytest
 from consist.core.step_context import StepContext
 
-from pilates.generic.records import FileRecord, RecordStore
+from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -20,8 +21,8 @@ from pilates.workflows.steps import (
 
 
 class DummyCoupler:
-    def __init__(self) -> None:
-        self._data = {}
+    def __init__(self, data=None) -> None:
+        self._data = dict(data or {})
 
     def get(self, key, default=None):
         return self._data.get(key, default)
@@ -34,31 +35,18 @@ class DummyPreprocessor:
     def __init__(self, output_dir: Path) -> None:
         self.output_dir = Path(output_dir)
 
-    def preprocess(self, workspace) -> RecordStore:
+    def preprocess(self, workspace) -> ActivitySimPreprocessOutputs:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         land_use = self.output_dir / "land_use.csv"
         households = self.output_dir / "households.csv"
         persons = self.output_dir / "persons.csv"
         for path in (land_use, households, persons):
             path.write_text("dummy")
-        return RecordStore(
-            recordList=[
-                FileRecord(
-                    file_path=str(land_use),
-                    short_name=ASIM_LAND_USE_IN,
-                    description="ActivitySim land use input table",
-                ),
-                FileRecord(
-                    file_path=str(households),
-                    short_name=ASIM_HOUSEHOLDS_IN,
-                    description="ActivitySim households input table",
-                ),
-                FileRecord(
-                    file_path=str(persons),
-                    short_name=ASIM_PERSONS_IN,
-                    description="ActivitySim persons input table",
-                ),
-            ]
+        return ActivitySimPreprocessOutputs(
+            mutable_data_dir=self.output_dir,
+            land_use_table=land_use,
+            households_table=households,
+            persons_table=persons,
         )
 
 
@@ -265,9 +253,13 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
         "get_preprocessor",
         lambda self, *args, **kwargs: dummy_preprocessor,
     )
+    population_source_h5 = tmp_path / "population_source.h5"
+    population_source_h5.write_text("stub", encoding="utf-8")
 
     step_fn = make_activitysim_preprocess_step(
-        coupler=DummyCoupler(),
+        coupler=DummyCoupler(
+            {USIM_POPULATION_SOURCE_H5: str(population_source_h5)}
+        ),
         outputs_holder=StepOutputsHolder(),
     )
     step_fn(settings=settings, state=state, workspace=workspace)

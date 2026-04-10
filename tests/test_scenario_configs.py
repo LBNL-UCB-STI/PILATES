@@ -19,8 +19,8 @@ ACTIVE_SCENARIO_PATHS = sorted(
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
 SFBAY_ROUTER_DIRECTORY = "r5/sfbay-cbg5500-weakConn-network"
-BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260329"
-BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260329"
+BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260408"
+BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260408"
 
 EXPECTED_WARMSTART_PATHS = {
     Path("scenarios/breathe/settings--sfbay--2018-Baseline.yaml"): (
@@ -37,6 +37,28 @@ EXPECTED_WARMSTART_PATHS = {
     Path("scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml"): (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
         "5.linkstats.FC08.v1.csv.gz"
+    ),
+    Path("scenarios/seattle/pilates-run--seattle--fy26-task1--2018-Baseline.yaml"): (
+        "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
+        "5.linkstats.FC07.v3.csv.gz"
+    ),
+    Path(
+        "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-060Elec.yaml"
+    ): (
+        "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
+        "5.linkstats.FC07.v3.csv.gz"
+    ),
+    Path(
+        "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-BaseFuel-100Elec.yaml"
+    ): (
+        "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
+        "5.linkstats.FC07.v3.csv.gz"
+    ),
+    Path(
+        "scenarios/seattle/pilates-run--seattle--fy26-task1--2050-HighFuel-100Elec.yaml"
+    ): (
+        "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
+        "5.linkstats.FC07.v3.csv.gz"
     ),
     Path("scenarios/sfbay/pilates-run--sfbay--jdeq-calibration-FC06-0.yaml"): (
         "r5/sfbay-cbg5500-weakConn-network/2018-baseline-linkstats/"
