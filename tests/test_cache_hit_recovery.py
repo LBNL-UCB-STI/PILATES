@@ -3,8 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 import yaml
 
+import consist
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.utils import coupler_helpers
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -28,6 +30,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.orchestration import (
     ManifestConfig,
+    _publish_recovered_outputs,
     _recover_cached_outputs,
     _recover_step_outputs,
 )
@@ -44,6 +47,7 @@ from pilates.workflows.steps import (
     make_beam_full_skim_step,
     make_beam_run_step,
     make_beam_postprocess_step,
+    make_urbansim_preprocess_step,
     make_urbansim_postprocess_step,
     make_urbansim_run_step,
 )
@@ -692,6 +696,280 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
     assert coupler.get(USIM_DATASTORE_H5) is not None
     assert coupler.get(USIM_FORECAST_OUTPUT) is not None
+
+
+def test_recover_urbansim_preprocess_outputs_republishes_recovered_paths_without_noops(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    datastore = usim_dir / "custom_mpo_06197001_model_data.h5"
+    skims = usim_dir / "skims_mpo_06197001.omx"
+    hh_size = usim_dir / "hsize_ct_06197001.csv"
+    income_rates = usim_dir / "income_rates_06197001.csv"
+    relmap = usim_dir / "relmap_06197001.csv"
+    schools = usim_dir / "schools_2010.csv"
+    school_districts = usim_dir / "blocks_school_districts_2010.csv"
+    for path in (
+        datastore,
+        skims,
+        hh_size,
+        income_rates,
+        relmap,
+        schools,
+        school_districts,
+    ):
+        _write_file(path)
+
+    monkeypatch.setattr(
+        "pilates.workflows.orchestration.cr.current_run",
+        lambda: None,
+    )
+
+    def _artifact(key: str, path: Path):
+        return SimpleNamespace(
+            key=key,
+            path=str(path),
+            container_uri=f"workspace://{path.name}",
+        )
+
+    cached_outputs = {
+        USIM_DATASTORE_H5: _artifact(USIM_DATASTORE_H5, datastore),
+        ASIM_OMX_SKIMS: _artifact(ASIM_OMX_SKIMS, skims),
+        "hh_size": _artifact("hh_size", hh_size),
+        "income_rates": _artifact("income_rates", income_rates),
+        "relmap": _artifact("relmap", relmap),
+        "schools": _artifact("schools", schools),
+        "school_districts": _artifact("school_districts", school_districts),
+        USIM_DATASTORE_BASE_H5: _artifact(USIM_DATASTORE_BASE_H5, datastore),
+    }
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    step_func = make_urbansim_preprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
+        step=StepRef(name="urbansim_preprocess", step_func=step_func),
+        step_name="urbansim_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(
+            run=SimpleNamespace(region="sfbay"),
+            activitysim=SimpleNamespace(warm_start_activities=False),
+            urbansim=SimpleNamespace(
+                input_file_template="custom_mpo_06197001_model_data.h5",
+                region_mappings={"region_to_region_id": {"sfbay": "06197001"}},
+            ),
+        ),
+        state=SimpleNamespace(
+            forecast_year=2018,
+            is_start_year=lambda: True,
+        ),
+        workspace=workspace,
+        coupler=coupler,
+        cached_outputs=cached_outputs,
+        run_id=None,
+        publish_outputs=True,
+    )
+
+    assert outputs is not None
+    assert holder.urbansim_preprocess is not None
+    assert coupler.get(USIM_DATASTORE_H5) == str(datastore)
+    assert coupler.get(USIM_DATASTORE_BASE_H5) == str(datastore)
+    assert coupler.get("hh_size") == str(hh_size)
+    assert not isinstance(coupler.get(USIM_DATASTORE_H5), consist.NoopArtifact)
+    assert not isinstance(coupler.get(USIM_DATASTORE_BASE_H5), consist.NoopArtifact)
+    assert not isinstance(coupler.get("hh_size"), consist.NoopArtifact)
+
+
+def test_publish_recovered_outputs_overlays_only_keys_replayed_by_replayer(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    preexisting = SimpleNamespace(
+        key="schools",
+        path=str(Path(workspace.get_usim_mutable_data_dir()) / "schools_2010.csv"),
+        container_uri="workspace://schools_2010.csv",
+    )
+    replayed_path = str(Path(workspace.get_usim_mutable_data_dir()) / "replayed.h5")
+    coupler.set("schools", preexisting)
+
+    def _replay(_outputs, _settings, _state, _workspace, _holder):
+        coupler_helpers.set_coupler_from_artifact(
+            coupler,
+            USIM_DATASTORE_H5,
+            None,
+            fallback=replayed_path,
+        )
+
+    step = StepRef(
+        name="test_step",
+        step_func=lambda **_kwargs: None,
+        output_replayer=_replay,
+    )
+
+    cached_datastore = SimpleNamespace(
+        key=USIM_DATASTORE_H5,
+        path=replayed_path,
+        container_uri="workspace://replayed.h5",
+    )
+    cached_schools = SimpleNamespace(
+        key="schools",
+        path=preexisting.path,
+        container_uri=preexisting.container_uri,
+    )
+
+    publication_mode = _publish_recovered_outputs(
+        step=step,
+        outputs=object(),
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=StepOutputsHolder(),
+        cached_outputs={
+            USIM_DATASTORE_H5: cached_datastore,
+            "schools": cached_schools,
+        },
+        run_id=None,
+    )
+
+    assert publication_mode == "output_replayer_with_cached_artifacts"
+    assert coupler.get(USIM_DATASTORE_H5) is cached_datastore
+    assert coupler.get("schools") is preexisting
+
+
+def test_run_workflow_cached_urbansim_preprocess_can_drive_urbansim_run_cache_hit(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    datastore = usim_dir / "custom_mpo_06197001_model_data.h5"
+    skims = usim_dir / "skims_mpo_06197001.omx"
+    hh_size = usim_dir / "hsize_ct_06197001.csv"
+    income_rates = usim_dir / "income_rates_06197001.csv"
+    relmap = usim_dir / "relmap_06197001.csv"
+    geoid_to_zone = usim_dir / "geoid_to_zone.csv"
+    schools = usim_dir / "schools_2010.csv"
+    school_districts = usim_dir / "blocks_school_districts_2010.csv"
+    usim_output = usim_dir / "usim_output.h5"
+    for path in (
+        datastore,
+        skims,
+        hh_size,
+        income_rates,
+        relmap,
+        geoid_to_zone,
+        schools,
+        school_districts,
+        usim_output,
+    ):
+        _write_file(path)
+
+    def _artifact(key: str, path: Path):
+        return SimpleNamespace(
+            key=key,
+            path=str(path),
+            container_uri=f"workspace://{path.name}",
+        )
+
+    preprocess_outputs = {
+        USIM_DATASTORE_H5: _artifact(USIM_DATASTORE_H5, datastore),
+        "omx_skims": _artifact("omx_skims", skims),
+        "hh_size": _artifact("hh_size", hh_size),
+        "income_rates": _artifact("income_rates", income_rates),
+        "relmap": _artifact("relmap", relmap),
+        "geoid_to_zone": _artifact("geoid_to_zone", geoid_to_zone),
+        "schools": _artifact("schools", schools),
+        "school_districts": _artifact("school_districts", school_districts),
+        USIM_DATASTORE_BASE_H5: _artifact(USIM_DATASTORE_BASE_H5, datastore),
+    }
+
+    preprocess_step = StepRef(
+        name="urbansim_preprocess",
+        step_func=make_urbansim_preprocess_step(coupler=coupler, outputs_holder=holder),
+    )
+    run_step = StepRef(
+        name="urbansim_run",
+        step_func=make_urbansim_run_step(coupler=coupler, outputs_holder=holder),
+    )
+
+    class CacheHitScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return SimpleNamespace(cache_hit=True, outputs=preprocess_outputs)
+
+            required_keys = (
+                USIM_DATASTORE_H5,
+                "omx_skims",
+                "hh_size",
+                "income_rates",
+                "relmap",
+                "geoid_to_zone",
+                "schools",
+                "school_districts",
+            )
+            clean_recovered_inputs = all(
+                coupler.get(key) is not None
+                and not isinstance(coupler.get(key), consist.NoopArtifact)
+                for key in required_keys
+            )
+            return SimpleNamespace(
+                cache_hit=clean_recovered_inputs,
+                outputs={USIM_FORECAST_OUTPUT: str(usim_output)},
+            )
+
+    scenario = CacheHitScenario()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        activitysim=SimpleNamespace(warm_start_activities=False),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_mpo_06197001_model_data.h5",
+            region_mappings={"region_to_region_id": {"sfbay": "06197001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        year=2018,
+        forecast_year=2018,
+        iteration=0,
+        is_start_year=lambda: True,
+    )
+
+    run_workflow(
+        stage_name="land_use",
+        steps=[preprocess_step, run_step],
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.urbansim_preprocess is not None
+    assert holder.urbansim_run is not None
+    required_keys = [
+        USIM_DATASTORE_H5,
+        "omx_skims",
+        "hh_size",
+        "income_rates",
+        "relmap",
+        "geoid_to_zone",
+        "schools",
+        "school_districts",
+    ]
+    assert all(
+        coupler.get(key) is not None
+        and not isinstance(coupler.get(key), consist.NoopArtifact)
+        for key in required_keys
+    )
+    assert getattr(holder.urbansim_run, "raw_outputs", {}).get(USIM_FORECAST_OUTPUT) == usim_output
 
 
 def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(

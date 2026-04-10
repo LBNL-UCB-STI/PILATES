@@ -7,6 +7,8 @@ import queue
 import shutil
 import threading
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Union
 
@@ -53,6 +55,35 @@ _archive_pending_tasks: Dict[
 _archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
+_published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
+    "published_coupler_keys",
+    default=None,
+)
+
+
+def _is_noop_artifact(candidate: Any) -> bool:
+    if candidate is None:
+        return False
+    candidate_type = type(candidate)
+    candidate_name = getattr(candidate_type, "__name__", "").lower()
+    candidate_module = getattr(candidate_type, "__module__", "").lower()
+    return "noopartifact" in candidate_name or ".noop" in candidate_module
+
+
+@contextmanager
+def record_published_coupler_keys() -> "set[str]":
+    published_keys: set[str] = set()
+    token = _published_coupler_keys.set(published_keys)
+    try:
+        yield published_keys
+    finally:
+        _published_coupler_keys.reset(token)
+
+
+def _record_published_coupler_key(key: str) -> None:
+    published_keys = _published_coupler_keys.get()
+    if published_keys is not None:
+        published_keys.add(key)
 
 
 def _archive_enabled() -> bool:
@@ -1099,10 +1130,16 @@ def set_coupler_from_artifact(
     if artifact is None and fallback is None:
         return
     canonical_key = resolve_artifact_key(key)
-    value = artifact or fallback
+    value = artifact
+    if _is_noop_artifact(value) and fallback is not None:
+        value = fallback
+    elif value is None:
+        value = fallback
 
     def _preserve_artifact_identity(candidate: Any) -> bool:
         if candidate is None or isinstance(candidate, (str, os.PathLike)):
+            return False
+        if _is_noop_artifact(candidate):
             return False
         return any(
             getattr(candidate, attr_name, None) is not None
@@ -1141,6 +1178,7 @@ def set_coupler_from_artifact(
     # Transitional compatibility: keep unscoped key writes so existing consumers
     # and historical runs remain valid while namespaced lookups are adopted.
     _set_value(coupler, canonical_key)
+    _record_published_coupler_key(canonical_key)
 
 
 def _log_with_optional_h5_container(

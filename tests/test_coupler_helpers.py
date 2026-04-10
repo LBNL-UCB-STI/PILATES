@@ -1,3 +1,4 @@
+import consist
 import pytest
 from types import SimpleNamespace
 
@@ -84,6 +85,26 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     )
 
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
+def test_set_coupler_from_artifact_falls_back_from_noop_artifact() -> None:
+    coupler = CouplerWithNamespaceView()
+    noop = consist.NoopArtifact(
+        key="usim_datastore_h5",
+        path="/tmp/noop-path.h5",
+        container_uri="workspace://noop-path.h5",
+    )
+
+    coupler_helpers.set_coupler_from_artifact(
+        coupler,
+        "usim_datastore_h5",
+        noop,
+        fallback="/tmp/fallback-path.h5",
+    )
+
+    assert ("view.set", "urbansim/usim_datastore_h5", "/tmp/fallback-path.h5") in coupler.calls
+    assert ("set_from_artifact", "usim_datastore_h5", "/tmp/fallback-path.h5") in coupler.calls
+    assert all(call[-1] is not noop for call in coupler.calls)
 
 
 def test_log_and_set_output_raises_without_active_run(monkeypatch) -> None:
