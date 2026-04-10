@@ -1,3 +1,4 @@
+import gzip
 from pathlib import Path
 from types import SimpleNamespace
 import yaml
@@ -46,6 +47,7 @@ from pilates.workflows.steps import (
     make_urbansim_postprocess_step,
     make_urbansim_run_step,
 )
+from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
 from pilates.workflows.steps import activitysim as steps_activitysim
 from pilates.workflows.steps import beam as steps_beam
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
@@ -978,6 +980,42 @@ def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
 
     assert outputs is None
     assert holder.atlas_postprocess is None
+
+
+def test_copy_vehicles_from_atlas_materializes_archive_fallback(
+    tmp_path, monkeypatch
+):
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    workspace = DummyWorkspace(local_root / "run")
+    state = SimpleNamespace(forecast_year=2018)
+
+    archived_source = archive_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
+    archived_source.parent.mkdir(parents=True, exist_ok=True)
+    archived_source.write_text("household_id,vehicleTypeId\n1,7\n", encoding="utf-8")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root / "run"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root / "run"))
+
+    def _resolve_beam_exchange_scenario_folder_fn(_workspace):
+        return str(local_root / "run" / "beam" / "input" / "test" / "scenario")
+
+    record = copy_vehicles_from_atlas(
+        workspace=workspace,
+        state=state,
+        resolve_beam_exchange_scenario_folder_fn=_resolve_beam_exchange_scenario_folder_fn,
+    )
+
+    assert record is not None
+    assert record.short_name == "vehicles_beam_in"
+    local_source = local_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
+    beam_vehicles = (
+        local_root / "run" / "beam" / "input" / "test" / "scenario" / "vehicles.csv.gz"
+    )
+    assert local_source.exists()
+    assert beam_vehicles.exists()
+    with gzip.open(beam_vehicles, "rt", encoding="utf-8") as fh:
+        assert "vehicleTypeId" in fh.read()
 
 
 def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):

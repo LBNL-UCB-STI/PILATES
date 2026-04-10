@@ -10,6 +10,7 @@ import pandas as pd
 from pilates.activitysim.outputs import has_asim_run_marker
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
+from pilates.utils.coupler_helpers import resolve_existing_path
 from pilates.utils.io import locate_beam_file
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -119,21 +120,33 @@ def copy_vehicles_from_atlas(
     os.makedirs(beam_scenario_folder, exist_ok=True)
     beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
 
-    atlas_vehicle_file_loc = source_path
-    if not atlas_vehicle_file_loc:
+    atlas_candidates = [source_path] if source_path else []
+    if not atlas_candidates:
         atlas_output_data_dir = workspace.get_atlas_output_dir()
-        atlas_vehicle_file_loc = os.path.join(
-            atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
+        atlas_candidates.extend(
+            [
+                os.path.join(atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"),
+                os.path.join(atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"),
+            ]
         )
-        if not os.path.exists(atlas_vehicle_file_loc):
-            atlas_vehicle_file_loc = os.path.join(
-                atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
-            )
 
-    if not os.path.exists(atlas_vehicle_file_loc):
+    atlas_vehicle_file_loc = None
+    for candidate in atlas_candidates:
+        if not candidate:
+            continue
+        resolved_candidate = resolve_existing_path(
+            candidate,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if resolved_candidate is not None and os.path.exists(resolved_candidate):
+            atlas_vehicle_file_loc = resolved_candidate
+            break
+
+    if atlas_vehicle_file_loc is None:
         logger.warning(
             "ATLAS vehicles2 file not found for BEAM input: %s",
-            atlas_vehicle_file_loc,
+            atlas_candidates[0] if atlas_candidates else None,
         )
         return None
 
