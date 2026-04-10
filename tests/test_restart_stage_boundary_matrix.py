@@ -770,6 +770,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_m
     assert beam_preprocess_inputs["plans_beam_in"] == str(beam_plans)
     assert beam_preprocess_inputs["households_beam_in"] == str(households)
     assert beam_preprocess_inputs["persons_beam_in"] == str(persons)
+    assert coupler.get("beam_plans_asim_out") == str(beam_plans)
+    assert coupler.get("households_asim_out") == str(households)
+    assert coupler.get("persons_asim_out") == str(persons)
 
 
 def test_restart_traffic_assignment_boundary_rejects_partial_hydrated_restore(

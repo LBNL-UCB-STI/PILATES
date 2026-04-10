@@ -10,6 +10,7 @@ from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
+    resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
 from pilates.utils.io import locate_beam_file
@@ -77,20 +78,31 @@ def _restore_activity_demand_outputs_for_resume(
     sees the same inputs it would have received after a live ActivitySim run.
     """
 
-    def _publish_restored_zarr_skims(
+    def _publish_restored_outputs(
         restored_outputs: Dict[str, Any],
         resolved_paths: Dict[str, Path],
     ) -> None:
-        zarr_value = restored_outputs.get(ZARR_SKIMS)
-        zarr_path = resolved_paths.get(ZARR_SKIMS)
-        if zarr_value is None or zarr_path is None:
-            return
-        set_coupler_from_artifact(
-            coupler,
-            ZARR_SKIMS,
-            None if isinstance(zarr_value, (str, os.PathLike)) else zarr_value,
-            fallback=str(zarr_path),
-        )
+        for key, path in resolved_paths.items():
+            value = restored_outputs.get(key)
+            resolved_artifact = resolve_artifact_from_value(
+                value,
+                key=key,
+                workspace=workspace,
+            )
+            artifact = (
+                resolved_artifact
+                if (
+                    hasattr(resolved_artifact, "container_uri")
+                    or hasattr(resolved_artifact, "uri")
+                )
+                else None
+            )
+            set_coupler_from_artifact(
+                coupler,
+                key,
+                artifact,
+                fallback=str(path),
+            )
 
     def _promote_archived_zarr_skims(
         restored_outputs: Dict[str, Any],
@@ -141,6 +153,7 @@ def _restore_activity_demand_outputs_for_resume(
 
     _ = state
     postprocess_outputs = outputs_holder.activitysim_postprocess
+    used_manifest_restore = False
     if postprocess_outputs is None and manifest_path is not None:
         resolved_manifest_path = resolve_existing_path(
             str(manifest_path),
@@ -161,8 +174,9 @@ def _restore_activity_demand_outputs_for_resume(
             )
             if postprocess_outputs is not None:
                 outputs_holder.activitysim_postprocess = postprocess_outputs
+                used_manifest_restore = True
     if postprocess_outputs is not None:
-        if manifest_path is not None:
+        if used_manifest_restore:
             # Manifest recovery should be path-driven so stale coupler values from
             # the previous workspace cannot override the restored outputs.
             restored_outputs = step_output_mapping(
@@ -179,7 +193,7 @@ def _restore_activity_demand_outputs_for_resume(
         if validated is None:
             return None
         restored_outputs, resolved_paths = validated
-        _publish_restored_zarr_skims(restored_outputs, resolved_paths)
+        _publish_restored_outputs(restored_outputs, resolved_paths)
         return restored_outputs
 
     get_value = getattr(coupler, "get", None)
@@ -204,7 +218,7 @@ def _restore_activity_demand_outputs_for_resume(
             asim_output_dir=None,
             processed_outputs=resolved_paths,
         )
-        _publish_restored_zarr_skims(restored_outputs, resolved_paths)
+        _publish_restored_outputs(restored_outputs, resolved_paths)
         return restored_outputs
     raise RuntimeError(
         "Restart into traffic_assignment requires hydrated ActivitySim outputs "
