@@ -113,7 +113,7 @@ def test_step_output_handoff_mapping_warns_without_coupler(
 
 
 def test_step_output_handoff_mapping_ignores_noop_artifact_placeholders(
-    tmp_path: Path,
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     output_path = tmp_path / "beam_plans.parquet"
     output_path.write_text("x", encoding="utf-8")
@@ -133,9 +133,11 @@ def test_step_output_handoff_mapping_ignores_noop_artifact_placeholders(
         )
     )
 
-    mapping = step_output_handoff_mapping(outputs, coupler=coupler)
+    with caplog.at_level("WARNING"):
+        mapping = step_output_handoff_mapping(outputs, coupler=coupler)
 
     assert mapping["beam_plans_asim_out"] == str(output_path)
+    assert "Ignoring NoopArtifact placeholder for coupler key 'beam_plans_asim_out'" in caplog.text
 
 
 def test_step_output_mapping_warns_that_it_is_lossy(
@@ -297,7 +299,7 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
 
 
 def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs(
-    monkeypatch, tmp_path: Path
+    monkeypatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     preprocess_path = tmp_path / "usim-preprocess.h5"
     preprocess_path.write_text("preprocess", encoding="utf-8")
@@ -396,20 +398,21 @@ def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs
 
             return _View()
 
-    land_use_stage.run_land_use_stage(
-        scenario=object(),
-        state=SimpleNamespace(forecast_year=2035),
-        settings=SimpleNamespace(
-            urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
-        ),
-        workspace=SimpleNamespace(
-            full_path=str(tmp_path),
-            get_usim_mutable_data_dir=lambda: str(tmp_path),
-        ),
-        coupler=_Coupler(),
-        year=2035,
-        outputs_holder_year=StepOutputsHolder(),
-    )
+    with caplog.at_level("DEBUG"):
+        land_use_stage.run_land_use_stage(
+            scenario=object(),
+            state=SimpleNamespace(forecast_year=2035),
+            settings=SimpleNamespace(
+                urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
+            ),
+            workspace=SimpleNamespace(
+                full_path=str(tmp_path),
+                get_usim_mutable_data_dir=lambda: str(tmp_path),
+            ),
+            coupler=_Coupler(),
+            year=2035,
+            outputs_holder_year=StepOutputsHolder(),
+        )
 
     run_binding_call = next(
         call for call in resolution_calls if call["step_name"] == "urbansim_run"
@@ -418,3 +421,6 @@ def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs
     assert run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5] == str(
         usim_current
     )
+    assert "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_base_h5'" in caplog.text
+    assert "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_h5'" in caplog.text
+    assert "[land_use] Runtime handoff for usim_datastore_base_h5 resolved via missing" in caplog.text
