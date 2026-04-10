@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple
 
@@ -34,6 +35,7 @@ from pilates.workflows.artifact_keys import (
 
 NAMESPACE_SEPARATOR = "/"
 _KNOWN_NAMESPACES = {"activitysim", "atlas", "beam", "urbansim"}
+logger = logging.getLogger(__name__)
 
 
 _EXPLICIT_NAMESPACE_BY_KEY = {
@@ -180,6 +182,26 @@ def _is_noop_artifact_placeholder(value: Any) -> bool:
     return "noopartifact" in name or ".noop" in module
 
 
+def _log_ignored_noop_artifact(
+    *,
+    requested_key: str,
+    storage_key: str,
+    lookup_source: str,
+    value: Any,
+) -> None:
+    logger.warning(
+        "Ignoring NoopArtifact placeholder for coupler key '%s' (storage_key='%s', "
+        "lookup_source=%s, type=%s, path=%s, container_uri=%s); falling back to "
+        "other input sources.",
+        requested_key,
+        storage_key,
+        lookup_source,
+        type(value).__name__,
+        getattr(value, "path", None),
+        getattr(value, "container_uri", None),
+    )
+
+
 def resolve_coupler_value(
     coupler: Optional[CouplerProtocol], key: str
 ) -> ResolvedCouplerValue:
@@ -209,6 +231,13 @@ def resolve_coupler_value(
             view_get = getattr(namespaced_view, "get", None)
             if callable(view_get):
                 value = view_get(local_key)
+                if value is not None and _is_noop_artifact_placeholder(value):
+                    _log_ignored_noop_artifact(
+                        requested_key=key,
+                        storage_key=qualify_key(namespace, local_key),
+                        lookup_source="namespaced_view",
+                        value=value,
+                    )
                 if value is not None and not _is_noop_artifact_placeholder(value):
                     return ResolvedCouplerValue(
                         requested_key=key,
@@ -234,6 +263,13 @@ def resolve_coupler_value(
         )
 
     value = get_value(key)
+    if value is not None and _is_noop_artifact_placeholder(value):
+        _log_ignored_noop_artifact(
+            requested_key=key,
+            storage_key=key,
+            lookup_source="legacy",
+            value=value,
+        )
     if value is not None and not _is_noop_artifact_placeholder(value):
         return ResolvedCouplerValue(
             requested_key=key,
@@ -247,6 +283,13 @@ def resolve_coupler_value(
 
     if canonical_key != key:
         value = get_value(canonical_key)
+        if value is not None and _is_noop_artifact_placeholder(value):
+            _log_ignored_noop_artifact(
+                requested_key=key,
+                storage_key=canonical_key,
+                lookup_source="canonical",
+                value=value,
+            )
         if value is not None and not _is_noop_artifact_placeholder(value):
             return ResolvedCouplerValue(
                 requested_key=key,
@@ -261,6 +304,13 @@ def resolve_coupler_value(
     alias = namespaced_alias_for_key(key)
     if alias is not None:
         value = get_value(alias)
+        if value is not None and _is_noop_artifact_placeholder(value):
+            _log_ignored_noop_artifact(
+                requested_key=key,
+                storage_key=alias,
+                lookup_source="alias",
+                value=value,
+            )
         if value is not None and not _is_noop_artifact_placeholder(value):
             return ResolvedCouplerValue(
                 requested_key=key,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import logging
 from pathlib import Path
 from typing import Dict, Optional, Union, cast
 
@@ -37,6 +38,8 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
+
+logger = logging.getLogger(__name__)
 
 
 def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
@@ -163,6 +166,15 @@ def run_land_use_stage(
             resolved.value
             if resolved.value is not None
             else usim_inputs.get(key)
+        )
+        logger.debug(
+            "[land_use] Runtime handoff for %s resolved via %s (storage_key=%s, "
+            "value_type=%s, fallback_used=%s)",
+            key,
+            resolved.source,
+            resolved.storage_key,
+            type(value).__name__ if value is not None else None,
+            resolved.value is None and usim_inputs.get(key) is not None,
         )
         if value is not None:
             run_inputs.setdefault(key, value)
