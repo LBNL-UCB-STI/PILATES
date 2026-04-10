@@ -1,6 +1,8 @@
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -13,6 +15,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows import steps
@@ -269,7 +275,13 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         "build_binding_plan",
         lambda **_kwargs: BindingPlan(
             source_by_key={USIM_POPULATION_SOURCE_H5: "explicit"},
-            inputs={USIM_POPULATION_SOURCE_H5: str(tmp_path / "model_data.h5")},
+            inputs={
+                USIM_POPULATION_SOURCE_H5: str(tmp_path / "model_data.h5"),
+                USIM_POPULATION_HOUSEHOLDS_TABLE: "/2025/households",
+                USIM_POPULATION_PERSONS_TABLE: "/2025/persons",
+                USIM_POPULATION_JOBS_TABLE: "/2025/jobs",
+                USIM_POPULATION_BLOCKS_TABLE: "/2025/blocks",
+            },
         ),
     )
     monkeypatch.setattr(steps_activitysim, "log_and_set_input", lambda **_kwargs: None)
@@ -281,7 +293,9 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
     monkeypatch.setattr(steps_activitysim, "_log_step_records", lambda **_kwargs: None)
 
     h5_path = tmp_path / "model_data.h5"
-    h5_path.write_text("x")
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2025/{table_name}", pd.DataFrame({"value": [1]}))
     asim_data_dir = tmp_path / "asim_data"
     asim_data_dir.mkdir(parents=True, exist_ok=True)
     for filename in ("land_use.csv", "households.csv", "persons.csv"):
@@ -294,19 +308,49 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
 
     step_fn(
         settings=SimpleNamespace(),
-        state=SimpleNamespace(year=2023, start_year=2017),
+        state=SimpleNamespace(year=2023, start_year=2017, forecast_year=2025),
         workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_data_dir)),
     )
 
     assert len(table_calls) == 1
     assert table_calls[0]["direction"] == "input"
     assert table_calls[0]["path"] == str(h5_path)
-    assert table_calls[0]["table_keys"]["/households"] == (
+    assert table_calls[0]["table_keys"]["/2025/households"] == (
         "activitysim_preprocess_usim_households_table_input"
     )
-    assert table_calls[0]["table_keys"]["/2017/households"] == (
-        "activitysim_preprocess_usim_households_table_start_year_input"
+
+
+def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths() -> None:
+    captured = {}
+
+    class _Preprocessor:
+        def preprocess(self, _workspace, **kwargs):
+            captured.update(kwargs)
+            return ActivitySimPreprocessOutputs(
+                mutable_data_dir=tmp_path,
+                land_use_table=tmp_path / "land_use.csv",
+                households_table=tmp_path / "households.csv",
+                persons_table=tmp_path / "persons.csv",
+                omx_skims=None,
+            )
+
+    tmp_path = Path("/tmp")
+    steps_activitysim._execute_activitysim_preprocess(
+        _Preprocessor(),
+        workspace=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+        population_source_h5_path="/tmp/model_data_2025.h5",
+        usim_population_households_table="/2025/households",
+        usim_population_persons_table="/2025/persons",
+        usim_population_jobs_table="/2025/jobs",
+        usim_population_blocks_table="/2025/blocks",
     )
+
+    assert captured["population_source_h5_path"] == "/tmp/model_data_2025.h5"
+    assert captured["usim_population_households_table"] == "/2025/households"
+    assert captured["usim_population_persons_table"] == "/2025/persons"
+    assert captured["usim_population_jobs_table"] == "/2025/jobs"
+    assert captured["usim_population_blocks_table"] == "/2025/blocks"
 
 
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:

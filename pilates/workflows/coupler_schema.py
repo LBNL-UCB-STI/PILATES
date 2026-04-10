@@ -38,6 +38,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_BLOCKS_TABLE,
     USIM_INPUT_NEXT,
     USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
@@ -54,6 +58,18 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     USIM_POPULATION_SOURCE_H5: (
         "UrbanSim datastore (H5) selected as the population source for ActivitySim preprocess."
+    ),
+    USIM_POPULATION_HOUSEHOLDS_TABLE: (
+        "Resolved households table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_PERSONS_TABLE: (
+        "Resolved persons table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_JOBS_TABLE: (
+        "Resolved jobs table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_BLOCKS_TABLE: (
+        "Resolved blocks table path inside the UrbanSim population-source H5."
     ),
     USIM_H5_UPDATED: "UrbanSim datastore updated by ATLAS postprocess.",
     USIM_INPUT_NEXT: "UrbanSim datastore for the next iteration produced by ActivitySim.",

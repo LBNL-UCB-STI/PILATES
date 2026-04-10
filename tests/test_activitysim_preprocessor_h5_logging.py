@@ -1,8 +1,16 @@
 import logging
+from types import SimpleNamespace
 
 import pandas as pd
 
 from pilates.activitysim import preprocessor as asim_preprocessor
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.workflows.artifact_keys import (
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+)
 
 
 def test_activitysim_h5_table_path_normalizes_prefixes() -> None:
@@ -66,6 +74,55 @@ def test_log_activitysim_usim_input_tables_logs_expected_keys(monkeypatch) -> No
     ]
     assert all(call[3] == "input" for call in calls)
     assert all(call[4]["profile_file_schema"] is True for call in calls)
+
+
+def test_activitysim_h5_preferred_prefixes_prefers_forecast_year() -> None:
+    state = SimpleNamespace(forecast_year=2019, year=2018)
+
+    assert asim_preprocessor._activitysim_h5_preferred_prefixes(state) == (
+        "2019",
+        "2018",
+        "",
+    )
+
+
+def test_detect_activitysim_h5_prefix_prefers_forecast_year_tables(tmp_path) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for prefix in ("2018", "2019"):
+            for table_name in ("households", "persons", "jobs", "blocks"):
+                store.put(f"/{prefix}/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pd.HDFStore(h5_path, mode="r") as store:
+        prefix = asim_preprocessor._detect_activitysim_h5_prefix(
+            store,
+            required_tables=("households", "persons", "jobs", "blocks"),
+            preferred_prefixes=asim_preprocessor._activitysim_h5_preferred_prefixes(
+                SimpleNamespace(forecast_year=2019, year=2018)
+            ),
+        )
+
+    assert prefix == "2019"
+
+
+def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for prefix in ("2018", "2019"):
+            for table_name in ("households", "persons", "jobs", "blocks"):
+                store.put(f"/{prefix}/{table_name}", pd.DataFrame({"value": [1]}))
+
+    resolved = resolve_usim_population_table_paths(
+        h5_path=str(h5_path),
+        year=2019,
+    )
+
+    assert resolved == {
+        USIM_POPULATION_HOUSEHOLDS_TABLE: "/2019/households",
+        USIM_POPULATION_PERSONS_TABLE: "/2019/persons",
+        USIM_POPULATION_JOBS_TABLE: "/2019/jobs",
+        USIM_POPULATION_BLOCKS_TABLE: "/2019/blocks",
+    }
 
 
 def test_coerce_integer_like_columns_converts_only_whole_number_floats() -> None:

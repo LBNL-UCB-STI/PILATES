@@ -19,9 +19,17 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
-from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR, USIM_POPULATION_SOURCE_H5
+from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows.binding import build_binding_plan
 from pilates.workspace import Workspace
 
@@ -65,6 +73,13 @@ from pilates.workflows.tracker_outputs import (
 )
 
 logger = logging.getLogger(__name__)
+
+_ACTIVITYSIM_POPULATION_TABLE_KEYS = (
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_BLOCKS_TABLE,
+)
 
 
 def _canonical_activitysim_run_output_key(short_name: str) -> str:
@@ -149,7 +164,15 @@ def _execute_activitysim_preprocess(
     filtered_kwargs = {
         key: value
         for key, value in runtime_kwargs.items()
-        if key in {"final_skims_omx", "population_source_h5_path"}
+        if key
+        in {
+            "final_skims_omx",
+            "population_source_h5_path",
+            USIM_POPULATION_HOUSEHOLDS_TABLE,
+            USIM_POPULATION_PERSONS_TABLE,
+            USIM_POPULATION_JOBS_TABLE,
+            USIM_POPULATION_BLOCKS_TABLE,
+        }
     }
     callable_kwargs = _filter_kwargs_for_callable(preprocessor.preprocess, filtered_kwargs)
     if (
@@ -322,7 +345,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
     step_inputs: Optional[Mapping[str, Any]] = None,
-) -> Dict[str, str]:
+) -> Dict[str, Any]:
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
     else:
@@ -340,13 +363,42 @@ def _resolve_activitysim_preprocess_runtime_inputs(
             key=USIM_POPULATION_SOURCE_H5,
             coupler=coupler,
         )
-    return {
-        "population_source_h5_path": _resolve_activitysim_h5_runtime_path(
-            value=population_source_value,
-            key=USIM_POPULATION_SOURCE_H5,
-            workspace=workspace,
-        ),
+    population_source_h5_path = _resolve_activitysim_h5_runtime_path(
+        value=population_source_value,
+        key=USIM_POPULATION_SOURCE_H5,
+        workspace=workspace,
+    )
+    runtime_inputs: Dict[str, Any] = {
+        "population_source_h5_path": population_source_h5_path,
     }
+    if step_inputs:
+        for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS:
+            table_value = step_inputs.get(table_key)
+            if isinstance(table_value, str) and table_value:
+                runtime_inputs[table_key] = table_value
+
+    missing_table_keys = [
+        table_key for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS if table_key not in runtime_inputs
+    ]
+    if population_source_h5_path and missing_table_keys:
+        target_year = getattr(state, "forecast_year", None)
+        if target_year is None:
+            target_year = getattr(state, "year", None)
+        try:
+            resolved_table_paths = resolve_usim_population_table_paths(
+                h5_path=population_source_h5_path,
+                year=target_year,
+            )
+        except Exception as exc:
+            logger.debug(
+                "Skipping ActivitySim population table resolution for %s: %s",
+                population_source_h5_path,
+                exc,
+            )
+        else:
+            for table_key, table_path in resolved_table_paths.items():
+                runtime_inputs.setdefault(table_key, table_path)
+    return runtime_inputs
 
 
 def _resolve_activitysim_postprocess_runtime_inputs(
@@ -979,65 +1031,38 @@ def make_activitysim_preprocess_step(
             input_desc = (
                 f"UrbanSim population-source datastore for ActivitySim year {state.year}"
             )
-            h5_tables_used = [
-                "households",
-                "persons",
-                "jobs",
-                "blocks",
-            ]
-            table_keys = {
-                "/households": "activitysim_preprocess_usim_households_table_input",
-                "/persons": "activitysim_preprocess_usim_persons_table_input",
-                "/jobs": "activitysim_preprocess_usim_jobs_table_input",
-                "/blocks": "activitysim_preprocess_usim_blocks_table_input",
-            }
-            table_descriptions = {
-                "/households": "UrbanSim households table used by ActivitySim preprocess",
-                "/persons": "UrbanSim persons table used by ActivitySim preprocess",
-                "/jobs": "UrbanSim jobs table used by ActivitySim preprocess",
-                "/blocks": "UrbanSim blocks table used by ActivitySim preprocess",
-            }
-            start_year = state.start_year
-            if start_year is not None:
-                h5_tables_used.extend(
-                    [
-                        f"/{start_year}/households",
-                        f"/{start_year}/persons",
-                        f"/{start_year}/jobs",
-                        f"/{start_year}/blocks",
-                    ]
+            table_config = (
+                (USIM_POPULATION_HOUSEHOLDS_TABLE, "households"),
+                (USIM_POPULATION_PERSONS_TABLE, "persons"),
+                (USIM_POPULATION_JOBS_TABLE, "jobs"),
+                (USIM_POPULATION_BLOCKS_TABLE, "blocks"),
+            )
+            h5_tables_used = []
+            table_keys = {}
+            table_descriptions = {}
+            start_year = getattr(state, "start_year", None)
+            for table_key, table_name in table_config:
+                table_path = runtime_inputs.get(table_key)
+                if not isinstance(table_path, str) or not table_path:
+                    continue
+                h5_tables_used.append(table_path)
+                key_suffix = (
+                    "start_year_input"
+                    if start_year is not None
+                    and table_path.startswith(f"/{start_year}/")
+                    else "input"
                 )
-                table_keys.update(
-                    {
-                        f"/{start_year}/households": (
-                            "activitysim_preprocess_usim_households_table_start_year_input"
-                        ),
-                        f"/{start_year}/persons": (
-                            "activitysim_preprocess_usim_persons_table_start_year_input"
-                        ),
-                        f"/{start_year}/jobs": (
-                            "activitysim_preprocess_usim_jobs_table_start_year_input"
-                        ),
-                        f"/{start_year}/blocks": (
-                            "activitysim_preprocess_usim_blocks_table_start_year_input"
-                        ),
-                    }
+                year_label = (
+                    "start-year"
+                    if start_year is not None
+                    and table_path.startswith(f"/{start_year}/")
+                    else "resolved"
                 )
-                table_descriptions.update(
-                    {
-                        f"/{start_year}/households": (
-                            "UrbanSim start-year households table used by ActivitySim preprocess"
-                        ),
-                        f"/{start_year}/persons": (
-                            "UrbanSim start-year persons table used by ActivitySim preprocess"
-                        ),
-                        f"/{start_year}/jobs": (
-                            "UrbanSim start-year jobs table used by ActivitySim preprocess"
-                        ),
-                        f"/{start_year}/blocks": (
-                            "UrbanSim start-year blocks table used by ActivitySim preprocess"
-                        ),
-                    }
+                table_keys[table_path] = (
+                    f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                )
+                table_descriptions[table_path] = (
+                    f"UrbanSim {year_label} {table_name} table used by ActivitySim preprocess"
                 )
             log_and_set_input(
                 key=USIM_POPULATION_SOURCE_H5,
@@ -1054,7 +1079,15 @@ def make_activitysim_preprocess_step(
                 table_keys=table_keys,
                 description_by_table=table_descriptions,
             )
-        return {"population_source_h5_path": usim_path}
+        return {
+            "population_source_h5_path": usim_path,
+            **{
+                table_key: runtime_inputs[table_key]
+                for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS
+                if isinstance(runtime_inputs.get(table_key), str)
+                and runtime_inputs.get(table_key)
+            },
+        }
 
     def _log_outputs(
         outputs: ActivitySimPreprocessOutputs,

@@ -23,6 +23,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     load_canonical_zones,
@@ -30,6 +31,12 @@ from pilates.utils.zone_utils import (
 )
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.artifact_keys import (
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+)
 from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
@@ -2078,6 +2085,10 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
         population_source_h5_path: Optional[str] = None,
+        usim_population_households_table: Optional[str] = None,
+        usim_population_persons_table: Optional[str] = None,
+        usim_population_jobs_table: Optional[str] = None,
+        usim_population_blocks_table: Optional[str] = None,
         usim_datastore_h5: Optional[Any] = None,
         usim_datastore_base_h5: Optional[Any] = None,
     ) -> ActivitySimPreprocessOutputs:
@@ -2097,6 +2108,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             )
         if population_source_h5_path is not None:
             preprocess_kwargs["population_source_h5_path"] = population_source_h5_path
+        resolved_table_paths = {
+            "households": usim_population_households_table,
+            "persons": usim_population_persons_table,
+            "jobs": usim_population_jobs_table,
+            "blocks": usim_population_blocks_table,
+        }
+        if any(path is not None for path in resolved_table_paths.values()):
+            preprocess_kwargs["resolved_h5_table_paths"] = {
+                key: value for key, value in resolved_table_paths.items() if value is not None
+            }
         record_store = self._preprocess(
             workspace,
             previous_records if previous_records is not None else RecordStore(),
@@ -2129,6 +2150,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
         population_source_h5_path: Optional[str] = None,
+        resolved_h5_table_paths: Optional[Dict[str, str]] = None,
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -2242,11 +2264,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             raise ValueError(
                 "ActivitySim preprocess requires an explicit population_source_h5_path."
             )
+        create_kwargs: Dict[str, Any] = {
+            "usim_store_path": population_source_h5_path,
+        }
+        if resolved_h5_table_paths is not None:
+            create_kwargs["resolved_h5_table_paths"] = resolved_h5_table_paths
         data_from_usim = create_asim_data_from_h5(
             settings,
             self.state,
             workspace,
-            usim_store_path=population_source_h5_path,
+            **create_kwargs,
         )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
@@ -3824,11 +3851,39 @@ def _detect_activitysim_h5_prefix(
     return None
 
 
+def _activitysim_h5_preferred_prefixes(
+    state: "WorkflowState",
+) -> Tuple[Optional[Union[str, int]], ...]:
+    """
+    Prefer the forecast-year slice inside a bound UrbanSim population datastore.
+
+    The population-source H5 handed off from UrbanSim/ATLAS can contain multiple
+    year-scoped table families. ActivitySim should consume the semantic target
+    population for the interval, which is represented by ``forecast_year`` when
+    available, not the workflow start year.
+    """
+    ordered_prefixes: List[Optional[Union[str, int]]] = []
+    for prefix in (
+        getattr(state, "forecast_year", None),
+        getattr(state, "year", None),
+        "",
+    ):
+        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
+        if normalized == "":
+            candidate: Optional[Union[str, int]] = ""
+        else:
+            candidate = normalized
+        if candidate not in ordered_prefixes:
+            ordered_prefixes.append(candidate)
+    return tuple(ordered_prefixes)
+
+
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
     usim_store_path: str,
+    resolved_h5_table_paths: Optional[Dict[str, str]] = None,
 ) -> List[FileRecord]:
     """
     Create ActivitySim input data from UrbanSim H5 outputs.
@@ -3886,30 +3941,29 @@ def create_asim_data_from_h5(
         "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
         usim_store_path,
     )
-    store = pd.HDFStore(usim_store_path, mode="r")
-    prefix = _detect_activitysim_h5_prefix(
-        store,
-        required_tables=("households", "persons", "jobs", "blocks"),
-        preferred_prefixes=(getattr(state, "start_year", None), ""),
-    )
-    if prefix is None:
-        available_keys = sorted(store.keys())
-        store.close()
-        raise KeyError(
-            "ActivitySim preprocess could not resolve required UrbanSim tables "
-            f"from bound datastore {usim_store_path}. Available keys: {available_keys}"
+    if resolved_h5_table_paths is None:
+        target_year = getattr(state, "forecast_year", None)
+        if target_year is None:
+            target_year = getattr(state, "year", None)
+        resolved_table_keys = resolve_usim_population_table_paths(
+            h5_path=usim_store_path,
+            year=target_year,
         )
-    logger.info(
-        "ActivitySim preprocess UrbanSim table prefix: %s",
-        prefix if prefix else "<root>",
-    )
-    try:
         resolved_h5_table_paths = {
-            "households": _activitysim_h5_table_path(prefix, "households"),
-            "persons": _activitysim_h5_table_path(prefix, "persons"),
-            "jobs": _activitysim_h5_table_path(prefix, "jobs"),
-            "blocks": _activitysim_h5_table_path(prefix, "blocks"),
+            "households": resolved_table_keys[USIM_POPULATION_HOUSEHOLDS_TABLE],
+            "persons": resolved_table_keys[USIM_POPULATION_PERSONS_TABLE],
+            "jobs": resolved_table_keys[USIM_POPULATION_JOBS_TABLE],
+            "blocks": resolved_table_keys[USIM_POPULATION_BLOCKS_TABLE],
         }
+    logger.info(
+        "ActivitySim preprocess UrbanSim tables: households=%s persons=%s jobs=%s blocks=%s",
+        resolved_h5_table_paths.get("households"),
+        resolved_h5_table_paths.get("persons"),
+        resolved_h5_table_paths.get("jobs"),
+        resolved_h5_table_paths.get("blocks"),
+    )
+    store = pd.HDFStore(usim_store_path, mode="r")
+    try:
         households = store[resolved_h5_table_paths["households"]]
         persons = store[resolved_h5_table_paths["persons"]]
         jobs = store[resolved_h5_table_paths["jobs"]]

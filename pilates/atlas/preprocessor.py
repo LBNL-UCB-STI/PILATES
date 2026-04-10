@@ -23,6 +23,7 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 
 logger = logging.getLogger(__name__)
 
@@ -356,65 +357,8 @@ def _atlas_static_input_metadata(
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
-    """
-    Resolve the HDF5 key for an ATLAS-required table.
-
-    Prefer ``/{year}/{table}`` when present, regardless of whether the current
-    ATLAS sub-year is the first sub-year in the interval. Some start-subyear
-    UrbanSim snapshots are still year-scoped (for example ``/2023/households``
-    inside ``model_data_2023.h5``) rather than root-scoped.
-
-    Fall back to root-level ``{table}`` to support merged/current datastores
-    that do not keep per-year table prefixes.
-    """
-    year_key = f"/{year}/{table}"
-    if year_key in store:
-        return year_key
-
-    if table in store:
-        if is_start_year:
-            return table
-        logger.warning(
-            "[AtlasPreprocessor] Year-specific table %s not found; falling back "
-            "to root table %s.",
-            year_key,
-            table,
-        )
-        return table
-
-    # Some UrbanSim outputs may carry only year-scoped tables (e.g. /2023/*)
-    # without root aliases. For ATLAS subyear runs, fall back to the nearest
-    # available year-scoped table for this table name.
-    suffix = f"/{table}"
-    year_scoped_candidates: list[tuple[int, str]] = []
-    for key in store.keys():
-        if not key.endswith(suffix):
-            continue
-        parts = key.strip("/").split("/")
-        if len(parts) != 2:
-            continue
-        year_token, table_token = parts
-        if table_token != table or not year_token.isdigit():
-            continue
-        year_scoped_candidates.append((int(year_token), key))
-
-    if year_scoped_candidates:
-        prior_or_equal = [entry for entry in year_scoped_candidates if entry[0] <= year]
-        if prior_or_equal:
-            selected_year, selected_key = max(prior_or_equal, key=lambda x: x[0])
-        else:
-            selected_year, selected_key = min(year_scoped_candidates, key=lambda x: x[0])
-        logger.warning(
-            "[AtlasPreprocessor] Year-specific table %s and root table %s were missing; "
-            "falling back to nearest available year-scoped table %s (year=%s).",
-            year_key,
-            table,
-            selected_key,
-            selected_year,
-        )
-        return selected_key
-
-    return year_key
+    _ = is_start_year
+    return resolve_usim_h5_table_key(store, year=year, table=table)
 
 
 def _resolve_atlas_static_sources(

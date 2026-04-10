@@ -204,12 +204,24 @@ def validate_population_consistency(
     ).dropna().astype(int)
     missing_households = pd.Index(vehicle_household_ids.unique()).difference(household_ids)
     if len(missing_households):
-        raise RuntimeError(
+        unique_vehicle_households = pd.Index(vehicle_household_ids.unique())
+        missing_share = (
+            float(len(missing_households)) / float(len(unique_vehicle_households))
+            if len(unique_vehicle_households)
+            else 0.0
+        )
+        logger.warning(
             "BEAM staged vehicles reference households that are absent from staged "
-            "households. "
-            f"missing_households={len(missing_households)} "
-            f"sample_missing_households={missing_households.tolist()[:10]} "
-            f"households_path={households_path} vehicles_path={vehicles_path}"
+            "households. Continuing because BEAM can filter vehicles against the "
+            "staged household set. "
+            "missing_households=%s vehicle_households=%s missing_share=%.6f "
+            "sample_missing_households=%s households_path=%s vehicles_path=%s",
+            len(missing_households),
+            len(unique_vehicle_households),
+            missing_share,
+            missing_households.tolist()[:10],
+            households_path,
+            vehicles_path,
         )
 
 

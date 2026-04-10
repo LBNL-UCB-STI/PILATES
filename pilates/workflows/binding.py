@@ -26,6 +26,7 @@ from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_preced
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
@@ -43,6 +44,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
 
@@ -269,6 +274,34 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             required=True,
             allow_fallback=True,
             preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+            fallback_provider="activitysim_population_source",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_HOUSEHOLDS_TABLE,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_HOUSEHOLDS_TABLE,),
+            fallback_provider="activitysim_population_source",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_PERSONS_TABLE,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_PERSONS_TABLE,),
+            fallback_provider="activitysim_population_source",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_JOBS_TABLE,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_JOBS_TABLE,),
+            fallback_provider="activitysim_population_source",
+        ),
+        ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_BLOCKS_TABLE,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_BLOCKS_TABLE,),
             fallback_provider="activitysim_population_source",
         ),
     )
@@ -614,10 +647,42 @@ def _activitysim_population_source(
             mapping[_CANDIDATE_PATHS_METADATA_KEY] = dict(candidate_paths)
         return mapping or None
 
+    def _target_population_year() -> Optional[int]:
+        forecast_year = getattr(state, "forecast_year", None)
+        if forecast_year is not None:
+            return int(forecast_year)
+        if year is not None:
+            return int(year)
+        current_year = getattr(state, "year", getattr(state, "current_year", None))
+        if current_year is not None:
+            return int(current_year)
+        return None
+
+    def _with_population_tables(mapping: Dict[str, Any]) -> Optional[Mapping[str, Any]]:
+        selected = mapping.get(USIM_POPULATION_SOURCE_H5)
+        if isinstance(selected, (str, os.PathLike)):
+            selected_path = os.fspath(selected)
+            if os.path.exists(selected_path):
+                try:
+                    mapping.update(
+                        resolve_usim_population_table_paths(
+                            h5_path=selected_path,
+                            year=_target_population_year(),
+                        )
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to resolve ActivitySim population-source table paths "
+                        "for %s: %s",
+                        selected_path,
+                        exc,
+                    )
+        return _with_metadata(mapping)
+
     if USIM_POPULATION_SOURCE_H5 in explicit_inputs:
         candidate = explicit_inputs.get(USIM_POPULATION_SOURCE_H5)
         if candidate:
-            return _with_metadata({USIM_POPULATION_SOURCE_H5: candidate})
+            return _with_population_tables({USIM_POPULATION_SOURCE_H5: candidate})
 
     if not _workflow_stage_enabled(state, "land_use"):
         base_candidate = explicit_inputs.get(USIM_DATASTORE_BASE_H5)
@@ -633,7 +698,7 @@ def _activitysim_population_source(
             )
         selected = base_candidate or current_candidate
         if selected:
-            return _with_metadata({USIM_POPULATION_SOURCE_H5: selected})
+            return _with_population_tables({USIM_POPULATION_SOURCE_H5: selected})
         base_inputs = _activitysim_input_datastore(
             settings=settings,
             workspace=workspace,
@@ -641,7 +706,7 @@ def _activitysim_population_source(
         base_path = None if not base_inputs else base_inputs.get(USIM_DATASTORE_BASE_H5)
         if base_path:
             candidate_paths[USIM_POPULATION_SOURCE_H5] = [str(base_path)]
-            return _with_metadata({USIM_POPULATION_SOURCE_H5: base_path})
+            return _with_population_tables({USIM_POPULATION_SOURCE_H5: base_path})
         return None
 
     candidates = _urbansim_datastore_candidates_for_year(
@@ -661,7 +726,7 @@ def _activitysim_population_source(
                 candidate_paths[USIM_POPULATION_SOURCE_H5] = list(dict.fromkeys(ordered))
     selected = candidates.get(USIM_POPULATION_SOURCE_H5)
     if selected:
-        return _with_metadata({USIM_POPULATION_SOURCE_H5: selected})
+        return _with_population_tables({USIM_POPULATION_SOURCE_H5: selected})
     return None
 
 
@@ -773,13 +838,7 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
 def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
     return {
         "activitysim_preprocess": (
-            ArtifactBindingRule(
-                semantic_key=USIM_POPULATION_SOURCE_H5,
-                required=True,
-                allow_fallback=True,
-                preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-                fallback_provider="activitysim_population_source",
-            ),
+            *activitysim_population_source_selection_rules(),
             ArtifactBindingRule(
                 semantic_key=FINAL_SKIMS_OMX,
                 required=False,

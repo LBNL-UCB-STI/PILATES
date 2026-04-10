@@ -400,8 +400,9 @@ class BeamPreprocessor(GenericPreprocessor):
             restored_vehicle_source = next(
                 (
                     record.file_path
-                    for record in input_records.all_records()
-                    if getattr(record, "short_name", None) == ATLAS_VEHICLES2_OUTPUT
+                    for record in previous_records.all_records()
+                    if getattr(record, "short_name", None)
+                    in (ATLAS_VEHICLES2_OUTPUT, "vehicles_beam_in")
                 ),
                 None,
             )

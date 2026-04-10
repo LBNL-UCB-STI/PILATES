@@ -18,6 +18,10 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_H5_UPDATED,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import (
@@ -287,7 +291,13 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
     monkeypatch.setitem(
         binding_module._FALLBACK_PROVIDERS,
         "activitysim_population_source",
-        lambda **_: {USIM_POPULATION_SOURCE_H5: "/tmp/base.h5"},
+        lambda **_: {
+            USIM_POPULATION_SOURCE_H5: "/tmp/base.h5",
+            USIM_POPULATION_HOUSEHOLDS_TABLE: "/2030/households",
+            USIM_POPULATION_PERSONS_TABLE: "/2030/persons",
+            USIM_POPULATION_JOBS_TABLE: "/2030/jobs",
+            USIM_POPULATION_BLOCKS_TABLE: "/2030/blocks",
+        },
     )
 
     plan = build_binding_plan(
@@ -299,6 +309,7 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
     )
 
     assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/base.h5"
+    assert plan.inputs[USIM_POPULATION_HOUSEHOLDS_TABLE] == "/2030/households"
     assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "fallback"
     assert not plan.missing_required
 
