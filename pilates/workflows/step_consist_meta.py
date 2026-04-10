@@ -203,7 +203,13 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             (root for root in pwd_candidates if (root / expected_suffix).exists()),
             beam_input_root.parent,
         )
-        env_overrides = {"PWD": str(pwd_root)}
+        # BEAM configs in the wild may resolve paths via either `PWD` or a
+        # bare `inputDirectory` key. Seed both so staged configs canonicalize
+        # the same way they run inside the container.
+        env_overrides = {
+            "PWD": str(pwd_root),
+            "inputDirectory": str(config_root),
+        }
         return BeamConfigAdapter(
             root_dirs=[config_root],
             primary_config=primary_config,

@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import inspect
 from types import SimpleNamespace
@@ -12,6 +13,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
 )
+from pilates.workflows.steps.beam import _archive_beam_config_references
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_beam_preprocess_step,
@@ -144,6 +146,12 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
     assert adapter.primary_config == (
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config
     )
+    assert adapter.env_overrides == {
+        "PWD": str(Path(workspace.full_path) / "beam"),
+        "inputDirectory": str(
+            Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+        ),
+    }
     assert resolved_config["model"] == "beam_run"
     assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 
@@ -201,6 +209,36 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
     assert tracker.canonicalize_config.call_count == 0
     assert tracker.prepare_config.call_count == 0
     assert tracker.prepare_config_resolver.call_count == 0
+
+
+def test_beam_config_reference_archival_resolves_input_directory(
+    tmp_path,
+):
+    workspace, settings = _setup_config(tmp_path)
+    config_root = (
+        Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    )
+    config_path = config_root / settings.beam.config
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "sample.csv").write_text("value\n1\n", encoding="utf-8")
+    config_path.write_text(
+        'beam.agentsim.agents.vehicles.vehicleTypesFilePath = ${inputDirectory}"/sample.csv"\n',
+        encoding="utf-8",
+    )
+
+    snapshot_dir = tmp_path / "snapshot"
+    archive_root = _archive_beam_config_references(
+        settings=settings,
+        workspace=workspace,
+        snapshot_dir=snapshot_dir,
+    )
+
+    assert archive_root == snapshot_dir / "beam_input_config_references_archived"
+    assert (archive_root / "sample.csv").exists()
+    manifest = json.loads(
+        (archive_root / "__archive_manifest.json").read_text(encoding="utf-8")
+    )
+    assert manifest["sample.csv"] == str(config_root / "sample.csv")
 
 
 def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):

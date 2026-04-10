@@ -167,6 +167,8 @@ def run_supply_demand_stage(
                 workspace=workspace,
                 outputs_holder=outputs_holder,
                 state=state,
+                settings=settings,
+                manifest_path=Path(manifest_path),
             )
 
         # C2. TRAFFIC ASSIGNMENT

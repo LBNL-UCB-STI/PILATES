@@ -401,7 +401,12 @@ def _archive_beam_config_references(
             _beam_config_reference_relative_path(include_path, config_root)
         ] = include_path
 
-    env_overrides = {"PWD": str(_beam_config_pwd_root(settings, workspace))}
+    # Seed both `PWD` and `inputDirectory` so canonicalization can resolve the
+    # staged BEAM config tree even when a legacy config uses bare references.
+    env_overrides = {
+        "PWD": str(_beam_config_pwd_root(settings, workspace)),
+        "inputDirectory": str(config_root),
+    }
     try:
         config_tree = _load_beam_config_tree(
             config_path,

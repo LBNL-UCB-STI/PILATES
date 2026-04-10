@@ -1682,6 +1682,7 @@ def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
         workspace=workspace,
         outputs_holder=holder,
         state=state,
+        settings=stage_env["settings"],
     )
 
     assert restored == {
@@ -1741,6 +1742,7 @@ def test_restore_activity_demand_outputs_for_resume_republishes_zarr_skims(
         workspace=workspace,
         outputs_holder=holder,
         state=state,
+        settings=stage_env["settings"],
     )
 
     assert restored is not None

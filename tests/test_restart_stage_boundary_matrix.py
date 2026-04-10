@@ -55,6 +55,7 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
+from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
@@ -682,6 +683,90 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
     assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
     assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
     assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
+
+
+def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_manifest(
+    restart_stage_env, tmp_path
+):
+    settings = restart_stage_env["settings"]
+    state = restart_stage_env["state"]
+    workspace = restart_stage_env["workspace"]
+    coupler = restart_stage_env["coupler"]
+    scenario = restart_stage_env["scenario"]
+
+    settings.run.models.activity_demand = "activitysim"
+    settings.activity_demand_enabled = True
+    state._settings["activity_demand_enabled"] = True
+    settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="disabled")
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = _write_file(iter_dir / "beam_plans.parquet")
+    households = _write_file(iter_dir / "households.parquet")
+    persons = _write_file(iter_dir / "persons.parquet")
+    zarr = _write_file(Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr")
+    usim_datastore = _write_file(
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+
+    manifest_path = tmp_path / "restart_traffic_asim_manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                                ZARR_SKIMS: zarr,
+                            },
+                        )
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        usim_inputs={
+            USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
+            USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
+        },
+        build_manifest_path=lambda _workspace, year, iteration: manifest_path,
+    )
+
+    beam_preprocess_calls = [
+        call
+        for call in scenario.calls
+        if "plans_beam_in" in call["inputs"]
+        and "households_beam_in" in call["inputs"]
+        and "persons_beam_in" in call["inputs"]
+    ]
+    assert beam_preprocess_calls, "Expected BEAM preprocess to start from manifest-restored ActivitySim outputs."
+    beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
+    assert beam_preprocess_inputs["plans_beam_in"] == str(beam_plans)
+    assert beam_preprocess_inputs["households_beam_in"] == str(households)
+    assert beam_preprocess_inputs["persons_beam_in"] == str(persons)
 
 
 def test_restart_traffic_assignment_boundary_rejects_partial_hydrated_restore(

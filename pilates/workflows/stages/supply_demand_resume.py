@@ -7,9 +7,15 @@ from typing import Any, Dict, Optional
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import artifact_to_existing_path, set_coupler_from_artifact
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    resolve_existing_path,
+    set_coupler_from_artifact,
+)
 from pilates.utils.io import locate_beam_file
+from pilates.utils.step_manifest import load_step_manifest
 from pilates.workflows.artifact_keys import ZARR_SKIMS
+from pilates.workflows.orchestration import _restore_outputs_from_manifest
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
@@ -54,6 +60,8 @@ def _restore_activity_demand_outputs_for_resume(
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
     state: WorkflowState,
+    settings: PilatesConfig,
+    manifest_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Rehydrate ActivitySim outputs for BEAM when resuming after a skipped substage.
@@ -108,6 +116,26 @@ def _restore_activity_demand_outputs_for_resume(
 
     _ = state
     postprocess_outputs = outputs_holder.activitysim_postprocess
+    if postprocess_outputs is None and manifest_path is not None:
+        resolved_manifest_path = resolve_existing_path(
+            str(manifest_path),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if resolved_manifest_path is not None:
+            manifest = load_step_manifest(Path(resolved_manifest_path))
+        else:
+            manifest = None
+        if manifest:
+            postprocess_outputs = _restore_outputs_from_manifest(
+                "activitysim_postprocess",
+                manifest,
+                workspace,
+                settings=settings,
+                state=state,
+            )
+            if postprocess_outputs is not None:
+                outputs_holder.activitysim_postprocess = postprocess_outputs
     if postprocess_outputs is not None:
         restored_outputs = step_output_handoff_mapping(
             postprocess_outputs,
