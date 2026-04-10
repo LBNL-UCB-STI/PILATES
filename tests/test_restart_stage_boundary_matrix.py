@@ -707,7 +707,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_m
     beam_plans = _write_file(iter_dir / "beam_plans.parquet")
     households = _write_file(iter_dir / "households.parquet")
     persons = _write_file(iter_dir / "persons.parquet")
-    zarr = _write_file(Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr")
+    archived_zarr = _write_file(
+        Path(workspace.get_asim_output_dir()) / "inputs-year-2017-iteration-0" / "skims.zarr"
+    )
     usim_datastore = _write_file(
         Path(workspace.get_usim_mutable_data_dir())
         / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
@@ -728,7 +730,7 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_m
                                 "beam_plans_asim_out": beam_plans,
                                 "households_asim_out": households,
                                 "persons_asim_out": persons,
-                                ZARR_SKIMS: zarr,
+                                "asim_input_skims_zarr_archived": archived_zarr,
                             },
                         )
                     ),

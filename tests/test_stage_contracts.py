@@ -1749,6 +1749,51 @@ def test_restore_activity_demand_outputs_for_resume_republishes_zarr_skims(
     assert coupler.get(ZARR_SKIMS) == str(archived_zarr)
 
 
+def test_restore_activity_demand_outputs_for_resume_promotes_archived_zarr_skims(
+    stage_env,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    holder = StepOutputsHolder()
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+
+    holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=None,
+        asim_output_dir=None,
+        processed_outputs={
+            "beam_plans_asim_out": beam_plans,
+            "households_asim_out": households,
+            "persons_asim_out": persons,
+            "asim_input_skims_zarr_archived": archived_zarr,
+        },
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=stage_env["settings"],
+    )
+
+    assert restored is not None
+    assert Path(restored[ZARR_SKIMS]) == archived_zarr
+    assert coupler.get(ZARR_SKIMS) == str(archived_zarr)
+
+
 def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_path):
     """
     Full-skim schedule after_each_iteration should run dedicated full-skim step.

@@ -30,6 +30,7 @@ _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     "persons_asim_out",
     ZARR_SKIMS,
 )
+_ARCHIVED_ZARR_SKIMS_KEY = "asim_input_skims_zarr_archived"
 
 
 def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optional[str]:
@@ -90,6 +91,27 @@ def _restore_activity_demand_outputs_for_resume(
             None if isinstance(zarr_value, (str, os.PathLike)) else zarr_value,
             fallback=str(zarr_path),
         )
+
+    def _promote_archived_zarr_skims(
+        restored_outputs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Promote the archived ActivitySim skims input into the BEAM contract.
+
+        ActivitySim postprocess persists the archived Zarr input under
+        ``asim_input_skims_zarr_archived``. BEAM restart expects the same
+        artifact under the canonical ``zarr_skims`` key, so make that mapping
+        explicit before validation.
+        """
+        if ZARR_SKIMS in restored_outputs:
+            return restored_outputs
+        processed_outputs = getattr(postprocess_outputs, "processed_outputs", None) or {}
+        archived_zarr = processed_outputs.get(_ARCHIVED_ZARR_SKIMS_KEY)
+        if archived_zarr is None:
+            return restored_outputs
+        promoted = dict(restored_outputs)
+        promoted[ZARR_SKIMS] = archived_zarr
+        return promoted
 
     def _require_complete_restore(
         restored_outputs: Dict[str, Any], source: str
@@ -152,6 +174,7 @@ def _restore_activity_demand_outputs_for_resume(
                 postprocess_outputs,
                 coupler=coupler,
             )
+        restored_outputs = _promote_archived_zarr_skims(restored_outputs)
         validated = _require_complete_restore(restored_outputs, "step outputs")
         if validated is None:
             return None
