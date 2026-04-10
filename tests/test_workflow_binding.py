@@ -332,8 +332,13 @@ def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkey
     )
 
     assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/base.h5"
-    assert plan.inputs[USIM_POPULATION_HOUSEHOLDS_TABLE] == "/2030/households"
+    assert USIM_POPULATION_HOUSEHOLDS_TABLE not in plan.inputs
+    assert (
+        plan.metadata["resolved_values_by_semantic_key"][USIM_POPULATION_HOUSEHOLDS_TABLE]
+        == "/2030/households"
+    )
     assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "fallback"
+    assert plan.source_by_key[USIM_POPULATION_HOUSEHOLDS_TABLE] == "fallback"
     assert not plan.missing_required
 
 

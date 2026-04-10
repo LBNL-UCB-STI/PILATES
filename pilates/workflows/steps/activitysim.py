@@ -65,6 +65,7 @@ from .shared import (
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
+    resolved_metadata_value_for_key,
     resolved_value_for_key,
 )
 from pilates.workflows.tracker_outputs import (
@@ -348,6 +349,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
 ) -> Dict[str, Any]:
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
+        resolution = None
     else:
         step_year = getattr(state, "year", getattr(state, "forecast_year", None))
         resolution = build_binding_plan(
@@ -376,6 +378,14 @@ def _resolve_activitysim_preprocess_runtime_inputs(
             table_value = step_inputs.get(table_key)
             if isinstance(table_value, str) and table_value:
                 runtime_inputs[table_key] = table_value
+    if resolution is not None:
+        for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS:
+            table_value = resolved_metadata_value_for_key(
+                resolved=resolution,
+                key=table_key,
+            )
+            if isinstance(table_value, str) and table_value:
+                runtime_inputs.setdefault(table_key, table_value)
 
     missing_table_keys = [
         table_key for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS if table_key not in runtime_inputs

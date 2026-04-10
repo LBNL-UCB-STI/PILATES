@@ -277,10 +277,14 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
             source_by_key={USIM_POPULATION_SOURCE_H5: "explicit"},
             inputs={
                 USIM_POPULATION_SOURCE_H5: str(tmp_path / "model_data.h5"),
-                USIM_POPULATION_HOUSEHOLDS_TABLE: "/2025/households",
-                USIM_POPULATION_PERSONS_TABLE: "/2025/persons",
-                USIM_POPULATION_JOBS_TABLE: "/2025/jobs",
-                USIM_POPULATION_BLOCKS_TABLE: "/2025/blocks",
+            },
+            metadata={
+                "resolved_values_by_semantic_key": {
+                    USIM_POPULATION_HOUSEHOLDS_TABLE: "/2025/households",
+                    USIM_POPULATION_PERSONS_TABLE: "/2025/persons",
+                    USIM_POPULATION_JOBS_TABLE: "/2025/jobs",
+                    USIM_POPULATION_BLOCKS_TABLE: "/2025/blocks",
+                }
             },
         ),
     )
@@ -351,6 +355,44 @@ def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths
     assert captured["usim_population_persons_table"] == "/2025/persons"
     assert captured["usim_population_jobs_table"] == "/2025/jobs"
     assert captured["usim_population_blocks_table"] == "/2025/blocks"
+
+
+def test_activitysim_preprocess_runtime_inputs_read_table_paths_from_binding_metadata(
+    monkeypatch, tmp_path
+) -> None:
+    h5_path = tmp_path / "model_data_2025.h5"
+    h5_path.write_text("x")
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        lambda **_kwargs: BindingPlan(
+            source_by_key={USIM_POPULATION_SOURCE_H5: "explicit"},
+            inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+            metadata={
+                "resolved_values_by_semantic_key": {
+                    USIM_POPULATION_HOUSEHOLDS_TABLE: "/2025/households",
+                    USIM_POPULATION_PERSONS_TABLE: "/2025/persons",
+                    USIM_POPULATION_JOBS_TABLE: "/2025/jobs",
+                    USIM_POPULATION_BLOCKS_TABLE: "/2025/blocks",
+                }
+            },
+        ),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_preprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2023, forecast_year=2025),
+        workspace=SimpleNamespace(),
+        coupler=_dummy_coupler(),
+        step_inputs=None,
+    )
+
+    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
+    assert runtime_inputs[USIM_POPULATION_HOUSEHOLDS_TABLE] == "/2025/households"
+    assert runtime_inputs[USIM_POPULATION_PERSONS_TABLE] == "/2025/persons"
+    assert runtime_inputs[USIM_POPULATION_JOBS_TABLE] == "/2025/jobs"
+    assert runtime_inputs[USIM_POPULATION_BLOCKS_TABLE] == "/2025/blocks"
 
 
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
