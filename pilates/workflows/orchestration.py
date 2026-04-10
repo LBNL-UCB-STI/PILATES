@@ -1765,6 +1765,14 @@ def _update_coupler_from_mapping(
             if (hasattr(resolved, "container_uri") or hasattr(resolved, "uri"))
             else None
         )
+        logger.debug(
+            "Republishing recovered coupler key=%s value_type=%s resolved_type=%s artifact_preserved=%s path=%s",
+            canonical_key,
+            type(value).__name__,
+            type(resolved).__name__,
+            artifact is not None,
+            path,
+        )
         set_coupler_from_artifact(
             coupler=coupler,
             key=canonical_key,

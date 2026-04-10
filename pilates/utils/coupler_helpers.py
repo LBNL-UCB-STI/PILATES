@@ -707,7 +707,19 @@ def resolve_artifact_from_value(
         return value
 
     tracker = cr.current_tracker()
-    if tracker is None or getattr(tracker, "db", None) is None:
+    if tracker is None:
+        logger.debug(
+            "resolve_artifact_from_value could not rehydrate key=%s path=%s because no active tracker is available.",
+            key,
+            path,
+        )
+        return value
+    if getattr(tracker, "db", None) is None:
+        logger.debug(
+            "resolve_artifact_from_value could not rehydrate key=%s path=%s because the active tracker has no db handle.",
+            key,
+            path,
+        )
         return value
 
     try:
@@ -721,11 +733,30 @@ def resolve_artifact_from_value(
             include_inputs=True,
         )
         if artifact is None:
+            logger.debug(
+                "resolve_artifact_from_value found no artifact for key=%s container_uri=%s (path=%s).",
+                key,
+                container_uri,
+                path,
+            )
             return value
         if key and getattr(artifact, "key", None) != key:
             artifact.key = key
+        logger.debug(
+            "resolve_artifact_from_value rehydrated key=%s path=%s to artifact type=%s container_uri=%s.",
+            key,
+            path,
+            type(artifact).__name__,
+            getattr(artifact, "container_uri", getattr(artifact, "uri", None)),
+        )
         return artifact
     except Exception:
+        logger.debug(
+            "resolve_artifact_from_value failed while rehydrating key=%s path=%s.",
+            key,
+            path,
+            exc_info=True,
+        )
         return value
 
 
