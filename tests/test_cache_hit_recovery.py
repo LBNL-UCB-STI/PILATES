@@ -698,6 +698,81 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     assert coupler.get(USIM_FORECAST_OUTPUT) is not None
 
 
+def test_recover_urbansim_run_outputs_materializes_historical_outputs_when_missing_locally(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    usim_output = Path(workspace.get_usim_mutable_data_dir()) / "model_data_2019.h5"
+    holder = StepOutputsHolder()
+    holder.urbansim_preprocess = object()
+    coupler = DummyCoupler()
+    materialize_calls = []
+
+    class ArtifactLike:
+        def __init__(self, key: str, container_uri: str) -> None:
+            self.key = key
+            self.container_uri = container_uri
+
+        @property
+        def path(self):
+            return Path(workspace.full_path) / self.container_uri.replace("workspace://", "")
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "usim-run-id"
+            return {
+                USIM_FORECAST_OUTPUT: ArtifactLike(
+                    USIM_FORECAST_OUTPUT,
+                    "workspace://urbansim/data/model_data_2019.h5",
+                )
+            }
+
+        def materialize_run_outputs(self, **kwargs):
+            materialize_calls.append(dict(kwargs))
+            usim_output.parent.mkdir(parents=True, exist_ok=True)
+            usim_output.write_text("cached", encoding="utf-8")
+            from consist import MaterializationResult
+
+            return MaterializationResult(
+                materialized_from_filesystem={"usim-run-id": str(workspace.full_path)}
+            )
+
+    monkeypatch.setattr(
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.steps.urbansim_atlas.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda *, key, path, coupler, **_kwargs: coupler.set(key, path),
+    )
+
+    step_func = make_urbansim_run_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
+        step=StepRef(name="urbansim_run", step_func=step_func),
+        step_name="urbansim_run",
+        outputs_holder=holder,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2019, forecast_year=2019, iteration=0),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs=None,
+        run_id="usim-run-id",
+        publish_outputs=True,
+    )
+
+    assert outputs is not None
+    assert outputs.usim_datastore_h5 == usim_output
+    assert holder.urbansim_run.usim_datastore_h5 == usim_output
+    assert materialize_calls and materialize_calls[0]["run_id"] == "usim-run-id"
+    assert USIM_FORECAST_OUTPUT in materialize_calls[0]["keys"]
+
+
 def test_recover_urbansim_preprocess_outputs_republishes_recovered_paths_without_noops(
     tmp_path, monkeypatch
 ):

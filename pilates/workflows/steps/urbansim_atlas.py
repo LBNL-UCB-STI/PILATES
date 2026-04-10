@@ -13,6 +13,7 @@ from pilates.atlas.preprocessor import (
 )
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.runner import UrbansimRunner
+from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
 from pilates.workspace import Workspace
@@ -155,6 +156,7 @@ def _recovered_cached_paths(
         _resolve_cached_run_outputs(run_id),
     )
     recovered: Dict[str, Path] = {}
+    unresolved_keys: list[str] = []
     for key, value in merged.items():
         path = artifact_to_existing_path(
             value,
@@ -163,6 +165,44 @@ def _recovered_cached_paths(
         )
         if path is not None:
             recovered[key] = Path(path)
+        else:
+            unresolved_keys.append(key)
+
+    if unresolved_keys and run_id:
+        tracker = cr.current_tracker()
+        materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+        if callable(materialize_run_outputs):
+            source_root = os.path.realpath(os.environ["PILATES_ARCHIVE_RUN_DIR"]) if os.environ.get("PILATES_ARCHIVE_RUN_DIR") else None
+            try:
+                logger.info(
+                    "Materializing cached outputs for %s into workspace because %d recovered paths were unresolved: %s",
+                    run_id,
+                    len(unresolved_keys),
+                    sorted(unresolved_keys),
+                )
+                materialize_run_outputs(
+                    run_id=run_id,
+                    target_root=os.path.realpath(workspace.full_path),
+                    source_root=source_root,
+                    preserve_existing=True,
+                    keys=list(unresolved_keys),
+                )
+            except Exception:
+                logger.debug(
+                    "Failed materializing cached outputs for %s while recovering typed outputs.",
+                    run_id,
+                    exc_info=True,
+                )
+            else:
+                for key in unresolved_keys:
+                    value = merged.get(key)
+                    path = artifact_to_existing_path(
+                        value,
+                        workspace=workspace,
+                        materialize_from_archive=False,
+                    )
+                    if path is not None:
+                        recovered[key] = Path(path)
     return recovered
 
 
