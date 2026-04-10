@@ -1255,7 +1255,7 @@ def _log_and_maybe_publish_artifact(
     if has_active_run and direction == "output":
         artifact = _find_current_run_output_artifact(key=key, path=path)
 
-    if artifact is None and (has_active_run or not skip_logging_without_active_run):
+    if artifact is None and has_active_run:
         artifact = _log_with_optional_h5_container(
             direction=direction,
             key=key,
@@ -1268,7 +1268,7 @@ def _log_and_maybe_publish_artifact(
         # path/artifact resolution.
         if isinstance(artifact, tuple):
             artifact = artifact[0] if artifact else None
-    elif artifact is None and skip_logging_without_active_run:
+    elif artifact is None and not has_active_run:
         artifact = _log_with_optional_h5_container(
             direction=direction,
             key=key,
@@ -1285,7 +1285,17 @@ def _log_and_maybe_publish_artifact(
     if publish_to_coupler:
         if coupler is None:
             raise TypeError("coupler must be provided when publish_to_coupler=True")
-        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+        # Without an active Consist run, disabled logging may yield placeholder
+        # artifacts that are useful for diagnostics but are not valid runtime
+        # handoff values. Publish plain filesystem paths in that case so restart
+        # and non-Consist execution paths can still resolve concrete inputs.
+        artifact_for_coupler = artifact if has_active_run else None
+        set_coupler_from_artifact(
+            coupler,
+            key,
+            artifact_for_coupler,
+            fallback=path,
+        )
 
 
 def log_and_set_output(

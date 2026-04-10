@@ -8,12 +8,14 @@ dlt
 duckdb
 pyarrow>=10.0.1
 pydantic>=2.0
+pyparsing==3.2.5
 rich
 sqlalchemy
 sqlmodel
 tables>=3.9.0,<4.0
 xarray==2025.11.0
 zarr==3.1.5
+google-crc32c
 typer
 tqdm
 scipy>=1.11.0
@@ -28,5 +30,5 @@ urllib3<2.0.0
 docker
 packaging>=21.0
 consist==0.1.1
-pyhocon>=0.3.60
+pyhocon==0.3.61
 pytest-cov

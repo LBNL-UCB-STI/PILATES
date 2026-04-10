@@ -25,6 +25,7 @@ dependencies:
     - pytz==2025.1
     - tzdata>=2022.1
     - pydantic>=2.0
+    - pyparsing==3.2.5
 
     # Scientific/data packages
     - numexpr==2.10.2
@@ -52,6 +53,7 @@ dependencies:
     - zarr>=3.0.6
     - asciitree
     - numcodecs>=0.10.0
+    - google-crc32c
     - fasteners
 
     # Utility packages
@@ -71,6 +73,7 @@ dependencies:
     # Database packages
     - duckdb
     - sqlmodel
+    - pyhocon==0.3.61
 
     # Provenance tracking
     - openlineage-python

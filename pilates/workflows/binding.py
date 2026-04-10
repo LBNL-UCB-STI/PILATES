@@ -664,11 +664,9 @@ def _activitysim_population_source(
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
                 try:
-                    mapping.update(
-                        resolve_usim_population_table_paths(
-                            h5_path=selected_path,
-                            year=_target_population_year(),
-                        )
+                    resolve_usim_population_table_paths(
+                        h5_path=selected_path,
+                        year=_target_population_year(),
                     )
                 except Exception as exc:
                     logger.warning(
@@ -677,6 +675,10 @@ def _activitysim_population_source(
                         selected_path,
                         exc,
                     )
+        # Keep the binding contract filesystem-oriented. ActivitySim resolves the
+        # HDF table names from the selected datastore path at execution time,
+        # so internal table identifiers like "/households" never leak into
+        # Consist input resolution where they are misinterpreted as paths.
         return _with_metadata(mapping)
 
     if USIM_POPULATION_SOURCE_H5 in explicit_inputs:

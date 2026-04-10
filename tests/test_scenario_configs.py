@@ -19,8 +19,10 @@ ACTIVE_SCENARIO_PATHS = sorted(
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
 SFBAY_ROUTER_DIRECTORY = "r5/sfbay-cbg5500-weakConn-network"
-BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260408"
-BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260408"
+DEFAULT_BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260408"
+DEFAULT_BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260408"
+BREATHE_BEAM_SINGULARITY_IMAGE = "docker://haitamlaarabi/beam:1.1-beta-v260329"
+BREATHE_BEAM_DOCKER_IMAGE = "haitamlaarabi/beam:1.1-beta-v260329"
 
 EXPECTED_WARMSTART_PATHS = {
     Path("scenarios/breathe/settings--sfbay--2018-Baseline.yaml"): (
@@ -104,8 +106,14 @@ def test_active_scenarios_pin_beam_images_and_explicit_warmstart_setting():
         data = _load_raw_yaml(path)
         infra = data["infrastructure"]
         beam = data["beam"]
-        assert infra["singularity_images"]["beam"] == BEAM_SINGULARITY_IMAGE
-        assert infra["docker_images"]["beam"] == BEAM_DOCKER_IMAGE
+        if path == Path("scenarios/breathe/settings--sfbay--2018-Baseline.yaml"):
+            expected_singularity = BREATHE_BEAM_SINGULARITY_IMAGE
+            expected_docker = BREATHE_BEAM_DOCKER_IMAGE
+        else:
+            expected_singularity = DEFAULT_BEAM_SINGULARITY_IMAGE
+            expected_docker = DEFAULT_BEAM_DOCKER_IMAGE
+        assert infra["singularity_images"]["beam"] == expected_singularity
+        assert infra["docker_images"]["beam"] == expected_docker
         assert "warmstart_linkstats_path" in beam
 
 
@@ -171,12 +179,6 @@ def test_active_scenarios_use_expected_warmstart_paths():
         )
 
 
-def test_archive_scenarios_remain_legacy_schema():
+def test_archive_scenarios_have_been_retired():
     archive_paths = sorted(Path("scenarios/archive").glob("*.yaml"))
-    assert archive_paths, "Expected legacy archive configs under scenarios/archive"
-
-    for path in archive_paths:
-        data = _load_raw_yaml(path)
-        assert "run" not in data, (
-            f"{path} should remain in the legacy flat schema as an archive reference"
-        )
+    assert archive_paths == []
