@@ -16,7 +16,10 @@ from pilates.utils.io import locate_beam_file
 from pilates.utils.step_manifest import load_step_manifest
 from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.orchestration import _restore_outputs_from_manifest
-from pilates.workflows.outputs_base import step_output_handoff_mapping
+from pilates.workflows.outputs_base import (
+    step_output_handoff_mapping,
+    step_output_mapping,
+)
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -137,10 +140,18 @@ def _restore_activity_demand_outputs_for_resume(
             if postprocess_outputs is not None:
                 outputs_holder.activitysim_postprocess = postprocess_outputs
     if postprocess_outputs is not None:
-        restored_outputs = step_output_handoff_mapping(
-            postprocess_outputs,
-            coupler=coupler,
-        )
+        if manifest_path is not None:
+            # Manifest recovery should be path-driven so stale coupler values from
+            # the previous workspace cannot override the restored outputs.
+            restored_outputs = step_output_mapping(
+                postprocess_outputs,
+                warn_lossy=False,
+            )
+        else:
+            restored_outputs = step_output_handoff_mapping(
+                postprocess_outputs,
+                coupler=coupler,
+            )
         validated = _require_complete_restore(restored_outputs, "step outputs")
         if validated is None:
             return None

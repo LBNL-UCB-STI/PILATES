@@ -585,6 +585,7 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
     state.current_inner_iter = 0
+    coupler.set(ZARR_SKIMS, str(tmp_path / "stale" / "skims.zarr"))
 
     run_supply_demand_stage(
         scenario=scenario,
