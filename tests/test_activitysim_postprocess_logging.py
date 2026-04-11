@@ -395,6 +395,46 @@ def test_activitysim_preprocess_runtime_inputs_read_table_paths_from_binding_met
     assert runtime_inputs[USIM_POPULATION_BLOCKS_TABLE] == "/2025/blocks"
 
 
+def test_activitysim_preprocess_runtime_inputs_reconcile_stale_table_metadata(
+    monkeypatch, tmp_path
+) -> None:
+    h5_path = tmp_path / "model_data_2025.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2025/{table_name}", pd.DataFrame({"value": [1]}))
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        lambda **_kwargs: BindingPlan(
+            source_by_key={USIM_POPULATION_SOURCE_H5: "explicit"},
+            inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+            metadata={
+                "resolved_values_by_semantic_key": {
+                    USIM_POPULATION_HOUSEHOLDS_TABLE: "/households",
+                    USIM_POPULATION_PERSONS_TABLE: "/persons",
+                    USIM_POPULATION_JOBS_TABLE: "/jobs",
+                    USIM_POPULATION_BLOCKS_TABLE: "/blocks",
+                }
+            },
+        ),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_preprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2023, forecast_year=2025),
+        workspace=SimpleNamespace(),
+        coupler=_dummy_coupler(),
+        step_inputs=None,
+    )
+
+    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
+    assert runtime_inputs[USIM_POPULATION_HOUSEHOLDS_TABLE] == "/2025/households"
+    assert runtime_inputs[USIM_POPULATION_PERSONS_TABLE] == "/2025/persons"
+    assert runtime_inputs[USIM_POPULATION_JOBS_TABLE] == "/2025/jobs"
+    assert runtime_inputs[USIM_POPULATION_BLOCKS_TABLE] == "/2025/blocks"
+
+
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),

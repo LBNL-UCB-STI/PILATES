@@ -4,7 +4,10 @@ from types import SimpleNamespace
 import pandas as pd
 
 from pilates.activitysim import preprocessor as asim_preprocessor
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    reconcile_usim_population_table_paths,
+    resolve_usim_population_table_paths,
+)
 from pilates.workflows.artifact_keys import (
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -141,6 +144,31 @@ def test_resolve_usim_population_table_paths_falls_back_to_root_tables(tmp_path)
         USIM_POPULATION_PERSONS_TABLE: "/persons",
         USIM_POPULATION_JOBS_TABLE: "/jobs",
         USIM_POPULATION_BLOCKS_TABLE: "/blocks",
+    }
+
+
+def test_reconcile_usim_population_table_paths_replaces_stale_root_metadata(tmp_path) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2019/{table_name}", pd.DataFrame({"value": [1]}))
+
+    resolved = reconcile_usim_population_table_paths(
+        h5_path=str(h5_path),
+        year=2019,
+        provided_paths={
+            USIM_POPULATION_HOUSEHOLDS_TABLE: "/households",
+            USIM_POPULATION_PERSONS_TABLE: "/persons",
+            USIM_POPULATION_JOBS_TABLE: "/jobs",
+            USIM_POPULATION_BLOCKS_TABLE: "/blocks",
+        },
+    )
+
+    assert resolved == {
+        USIM_POPULATION_HOUSEHOLDS_TABLE: "/2019/households",
+        USIM_POPULATION_PERSONS_TABLE: "/2019/persons",
+        USIM_POPULATION_JOBS_TABLE: "/2019/jobs",
+        USIM_POPULATION_BLOCKS_TABLE: "/2019/blocks",
     }
 
 

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, Mapping, Optional
 
 import pandas as pd
 
@@ -87,6 +87,50 @@ def resolve_usim_population_table_paths(
             )
             for semantic_key, table_name in POPULATION_TABLE_BY_KEY.items()
         }
+        missing = [table_path for table_path in resolved.values() if table_path not in store]
+        if missing:
+            available = sorted(store.keys())
+            raise KeyError(
+                "UrbanSim population source is missing required tables. "
+                f"missing={missing} available={available}"
+            )
+        return resolved
+
+
+def reconcile_usim_population_table_paths(
+    *,
+    h5_path: str,
+    year: Optional[int],
+    provided_paths: Optional[Mapping[str, str]] = None,
+) -> Dict[str, str]:
+    """
+    Validate optional pre-resolved table paths against the actual H5 contents.
+
+    When stale metadata points at tables that are not present in the bound H5,
+    fall back to year-aware resolution for just those missing entries.
+    """
+    normalized_provided = {
+        semantic_key: (
+            table_path
+            if str(table_path).startswith("/")
+            else f"/{str(table_path).lstrip('/')}"
+        )
+        for semantic_key, table_path in (provided_paths or {}).items()
+        if table_path
+    }
+    with pd.HDFStore(h5_path, mode="r") as store:
+        resolved: Dict[str, str] = {}
+        for semantic_key, table_name in POPULATION_TABLE_BY_KEY.items():
+            provided_path = normalized_provided.get(semantic_key)
+            if provided_path and provided_path in store:
+                resolved[semantic_key] = provided_path
+                continue
+            resolved[semantic_key] = resolve_usim_h5_table_key(
+                store,
+                year=year,
+                table=table_name,
+            )
+
         missing = [table_path for table_path in resolved.values() if table_path not in store]
         if missing:
             available = sorted(store.keys())
