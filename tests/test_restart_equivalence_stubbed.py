@@ -420,6 +420,25 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 return BeamPostprocessOutputs(zarr_skims=zarr, final_skims_omx=final_skims)
             if model_name == "atlas":
                 vehicles2 = Path(workspace.get_atlas_output_dir()) / f"vehicles2_{state.year}.csv"
+                mapping = pd.read_csv(
+                    Path(__file__).resolve().parents[1]
+                    / "pilates"
+                    / "atlas"
+                    / "atlas_input"
+                    / "vehicle_type_mapping_baseline.csv"
+                )
+                vehicle_type_ids = [
+                    mapping.loc[
+                        (mapping["bodytype"] == "car")
+                        & (mapping["adopt_fuel"] == "conv"),
+                        "vehicleTypeId",
+                    ].iloc[0],
+                    mapping.loc[
+                        (mapping["bodytype"] == "suv")
+                        & (mapping["adopt_fuel"] == "ev"),
+                        "vehicleTypeId",
+                    ].iloc[0],
+                ]
                 _write_csv(
                     vehicles2,
                     pd.DataFrame(
@@ -429,7 +448,7 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                             "bodytype": ["sedan", "suv"],
                             "pred_power": ["gasoline", "electricity"],
                             "modelyear": [2018, 2020],
-                            "vehicleTypeId": ["sedan_gasoline_2018", "suv_electricity_2020"],
+                            "vehicleTypeId": vehicle_type_ids,
                         }
                     ),
                 )

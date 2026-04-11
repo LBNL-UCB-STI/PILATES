@@ -10,6 +10,83 @@ from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 
 
+def test_atlas_add_vehicle_type_id_uses_mapping_file_and_normalizes_categories(
+    tmp_path,
+):
+    vehicles_csv = tmp_path / "vehicles_2023.csv"
+    output_csv = tmp_path / "vehicles2_2023.csv"
+    mapping_csv = tmp_path / "vehicle_type_mapping_baseline.csv"
+
+    vehicles_csv.write_text(
+        (
+            "household_id,vehicle_id,bodytype,pred_power,modelyear\n"
+            "1,10,sedan,gasoline,2020\n"
+            "2,20,suv,electricity,2020\n"
+        ),
+        encoding="utf-8",
+    )
+    mapping_csv.write_text(
+        (
+            "vehicleTypeId,bodytype,modelyear,adopt_fuel,sampleProbabilityWithinCategory\n"
+            "car_conv_2020,car,2020,conv,1.0\n"
+            "suv_ev_2020,suv,2020,ev,1.0\n"
+        ),
+        encoding="utf-8",
+    )
+
+    atlas_postprocessor.atlas_add_vehileTypeId(
+        settings=SimpleNamespace(atlas_scenario="baseline"),
+        output_year=2023,
+        vehicles_csv_path=str(vehicles_csv),
+        output_vehicles2_csv_path=str(output_csv),
+        mapping_csv_path=str(mapping_csv),
+    )
+
+    vehicles2 = pd.read_csv(output_csv)
+
+    assert vehicles2["vehicleTypeId"].tolist() == ["car_conv_2020", "suv_ev_2020"]
+
+
+def test_atlas_add_vehicle_type_id_falls_back_to_nearest_year_and_bodytype(
+    tmp_path,
+):
+    vehicles_csv = tmp_path / "vehicles_2023.csv"
+    output_csv = tmp_path / "vehicles2_2023.csv"
+    mapping_csv = tmp_path / "vehicle_type_mapping_baseline.csv"
+
+    vehicles_csv.write_text(
+        (
+            "household_id,vehicle_id,bodytype,pred_power,modelyear\n"
+            "1,10,sedan,gasoline,2023\n"
+            "2,20,mystery,electricity,2024\n"
+        ),
+        encoding="utf-8",
+    )
+    mapping_csv.write_text(
+        (
+            "vehicleTypeId,bodytype,modelyear,adopt_fuel,sampleProbabilityWithinCategory\n"
+            "car_conv_2022,car,2022,conv,1.0\n"
+            "fallback_ev_2025,suv,2025,ev,1.0\n"
+        ),
+        encoding="utf-8",
+    )
+
+    atlas_postprocessor.atlas_add_vehileTypeId(
+        settings=SimpleNamespace(atlas_scenario="baseline"),
+        output_year=2023,
+        vehicles_csv_path=str(vehicles_csv),
+        output_vehicles2_csv_path=str(output_csv),
+        mapping_csv_path=str(mapping_csv),
+    )
+
+    vehicles2 = pd.read_csv(output_csv)
+
+    assert vehicles2["vehicleTypeId"].tolist() == [
+        "car_conv_2022",
+        "fallback_ev_2025",
+    ]
+
+
 def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_path):
     captured = {}
 

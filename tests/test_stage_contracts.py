@@ -727,6 +727,34 @@ def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env)
     assert FINAL_SKIMS_OMX not in (preprocess_calls[0].get("inputs") or {})
 
 
+def test_vehicle_ownership_stage_collapses_duplicate_atlas_preprocess_usim_binding(
+    stage_env,
+):
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+
+    run_vehicle_ownership_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        build_atlas_static_inputs_fallback=lambda workspace: {},
+    )
+
+    preprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "atlas_preprocess"
+    ]
+    assert preprocess_calls, "Expected an ATLAS preprocess step call."
+    preprocess_binding = preprocess_calls[0]["binding"]
+    assert isinstance(preprocess_binding, BindingResult)
+    assert preprocess_binding.inputs[USIM_DATASTORE_CURRENT_H5] == stage_env["usim_input_path"]
+    assert USIM_DATASTORE_BASE_H5 not in (preprocess_binding.inputs or {})
+
+
 def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
     """ATLAS subyear boundaries should enqueue restart artifacts and flush."""
     from pilates.workflows.stages import vehicle_ownership as vo_stage

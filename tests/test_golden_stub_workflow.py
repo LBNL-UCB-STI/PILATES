@@ -83,6 +83,17 @@ from pilates.workflows.steps import StepOutputsHolder
 from workflow_state import WorkflowState
 
 
+def _baseline_vehicle_type_ids() -> set[str]:
+    mapping_path = (
+        Path(__file__).resolve().parents[1]
+        / "pilates"
+        / "atlas"
+        / "atlas_input"
+        / "vehicle_type_mapping_baseline.csv"
+    )
+    return set(pd.read_csv(mapping_path)["vehicleTypeId"].astype(str))
+
+
 EXPECTED_STAGE_MODELS = (
     "initialization",
     "urbansim_preprocess",
@@ -963,10 +974,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         "modelyear",
         "vehicleTypeId",
     } <= set(vehicles2.columns)
-    assert vehicles2["vehicleTypeId"].tolist() == [
-        "sedan_gasoline_2018",
-        "suv_electricity_2020",
-    ]
+    assert set(vehicles2["vehicleTypeId"]).issubset(_baseline_vehicle_type_ids())
     asim_mutable_dir = Path(workspace.get_asim_mutable_data_dir())
     land_use = pd.read_csv(asim_mutable_dir / "land_use.csv")
     households = pd.read_csv(asim_mutable_dir / "households.csv")

@@ -307,6 +307,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=30,
         outputs_class=UrbanSimPostprocessOutputs,
         input_keys=(USIM_DATASTORE_H5,),
+        optional_input_keys=(USIM_DATASTORE_BASE_H5,),
         output_keys=(USIM_DATASTORE_H5,),
         dynamic_output_families=(
             "usim_input_archive_{year}",

@@ -344,10 +344,23 @@ def run_vehicle_ownership_stage(
         atlas_state.atlas_usim_datastore_base_h5 = step_inputs.get(
             USIM_DATASTORE_BASE_H5
         )
+        atlas_preprocess_explicit_inputs = dict(step_inputs)
+        atlas_preprocess_required_keys = None
+        if (
+            atlas_preprocess_explicit_inputs.get(USIM_DATASTORE_CURRENT_H5)
+            == atlas_preprocess_explicit_inputs.get(USIM_DATASTORE_BASE_H5)
+        ):
+            # Atlas preprocess uses one selected UrbanSim datastore per subyear.
+            # When current/base collapse to the same H5, binding both semantic
+            # aliases only perturbs cache identity without changing execution.
+            atlas_preprocess_explicit_inputs.pop(USIM_DATASTORE_BASE_H5, None)
+            atlas_preprocess_required_keys = [USIM_DATASTORE_CURRENT_H5]
+
         atlas_preprocess_binding = build_binding_plan(
             step_name="atlas_preprocess",
             coupler=coupler,
-            explicit_inputs=step_inputs,
+            explicit_inputs=atlas_preprocess_explicit_inputs,
+            required_keys=atlas_preprocess_required_keys,
             settings=settings,
             state=atlas_state,
             workspace=workspace,

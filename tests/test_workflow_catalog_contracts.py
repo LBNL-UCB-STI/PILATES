@@ -101,7 +101,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         },
         "urbansim_postprocess": {
             "input_keys": (USIM_DATASTORE_H5,),
-            "optional_input_keys": (),
+            "optional_input_keys": (USIM_DATASTORE_BASE_H5,),
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (USIM_DATASTORE_H5,),
@@ -394,6 +394,23 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "upstream_step_inputs": ["urbansim_preprocess"],
         "output_keys": [USIM_DATASTORE_H5],
         "dynamic_output_families": [],
+        "optional": False,
+    }
+    assert contracts["urbansim_postprocess"] == {
+        "step_name": "urbansim_postprocess",
+        "stage_name": "land_use",
+        "phase": "postprocess",
+        "depends_on": ["urbansim_run"],
+        "input_keys": [USIM_DATASTORE_H5],
+        "optional_input_keys": [USIM_DATASTORE_BASE_H5],
+        "optional_output_keys": [],
+        "dynamic_input_families": [],
+        "upstream_step_inputs": ["urbansim_run"],
+        "output_keys": [USIM_DATASTORE_H5],
+        "dynamic_output_families": [
+            "usim_input_archive_{year}",
+            "usim_input_merged_{year}",
+        ],
         "optional": False,
     }
     assert contracts["atlas_postprocess"] == {
