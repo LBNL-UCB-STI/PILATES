@@ -36,6 +36,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -55,6 +56,9 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     USIM_DATASTORE_CURRENT_H5: (
         "UrbanSim current datastore (H5): latest mutable version produced by workflow steps."
+    ),
+    USIM_FORECAST_OUTPUT: (
+        "UrbanSim forecast output datastore (H5) produced by the runner for the current year."
     ),
     USIM_POPULATION_SOURCE_H5: (
         "UrbanSim datastore (H5) selected as the population source for ActivitySim preprocess."

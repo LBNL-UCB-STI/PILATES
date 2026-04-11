@@ -114,6 +114,13 @@ def test_build_coupler_schema_declares_beam_plans_handoff_alias():
     assert "beam/beam_plans_asim_out" in schema
 
 
+def test_build_coupler_schema_declares_urbansim_forecast_output_alias():
+    schema = build_coupler_schema([], settings=_settings())
+
+    assert "usim_forecast_output" in schema
+    assert "urbansim/usim_forecast_output" in schema
+
+
 def test_build_coupler_schema_without_extras_is_empty_for_no_steps():
     schema = build_coupler_schema(
         [],

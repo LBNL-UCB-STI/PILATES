@@ -893,6 +893,17 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 ),
             ),
         ),
+        "urbansim_postprocess": (
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_CURRENT_H5,
+                required=True,
+                allow_fallback=True,
+                preferred_keys=(
+                    USIM_DATASTORE_BASE_H5,
+                    USIM_DATASTORE_CURRENT_H5,
+                ),
+            ),
+        ),
         "beam_preprocess": (
             ArtifactBindingRule(
                 semantic_key=BEAM_PLANS_IN,

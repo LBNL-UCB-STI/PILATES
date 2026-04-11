@@ -559,6 +559,32 @@ def test_build_binding_plan_centralizes_atlas_preprocess_usim_precedence():
     assert not plan.missing_required
 
 
+def test_build_binding_plan_prefers_base_key_for_urbansim_postprocess_cache_compat():
+    plan = build_binding_plan(
+        step_name="urbansim_postprocess",
+        coupler=_CouplerStub(
+            {
+                USIM_DATASTORE_BASE_H5: "/tmp/shared.h5",
+                USIM_DATASTORE_CURRENT_H5: "/tmp/shared.h5",
+            }
+        ),
+        explicit_inputs={USIM_DATASTORE_CURRENT_H5: "/tmp/shared.h5"},
+        fallback_inputs={USIM_DATASTORE_BASE_H5: "/tmp/shared.h5"},
+        required_keys=[USIM_DATASTORE_CURRENT_H5],
+    )
+
+    assert plan.inputs == {}
+    assert plan.input_keys == [USIM_DATASTORE_BASE_H5]
+    assert plan.optional_input_keys == []
+    assert plan.source_by_key[USIM_DATASTORE_CURRENT_H5] == "coupler"
+    assert plan.coupler_key_by_key[USIM_DATASTORE_CURRENT_H5] == USIM_DATASTORE_BASE_H5
+    assert (
+        plan.metadata["selected_key_by_semantic_key"][USIM_DATASTORE_CURRENT_H5]
+        == USIM_DATASTORE_BASE_H5
+    )
+    assert not plan.missing_required
+
+
 def test_build_binding_plan_preserves_atlas_linear_stage_inputs():
     plan = build_binding_plan(
         step_name="atlas_run",

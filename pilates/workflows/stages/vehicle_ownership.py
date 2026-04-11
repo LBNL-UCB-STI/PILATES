@@ -353,6 +353,34 @@ def run_vehicle_ownership_stage(
             workspace=workspace,
             year=atlas_year,
         )
+        atlas_preprocess_binding_meta = atlas_preprocess_binding.metadata or {}
+        atlas_preprocess_selected = atlas_preprocess_binding_meta.get(
+            "selected_key_by_semantic_key", {}
+        )
+        atlas_preprocess_candidates = atlas_preprocess_binding_meta.get(
+            "candidate_paths_by_semantic_key", {}
+        )
+        logger.debug(
+            "[ATLAS] atlas_preprocess binding year=%s input_keys=%s optional_input_keys=%s "
+            "sources=%s selected=%s candidates=%s",
+            atlas_year,
+            atlas_preprocess_binding.input_keys,
+            atlas_preprocess_binding.optional_input_keys,
+            {
+                key: atlas_preprocess_binding.source_by_key.get(key)
+                for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5)
+            },
+            {
+                key: atlas_preprocess_selected.get(key)
+                for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5)
+                if atlas_preprocess_selected.get(key) is not None
+            },
+            {
+                key: atlas_preprocess_candidates.get(key)
+                for key in (USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5)
+                if atlas_preprocess_candidates.get(key)
+            },
+        )
 
         atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
         atlas_interval_end_year = atlas_year
@@ -367,6 +395,20 @@ def run_vehicle_ownership_stage(
             atlas_interval_start_year,
             atlas_interval_end_year,
             len(atlas_static_keys),
+        )
+        atlas_static_input_keys_present = sorted(
+            key for key in atlas_static_keys if key in step_inputs
+        )
+        atlas_static_input_keys_missing = sorted(
+            set(atlas_static_keys) - set(step_inputs)
+        )
+        logger.debug(
+            "[ATLAS] atlas_preprocess static-input census year=%s present=%s/%s missing=%s sample_present=%s",
+            atlas_year,
+            len(atlas_static_input_keys_present),
+            len(atlas_static_keys),
+            atlas_static_input_keys_missing[:5],
+            atlas_static_input_keys_present[:5],
         )
         atlas_run_fallbacks: Dict[str, Any] = {
             key: value
