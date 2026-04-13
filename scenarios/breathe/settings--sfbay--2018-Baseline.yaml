@@ -277,7 +277,7 @@ urbansim:
 # Transportation network simulation settings
 # =============================================================================
 beam:
-  config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
+  config: "/Users/haitamlaarabi/Workspace/Models/beam-data/beam-data-sfbay/scenarios/breathe/pilates--sfbay--2018-Baseline.conf"
   sample: 1.0
   replanning_portion: 0.4
   memory: "${BEAM_MEMORY}"
@@ -286,7 +286,7 @@ beam:
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/sfbay-cbg5500-weakConn-network
-  warmstart_linkstats_path: {router_directory}/2018-baseline-linkstats/3.linkstats.FC07.v3.csv.gz
+  warmstart_linkstats_path: "{router_directory}/2018-baseline-linkstats/3.linkstats.FC07.v3.csv.gz"
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10
