@@ -16,7 +16,7 @@ run:
   vehicle_ownership_freq: 6
   supply_demand_iters: 6
   output_directory: /global/scratch/users/$USER/pilates-output
-  output_run_name: pilates-run--20250730--2018-Baseline
+  output_run_name: 2018-Baseline--breathe
   consist_db_local_run: true
   consist_db_filename: provenance.duckdb
   models:
@@ -240,12 +240,12 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260329
+    beam: docker://haitamlaarabi/beam:1.1-beta-v260412
     activitysim: docker://zaneedell/activitysim:0.2.5
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260329
+    beam: haitamlaarabi/beam:1.1-beta-v260412
     activitysim: zaneedell/activitysim:0.2.5
     polaris: tbd
   docker_config:
@@ -277,7 +277,7 @@ urbansim:
 # Transportation network simulation settings
 # =============================================================================
 beam:
-  config: scenarios/freight/sfbay-pilates--20250730--2018-Baseline.conf
+  config: scenarios/breathe/pilates--sfbay--2018-Baseline.conf
   sample: 1.0
   replanning_portion: 0.4
   memory: "${BEAM_MEMORY}"
@@ -286,7 +286,7 @@ beam:
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/sfbay-cbg5500-weakConn-network
-  warmstart_linkstats_path: "{router_directory}/init.linkstats.csv.gz"
+  warmstart_linkstats_path: {router_directory}/2018-baseline-linkstats/3.linkstats.FC07.v3.csv.gz
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10
