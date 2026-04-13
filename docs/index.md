@@ -1,95 +1,109 @@
-# PILATES Documentation
+---
+hide:
+  - navigation
+  - title
+  - toc
+---
 
-> [!WARNING]
-> These docs are an initial pass generated and reworked with the help of an LLM.
-> They have not been fully verified end-to-end against every workflow, config,
-> and deployment path in this repository. Treat them as a strong starting point,
-> not as guaranteed source-of-truth documentation. When behavior matters, verify
-> against the code and active configs.
-
-This page is the landing page for the current documentation set and is intended
-to be easy to migrate into a static site later.
+<section id="home-page" class="home-hero">
+  <div class="home-hero__inner">
+    <p class="home-hero__eyebrow">Integrated microsimulation platform</p>
+    <h1>PILATES couples land use and transportation models into one reproducible workflow.</h1>
+    <p class="tagline">Run UrbanSim, ActivitySim, BEAM, and ATLAS in a shared scenario loop with containerized execution, explicit state handoffs, and provenance-aware outputs.</p>
+    <div class="home-actions">
+      <a class="md-button md-button--primary" href="getting_started.md">Get started</a>
+      <a class="md-button" href="workflow_primer.md">See the workflow</a>
+    </div>
+    <dl class="home-summary">
+      <div class="home-summary__item">
+        <dt>Model stack</dt>
+        <dd>UrbanSim, ActivitySim, BEAM, and ATLAS</dd>
+      </div>
+      <div class="home-summary__item">
+        <dt>Execution style</dt>
+        <dd>Containerized steps with explicit state handoffs</dd>
+      </div>
+      <div class="home-summary__item">
+        <dt>Best for</dt>
+        <dd>Regional forecasting, scenario analysis, and coupled simulation experiments</dd>
+      </div>
+    </dl>
+  </div>
+</section>
 
 ## Start Here
 
-If you are new to PILATES, read these first:
+Follow this path in order if you are new to PILATES:
 
-1. `getting_started.md`
-2. `cli_reference.md`
-3. `configuration_reference.md`
-4. `data_bootstrap.md`
-5. `troubleshooting.md`
+1. [Getting Started](getting_started.md)
+2. [CLI Reference](cli_reference.md)
+3. [Configuration Reference](configuration_reference.md)
+4. [Data Bootstrap](data_bootstrap.md)
+5. [Workflow Primer](workflow_primer.md)
 
-## Architecture And Workflow
+!!! note
 
-- `architecture.md`
-  High-level architecture overview and reading guide.
-- `workflow_primer.md`
-  Runtime, stages, steps, manifests, restart behavior, and workflow structure.
-- `provenance_and_lineage.md`
-  High-level overview of provenance, artifacts, and lineage.
-- `artifact_flow.md`
-  Concise map of the main workflow-facing artifact handoffs.
-- `lineage_map.md`
-  More detailed artifact and step lineage reference.
+    PILATES expects a container runtime, a configured Python environment, and
+    region-specific input data. The [Getting Started](getting_started.md) guide
+    covers the minimum local setup before the first scenario run.
 
-## Model Integration
+## What PILATES Does
 
-- `model_integration_guide.md`
-  Current integration architecture and contract boundaries.
-- `adding_a_model.md`
-  Practical checklist for adding a new model or workflow step family.
+PILATES is a workflow runtime for long-horizon regional simulation. It keeps
+model adapters decoupled, coordinates their run order, and manages the state
+passed between them.
 
-## Configuration And Operations
+It helps you:
 
-- `configuration_reference.md`
-  Canonical config structure and key runtime options.
-- `cli_reference.md`
-  Supported CLI entry points and common invocation patterns.
-- `data_bootstrap.md`
-  Expected external data layout and pre-run validation.
-- `hpc_execution.md`
-  Lawrencium-style Slurm execution overview.
-- `troubleshooting.md`
-  Common failure modes and debugging starting points.
+- compose different model stacks for short- and long-horizon scenarios
+- keep run structure explicit through preprocess, runner, and postprocess stages
+- run locally or on HPC with the same scenario and configuration framing
+- trace outputs back to configs, artifacts, and execution context
+- evolve database and data-loading paths without rewriting every model adapter
 
-## Provenance And Database
+## Choose A Reading Path
 
-- `database-setup.md`
-  Enabling and validating the run-local Consist DuckDB.
-- `database_documentation_guide.md`
-  ERD generation and live DB inspection workflow.
-- `database_schema_reference.md`
-  Curated schema families and live DB caveats.
-- `artifact_facet_catalog.md`
-  Current artifact facet conventions.
+=== "Running a scenario"
 
-## Domain And Specialized Guides
+    - [Getting Started](getting_started.md)
+    - [Configuration Reference](configuration_reference.md)
+    - [CLI Reference](cli_reference.md)
+    - [Data Bootstrap](data_bootstrap.md)
+    - [Troubleshooting](troubleshooting.md)
 
-- `zone_id_management.md`
-- `land_use_skim_alignment.md`
-- `test_output_preservation.md`
+=== "Understanding the workflow"
 
-## Status Notes
+    - [Workflow Primer](workflow_primer.md)
+    - [Architecture](architecture.md)
+    - [Provenance and Lineage](provenance_and_lineage.md)
+    - [Artifact Flow](artifact_flow.md)
+    - [Lineage Map](lineage_map.md)
 
-These docs have been substantially updated to match the current runtime shape,
-but they are still early. The most trustworthy documents right now are the ones
-that were recently rewritten around the current code structure:
+=== "Extending PILATES"
 
-- `architecture.md`
-- `workflow_primer.md`
-- `model_integration_guide.md`
-- `adding_a_model.md`
-- `cli_reference.md`
-- `provenance_and_lineage.md`
-- `data_bootstrap.md`
-- `hpc_execution.md`
+    - [Model Integration Guide](model_integration_guide.md)
+    - [Adding a Model](adding_a_model.md)
+    - [Database Setup](database-setup.md)
+    - [Database Documentation Guide](database_documentation_guide.md)
 
-## Source Of Truth
+## Common Follow-Up Tasks
 
-When the docs and code disagree, the code wins.
+| I want to... | Go to |
+| --- | --- |
+| run the current workflow locally | [Getting Started](getting_started.md) |
+| understand how stages and steps fit together | [Workflow Primer](workflow_primer.md) |
+| inspect the runtime architecture | [Architecture](architecture.md) |
+| trace artifact handoffs and lineage | [Artifact Flow](artifact_flow.md) and [Lineage Map](lineage_map.md) |
+| integrate or refactor a model adapter | [Model Integration Guide](model_integration_guide.md) |
+| add a new step family | [Adding a Model](adding_a_model.md) |
+| enable the run-local database and inspect schemas | [Database Setup](database-setup.md) |
+| prepare region inputs and validate external data layout | [Data Bootstrap](data_bootstrap.md) |
 
-The most important code entry points to cross-check are:
+## Documentation Status
+
+These docs are substantially stronger than the earlier flat Markdown set, but
+they still trail the live runtime in some places. When behavior matters, check
+the code paths that own execution:
 
 - `run.py`
 - `pilates/runtime/launcher.py`
