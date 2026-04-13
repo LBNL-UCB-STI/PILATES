@@ -99,10 +99,15 @@ def test_catalog_declared_key_matching_covers_dynamic_families():
 def test_catalog_declared_key_matching_accepts_supported_aliases():
     assert catalog.workflow_step_key_is_declared(
         "activitysim_preprocess",
+        "usim_population_source_h5",
+        direction="input",
+    )
+    assert not catalog.workflow_step_key_is_declared(
+        "activitysim_preprocess",
         "usim_datastore_current_h5",
         direction="input",
     )
-    assert catalog.workflow_step_key_is_declared(
+    assert not catalog.workflow_step_key_is_declared(
         "activitysim_preprocess",
         "usim_datastore_h5",
         direction="input",

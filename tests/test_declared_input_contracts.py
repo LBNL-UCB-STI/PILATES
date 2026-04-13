@@ -135,7 +135,7 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
         )
         assert activitysim_contract == {
             "asim_mutable_configs_dir": os.path.join(tmp_path, "asim", "configs"),
-            "usim_datastore_h5": os.path.join(
+            "usim_population_source_h5": os.path.join(
                 tmp_path, "usim", "data", "usim_123.h5"
             ),
         }
@@ -187,7 +187,7 @@ def test_runtime_expected_inputs_still_probe_filesystem_for_presence(
     activitysim_runtime = ActivitysimPreprocessor.runtime_expected_inputs(
         settings, state, workspace
     )
-    assert activitysim_runtime["usim_datastore_h5"] == str(usim_input_path)
+    assert activitysim_runtime["usim_population_source_h5"] == str(usim_input_path)
 
     urbansim_runtime = UrbansimPreprocessor.runtime_expected_inputs(
         settings, state, workspace

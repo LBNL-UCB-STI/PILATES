@@ -18,9 +18,10 @@ from pilates.utils.step_manifest import load_step_manifest
 from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.orchestration import _restore_outputs_from_manifest
 from pilates.workflows.outputs_base import (
+    iter_step_output_items,
     step_output_handoff_mapping,
-    step_output_mapping,
 )
+from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -179,10 +180,12 @@ def _restore_activity_demand_outputs_for_resume(
         if used_manifest_restore:
             # Manifest recovery should be path-driven so stale coupler values from
             # the previous workspace cannot override the restored outputs.
-            restored_outputs = step_output_mapping(
-                postprocess_outputs,
-                warn_lossy=False,
-            )
+            restored_outputs = {}
+            for key, path, _ in iter_step_output_items(postprocess_outputs):
+                sanitized_key = sanitize_artifact_key(key)
+                if sanitized_key is None or sanitized_key in restored_outputs:
+                    continue
+                restored_outputs[sanitized_key] = str(path)
         else:
             restored_outputs = step_output_handoff_mapping(
                 postprocess_outputs,

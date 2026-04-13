@@ -18,6 +18,22 @@ class _WorkspaceStub:
         return str(self._usim_dir)
 
 
+class _StateStub:
+    class Stage:
+        land_use = "land_use"
+
+    def __init__(self, *, start_year: bool, land_use_enabled: bool, run_info_path: str | None = None):
+        self._start_year = start_year
+        self._land_use_enabled = land_use_enabled
+        self.run_info_path = run_info_path
+
+    def is_start_year(self) -> bool:
+        return self._start_year
+
+    def is_enabled(self, stage) -> bool:
+        return stage == self.Stage.land_use and self._land_use_enabled
+
+
 def _settings_stub():
     return SimpleNamespace(
         run=SimpleNamespace(region="test"),
@@ -32,7 +48,7 @@ def _settings_stub():
 def test_build_urbansim_inputs_prefers_output_for_non_start_year(tmp_path: Path):
     settings = _settings_stub()
     workspace = _WorkspaceStub(tmp_path, tmp_path)
-    state = SimpleNamespace(is_start_year=lambda: False)
+    state = _StateStub(start_year=False, land_use_enabled=True)
 
     base_h5 = tmp_path / "usim_000.h5"
     output_h5 = tmp_path / "usim_2019.h5"
@@ -53,7 +69,7 @@ def test_build_urbansim_inputs_prefers_output_for_non_start_year(tmp_path: Path)
 def test_build_urbansim_inputs_uses_base_for_current_on_start_year(tmp_path: Path):
     settings = _settings_stub()
     workspace = _WorkspaceStub(tmp_path, tmp_path)
-    state = SimpleNamespace(is_start_year=lambda: True)
+    state = _StateStub(start_year=True, land_use_enabled=True)
 
     base_h5 = tmp_path / "usim_000.h5"
     base_h5.write_text("base")
@@ -74,7 +90,7 @@ def test_build_urbansim_inputs_falls_back_to_base_when_output_missing(
 ):
     settings = _settings_stub()
     workspace = _WorkspaceStub(tmp_path, tmp_path)
-    state = SimpleNamespace(is_start_year=lambda: False)
+    state = _StateStub(start_year=False, land_use_enabled=True)
 
     base_h5 = tmp_path / "usim_000.h5"
     base_h5.write_text("base")
@@ -97,8 +113,9 @@ def test_build_urbansim_inputs_falls_back_to_archive_base_when_local_missing(
     local_run_dir = tmp_path / "local-run"
     archive_run_dir = tmp_path / "archive-run"
     workspace = _WorkspaceStub(local_run_dir, local_run_dir / "urbansim" / "data")
-    state = SimpleNamespace(
-        is_start_year=lambda: False,
+    state = _StateStub(
+        start_year=False,
+        land_use_enabled=True,
         run_info_path=str(archive_run_dir / "run_state.yaml"),
     )
 
@@ -124,8 +141,9 @@ def test_build_urbansim_inputs_prefers_archive_output_for_current_when_local_mis
     local_run_dir = tmp_path / "local-run"
     archive_run_dir = tmp_path / "archive-run"
     workspace = _WorkspaceStub(local_run_dir, local_run_dir / "urbansim" / "data")
-    state = SimpleNamespace(
-        is_start_year=lambda: False,
+    state = _StateStub(
+        start_year=False,
+        land_use_enabled=True,
         run_info_path=str(archive_run_dir / "run_state.yaml"),
     )
 

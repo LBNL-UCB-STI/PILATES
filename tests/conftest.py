@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from pilates.utils import consist_runtime as cr
@@ -25,3 +27,8 @@ def _disable_consist_logging_for_isolated_step_tests(request):
     finally:
         if should_disable:
             cr.set_enabled(None)
+
+
+@pytest.fixture(autouse=True)
+def _run_tests_from_repo_root(monkeypatch):
+    monkeypatch.chdir(Path(__file__).resolve().parents[1])

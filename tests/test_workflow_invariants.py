@@ -160,6 +160,7 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
         "build_standard_step",
         _fake_build_standard_step,
     )
+    monkeypatch.setattr(steps_beam, "_archive_beam_run_inputs", lambda **_kwargs: None)
 
     steps.make_beam_run_step(
         coupler=SimpleNamespace(),
@@ -183,7 +184,7 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     output_logger(
         outputs,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, iteration=0),
         workspace=SimpleNamespace(),
         holder=SimpleNamespace(),
     )

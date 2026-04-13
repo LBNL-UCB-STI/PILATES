@@ -84,6 +84,9 @@ class DummyWorkspace:
     def get_beam_mutable_data_dir(self) -> str:
         return str(self._root / "beam" / "input")
 
+    def get_beam_output_dir(self) -> str:
+        return str(self._root / "beam" / "output")
+
 
 class DummyScenario:
     def __init__(self, *, cache_hit: bool = False) -> None:
@@ -398,7 +401,10 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
     for path in (households, persons, land_use):
         _write_file(path)
 
-    settings = SimpleNamespace()
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="seattle"),
+            beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+        )
     state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     coupler_keys = [ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN]
 
@@ -507,7 +513,10 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
     for path in (plans, households, persons, warmstart):
         _write_file(path)
 
-    settings = SimpleNamespace()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+    )
     state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     step_inputs = {
         BEAM_PLANS_IN: str(plans),
@@ -629,7 +638,10 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
         _write_file(path)
     write_asim_run_marker(asim_output_dir, year=2018, iteration=0)
 
-    settings = SimpleNamespace()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+    )
     state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     coupler_keys = [
         "households_asim_out_temp",
@@ -967,7 +979,10 @@ def test_beam_run_binding_tracks_optional_warmstart(
         },
     )
 
-    settings = SimpleNamespace()
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+    )
     state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
     coupler_keys = [
         "linkstats",
