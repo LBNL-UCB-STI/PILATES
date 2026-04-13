@@ -101,7 +101,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
         },
         "urbansim_postprocess": {
             "input_keys": (USIM_DATASTORE_H5,),
-            "optional_input_keys": (),
+            "optional_input_keys": (USIM_DATASTORE_BASE_H5,),
             "optional_output_keys": (),
             "dynamic_input_families": (),
             "output_keys": (USIM_DATASTORE_H5,),

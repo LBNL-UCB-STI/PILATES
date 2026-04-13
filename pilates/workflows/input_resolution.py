@@ -169,3 +169,22 @@ def resolved_value_for_key(
     if source in {"explicit", "fallback"}:
         return resolved.inputs.get(key)
     return None
+
+
+def resolved_metadata_value_for_key(
+    *,
+    resolved: BindingPlan,
+    key: str,
+) -> Any:
+    """
+    Return an auxiliary resolved value stored in binding metadata.
+
+    Some step-local runtime helpers need values that are meaningful to the step
+    but should not participate in the generic Consist input envelope, such as
+    internal HDF table selectors.
+    """
+    metadata = resolved.metadata or {}
+    values_by_key = metadata.get("resolved_values_by_semantic_key", {})
+    if isinstance(values_by_key, Mapping):
+        return values_by_key.get(key)
+    return None

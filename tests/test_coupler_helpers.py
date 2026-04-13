@@ -4,6 +4,11 @@ from types import SimpleNamespace
 from pilates.utils import coupler_helpers
 
 
+class NoopArtifact:
+    def __init__(self) -> None:
+        self.id = "noop"
+
+
 class CouplerWithSetFromArtifact:
     def __init__(self) -> None:
         self.calls = []
@@ -95,7 +100,7 @@ def test_log_and_set_output_publishes_plain_path_without_active_run(monkeypatch)
     monkeypatch.setattr(
         coupler_helpers,
         "_log_with_optional_h5_container",
-        lambda **kwargs: logged_meta.update(kwargs) or SimpleNamespace(id="noop"),
+        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
     )
     monkeypatch.setattr(
         coupler_helpers,
@@ -200,7 +205,7 @@ def test_log_and_set_input_publishes_plain_path_without_active_run(monkeypatch) 
     monkeypatch.setattr(
         coupler_helpers,
         "_log_with_optional_h5_container",
-        lambda **kwargs: logged_meta.update(kwargs) or SimpleNamespace(id="noop"),
+        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
     )
 
     coupler_helpers.log_and_set_input(

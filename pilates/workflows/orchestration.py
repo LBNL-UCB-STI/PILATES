@@ -22,6 +22,7 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
+    record_published_coupler_keys,
     resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
@@ -870,20 +871,63 @@ def _publish_recovered_outputs(
     workspace: Any,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
-) -> None:
+    cached_outputs: Optional[Mapping[str, Any]] = None,
+    run_id: Optional[str] = None,
+) -> str:
+    tracker_outputs: Optional[Mapping[str, Any]] = None
+    if run_id:
+        try:
+            tracker_outputs = load_tracker_run_outputs(
+                run_id,
+                logger=logger,
+                log_context="workflow recovered output publication",
+            )
+        except RuntimeError:
+            logger.debug(
+                "Skipping tracker output lookup while republishing recovered outputs for %s; "
+                "no active tracker is available.",
+                step.name,
+                exc_info=True,
+            )
+    cached_mapping = merge_canonical_output_mappings(
+        cached_outputs,
+        tracker_outputs,
+    )
     replayer = step.output_replayer
     if replayer is not None:
-        if cr.current_run() is not None:
-            replayer(outputs, settings, state, workspace, outputs_holder)
-            return
-        previous_enabled = getattr(cr, "_enabled_override", None)
-        cr.set_enabled(False)
-        try:
-            replayer(outputs, settings, state, workspace, outputs_holder)
-        finally:
-            cr.set_enabled(previous_enabled)
-        return
+        with record_published_coupler_keys() as replayed_keys:
+            if cr.current_run() is not None:
+                replayer(outputs, settings, state, workspace, outputs_holder)
+            else:
+                previous_enabled = getattr(cr, "_enabled_override", None)
+                cr.set_enabled(False)
+                try:
+                    replayer(outputs, settings, state, workspace, outputs_holder)
+                finally:
+                    cr.set_enabled(previous_enabled)
+        if cached_mapping:
+            filtered_cached_mapping = {
+                key: value
+                for key, value in cached_mapping.items()
+                if key in replayed_keys
+            }
+        else:
+            filtered_cached_mapping = {}
+        if filtered_cached_mapping:
+            _update_coupler_from_mapping(
+                filtered_cached_mapping,
+                coupler=coupler,
+                workspace=workspace,
+            )
+            logger.debug(
+                "Republished %d cached artifact outputs into the coupler after replay for %s.",
+                len(filtered_cached_mapping),
+                step.name,
+            )
+            return "output_replayer_with_cached_artifacts"
+        return "output_replayer"
     _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
+    return "typed_outputs"
 
 
 def _merge_output_recovery_meta(outputs: Any, audit_meta: Dict[str, Any]) -> None:
@@ -902,13 +946,18 @@ def _finalize_recovered_step_outputs(
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     publish_outputs: bool,
+    cached_outputs: Optional[Mapping[str, Any]] = None,
+    run_id: Optional[str] = None,
+    audit_meta: Optional[Dict[str, Any]] = None,
 ) -> Any:
+    if audit_meta is None:
+        audit_meta = {}
     validate = getattr(outputs, "validate", None)
     if callable(validate):
         validate()
     outputs_holder.set_attribute(step_name, outputs)
     if publish_outputs:
-        _publish_recovered_outputs(
+        publication_mode = _publish_recovered_outputs(
             step=step,
             outputs=outputs,
             settings=settings,
@@ -916,7 +965,10 @@ def _finalize_recovered_step_outputs(
             workspace=workspace,
             coupler=coupler,
             outputs_holder=outputs_holder,
+            cached_outputs=cached_outputs,
+            run_id=run_id,
         )
+        audit_meta["output_publication_mode"] = publication_mode
     return outputs
 
 
@@ -965,6 +1017,9 @@ def _recover_step_outputs(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
                 publish_outputs=publish_outputs,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+                audit_meta=audit_meta,
             )
             _merge_output_recovery_meta(outputs, audit_meta)
             return outputs
@@ -995,6 +1050,8 @@ def _recover_step_outputs(
                 workspace=workspace,
                 coupler=coupler,
                 outputs_holder=outputs_holder,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
             )
         _merge_output_recovery_meta(outputs, audit_meta)
         return outputs
@@ -1081,6 +1138,7 @@ def run_manifested_steps(
                         workspace=workspace,
                         coupler=coupler,
                         outputs_holder=outputs_holder,
+                        run_id=manifest.get(spec.name, {}).get("run_id"),
                     )
                     _merge_output_recovery_meta(outputs, recovery_meta)
                     _emit_step_resolution_audit(

@@ -23,7 +23,7 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     load_canonical_zones,
@@ -3941,20 +3941,29 @@ def create_asim_data_from_h5(
         "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
         usim_store_path,
     )
-    if resolved_h5_table_paths is None:
-        target_year = getattr(state, "forecast_year", None)
-        if target_year is None:
-            target_year = getattr(state, "year", None)
-        resolved_table_keys = resolve_usim_population_table_paths(
-            h5_path=usim_store_path,
-            year=target_year,
-        )
-        resolved_h5_table_paths = {
-            "households": resolved_table_keys[USIM_POPULATION_HOUSEHOLDS_TABLE],
-            "persons": resolved_table_keys[USIM_POPULATION_PERSONS_TABLE],
-            "jobs": resolved_table_keys[USIM_POPULATION_JOBS_TABLE],
-            "blocks": resolved_table_keys[USIM_POPULATION_BLOCKS_TABLE],
-        }
+    target_year = getattr(state, "forecast_year", None)
+    if target_year is None:
+        target_year = getattr(state, "year", None)
+    resolved_table_keys = reconcile_usim_population_table_paths(
+        h5_path=usim_store_path,
+        year=target_year,
+        provided_paths=(
+            None
+            if resolved_h5_table_paths is None
+            else {
+                USIM_POPULATION_HOUSEHOLDS_TABLE: resolved_h5_table_paths.get("households"),
+                USIM_POPULATION_PERSONS_TABLE: resolved_h5_table_paths.get("persons"),
+                USIM_POPULATION_JOBS_TABLE: resolved_h5_table_paths.get("jobs"),
+                USIM_POPULATION_BLOCKS_TABLE: resolved_h5_table_paths.get("blocks"),
+            }
+        ),
+    )
+    resolved_h5_table_paths = {
+        "households": resolved_table_keys[USIM_POPULATION_HOUSEHOLDS_TABLE],
+        "persons": resolved_table_keys[USIM_POPULATION_PERSONS_TABLE],
+        "jobs": resolved_table_keys[USIM_POPULATION_JOBS_TABLE],
+        "blocks": resolved_table_keys[USIM_POPULATION_BLOCKS_TABLE],
+    }
     logger.info(
         "ActivitySim preprocess UrbanSim tables: households=%s persons=%s jobs=%s blocks=%s",
         resolved_h5_table_paths.get("households"),

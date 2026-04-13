@@ -376,11 +376,11 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
     assert [year for year, _ in preprocess_calls] == [2020, 2022, 2024]
     assert preprocess_calls[0][1] is not None
     assert preprocess_calls[0][1].inputs[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
-    assert preprocess_calls[0][1].inputs[USIM_DATASTORE_BASE_H5] == str(current_h5)
+    assert preprocess_calls[0][1].inputs.get(USIM_DATASTORE_BASE_H5) is None
     for _, step in preprocess_calls[1:]:
         assert step is not None
         assert step.inputs[USIM_DATASTORE_CURRENT_H5] == str(forecast_h5)
-        assert step.inputs[USIM_DATASTORE_BASE_H5] == str(forecast_h5)
+        assert step.inputs.get(USIM_DATASTORE_BASE_H5) is None
 
 
 def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(

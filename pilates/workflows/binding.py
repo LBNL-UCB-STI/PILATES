@@ -54,6 +54,7 @@ from pilates.workflows.artifact_keys import (
 logger = logging.getLogger(__name__)
 
 _CANDIDATE_PATHS_METADATA_KEY = "candidate_paths_by_semantic_key"
+_RESOLVED_VALUES_METADATA_KEY = "resolved_values_by_semantic_key"
 
 
 def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:
@@ -87,7 +88,7 @@ class ArtifactBindingRule:
     allow_fallback: bool = False
     preferred_keys: tuple[str, ...] = ()
     fallback_provider: Optional[str] = None
-    pass_mode: Literal["auto", "input_key_only", "explicit_only"] = "auto"
+    pass_mode: Literal["auto", "input_key_only", "explicit_only", "metadata_only"] = "auto"
 
 
 @dataclass(frozen=True)
@@ -282,6 +283,7 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             allow_fallback=True,
             preferred_keys=(USIM_POPULATION_HOUSEHOLDS_TABLE,),
             fallback_provider="activitysim_population_source",
+            pass_mode="metadata_only",
         ),
         ArtifactBindingRule(
             semantic_key=USIM_POPULATION_PERSONS_TABLE,
@@ -289,6 +291,7 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             allow_fallback=True,
             preferred_keys=(USIM_POPULATION_PERSONS_TABLE,),
             fallback_provider="activitysim_population_source",
+            pass_mode="metadata_only",
         ),
         ArtifactBindingRule(
             semantic_key=USIM_POPULATION_JOBS_TABLE,
@@ -296,6 +299,7 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             allow_fallback=True,
             preferred_keys=(USIM_POPULATION_JOBS_TABLE,),
             fallback_provider="activitysim_population_source",
+            pass_mode="metadata_only",
         ),
         ArtifactBindingRule(
             semantic_key=USIM_POPULATION_BLOCKS_TABLE,
@@ -303,6 +307,7 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
             allow_fallback=True,
             preferred_keys=(USIM_POPULATION_BLOCKS_TABLE,),
             fallback_provider="activitysim_population_source",
+            pass_mode="metadata_only",
         ),
     )
 
@@ -664,9 +669,11 @@ def _activitysim_population_source(
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
                 try:
-                    resolve_usim_population_table_paths(
-                        h5_path=selected_path,
-                        year=_target_population_year(),
+                    mapping.update(
+                        resolve_usim_population_table_paths(
+                            h5_path=selected_path,
+                            year=_target_population_year(),
+                        )
                     )
                 except Exception as exc:
                     logger.warning(
@@ -675,10 +682,6 @@ def _activitysim_population_source(
                         selected_path,
                         exc,
                     )
-        # Keep the binding contract filesystem-oriented. ActivitySim resolves the
-        # HDF table names from the selected datastore path at execution time,
-        # so internal table identifiers like "/households" never leak into
-        # Consist input resolution where they are misinterpreted as paths.
         return _with_metadata(mapping)
 
     if USIM_POPULATION_SOURCE_H5 in explicit_inputs:
@@ -1134,6 +1137,7 @@ def build_binding_plan(
     missing_required: list[str] = []
     selected_key_by_semantic_key: Dict[str, str] = {}
     candidate_paths_by_semantic_key: Dict[str, list[str]] = {}
+    resolved_values_by_semantic_key: Dict[str, Any] = {}
 
     def _default_rule(semantic_key: str, *, required: bool) -> ArtifactBindingRule:
         return ArtifactBindingRule(semantic_key=semantic_key, required=required)
@@ -1172,7 +1176,9 @@ def build_binding_plan(
         if selected_key is not None:
             coupler_key_by_key[semantic_key] = selected_key
             selected_key_by_semantic_key[semantic_key] = matched_candidate or selected_key
-        if source == "coupler" and selected_key is not None:
+        if source != "missing" and rule.pass_mode == "metadata_only":
+            resolved_values_by_semantic_key[semantic_key] = value
+        elif source == "coupler" and selected_key is not None:
             if is_required:
                 plan_input_keys.append(selected_key)
             else:
@@ -1190,6 +1196,10 @@ def build_binding_plan(
     if candidate_paths_by_semantic_key:
         plan_metadata.setdefault(_CANDIDATE_PATHS_METADATA_KEY, {}).update(
             candidate_paths_by_semantic_key
+        )
+    if resolved_values_by_semantic_key:
+        plan_metadata.setdefault(_RESOLVED_VALUES_METADATA_KEY, {}).update(
+            resolved_values_by_semantic_key
         )
     if spec is not None and spec.notes and "notes" not in plan_metadata:
         plan_metadata["notes"] = spec.notes

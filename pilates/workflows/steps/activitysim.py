@@ -19,7 +19,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import (
@@ -65,6 +65,7 @@ from .shared import (
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
+    resolved_metadata_value_for_key,
     resolved_value_for_key,
 )
 from pilates.workflows.tracker_outputs import (
@@ -348,6 +349,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
 ) -> Dict[str, Any]:
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
+        resolution = None
     else:
         step_year = getattr(state, "year", getattr(state, "forecast_year", None))
         resolution = build_binding_plan(
@@ -376,18 +378,30 @@ def _resolve_activitysim_preprocess_runtime_inputs(
             table_value = step_inputs.get(table_key)
             if isinstance(table_value, str) and table_value:
                 runtime_inputs[table_key] = table_value
+    if resolution is not None:
+        for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS:
+            table_value = resolved_metadata_value_for_key(
+                resolved=resolution,
+                key=table_key,
+            )
+            if isinstance(table_value, str) and table_value:
+                runtime_inputs.setdefault(table_key, table_value)
 
-    missing_table_keys = [
-        table_key for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS if table_key not in runtime_inputs
-    ]
-    if population_source_h5_path and missing_table_keys:
+    if population_source_h5_path:
         target_year = getattr(state, "forecast_year", None)
         if target_year is None:
             target_year = getattr(state, "year", None)
         try:
-            resolved_table_paths = resolve_usim_population_table_paths(
+            provided_table_paths = {
+                table_key: runtime_inputs[table_key]
+                for table_key in _ACTIVITYSIM_POPULATION_TABLE_KEYS
+                if isinstance(runtime_inputs.get(table_key), str)
+                and runtime_inputs.get(table_key)
+            }
+            resolved_table_paths = reconcile_usim_population_table_paths(
                 h5_path=population_source_h5_path,
                 year=target_year,
+                provided_paths=provided_table_paths,
             )
         except Exception as exc:
             logger.debug(
@@ -397,7 +411,16 @@ def _resolve_activitysim_preprocess_runtime_inputs(
             )
         else:
             for table_key, table_path in resolved_table_paths.items():
-                runtime_inputs.setdefault(table_key, table_path)
+                current_value = runtime_inputs.get(table_key)
+                if current_value != table_path:
+                    if isinstance(current_value, str) and current_value:
+                        logger.debug(
+                            "Reconciled ActivitySim population table selector %s: %s -> %s",
+                            table_key,
+                            current_value,
+                            table_path,
+                        )
+                    runtime_inputs[table_key] = table_path
     return runtime_inputs
 
 

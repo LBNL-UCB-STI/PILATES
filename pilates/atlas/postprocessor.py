@@ -2,10 +2,13 @@ from typing import Optional, Dict, Any
 import logging
 import os
 from pathlib import Path
+import re
+import zlib
 
 import numpy as np
 import pandas as pd
 
+from pilates.atlas.inputs import atlas_selected_scenario
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
@@ -18,16 +21,234 @@ from pilates.generic.postprocessor import GenericPostprocessor
 logger = logging.getLogger(__name__)
 
 
+_ATLAS_VEHICLE_TYPE_MAPPING_BY_SCENARIO = {
+    "baseline": "vehicle_type_mapping_baseline.csv",
+    "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
+    "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
+}
+
+_ATLAS_SCENARIO_ALIASES = {
+    "baseline": "baseline",
+    "ess_cons": "ess_cons",
+    "ess_const_220_price": "ess_cons",
+    "zev_mandate": "zev_mandate",
+    "evmandforced2": "zev_mandate",
+}
+
+_ATLAS_BODYTYPE_ALIASES = {
+    "car": "car",
+    "sedan": "car",
+    "coupe": "car",
+    "wagon": "car",
+    "hatchback": "car",
+    "convertible": "car",
+    "sports_car": "car",
+    "sportscar": "car",
+    "minivan": "minvan",
+    "mini_van": "minvan",
+    "minvan": "minvan",
+    "suv": "suv",
+    "cuv": "suv",
+    "truck": "truck",
+    "pickup": "truck",
+    "pickup_truck": "truck",
+    "van": "van",
+    "cargo_van": "van",
+    "passenger_van": "van",
+}
+
+_ATLAS_FUEL_ALIASES = {
+    "conv": "conv",
+    "conventional": "conv",
+    "gas": "conv",
+    "gasoline": "conv",
+    "ice": "conv",
+    "diesel": "conv",
+    "ev": "ev",
+    "electric": "ev",
+    "electricity": "ev",
+    "bev": "ev",
+    "hybrid": "hybrid",
+    "phev": "phev",
+    "plugin_hybrid": "phev",
+    "plug_in_hybrid": "phev",
+    "fuelcell": "fuelcell",
+    "fuel_cell": "fuelcell",
+    "hydrogen": "fuelcell",
+    "cng": "cng",
+}
+
+
+def _normalize_lookup_key(value: Any) -> Optional[str]:
+    if pd.isna(value):
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def _settings_value(settings: Any, field_name: str) -> Optional[Any]:
+    if isinstance(settings, dict):
+        return settings.get(field_name)
+    return getattr(settings, field_name, None)
+
+
+def _normalized_atlas_scenario(settings: Any) -> str:
+    scenario = atlas_selected_scenario(settings)
+    if scenario is None:
+        for field_name in ("atlas_vehicles_scenario", "atlas_scenario"):
+            raw_value = _settings_value(settings, field_name)
+            normalized = _ATLAS_SCENARIO_ALIASES.get(_normalize_lookup_key(raw_value))
+            if normalized is not None:
+                scenario = normalized
+                break
+    if scenario is None:
+        logger.warning(
+            "[AtlasPostprocessor] No ATLAS scenario configured for vehicle type mapping; defaulting to baseline."
+        )
+        return "baseline"
+    return scenario
+
+
+def resolve_atlas_vehicle_type_mapping_path(
+    settings: Any, workspace: Optional[Workspace] = None
+) -> Path:
+    scenario = _normalized_atlas_scenario(settings)
+    mapping_name = _ATLAS_VEHICLE_TYPE_MAPPING_BY_SCENARIO.get(scenario)
+    if mapping_name is None:
+        raise RuntimeError(
+            f"Unsupported ATLAS scenario for vehicle type mapping: {scenario}"
+        )
+
+    candidates = []
+    if workspace is not None:
+        candidates.append(Path(workspace.get_atlas_mutable_input_dir()) / mapping_name)
+    candidates.append(Path(__file__).resolve().parent / "atlas_input" / mapping_name)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise RuntimeError(
+        "ATLAS vehicle type mapping file not found. Looked for: "
+        + ", ".join(str(candidate) for candidate in candidates)
+    )
+
+
+def _normalize_bodytype_for_mapping(value: Any) -> Optional[str]:
+    normalized = _normalize_lookup_key(value)
+    if normalized is None:
+        return None
+    return _ATLAS_BODYTYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_fuel_for_mapping(value: Any) -> Optional[str]:
+    normalized = _normalize_lookup_key(value)
+    if normalized is None:
+        return None
+    return _ATLAS_FUEL_ALIASES.get(normalized, normalized)
+
+
+def _prepare_vehicle_type_mapping(mapping_csv_path: str) -> pd.DataFrame:
+    mapping = pd.read_csv(mapping_csv_path)
+    mapping = mapping.copy()
+    mapping["modelyear"] = mapping["modelyear"].astype(int)
+    mapping["bodytype_key"] = mapping["bodytype"].map(_normalize_bodytype_for_mapping)
+    mapping["fuel_key"] = mapping["adopt_fuel"].map(_normalize_fuel_for_mapping)
+    mapping["sampleProbabilityWithinCategory"] = pd.to_numeric(
+        mapping["sampleProbabilityWithinCategory"], errors="coerce"
+    ).fillna(0.0)
+    mapping = mapping.dropna(subset=["vehicleTypeId", "modelyear"])
+    mapping = mapping.drop_duplicates(
+        subset=["fuel_key", "bodytype_key", "modelyear", "vehicleTypeId"],
+        keep="first",
+    )
+    return mapping
+
+
+def _nearest_modelyear_subset(mapping: pd.DataFrame, modelyear: int) -> pd.DataFrame:
+    nearest_year = (
+        (mapping["modelyear"] - modelyear).abs().sort_values().index[0]
+    )
+    target_year = int(mapping.loc[nearest_year, "modelyear"])
+    return mapping.loc[mapping["modelyear"] == target_year]
+
+
+def _select_vehicle_type_candidates(
+    mapping: pd.DataFrame,
+    fuel_key: Optional[str],
+    bodytype_key: Optional[str],
+    modelyear: int,
+) -> pd.DataFrame:
+    attempts = (
+        (fuel_key, bodytype_key, False),
+        (fuel_key, bodytype_key, True),
+        (fuel_key, None, False),
+        (fuel_key, None, True),
+        (None, bodytype_key, True),
+        (None, None, True),
+    )
+
+    for candidate_fuel, candidate_bodytype, nearest_year in attempts:
+        matched = mapping
+        if candidate_fuel is not None:
+            matched = matched.loc[matched["fuel_key"] == candidate_fuel]
+        if candidate_bodytype is not None:
+            matched = matched.loc[matched["bodytype_key"] == candidate_bodytype]
+        if matched.empty:
+            continue
+        if nearest_year:
+            matched = _nearest_modelyear_subset(matched, modelyear)
+        else:
+            matched = matched.loc[matched["modelyear"] == modelyear]
+            if matched.empty:
+                continue
+        return matched.sort_values("vehicleTypeId").reset_index(drop=True)
+
+    raise RuntimeError(
+        "Unable to map ATLAS vehicle row to a BEAM vehicle type. "
+        f"fuel={fuel_key} bodytype={bodytype_key} modelyear={modelyear}"
+    )
+
+
+def _sample_vehicle_type_ids(
+    candidates: pd.DataFrame,
+    sample_size: int,
+    *,
+    output_year: int,
+    fuel_key: Optional[str],
+    bodytype_key: Optional[str],
+    modelyear: int,
+) -> pd.Series:
+    weights = candidates["sampleProbabilityWithinCategory"]
+    if float(weights.sum()) <= 0:
+        weights = None
+    seed_value = zlib.crc32(
+        f"{output_year}|{fuel_key}|{bodytype_key}|{modelyear}|{sample_size}".encode(
+            "utf-8"
+        )
+    )
+    return candidates.sample(
+        n=sample_size,
+        replace=True,
+        weights=weights,
+        random_state=seed_value,
+    )["vehicleTypeId"].reset_index(drop=True)
+
+
 def atlas_add_vehileTypeId(
     settings: dict,
     output_year: int,
     vehicles_csv_path: str,
     output_vehicles2_csv_path: str,
+    mapping_csv_path: Optional[str] = None,
 ):
     """Add a 'vehicleTypeId' column to the ATLAS vehicles CSV.
 
-    Reads the main ATLAS vehicles output, creates a composite 'vehicleTypeId'
-    column for BEAM, and writes the result to a new 'vehicles2_{year}.csv' file.
+    Reads the main ATLAS vehicles output, samples a BEAM-compatible
+    ``vehicleTypeId`` from the scenario-specific mapping table, and writes the
+    result to a new ``vehicles2_{year}.csv`` file.
 
     Args:
         settings (dict): The simulation settings.
@@ -41,26 +262,57 @@ def atlas_add_vehileTypeId(
         )
         return
 
-    # Read original ATLAS output "vehicles_*.csv" as dataframe
     df = pd.read_csv(vehicles_csv_path)
-
-    # ATLAS:v1.0.6 can generate continuous modelyear
     df["modelyear"] = df["modelyear"].astype(int)
-
-    # Add "vehicleTypeId" column in dataframe for BEAM
-    # For prior-2015-model vehicles, vehicleTypeId is *_*_2015
-    df["vehicleTypeId"] = (
-        df[["bodytype", "pred_power", "modelyear"]].astype(str).agg("_".join, axis=1)
+    mapping_path = (
+        Path(mapping_csv_path)
+        if mapping_csv_path is not None
+        else resolve_atlas_vehicle_type_mapping_path(settings)
     )
-    df.loc[df["modelyear"] < 2015, "vehicleTypeId"] = (
-        df.loc[df["modelyear"] < 2015, ["bodytype", "pred_power"]]
-        .astype(str)
-        .agg("_".join, axis=1)
-        + "_2015"
-    )
+    mapping = _prepare_vehicle_type_mapping(str(mapping_path))
 
-    # Write to a new file vehicles2_*.csv
+    fuel_source = None
+    if "adopt_fuel" in df.columns:
+        fuel_source = df["adopt_fuel"]
+    if "pred_power" in df.columns:
+        fuel_source = (
+            fuel_source.combine_first(df["pred_power"])
+            if fuel_source is not None
+            else df["pred_power"]
+        )
+    df["_fuel_key"] = (
+        fuel_source.map(_normalize_fuel_for_mapping) if fuel_source is not None else None
+    )
+    df["_bodytype_key"] = (
+        df["bodytype"].map(_normalize_bodytype_for_mapping)
+        if "bodytype" in df.columns
+        else None
+    )
+    df["vehicleTypeId"] = pd.Series(index=df.index, dtype="object")
+
+    grouped = df.groupby(["_fuel_key", "_bodytype_key", "modelyear"], sort=False, dropna=False)
+    for (fuel_key, bodytype_key, modelyear), vehicle_subset in grouped:
+        candidates = _select_vehicle_type_candidates(
+            mapping,
+            fuel_key=fuel_key,
+            bodytype_key=bodytype_key,
+            modelyear=int(modelyear),
+        )
+        sampled_ids = _sample_vehicle_type_ids(
+            candidates,
+            sample_size=len(vehicle_subset),
+            output_year=output_year,
+            fuel_key=fuel_key,
+            bodytype_key=bodytype_key,
+            modelyear=int(modelyear),
+        )
+        df.loc[vehicle_subset.index, "vehicleTypeId"] = sampled_ids.values
+
+    df.drop(columns=["_fuel_key", "_bodytype_key"], inplace=True)
     df.to_csv(output_vehicles2_csv_path, index=False)
+
+
+atlas_add_vehicleTypeId = atlas_add_vehileTypeId
 
 
 def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):

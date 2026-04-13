@@ -964,8 +964,8 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         "vehicleTypeId",
     } <= set(vehicles2.columns)
     assert vehicles2["vehicleTypeId"].tolist() == [
-        "sedan_gasoline_2018",
-        "suv_electricity_2020",
+        "2018_Ford_Fusion_AWD",
+        "2020_Tesla_Model_Y",
     ]
     asim_mutable_dir = Path(workspace.get_asim_mutable_data_dir())
     land_use = pd.read_csv(asim_mutable_dir / "land_use.csv")

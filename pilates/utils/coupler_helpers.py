@@ -3,6 +3,8 @@ import logging
 import re
 import atexit
 import fnmatch
+from contextlib import contextmanager
+from contextvars import ContextVar
 import queue
 import shutil
 import threading
@@ -53,6 +55,35 @@ _archive_pending_tasks: Dict[
 _archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
+_published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
+    "published_coupler_keys",
+    default=None,
+)
+
+
+def _is_noop_artifact(candidate: Any) -> bool:
+    if candidate is None:
+        return False
+    candidate_type = type(candidate)
+    candidate_name = getattr(candidate_type, "__name__", "").lower()
+    candidate_module = getattr(candidate_type, "__module__", "").lower()
+    return "noopartifact" in candidate_name or ".noop" in candidate_module
+
+
+@contextmanager
+def record_published_coupler_keys() -> "set[str]":
+    published_keys: set[str] = set()
+    token = _published_coupler_keys.set(published_keys)
+    try:
+        yield published_keys
+    finally:
+        _published_coupler_keys.reset(token)
+
+
+def _record_published_coupler_key(key: str) -> None:
+    published_keys = _published_coupler_keys.get()
+    if published_keys is not None:
+        published_keys.add(key)
 
 
 def _archive_enabled() -> bool:
@@ -1099,10 +1130,16 @@ def set_coupler_from_artifact(
     if artifact is None and fallback is None:
         return
     canonical_key = resolve_artifact_key(key)
-    value = artifact or fallback
+    value = artifact
+    if _is_noop_artifact(value) and fallback is not None:
+        value = fallback
+    elif value is None:
+        value = fallback
 
     def _preserve_artifact_identity(candidate: Any) -> bool:
         if candidate is None or isinstance(candidate, (str, os.PathLike)):
+            return False
+        if _is_noop_artifact(candidate):
             return False
         return any(
             getattr(candidate, attr_name, None) is not None
@@ -1117,6 +1154,7 @@ def set_coupler_from_artifact(
         set_value = getattr(target, "set", None)
         if callable(set_value):
             set_value(target_key, value)
+        _record_published_coupler_key(target_key)
 
     # Preferred path: if available, also publish through model namespace view.
     target = namespaced_view_target(canonical_key)
@@ -1285,17 +1323,7 @@ def _log_and_maybe_publish_artifact(
     if publish_to_coupler:
         if coupler is None:
             raise TypeError("coupler must be provided when publish_to_coupler=True")
-        # Without an active Consist run, disabled logging may yield placeholder
-        # artifacts that are useful for diagnostics but are not valid runtime
-        # handoff values. Publish plain filesystem paths in that case so restart
-        # and non-Consist execution paths can still resolve concrete inputs.
-        artifact_for_coupler = artifact if has_active_run else None
-        set_coupler_from_artifact(
-            coupler,
-            key,
-            artifact_for_coupler,
-            fallback=path,
-        )
+        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_and_set_output(
