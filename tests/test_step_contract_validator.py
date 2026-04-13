@@ -309,6 +309,21 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
             continue
 
         step_func = step_funcs[step_name]
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="test"),
+            urbansim=SimpleNamespace(
+                region_mappings={"region_to_region_id": {"test": "000"}},
+                input_file_template="usim_{region_id}.h5",
+            ),
+        )
+        workspace = SimpleNamespace(
+            full_path="/tmp/workspace",
+            get_asim_output_dir=lambda: "/tmp/activitysim/output",
+            get_asim_mutable_data_dir=lambda: "/tmp/activitysim/data",
+            get_beam_output_dir=lambda: "/tmp/beam/output",
+            get_beam_mutable_data_dir=lambda: "/tmp/beam/data",
+            get_usim_mutable_data_dir=lambda: "/tmp/usim/data",
+        )
         run_kwargs = _build_step_run_kwargs(
             step=StepRef(
                 name=step_name,
@@ -316,9 +331,9 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
                 year=2023,
                 iteration=0,
             ),
-            settings=SimpleNamespace(run=None),
+            settings=settings,
             state=SimpleNamespace(),
-            workspace=SimpleNamespace(),
+            workspace=workspace,
             runtime_kwargs={},
             stage_name="test_stage",
             default_iteration=0,

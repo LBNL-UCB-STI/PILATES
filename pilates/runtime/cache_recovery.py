@@ -216,13 +216,12 @@ def run_with_cache_recovery(
     recover_outputs: Callable[[Any], Optional[Any]],
 ) -> tuple[Any, Optional[Any], dict[str, Any]]:
     """
-    Run a step once, try cache-hit recovery, and rerun with overwrite as fallback.
+    Run a step once and, on cache hit, attempt one explicit output recovery pass.
     """
     result = run_step(None)
     metadata = {
         "initial_cache_hit": bool(getattr(result, "cache_hit", False)),
         "recovery_attempts": 0,
-        "overwrite_rerun": False,
     }
     if not getattr(result, "cache_hit", False):
         cache_miss_explanation = log_cache_miss_explanation(
@@ -239,17 +238,5 @@ def run_with_cache_recovery(
     if outputs is None and getattr(result, "cache_hit", False):
         metadata["recovery_attempts"] += 1
         outputs = recover_outputs(result)
-    if outputs is None and getattr(result, "cache_hit", False):
-        logger.warning(
-            "[%s] Cache hit for %s could not hydrate outputs_holder; rerunning with cache_mode=overwrite.",
-            stage_name,
-            step_name,
-        )
-        metadata["overwrite_rerun"] = True
-        result = run_step(CacheOptions(cache_mode="overwrite"))
-        outputs = read_outputs()
-        if outputs is None and getattr(result, "cache_hit", False):
-            metadata["recovery_attempts"] += 1
-            outputs = recover_outputs(result)
     metadata["final_cache_hit"] = bool(getattr(result, "cache_hit", False))
     return result, outputs, metadata

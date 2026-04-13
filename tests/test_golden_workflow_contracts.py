@@ -19,6 +19,7 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
+    USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_INPUT_MERGED_PREFIX,
@@ -81,7 +82,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     land_use_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert land_use_datastore is not None
     assert Path(land_use_datastore).resolve() == Path(
-        usim_inputs[USIM_DATASTORE_CURRENT_H5]
+        usim_inputs[USIM_DATASTORE_BASE_H5]
     ).resolve()
 
     run_vehicle_ownership_stage(
@@ -143,9 +144,9 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     final_usim_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert final_usim_datastore is not None
-    assert Path(final_usim_datastore).name == (
-        f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
-    )
+    assert Path(final_usim_datastore).name == Path(
+        usim_inputs[USIM_DATASTORE_BASE_H5]
+    ).name
     assert Path(final_usim_datastore).parent == Path(after_vehicle_ownership).parent
     assert Path(final_usim_datastore).resolve() == Path(
         scenario_outputs[USIM_DATASTORE_H5].path

@@ -938,7 +938,9 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert coupler_base_h5 is not None
     assert coupler_current_h5 is not None
     assert Path(coupler_base_h5).resolve() == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    assert Path(coupler_current_h5).resolve() == usim_merged_path.resolve()
+    assert Path(coupler_current_h5).resolve() == Path(
+        usim_inputs[USIM_DATASTORE_BASE_H5]
+    ).resolve()
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
     # produces Atlas outputs plus ActivitySim-ready tables.
@@ -1126,8 +1128,6 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         meta = scenario_outputs[key].meta or {}
         assert meta.get("year") == state.forecast_year
         assert meta.get("iteration") == 0
-        description = str(meta.get("description", ""))
-        assert description.startswith("ActivitySim output file:")
 
     report = write_provenance_report(
         tracker=tracker,

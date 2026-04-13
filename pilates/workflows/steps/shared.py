@@ -812,6 +812,13 @@ class StandardStepSpec:
     output_recoverer: Optional[OutputRecoverer] = None
     declared_outputs: Optional[list[str]] = None
     schema_outputs: Optional[list[str]] = None
+    output_paths: Any = None
+    load_inputs: Optional[bool] = None
+    cache_mode: Optional[str] = None
+    cache_hydration: Optional[str] = None
+    input_binding: Optional[str] = None
+    input_paths: Any = None
+    input_materialization: Optional[str] = None
     use_logged_wrapper: bool = True
     step_description: Optional[str] = None
     tags: Optional[list[str]] = None
@@ -1208,6 +1215,13 @@ def _make_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     log_start_message: bool = False,
     log_completion_message: bool = False,
     step_description: Optional[str] = None,
@@ -1337,6 +1351,13 @@ def _make_typed_step_function(
             if declared_outputs is not None
             else _declared_outputs_from_class(outputs_class)
         ),
+        output_paths=output_paths,
+        load_inputs=load_inputs,
+        cache_mode=cache_mode,
+        cache_hydration=cache_hydration,
+        input_binding=input_binding,
+        input_paths=input_paths,
+        input_materialization=input_materialization,
         tags=step_tags,
     )
 
@@ -1358,6 +1379,13 @@ def _make_logged_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     step_description: Optional[str] = None,
     tags: Optional[list[str]] = None,
     step_logger: Optional[logging.Logger] = None,
@@ -1382,6 +1410,13 @@ def _make_logged_typed_step_function(
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
+        output_paths=output_paths,
+        load_inputs=load_inputs,
+        cache_mode=cache_mode,
+        cache_hydration=cache_hydration,
+        input_binding=input_binding,
+        input_paths=input_paths,
+        input_materialization=input_materialization,
         log_start_message=True,
         log_completion_message=True,
         step_logger=step_logger or logger,
@@ -1436,6 +1471,13 @@ def build_standard_step(
         output_recoverer=spec.output_recoverer,
         declared_outputs=spec.declared_outputs,
         schema_outputs=spec.schema_outputs,
+        output_paths=spec.output_paths,
+        load_inputs=spec.load_inputs,
+        cache_mode=spec.cache_mode,
+        cache_hydration=spec.cache_hydration,
+        input_binding=spec.input_binding,
+        input_paths=spec.input_paths,
+        input_materialization=spec.input_materialization,
         step_description=spec.step_description,
         tags=spec.tags,
         step_logger=spec.step_logger,
@@ -1478,6 +1520,9 @@ def _decorate_step_with_consist(
     load_inputs: Optional[bool] = None,
     cache_mode: Optional[str] = None,
     cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:
     """
@@ -1496,6 +1541,12 @@ def _decorate_step_with_consist(
         # what each means for Consist cache identity and how to add new models.
         **consist_step_meta(step_model),
     }
+    if input_binding is None and load_inputs is True:
+        input_binding = "loaded"
+        load_inputs = None
+    elif input_binding is None and load_inputs is False:
+        input_binding = "none"
+        load_inputs = None
     if schema_outputs:
         kwargs["schema_outputs"] = schema_outputs
     if outputs:
@@ -1508,4 +1559,10 @@ def _decorate_step_with_consist(
         kwargs["cache_mode"] = cache_mode
     if cache_hydration is not None:
         kwargs["cache_hydration"] = cache_hydration
+    if input_binding is not None:
+        kwargs["input_binding"] = input_binding
+    if input_paths is not None:
+        kwargs["input_paths"] = input_paths
+    if input_materialization is not None:
+        kwargs["input_materialization"] = input_materialization
     return define_step(**kwargs)(step_func)

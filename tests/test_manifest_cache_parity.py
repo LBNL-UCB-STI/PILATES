@@ -46,6 +46,7 @@ from pilates.workflows.steps import (
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
+    make_beam_preprocess_step,
     make_beam_run_step,
 )
 
@@ -571,19 +572,23 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
     )
     fresh_snapshot = fresh_result["snapshot"]
 
-    def _should_not_run(**_runtime_kwargs):
-        raise AssertionError("cache-hit and manifest paths should not execute the step")
-
-    _should_not_run.__consist_step__ = object()
+    cache_holder = StepOutputsHolder()
+    cache_coupler = DummyCoupler()
+    cache_step = make_beam_preprocess_step(
+        coupler=cache_coupler,
+        outputs_holder=cache_holder,
+    )
 
     cache_result = _run_step_mode(
         step_name="beam_preprocess",
         mode_label="cache",
-        step_func=_should_not_run,
+        step_func=cache_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=cache_holder,
+        coupler=cache_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_postprocess",
             object(),
@@ -592,24 +597,33 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
         cache_hit=True,
     )
 
-    manifest_outputs = _recover_cached_outputs(
+    manifest_holder = StepOutputsHolder()
+    manifest_coupler = DummyCoupler()
+    manifest_step = make_beam_preprocess_step(
+        coupler=manifest_coupler,
+        outputs_holder=manifest_holder,
+    )
+    manifest_outputs = _recover_manifest_outputs(
         step_name="beam_preprocess",
-        outputs_holder=StepOutputsHolder(),
+        step_func=manifest_step,
+        holder=manifest_holder,
         settings=settings,
         state=state,
         workspace=workspace,
-        coupler=DummyCoupler(),
+        coupler=manifest_coupler,
         step_inputs=step_inputs,
     )
     assert manifest_outputs is not None
     manifest_result = _run_step_mode(
         step_name="beam_preprocess",
         mode_label="manifest",
-        step_func=_should_not_run,
+        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
+        holder=manifest_holder,
+        coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_postprocess",
             object(),
@@ -1117,7 +1131,11 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
     _write_file(usim_h5)
 
     settings = SimpleNamespace(
-        urbansim=SimpleNamespace(region_id="000", region_mappings={"region_to_region_id": {}}),
+        urbansim=SimpleNamespace(
+            region_id="000",
+            region_mappings={"region_to_region_id": {"test": "000"}},
+            input_file_template="usim_{region_id}.h5",
+        ),
         run=SimpleNamespace(region="test"),
     )
     state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)

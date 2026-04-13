@@ -1,7 +1,10 @@
 from types import SimpleNamespace
 
+import pytest
+
+pytest.importorskip("openmatrix")
+
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
-from pilates.workflows import steps
 from pilates.workflows.steps import beam as steps_beam
 
 
@@ -18,7 +21,7 @@ def test_beam_preprocess_fails_early_when_config_file_missing(monkeypatch, tmp_p
         _fake_build_standard_step,
     )
 
-    steps.make_beam_preprocess_step(
+    steps_beam.make_beam_preprocess_step(
         coupler=SimpleNamespace(),
         outputs_holder=SimpleNamespace(),
     )
@@ -57,7 +60,7 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
         _fake_build_standard_step,
     )
 
-    steps.make_beam_run_step(
+    steps_beam.make_beam_run_step(
         coupler=SimpleNamespace(),
         outputs_holder=SimpleNamespace(),
     )
@@ -128,7 +131,7 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
             }
             return mapping.get(key, default)
 
-    steps.make_beam_run_step(
+    steps_beam.make_beam_run_step(
         coupler=CouplerStub(),
         outputs_holder=SimpleNamespace(),
     )
@@ -191,7 +194,7 @@ def test_beam_run_fails_clearly_when_config_file_missing(monkeypatch, tmp_path):
         _fake_build_standard_step,
     )
 
-    steps.make_beam_run_step(
+    steps_beam.make_beam_run_step(
         coupler=SimpleNamespace(),
         outputs_holder=SimpleNamespace(),
     )
@@ -222,7 +225,7 @@ def test_beam_run_fails_clearly_when_config_file_missing(monkeypatch, tmp_path):
 
 def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     coupler_values = {}
-    step_fn = steps.make_beam_run_step(
+    step_fn = steps_beam.make_beam_run_step(
         coupler=SimpleNamespace(
             get=lambda key, default=None: coupler_values.get(key, default),
             set=lambda *args, **kwargs: None,
@@ -381,7 +384,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
 
 
 def test_beam_run_archives_atlas_vehicles_input_when_present(monkeypatch, tmp_path):
-    step_fn = steps.make_beam_run_step(
+    step_fn = steps_beam.make_beam_run_step(
         coupler=SimpleNamespace(
             get=lambda *args, **kwargs: None,
             set=lambda *args, **kwargs: None,

@@ -409,9 +409,20 @@ class AtlasPostprocessor(GenericPostprocessor):
         usim_output_path = resolve_atlas_usim_datastore_path(
             settings, state, workspace
         )
+        output_year = getattr(state, "year", getattr(state, "forecast_year", None))
+        vehicles2_path = (
+            os.path.join(workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv")
+            if output_year is not None
+            else None
+        )
         return {
             "atlas_output_dir": workspace.get_atlas_output_dir(),
             "usim_datastore_h5": usim_output_path,
+            **(
+                {"atlas_vehicles2_output": vehicles2_path}
+                if vehicles2_path is not None
+                else {}
+            ),
         }
 
     def __init__(

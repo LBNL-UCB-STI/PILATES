@@ -935,78 +935,23 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
-            restart_frontier_contract = (
-                _restart_frontier_contract(settings=settings, state=state)
-                if is_restart_run and state.data_initialized
-                else None
-            )
             if is_restart_run and state.data_initialized:
-                try:
-                    rewind_restore = _hydrate_rewind_runner_inputs(
-                        tracker=tracker,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        local_run_dir=local_run_dir,
-                        archive_run_dir=archive_run_dir,
-                        archive_state_path=archive_state_path,
-                        query_facet=restart_query_facet,
-                    )
-                except restart_runtime.RestartHydrationError as exc:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_rewind_restore",
-                        **exc.summary,
-                    )
-                    raise
-                if rewind_restore is not None:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_rewind_restore",
-                        **rewind_restore,
-                    )
-                    logger.info(
-                        "Restart exact rewind restore complete: frontier_stage=%s "
-                        "frontier_step=%s hydrated_keys=%s overlay_root=%s",
-                        rewind_restore.get("frontier_stage"),
-                        rewind_restore.get("frontier_step"),
-                        rewind_restore.get("hydrated_keys"),
-                        rewind_restore.get("overlay_root"),
-                    )
-            if restart_frontier_contract is not None:
-                try:
-                    restart_hydration = _hydrate_missing_restart_artifacts(
-                        tracker=tracker,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        local_run_dir=local_run_dir,
-                        archive_run_dir=archive_run_dir,
-                        query_facet=restart_query_facet,
-                    )
-                except restart_runtime.RestartHydrationError as exc:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_hydration",
-                        **exc.summary,
-                    )
-                    raise
+                logger.info(
+                    "Restart replay mode active: skipping bespoke restart "
+                    "hydration and relying on scenario replay plus Consist cache hits."
+                )
                 emit_consist_audit_event(
                     workspace=workspace,
                     event_type="restart_hydration",
-                    **restart_hydration,
-                )
-                logger.info(
-                    "Restart frontier hydration complete: frontier_stage=%s "
-                    "frontier_step=%s hydrated_keys=%s missing_keys=%s "
-                    "fallback_reason=%s",
-                    restart_hydration.get("frontier_stage"),
-                    restart_hydration.get("frontier_step"),
-                    restart_hydration.get("hydrated_keys"),
-                    restart_hydration.get("missing_keys"),
-                    restart_hydration.get("fallback_reason"),
+                    frontier_stage=None,
+                    frontier_step=None,
+                    success=True,
+                    hydrated_keys=[],
+                    missing_keys=[],
+                    producer_steps_by_key={},
+                    fallback_reason="replay_mode",
+                    rewind_restore=False,
+                    overlay_root=None,
                 )
 
             # 7. MAIN WORKFLOW LOOP

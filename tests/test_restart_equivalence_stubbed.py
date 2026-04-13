@@ -9,6 +9,7 @@ import pprint
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import pandas as pd
@@ -197,6 +198,7 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         AtlasPreprocessOutputs,
         AtlasRunOutputs,
     )
+    from pilates.utils.beam import get_beam_omx_skims_name
     from pilates.beam.outputs import BeamPostprocessOutputs, BeamPreprocessOutputs, BeamRunOutputs
     from pilates.generic.model_factory import ModelFactory
     from pilates.generic.records import RecordStore
@@ -414,7 +416,11 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 )
             if model_name == "beam":
                 zarr = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-                final_skims = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
+                final_skims = (
+                    Path(workspace.get_beam_mutable_data_dir())
+                    / settings.run.region
+                    / get_beam_omx_skims_name(settings)
+                )
                 _write_file(zarr)
                 _write_file(final_skims)
                 return BeamPostprocessOutputs(zarr_skims=zarr, final_skims_omx=final_skims)
@@ -684,6 +690,10 @@ def _resume_runtime(
         f"local={local_runtime.settings.run.output_run_name}"
     )
     _copy_tracker_db(interrupted.db_path, local_runtime.db_path)
+    archive_state_path = Path(interrupted.state.file_loc)
+    local_state_path = Path(local_runtime.state.file_loc)
+    local_state_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(archive_state_path, local_state_path)
     local_runtime.state = WorkflowState.from_settings(local_runtime.settings)
     return {"hydration": None}
 
@@ -834,15 +844,67 @@ def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
     }
 
 
-def _snapshot(runtime: _StubRuntime) -> dict[str, Any]:
+def _run_metrics(tracker: Tracker, workspace: Workspace) -> dict[str, Any]:
+    by_model: dict[str, dict[str, int]] = {}
+    cache_hit_steps = 0
+    executed_steps = 0
+    total_steps = 0
+
+    for run in tracker.run_set(label="equivalence", limit=200000):
+        if str(getattr(run, "status", "")).lower() != "completed":
+            continue
+        model = getattr(run, "model_name", None) or getattr(run, "model", None)
+        if not model or model == "pilates_orchestrator":
+            continue
+        total_steps += 1
+        meta = getattr(run, "meta", None)
+        if not isinstance(meta, Mapping):
+            meta = {}
+        is_cache_hit = bool(meta.get("cache_hit", False))
+        if is_cache_hit:
+            cache_hit_steps += 1
+        else:
+            executed_steps += 1
+        model_counts = by_model.setdefault(
+            str(model),
+            {"total": 0, "cache_hit": 0, "executed": 0},
+        )
+        model_counts["total"] += 1
+        model_counts["cache_hit" if is_cache_hit else "executed"] += 1
+
+    audit = _audit_snapshot(workspace)
+    restart_hydration = audit.get("restart_hydration", {})
+    return {
+        "step_counts": {
+            "total": total_steps,
+            "cache_hit": cache_hit_steps,
+            "executed": executed_steps,
+        },
+        "by_model": by_model,
+        "restart_hydration_event_count": int(
+            restart_hydration.get("event_count", 0) or 0
+        ),
+        "custom_recovery_steps": sorted(audit.get("steps_using_custom_recovery", {}).keys()),
+    }
+
+
+def _snapshot(
+    runtime: _StubRuntime,
+    *,
+    mode: str,
+    elapsed_seconds: Optional[float] = None,
+) -> dict[str, Any]:
     _debug(f"snapshot:start name={runtime.settings.run.output_run_name}")
     coupler = getattr(getattr(runtime.tracker, "scenario", None), "coupler", None)
     out = {
+        "mode": mode,
+        "elapsed_seconds": elapsed_seconds,
         "artifact_digests": _digest_bundle(runtime.workspace),
         "manifest_snapshot": _manifest_snapshot(runtime.workspace),
         "parent_edges": _normalized_parent_edges(runtime.tracker),
         "run_index_rows": _run_index_rows(runtime.tracker, runtime.workspace.full_path),
         "audit": _audit_snapshot(runtime.workspace),
+        "metrics": _run_metrics(runtime.tracker, runtime.workspace),
     }
     _debug(f"snapshot:complete name={runtime.settings.run.output_run_name}")
     return out
@@ -925,8 +987,10 @@ def _reset_audit_state():
 def baseline_snapshot(tmp_path, monkeypatch):
     runtime = _make_runtime(tmp_path, monkeypatch, name="baseline")
     _emit_run_context(runtime, restart_run=False)
+    started = perf_counter()
     _stage_runner(runtime)
-    return _snapshot(runtime)
+    elapsed = perf_counter() - started
+    return _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
 
 
 def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
@@ -955,6 +1019,7 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     cr.set_enabled(True)
     try:
         _debug(f"resumed_case:resume_execute boundary={stop_boundary}")
+        started = perf_counter()
         with cr.use_tracker(resumed_runtime.tracker):
             with cr.scenario(
                 name=resumed_runtime.settings.run.output_run_name,
@@ -1019,10 +1084,41 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                             usim_inputs=usim_inputs,
                             build_manifest_path=launcher_runtime.build_manifest_path,
                         )
+        elapsed = perf_counter() - started
     finally:
         cr.set_enabled(None)
     _debug(f"resumed_case:resume_complete boundary={stop_boundary}")
-    return _snapshot(resumed_runtime)
+    return _snapshot(
+        resumed_runtime,
+        mode="restart_hydration",
+        elapsed_seconds=elapsed,
+    )
+
+
+def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
+    archive_runtime = _make_runtime(tmp_path, monkeypatch, name=f"replay_archive_{stop_boundary}")
+    _emit_run_context(archive_runtime, restart_run=False)
+    _debug(f"replay_case:interrupting boundary={stop_boundary}")
+    with pytest.raises(_StopWorkflow):
+        _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
+
+    replay_runtime = _make_runtime(tmp_path, monkeypatch, name=f"replay_{stop_boundary}")
+    _emit_run_context(
+        replay_runtime,
+        restart_run=True,
+        archive_run_dir=Path(archive_runtime.workspace.full_path),
+    )
+    _copy_tracker_db(archive_runtime.db_path, replay_runtime.db_path)
+
+    started = perf_counter()
+    _stage_runner(replay_runtime)
+    elapsed = perf_counter() - started
+    _debug(f"replay_case:replay_complete boundary={stop_boundary}")
+    return _snapshot(
+        replay_runtime,
+        mode="replay",
+        elapsed_seconds=elapsed,
+    )
 
 
 @pytest.mark.parametrize(
@@ -1042,3 +1138,27 @@ def test_stubbed_restart_resume_matches_uninterrupted_baseline(
 ):
     resumed = _run_resumed_case(tmp_path, monkeypatch, stop_boundary=stop_boundary)
     _assert_equivalent(baseline_snapshot, resumed)
+
+
+@pytest.mark.parametrize(
+    "stop_boundary",
+    [
+        "after_beam_postprocess",
+        "after_first_atlas_subyear",
+        "after_year_complete",
+    ],
+)
+def test_stubbed_replay_resume_tracks_phase0_metrics(
+    baseline_snapshot,
+    tmp_path,
+    monkeypatch,
+    stop_boundary,
+):
+    replayed = _run_replay_case(tmp_path, monkeypatch, stop_boundary=stop_boundary)
+
+    assert replayed["mode"] == "replay"
+    assert replayed["elapsed_seconds"] is not None
+    assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["cache_hit"]
+    assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["executed"]
+    assert replayed["metrics"]["restart_hydration_event_count"] == 0
+    assert replayed["artifact_digests"] == baseline_snapshot["artifact_digests"]

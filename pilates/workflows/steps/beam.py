@@ -3,12 +3,14 @@ from __future__ import annotations
 import inspect
 import json
 import logging
+from dataclasses import replace
 from pathlib import Path
 import re
 import shutil
 from typing import Any, Callable, Dict, Mapping, Optional
 
 from pilates.config.models import PilatesConfig
+from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
@@ -913,6 +915,44 @@ def _recover_beam_run_outputs(
     )
 
 
+def _recover_beam_preprocess_outputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    step_inputs: Optional[Mapping[str, Any]],
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+) -> Optional[BeamPreprocessOutputs]:
+    del settings, state, coupler, outputs_holder, cached_outputs, run_id
+    prepared_inputs: Dict[str, Path] = {}
+    if step_inputs:
+        allowed_keys = {
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+        }
+        for key, value in step_inputs.items():
+            if key not in allowed_keys:
+                continue
+            path = artifact_to_existing_path(
+                value,
+                workspace=workspace,
+                materialize_from_archive=True,
+            )
+            if path is not None:
+                prepared_inputs[key] = Path(path)
+    if not prepared_inputs:
+        return None
+    return BeamPreprocessOutputs(
+        beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+        prepared_inputs=prepared_inputs,
+    )
+
+
 def _recover_beam_postprocess_outputs(
     *,
     settings: PilatesConfig,
@@ -969,6 +1009,141 @@ def _recover_beam_full_skim_outputs(
     if full_skims is None:
         return None
     return BeamFullSkimOutputs(full_skims=full_skims)
+
+
+def _beam_step_settings(ctx: Any) -> Any:
+    return getattr(ctx, "runtime_settings", None) or getattr(ctx, "settings", None)
+
+
+def _beam_step_state(ctx: Any) -> Any:
+    return getattr(ctx, "runtime_state", None) or getattr(ctx, "state", None)
+
+
+def _beam_step_workspace(ctx: Any) -> Any:
+    return getattr(ctx, "runtime_workspace", None) or getattr(ctx, "workspace", None)
+
+
+def _beam_preprocess_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.preprocessor import BeamPreprocessor
+
+    return BeamPreprocessor.expected_inputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+
+
+def _beam_preprocess_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.preprocessor import BeamPreprocessor
+
+    return BeamPreprocessor.expected_outputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+
+
+def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamRunner
+
+    return BeamRunner.runtime_expected_inputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+
+
+def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamRunner
+
+    return BeamRunner.expected_outputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+
+
+def _beam_postprocess_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.postprocessor import BeamPostprocessor
+
+    return BeamPostprocessor.expected_inputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+
+
+def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.postprocessor import BeamPostprocessor
+
+    expected = BeamPostprocessor.expected_outputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
+    if ZARR_SKIMS in expected:
+        return {ZARR_SKIMS: expected[ZARR_SKIMS]}
+    return {}
+
+
+def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
+    settings = _beam_step_settings(ctx)
+    workspace = _beam_step_workspace(ctx)
+    return {
+        BEAM_CONFIG_FILE: _require_primary_beam_config(
+            settings,
+            workspace,
+        ),
+        "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+        "beam_output_dir": workspace.get_beam_output_dir(),
+    }
+
+
+def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
+    settings = _beam_step_settings(ctx)
+    state = _beam_step_state(ctx)
+    workspace = _beam_step_workspace(ctx)
+    year = getattr(state, "current_year", None)
+    if year is None:
+        year = getattr(state, "year", None)
+    iteration = getattr(state, "current_inner_iter", None)
+    if iteration is None:
+        iteration = getattr(state, "iteration", 0)
+    if year is None:
+        return {}
+    return {
+        "beam_full_skims": (
+            Path(workspace.get_beam_output_dir())
+            / settings.run.region
+            / f"year-{int(year)}-iteration-{int(iteration)}"
+            / "skimsODFull.csv.gz"
+        )
+    }
+
+
+def _attach_beam_replay_contract(
+    step_func: Callable[..., Any],
+    *,
+    inputs: Optional[Callable[..., Mapping[str, Any]]] = None,
+    output_paths: Optional[Callable[..., Mapping[str, Any]]] = None,
+    input_binding: Optional[str] = "paths",
+    cache_hydration: Optional[str] = None,
+) -> Callable[..., Any]:
+    meta = getattr(step_func, "__consist_step__", None)
+    if meta is None:
+        return step_func
+    updates: Dict[str, Any] = {}
+    if inputs is not None:
+        updates["inputs"] = inputs
+    if output_paths is not None:
+        updates["output_paths"] = output_paths
+    if input_binding is not None:
+        updates["input_binding"] = input_binding
+    if cache_hydration is not None:
+        updates["cache_hydration"] = cache_hydration
+    if updates:
+        setattr(step_func, "__consist_step__", replace(meta, **updates))
+    return step_func
 
 
 def make_beam_preprocess_step(
@@ -1058,7 +1233,7 @@ def make_beam_preprocess_step(
             },
         )
 
-    return build_standard_step(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1077,9 +1252,16 @@ def make_beam_preprocess_step(
             ),
             input_logger=_log_inputs,
             output_logger=_log_outputs,
+            output_recoverer=_recover_beam_preprocess_outputs,
             schema_outputs=_schema_outputs_from_class(BeamPreprocessOutputs),
             use_logged_wrapper=False,
         ),
+    )
+    return _attach_beam_replay_contract(
+        step,
+        inputs=_beam_preprocess_inputs,
+        output_paths=_beam_preprocess_output_paths,
+        cache_hydration="metadata",
     )
 
 
@@ -1216,7 +1398,7 @@ def make_beam_run_step(
             extra_meta_fn=_beam_run_extra_meta,
         )
 
-    return build_standard_step(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1239,6 +1421,12 @@ def make_beam_run_step(
             schema_outputs=_schema_outputs_from_class(BeamRunOutputs),
             use_logged_wrapper=False,
         ),
+    )
+    return _attach_beam_replay_contract(
+        step,
+        inputs=_beam_run_inputs,
+        output_paths=_beam_run_output_paths,
+        cache_hydration="inputs-missing",
     )
 
 
@@ -1306,7 +1494,7 @@ def make_beam_postprocess_step(
             return
         _publish_beam_run_outputs(outputs=upstream, coupler=coupler)
 
-    return build_standard_step(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1331,6 +1519,12 @@ def make_beam_postprocess_step(
             schema_outputs=_schema_outputs_from_class(BeamPostprocessOutputs),
             use_logged_wrapper=False,
         ),
+    )
+    return _attach_beam_replay_contract(
+        step,
+        inputs=_beam_postprocess_inputs,
+        output_paths=_beam_postprocess_output_paths,
+        cache_hydration="inputs-missing",
     )
 
 
@@ -1362,7 +1556,7 @@ def make_beam_full_skim_step(
                 step_name="beam_full_skim",
             )
 
-    return build_standard_step(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1386,4 +1580,10 @@ def make_beam_full_skim_step(
             schema_outputs=_schema_outputs_from_class(BeamFullSkimOutputs),
             use_logged_wrapper=False,
         ),
+    )
+    return _attach_beam_replay_contract(
+        step,
+        inputs=_beam_full_skim_inputs,
+        output_paths=_beam_full_skim_output_paths,
+        cache_hydration="inputs-missing",
     )

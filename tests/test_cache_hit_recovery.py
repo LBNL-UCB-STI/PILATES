@@ -1503,7 +1503,9 @@ def test_run_workflow_cache_hit_urbansim_run_replays_canonical_datastore_key(
         steps=[StepRef(name="urbansim_run", step_func=step_func)],
         scenario=CacheHitScenario(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            urbansim=SimpleNamespace(output_file_template="usim_{year}.h5"),
+        ),
         workspace=workspace,
         coupler=coupler,
         outputs_holder=holder,
@@ -1560,7 +1562,9 @@ def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_ke
         steps=[StepRef(name="atlas_postprocess", step_func=step_func)],
         scenario=CacheHitScenario(),
         state=state,
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            urbansim=SimpleNamespace(output_file_template="usim_{year}.h5"),
+        ),
         workspace=workspace,
         coupler=coupler,
         outputs_holder=holder,

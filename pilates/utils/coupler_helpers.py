@@ -145,6 +145,20 @@ def _resolve_workspace_uri_path(
     return os.path.join(local_root, rel_path)
 
 
+def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
+    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
+    if not isinstance(container_uri, str) or not container_uri.startswith("workspace://"):
+        return None
+    meta = getattr(value, "meta", None)
+    if not isinstance(meta, Mapping):
+        return None
+    mount_root = meta.get("mount_root")
+    if not mount_root:
+        return None
+    rel_path = container_uri[len("workspace://") :].lstrip("/")
+    return os.path.abspath(os.path.join(str(mount_root), rel_path))
+
+
 def _copy_archive_to_local(
     *,
     local_path: str,
@@ -550,12 +564,19 @@ def artifact_to_path(
     """
     if value is None:
         return None
-    path = (
-        getattr(value, "path", None)
-        or getattr(value, "container_uri", None)
-        or getattr(value, "uri", None)
-        or value
-    )
+    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
+    if isinstance(container_uri, str) and container_uri.startswith("workspace://"):
+        rel_path = container_uri[len("workspace://") :].lstrip("/")
+        if workspace is not None and getattr(workspace, "full_path", None):
+            current_workspace_path = os.path.join(str(workspace.full_path), rel_path)
+            if os.path.exists(current_workspace_path):
+                return current_workspace_path
+        source_workspace_path = _resolve_artifact_source_workspace_path(value)
+        if source_workspace_path and os.path.exists(source_workspace_path):
+            return source_workspace_path
+        if workspace is not None and getattr(workspace, "full_path", None):
+            return os.path.join(str(workspace.full_path), rel_path)
+    path = getattr(value, "path", None) or container_uri or value
     if isinstance(path, Path):
         path = os.fspath(path)
     elif isinstance(path, os.PathLike):
@@ -675,11 +696,17 @@ def artifact_to_existing_path(
     path = artifact_to_path(value, workspace=workspace)
     if path is None and isinstance(value, str):
         path = value
-    return resolve_existing_path(
+    resolved = resolve_existing_path(
         path,
         workspace=workspace,
         materialize_from_archive=materialize_from_archive,
     )
+    if resolved is not None:
+        return resolved
+    source_workspace_path = _resolve_artifact_source_workspace_path(value)
+    if source_workspace_path and os.path.exists(source_workspace_path):
+        return source_workspace_path
+    return None
 
 
 def resolve_artifact_from_value(
