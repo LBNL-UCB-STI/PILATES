@@ -30,6 +30,7 @@ stage_file=""
 partition_arg="lr7"
 account_arg=""
 high_mem=false
+hours_arg=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -53,14 +54,19 @@ while [ $# -gt 0 ]; do
         high_mem=true
         shift
         ;;
+    -t|--hours)
+        hours_arg="${2:-}"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [-t hours]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [-t hours]\n" "$0"
         exit 2
         ;;
     esac
@@ -104,7 +110,13 @@ if [ -z "$account_arg" ]; then
     exit 2
 fi
 ACCOUNT="$account_arg"
-EXPECTED_EXECUTION_DURATION="${EXPECTED_EXECUTION_DURATION:-3-00:00:00}"
+if [ -n "$hours_arg" ]; then
+    days=$(( hours_arg / 24 ))
+    remaining_hours=$(( hours_arg % 24 ))
+    EXPECTED_EXECUTION_DURATION="$(printf '%d-%02d:00:00' "$days" "$remaining_hours")"
+else
+    EXPECTED_EXECUTION_DURATION="${EXPECTED_EXECUTION_DURATION:-3-00:00:00}"
+fi
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 
 resolve_path() {
