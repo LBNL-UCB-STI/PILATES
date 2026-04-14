@@ -580,7 +580,12 @@ def _build_step_run_kwargs(
             binding=resolved_binding,
         )
         if resolved_input_keys is None:
-            resolved_input_paths = {}
+            # Preserve declared requested destinations for metadata-only steps
+            # that do not provide an explicit resolved input mapping. When a
+            # binding is present but does not resolve concrete inputs, stage
+            # nothing rather than guessing which optional keys should exist.
+            if resolved_binding is not None or step.inputs is not None:
+                resolved_input_paths = {}
         else:
             requested_input_paths = {
                 str(key): value

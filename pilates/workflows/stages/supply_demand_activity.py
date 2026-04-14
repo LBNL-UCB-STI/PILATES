@@ -182,8 +182,8 @@ def _run_activity_demand_phase(
     if (
         bool(getattr(state, "is_restart_run", False))
         and state.is_enabled(WorkflowState.Stage.land_use)
+        and not resolved_usim_inputs
     ):
-        get_value = getattr(coupler, "get", None)
         from .supply_demand_resume import (
             _restore_supply_demand_usim_inputs_for_resume,
         )
@@ -195,29 +195,6 @@ def _run_activity_demand_phase(
             settings=settings,
         ).items():
             resolved_usim_inputs.setdefault(key, value)
-        if callable(get_value):
-            coupler_population = get_value(USIM_POPULATION_SOURCE_H5)
-            coupler_current = get_value(USIM_DATASTORE_CURRENT_H5)
-            if (
-                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
-                and coupler_current is not None
-            ):
-                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_current
-            elif (
-                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
-                and coupler_population is not None
-            ):
-                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_population
-            if (
-                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
-                and coupler_population is not None
-            ):
-                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_population
-            elif (
-                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
-                and coupler_current is not None
-            ):
-                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_current
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
