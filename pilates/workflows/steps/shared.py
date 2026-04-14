@@ -207,8 +207,6 @@ from typing import (
     TypeVar,
     cast,
 )
-
-import h5py
 from consist import define_step
 from sqlalchemy import inspect
 
@@ -294,18 +292,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    """Extract a content hash from an artifact-like mapping value."""
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
-
-
 def _log_step_records(
     *,
     record_items: Any,
@@ -351,70 +337,6 @@ def _log_step_records(
             description=description,
             **meta,
         )
-
-
-def _log_named_h5_tables(
-    *,
-    path: str,
-    direction: str,
-    table_keys: Dict[str, str],
-    description_by_table: Optional[Dict[str, str]] = None,
-    extra_meta_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-) -> None:
-    """
-    Log selected HDF5 datasets as individual ``h5_table`` artifacts.
-
-    Parameters
-    ----------
-    path : str
-        HDF5 container path.
-    direction : str
-        Consist artifact direction, usually ``"input"`` or ``"output"``.
-    table_keys : dict
-        Mapping of HDF5 table paths to artifact keys.
-    description_by_table : dict, optional
-        Optional mapping of HDF5 table paths to descriptions.
-    extra_meta_fn : callable, optional
-        Callback returning extra metadata for each `(artifact_key, table_path)`.
-    """
-    description_by_table = description_by_table or {}
-    try:
-        with h5py.File(path, "r") as h5_file:
-            for table_path, artifact_key in table_keys.items():
-                normalized_path = (
-                    table_path if str(table_path).startswith("/") else f"/{table_path}"
-                )
-                if normalized_path not in h5_file:
-                    logger.debug(
-                        "Skipping HDF5 table log for missing dataset %s in %s",
-                        normalized_path,
-                        path,
-                    )
-                    continue
-                meta: Dict[str, Any] = {
-                    "profile_file_schema": True,
-                    "h5_parent_key": artifact_key.rsplit("_table_", 1)[0]
-                    if "_table_" in artifact_key
-                    else artifact_key,
-                    "h5_table_name": normalized_path.split("/")[-1],
-                }
-                if extra_meta_fn is not None:
-                    extra_meta = extra_meta_fn(artifact_key, normalized_path)
-                    if extra_meta:
-                        meta.update(extra_meta)
-                cr.log_h5_table(
-                    path,
-                    key=artifact_key,
-                    table_path=normalized_path,
-                    direction=direction,
-                    description=description_by_table.get(
-                        table_path, f"HDF5 table {normalized_path}"
-                    ),
-                    **meta,
-                )
-    except OSError:
-        logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
-
 
 def _parse_prefixed_iteration_key(
     short_name: str, prefix: str
@@ -1210,7 +1132,6 @@ def validate_workflow_step_contracts(
     - Dependency specs reference known step names.
     - Optionally, declared step models are consistent with tracked step names.
     - For tracked declared steps, canonical outputs match step metadata outputs.
-    - Deprecated ``StepRef.required_outputs`` overrides require rationale.
     """
     errors: list[str] = []
 
@@ -1399,19 +1320,6 @@ def validate_workflow_step_contracts(
                         state=state,
                         workspace=workspace,
                     )
-
-    if step_refs is not None:
-        for step_ref in step_refs:
-            required_outputs = getattr(step_ref, "required_outputs", None)
-            if required_outputs is None:
-                continue
-            rationale = getattr(step_ref, "required_outputs_rationale", None)
-            step_name = getattr(step_ref, "name", "<unknown>")
-            if not isinstance(rationale, str) or not rationale.strip():
-                errors.append(
-                    f"Step '{step_name}': deprecated StepRef.required_outputs override requires "
-                    "StepRef.required_outputs_rationale."
-                )
 
     if errors:
         raise RuntimeError(

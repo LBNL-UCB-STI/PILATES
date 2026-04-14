@@ -121,9 +121,6 @@ def _stub_recovered_output_publication(monkeypatch):
         monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
         monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
 
-    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
-    monkeypatch.setattr(steps_urbansim_atlas, "_log_named_h5_tables", lambda **_kwargs: None)
-
 
 def _write_file(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -783,11 +780,6 @@ def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(
         lambda *, key, path, coupler, **_kwargs: coupler.set(key, path),
     )
     monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **_kwargs: None,
-    )
     holder = StepOutputsHolder()
     holder.urbansim_run = object()
     step_func = make_urbansim_postprocess_step(coupler=coupler, outputs_holder=holder)

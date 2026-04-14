@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
-import warnings
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
 from consist.core.step_context import StepContext
@@ -94,8 +93,6 @@ class StepRef:
     input_binding: Optional[str] = None
     input_paths: Optional[Mapping[str, Any]] = None
     input_materialization: Optional[str] = None
-    required_outputs: Optional[Sequence[str]] = None
-    required_outputs_rationale: Optional[str] = None
     output_missing: Optional[Literal["warn", "error", "ignore"]] = None
     output_mismatch: Optional[Literal["warn", "error", "ignore"]] = None
     model: Optional[str] = None
@@ -662,21 +659,7 @@ def _build_step_run_kwargs(
         )
 
     resolved_required_outputs: Optional[Sequence[str]] = None
-    if step.required_outputs is not None:
-        rationale = (step.required_outputs_rationale or "").strip()
-        if not rationale:
-            raise ValueError(
-                f"Step '{step.name}': StepRef.required_outputs override requires "
-                "StepRef.required_outputs_rationale with a non-empty explanation."
-            )
-        warnings.warn(
-            f"Step '{step.name}': StepRef.required_outputs is deprecated. "
-            "Use StepOutputs declared_outputs instead.",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        resolved_required_outputs = _normalize_output_keys(step.required_outputs)
-    elif outputs_class is not None:
+    if outputs_class is not None:
         # Tracked steps use StepOutputs required_outputs as the strict runtime
         # output contract. declared_outputs remains available for schema/catalog
         # publication without forcing every optional artifact to materialize.

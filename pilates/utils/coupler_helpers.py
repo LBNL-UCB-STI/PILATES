@@ -1171,7 +1171,7 @@ def set_coupler_from_artifact(
             return False
         return any(
             getattr(candidate, attr_name, None) is not None
-            for attr_name in ("id", "uri", "container_uri", "content_hash", "hash")
+            for attr_name in ("id", "uri", "container_uri", "hash")
         )
 
     def _set_value(target: Any, target_key: str) -> None:

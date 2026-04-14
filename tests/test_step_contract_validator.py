@@ -357,44 +357,6 @@ def test_atlas_run_output_class_expands_stateful_required_outputs():
     assert required == ("householdv_2021", "vehicles_2021")
 
 
-def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():
-    """Deprecated StepRef.required_outputs override requires rationale at validation time."""
-
-    @define_step(model="dummy_step")
-    def _dummy_step(*args, **kwargs):
-        return None
-
-    with pytest.raises(RuntimeError, match="requires StepRef.required_outputs_rationale"):
-        step_shared.validate_workflow_step_contracts(
-            step_refs=[
-                StepRef(
-                    name="dummy_step",
-                    step_func=_dummy_step,
-                    required_outputs=["override_key"],
-                )
-            ]
-        )
-
-
-def test_validate_workflow_step_contracts_accepts_rationalized_required_outputs_override():
-    """Compatibility override remains allowed when rationale is provided."""
-
-    @define_step(model="dummy_step")
-    def _dummy_step(*args, **kwargs):
-        return None
-
-    step_shared.validate_workflow_step_contracts(
-        step_refs=[
-            StepRef(
-                name="dummy_step",
-                step_func=_dummy_step,
-                required_outputs=["override_key"],
-                required_outputs_rationale="Temporary bridge during migration.",
-            )
-        ]
-    )
-
-
 def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
     """Runtime step launches must enforce required outputs, not the full declared schema."""
 

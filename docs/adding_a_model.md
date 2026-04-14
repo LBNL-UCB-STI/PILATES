@@ -42,6 +42,11 @@ For tracked steps, keep the contract layers in this order:
    `expected_outputs(settings, state, workspace)` when they can
 4. restart/replay hooks are exceptional and should be added only when the
    default replay-first path is not enough
+5. when a step needs provenance fingerprints, read Consist artifacts through
+   `artifact.hash`; do not probe legacy hash field names
+6. when a step logs selected HDF5 child artifacts, use
+   `log_h5_container(..., child_specs=..., child_selection="include_only")`
+   and keep only the workflow-specific table-selection logic local
 
 If a step uses requested replay/restart staging, publish canonical destination
 paths through `input_paths`. Do not make requested staging depend on local file

@@ -322,6 +322,16 @@ def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_wo
         settings=settings, state=state, workspace=workspace
     )
 
+    assert preprocess_inputs == ActivitysimPreprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs == ActivitysimRunner.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert postprocess_inputs == ActivitysimPostprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+
     assert preprocess_inputs[FINAL_SKIMS_OMX] == str(
         tmp_path / "beam" / "data" / "seattle" / "skims.omx"
     )
@@ -338,18 +348,22 @@ def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_wo
         tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
 
-    assert ActivitysimPreprocessor.expected_inputs(
+    preprocess_runtime_inputs = ActivitysimPreprocessor.expected_inputs(
         settings=settings, state=state, workspace=workspace
-    )[FINAL_SKIMS_OMX] is None
-    assert ActivitysimRunner.expected_inputs(
+    )
+    run_runtime_inputs = ActivitysimRunner.expected_inputs(
         settings=settings, state=state, workspace=workspace
-    )[ZARR_SKIMS] is None
-    assert ActivitysimRunner.expected_inputs(
+    )
+    postprocess_runtime_inputs = ActivitysimPostprocessor.expected_inputs(
         settings=settings, state=state, workspace=workspace
-    )[ASIM_SHARROW_CACHE_DIR] is None
-    assert ActivitysimPostprocessor.expected_inputs(
-        settings=settings, state=state, workspace=workspace
-    )[ZARR_SKIMS] is None
+    )
+
+    assert preprocess_runtime_inputs["usim_population_source_h5"] is None
+    assert preprocess_runtime_inputs[FINAL_SKIMS_OMX] is None
+    assert run_runtime_inputs[ZARR_SKIMS] is None
+    assert run_runtime_inputs[ASIM_SHARROW_CACHE_DIR] is None
+    assert postprocess_runtime_inputs["asim_output_dir"] is None
+    assert postprocess_runtime_inputs[ZARR_SKIMS] is None
 
 
 def test_urbansim_and_atlas_step_factories_attach_consist_metadata():
@@ -929,80 +943,6 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
         output_missing="error",
         output_mismatch="error",
     )
-
-
-def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
-    scenario = _FakeScenario()
-    workspace = SimpleNamespace(full_path="/tmp/workspace")
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, iteration=0)
-    outputs_holder = StepOutputsHolder()
-    coupler = _DummyCoupler()
-
-    @define_step(model="dummy_step", outputs=["artifact_a"])
-    def _decorated_step(settings, state, workspace):
-        return None
-
-    spec = StepRef(
-        name="dummy_step",
-        step_func=_decorated_step,
-        required_outputs=["artifact_override"],
-        required_outputs_rationale="Temporary compatibility while migrating metadata.",
-        output_missing="warn",
-        output_mismatch="warn",
-    )
-    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
-    with pytest.warns(DeprecationWarning, match="StepRef.required_outputs is deprecated"):
-        stage.run(
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            name_suffix="unit",
-        )
-
-    call = scenario.calls[0]
-    assert call["outputs"] == ["artifact_override"]
-    assert call["output_policy"] == OutputPolicyOptions(
-        output_missing="warn",
-        output_mismatch="warn",
-    )
-
-
-def test_workflow_stage_required_outputs_override_requires_rationale():
-    scenario = _FakeScenario()
-    workspace = SimpleNamespace(full_path="/tmp/workspace")
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, iteration=0)
-    outputs_holder = StepOutputsHolder()
-    coupler = _DummyCoupler()
-
-    @define_step(model="dummy_step", outputs=["artifact_a"])
-    def _decorated_step(settings, state, workspace):
-        return None
-
-    spec = StepRef(
-        name="dummy_step",
-        step_func=_decorated_step,
-        required_outputs=["artifact_override"],
-    )
-    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
-
-    with pytest.raises(
-        RuntimeError,
-        match="required_outputs_rationale",
-    ):
-        stage.run(
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            name_suffix="unit",
-        )
 
 
 def test_tracked_step_uses_canonical_outputs_instead_of_metadata_outputs():

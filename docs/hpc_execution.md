@@ -184,6 +184,20 @@ The actual PILATES workflow is the same, but HPC adds operational differences:
 - `run.output_directory` is the durable archive root on shared scratch, while `run.local_workspace_root` is the mutable node-local workspace.
 - Logged artifacts are mirrored through the archive helper layer; Consist DB snapshots and mirrors are handled separately.
 
+## Replay-First Storage Model
+
+The current HPC contract is:
+
+- shared scratch (`run.output_directory`) is the durable run/archive root during execution
+- node-local flash (`run.local_workspace_root`) is disposable mutable workspace
+- colder archival NFS should be exposed to PILATES through Consist `recovery_roots`, not through PILATES path guessing
+
+Operationally this means:
+
+- a fresh replay in a new local workspace should recover from the scratch archive
+- restart after local workspace loss should still work when the archive root is intact
+- explicit archive flushes remain the boundary for preemption/termination safety
+
 ## Related Docs
 
 - `hpc/README.md`

@@ -957,76 +957,48 @@ _recover_beam_full_skim_outputs = make_default_recoverer(
 )
 
 
-def _beam_step_settings(ctx: Any) -> Any:
-    return getattr(ctx, "runtime_settings", None) or getattr(ctx, "settings", None)
-
-
-def _beam_step_state(ctx: Any) -> Any:
-    return getattr(ctx, "runtime_state", None) or getattr(ctx, "state", None)
-
-
-def _beam_step_workspace(ctx: Any) -> Any:
-    return getattr(ctx, "runtime_workspace", None) or getattr(ctx, "workspace", None)
+def _beam_step_runtime(ctx: Any) -> tuple[Any, Any, Any]:
+    return (
+        ctx.require_runtime("settings"),
+        ctx.require_runtime("state"),
+        ctx.require_runtime("workspace"),
+    )
 
 
 def _beam_preprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
-
-    return BeamPreprocessor.expected_inputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPreprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_preprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
-
-    return BeamPreprocessor.expected_outputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPreprocessor.expected_outputs(settings, state, workspace)
 
 
 def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
-
-    return BeamRunner.runtime_expected_inputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamRunner.runtime_expected_inputs(settings, state, workspace)
 
 
 def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
-
-    return BeamRunner.expected_outputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamRunner.expected_outputs(settings, state, workspace)
 
 
 def _beam_postprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
-
-    return BeamPostprocessor.expected_inputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPostprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
-
-    expected = BeamPostprocessor.expected_outputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    expected = BeamPostprocessor.expected_outputs(settings, state, workspace)
     if ZARR_SKIMS in expected:
         return {ZARR_SKIMS: expected[ZARR_SKIMS]}
     return {}
@@ -1034,22 +1006,14 @@ def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
 
 def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
-
-    return BeamFullSkimRunner.expected_inputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamFullSkimRunner.expected_inputs(settings, state, workspace)
 
 
 def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
-
-    return BeamFullSkimRunner.expected_outputs(
-        _beam_step_settings(ctx),
-        _beam_step_state(ctx),
-        _beam_step_workspace(ctx),
-    )
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamFullSkimRunner.expected_outputs(settings, state, workspace)
 
 
 def make_beam_preprocess_step(

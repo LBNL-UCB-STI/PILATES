@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional
 
 import pandas as pd
+from consist.types import H5ChildSpec
 
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import (
@@ -45,7 +46,6 @@ from .shared import (
     WorkflowState,
     _atlas_artifact_facet_meta,
     build_standard_step,
-    _log_named_h5_tables,
     _log_step_records,
     make_default_recoverer,
     _urbansim_output_facet_meta,
@@ -707,6 +707,29 @@ def make_urbansim_postprocess_step(
             )
         for short_name, path, description in outputs._iter_record_items():
             if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
+                archive_table_keys = _root_h5_table_keys(
+                    str(path),
+                    key_prefix="urbansim_postprocess_usim_",
+                    key_suffix="_table_archived",
+                )
+                if archive_table_keys:
+                    archive_descriptions = _root_h5_table_descriptions(
+                        str(path),
+                        action="archived by UrbanSim postprocess",
+                    )
+                    child_specs = {
+                        table_path: H5ChildSpec(
+                            key=artifact_key,
+                            description=archive_descriptions.get(table_path),
+                            metadata={
+                                "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                                "h5_table_name": table_path.split("/")[-1],
+                            },
+                        )
+                        for table_path, artifact_key in archive_table_keys.items()
+                    }
+                else:
+                    child_specs = None
                 log_output_only(
                     key=short_name,
                     path=str(path),
@@ -715,26 +738,37 @@ def make_urbansim_postprocess_step(
                     profile_file_schema=True,
                     h5_container=True,
                     hash_tables="if_unchanged",
+                    h5_tables_used=list(archive_table_keys.keys()),
+                    child_specs=child_specs,
+                    child_selection="include_only" if child_specs else "all",
                     **_urbansim_output_facet_meta(
                         short_name, forecast_year=forecast_year
                     ),
                 )
-                archive_table_keys = _root_h5_table_keys(
-                    str(path),
-                    key_prefix="urbansim_postprocess_usim_",
-                    key_suffix="_table_archived",
-                )
-                if archive_table_keys:
-                    _log_named_h5_tables(
-                        path=str(path),
-                        direction="output",
-                        table_keys=archive_table_keys,
-                        description_by_table=_root_h5_table_descriptions(
-                            str(path),
-                            action="archived by UrbanSim postprocess",
-                        ),
-                    )
         if outputs.usim_datastore_h5 is not None:
+            merged_table_keys = _root_h5_table_keys(
+                str(outputs.usim_datastore_h5),
+                key_prefix="urbansim_postprocess_usim_",
+                key_suffix="_table_updated",
+            )
+            if merged_table_keys:
+                merged_descriptions = _root_h5_table_descriptions(
+                    str(outputs.usim_datastore_h5),
+                    action="prepared for the next iteration by UrbanSim postprocess",
+                )
+                merged_child_specs = {
+                    table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description=merged_descriptions.get(table_path),
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": table_path.split("/")[-1],
+                        },
+                    )
+                    for table_path, artifact_key in merged_table_keys.items()
+                }
+            else:
+                merged_child_specs = None
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -747,25 +781,13 @@ def make_urbansim_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                h5_tables_used=list(merged_table_keys.keys()),
+                child_specs=merged_child_specs,
+                child_selection="include_only" if merged_child_specs else "all",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
-            merged_table_keys = _root_h5_table_keys(
-                str(outputs.usim_datastore_h5),
-                key_prefix="urbansim_postprocess_usim_",
-                key_suffix="_table_updated",
-            )
-            if merged_table_keys:
-                _log_named_h5_tables(
-                    path=str(outputs.usim_datastore_h5),
-                    direction="output",
-                    table_keys=merged_table_keys,
-                    description_by_table=_root_h5_table_descriptions(
-                        str(outputs.usim_datastore_h5),
-                        action="prepared for the next iteration by UrbanSim postprocess",
-                    ),
-                )
 
     step_func = build_standard_step(
         coupler=coupler,
@@ -1034,6 +1056,12 @@ def make_atlas_postprocess_step(
         if usim_output_path is not None:
             usim_output_path = Path(usim_output_path)
         if usim_output_path is not None and usim_output_path.exists():
+            households_table_path = _resolve_atlas_postprocess_households_table_path(
+                path=str(usim_output_path),
+                forecast_year=forecast_year,
+                is_start_year=state.is_start_year(),
+            )
+            artifact_key = "atlas_postprocess_usim_households_table_input"
             log_input_only(
                 key=USIM_DATASTORE_H5,
                 path=str(usim_output_path),
@@ -1044,28 +1072,21 @@ def make_atlas_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                h5_tables_used=[households_table_path],
+                child_specs={
+                    households_table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description="UrbanSim households table consumed by ATLAS postprocess",
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": households_table_path.split("/")[-1],
+                        },
+                    )
+                },
+                child_selection="include_only",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
-            )
-            households_table_path = (
-                _resolve_atlas_postprocess_households_table_path(
-                    path=str(usim_output_path),
-                    forecast_year=forecast_year,
-                    is_start_year=state.is_start_year(),
-                )
-            )
-            _log_named_h5_tables(
-                path=str(usim_output_path),
-                direction="input",
-                table_keys={
-                    households_table_path: "atlas_postprocess_usim_households_table_input"
-                },
-                description_by_table={
-                    households_table_path: (
-                        "UrbanSim households table consumed by ATLAS postprocess"
-                    )
-                },
             )
         return {}
 
@@ -1097,6 +1118,12 @@ def make_atlas_postprocess_step(
             profile_schema_suffixes=(".csv", ".parquet"),
         )
         if outputs.usim_datastore_h5 is not None:
+            households_table_path = _resolve_atlas_postprocess_households_table_path(
+                path=str(outputs.usim_datastore_h5),
+                forecast_year=forecast_year,
+                is_start_year=state.is_start_year(),
+            )
+            artifact_key = "atlas_postprocess_usim_households_table_updated"
             log_and_set_output(
                 key=USIM_POPULATION_SOURCE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -1108,28 +1135,21 @@ def make_atlas_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                h5_tables_used=[households_table_path],
+                child_specs={
+                    households_table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description="UrbanSim households table updated by ATLAS postprocess",
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": households_table_path.split("/")[-1],
+                        },
+                    )
+                },
+                child_selection="include_only",
                 **_urbansim_output_facet_meta(
                     USIM_POPULATION_SOURCE_H5, forecast_year=forecast_year
                 ),
-            )
-            households_table_path = (
-                _resolve_atlas_postprocess_households_table_path(
-                    path=str(outputs.usim_datastore_h5),
-                    forecast_year=forecast_year,
-                    is_start_year=state.is_start_year(),
-                )
-            )
-            _log_named_h5_tables(
-                path=str(outputs.usim_datastore_h5),
-                direction="output",
-                table_keys={
-                    households_table_path: "atlas_postprocess_usim_households_table_updated"
-                },
-                description_by_table={
-                    households_table_path: (
-                        "UrbanSim households table updated by ATLAS postprocess"
-                    )
-                },
             )
 
     step_func = build_standard_step(
