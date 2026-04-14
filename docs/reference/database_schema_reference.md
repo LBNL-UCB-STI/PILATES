@@ -5,28 +5,27 @@ summary: Reference map for the current curated schema families and live run data
 
 # Database Schema Reference
 
-## Purpose
+## Current Schema Surface
 
-Provide the stable schema-facing reference without turning the page into an architecture roadmap.
+The schema registry in `pilates.database.schema.registry` is the source of truth for which SQLModel classes PILATES registers with Consist.
 
-## Who This Is For
+It resolves schema classes in three ways:
 
-- Analysts reading tables and joins.
-- Contributors checking which schema families are currently curated and queryable.
+- exact artifact keys such as `households_asim_in`, `beam_plans_out`, or `linkstats`
+- prefix families such as `events_parquet_`, `linkstats_`, `householdv_`, and `vehicles_`
+- split BEAM event keys, where `events_parquet_..._type_...` maps to a more specific event schema
 
-## This Page Answers
+The current curated families cover the same model groupings the workflow docs use:
 
-- Which schema families currently matter for public inspection?
-- How does the curated schema surface differ from a live run DB?
-- Which safe introspection queries and generated schema artifacts are still current?
+- ActivitySim inputs and outputs
+- ATLAS CSV artifacts
+- BEAM plans, network outputs, linkstats, route history, and event splits
+- UrbanSim postprocess tables and archive-friendly handoff tables
+
+The generated schema-visualization surface is checked into the repo as ERD artifacts and can be regenerated from `pilates/database/scripts/generate_schema_erd.py`. The public docs site should treat those generated files as a reference map, not as an architecture roadmap.
 
 ## Adjacent Pages
 
 - Start with [Database Setup](database_setup.md).
 - Pair this with [Database Documentation Guide](database_documentation_guide.md).
 - Use [SQL and DuckDB](../analysis/sql_and_duckdb.md) for practical query patterns.
-
-## Source Material To Mine
-
-- Current curated schema docs and ERD assets.
-- Existing schema-reference page content.

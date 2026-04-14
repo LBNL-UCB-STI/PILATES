@@ -5,28 +5,22 @@ summary: Preserving workflow test artifacts for inspection, review, and utility-
 
 # Test Output Preservation
 
-## Purpose
+## Current Workflow
 
-Document the preserved-test-output workflow as an operator and contributor utility.
+Use the preserved-output workflow when you need a stable directory tree from a test run.
 
-## Who This Is For
+The current helper script, `run_stub_test_with_output.sh`, exports `PRESERVE_TEST_OUTPUT` before running the test command. That tells the test harness to keep the generated output tree instead of cleaning it away after the run.
 
-- Contributors debugging workflow behavior through preserved artifacts.
-- Reviewers or analysts who want a stable test-generated archive to inspect outside a full production run.
+The preserved tree is useful when you need to inspect the files that a test actually produced, including run-local artifacts, logs, and any DB or archive sidecars that the test emitted.
 
-## This Page Answers
+Keep this workflow narrow:
 
-- How do contributors preserve test outputs on demand?
-- What kinds of artifacts and schema docs should they expect to inspect afterward?
-- When is preserved test output more useful than rerunning a full scenario?
+- use it for debugging and review of test-generated artifacts
+- do not treat it as a replacement for a full scenario archive
+- do not rely on it for the production run path
 
 ## Adjacent Pages
 
 - Read [Operations Overview](overview.md) first.
 - Pair this with [SQL and DuckDB](../analysis/sql_and_duckdb.md).
 - Use [Testing New Integrations](../extend/testing_new_integrations.md) for how this fits into contributor verification.
-
-## Source Material To Mine
-
-- Existing preserved-output guide content.
-- current test helpers and documented environment variables.

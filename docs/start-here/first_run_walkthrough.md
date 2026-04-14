@@ -5,29 +5,36 @@ summary: Concrete checklist from copied scenario config to a successful first lo
 
 # First Run Walkthrough
 
-## Purpose
+## Do This First
 
-Provide one explicit, reproducible first-run path instead of a generic setup discussion.
+1. Pick an active local template from `scenarios/`, such as a `*-local.yaml` file.
+2. Copy it to a working filename in your checkout.
+3. Edit the paths that point at your machine:
+   - `run.output_directory`, which is the parent directory where PILATES will create the archive run directory
+   - `run.local_workspace_root` if you want the mutable workspace on a different filesystem
+   - any model input folders that are still absolute or environment-specific
+4. Confirm the region-specific data trees referenced by the template exist.
+5. Run:
 
-## Who This Is For
+```bash
+python run.py -c path/to/your-settings.yaml
+```
 
-- Users who want the shortest route from clone to a run directory on disk.
-- New contributors validating that their local environment is wired correctly before reading deeper docs.
+## What The Launcher Does
 
-## This Page Answers
+- It loads the YAML file with Pydantic validation.
+- It attaches the runtime flags and runtime options used by the launcher.
+- It resolves a run-specific archive directory under `run.output_directory`.
+- It uses `run.local_workspace_root` as the mutable workspace parent when that field is set; otherwise it uses the archive side.
+- It creates the run-specific archive directory and mutable workspace, then starts the scenario lifecycle.
 
-- Which scenario template should I copy first?
-- What should I edit before I call `python run.py`?
-- What output on disk counts as a successful first run?
+## What Counts As Success
 
-## Adjacent Pages
+A successful first run reaches the scenario lifecycle and leaves behind a run-specific archive directory plus the restart state needed for later replay or resume. If the run fails early, the launcher logs a restart command that reuses the same config file and, when available, the existing state file.
 
-- Start with [Getting Started](getting_started.md).
-- Use [Configuration Basics](configuration_basics.md) if the settings file shape is still unclear.
-- Use [Troubleshooting](../run/troubleshooting.md) if the walkthrough fails.
+## When To Stop And Switch Pages
 
-## Source Material To Mine
-
-- The old getting started guide's concrete commands.
-- Active local settings templates under `scenarios/`.
-- Current restart file and run directory behavior in the launcher.
+- Use [Configuration Basics](configuration_basics.md) if you need the config mental model first.
+- Use [CLI](../run/cli.md) if you want the exact flags.
+- Use [Scenario Lifecycle](../run/scenario_lifecycle.md) if you want to understand what happens after startup succeeds.
+- Use [Troubleshooting](../run/troubleshooting.md) if the run stops during config loading, bootstrap, or startup validation.

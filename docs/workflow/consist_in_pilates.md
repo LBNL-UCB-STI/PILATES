@@ -5,30 +5,59 @@ summary: What Consist owns in PILATES and how replay, caching, staging, and anal
 
 # Consist in PILATES
 
-## Purpose
+## What Consist Owns
 
-Treat Consist as a first-class part of the public runtime model rather than a side note under provenance.
+- Scenario and step contexts created in `run.py` / `pilates/runtime/launcher.py`.
+- Cache identity and queryable facets built by `pilates/utils/consist_config.py`.
+- Step metadata, parent run linkage, tags, and artifact records.
+- Step-level cache hits, replay results, and archive-friendly run outputs.
 
-## Who This Is For
+## What PILATES Owns
 
-- Contributors working on runtime, restart, lineage, or cache behavior.
-- Advanced users who need to understand how PILATES uses scenarios, steps, artifacts, and analysis trackers.
+- The run/storage topology: archive run directory versus mutable local workspace.
+- Bootstrap hydration, restart preflight, and stage orchestration.
+- Coupler seeding for bootstrap artifacts and replay-restored paths.
+- The choice to treat some recovery helpers as legacy/manual tools rather than the normal launcher path.
 
-## This Page Answers
+## Current Runtime Shape
 
-- What does Consist own versus what does PILATES own?
-- How do cache hits, replay, input staging, artifact logging, and archive recovery roots fit together?
-- How should readers think about runs, steps, the coupler, artifacts, and analysis access?
+`pilates/runtime/launcher.py` builds the scenario contract, declares the coupler outputs, seeds bootstrap artifacts into the coupler, and then runs the year loop inside Consist scenario/step contexts.
+
+`pilates/utils/consist_config.py` keeps the Consist inputs narrow and explicit:
+
+- `config` carries the cache identity.
+- `facet` carries queryable run metadata.
+- `identity_inputs` are only added for steps that need file or directory digests.
+
+The launcher also records run context metadata such as `scenario_id`, `seed`, `archive_run_dir`, `local_run_dir`, and `restart_run`.
+
+## Public Artifact Surface
+
+Consist records the tracked workflow publications, but the semantic public surface still comes from PILATES workflow keys and families. The most important current examples are:
+
+- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` for the canonical current mutable UrbanSim datastore handle
+- `USIM_POPULATION_SOURCE_H5` for the datastore selected for ActivitySim preprocess
+- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) and `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) for year-scoped UrbanSim snapshot families
+- `ZARR_SKIMS` for the shared skims handoff used by ActivitySim and BEAM
+- `FINAL_SKIMS_OMX` and `BEAM_FULL_SKIMS` for BEAM-side skim outputs
+- `BEAM_INPUT_*_ARCHIVED` for replay-relevant archived BEAM inputs
+
+Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.md), and [Lineage Map](lineage_map.md) for the contract-level meaning of those publications.
+
+## Replay, Restart, and Hydration
+
+- Fresh runs execute bootstrap first, then enter the scenario context.
+- Restart runs can still run bootstrap pre-scenario so the workspace invariants are rehydrated through the normal cached path.
+- When `state.data_initialized` is already true on restart, the launcher skips bespoke restart hydration and relies on scenario replay plus Consist cache hits.
+- The launcher emits a `restart_hydration` audit event with `fallback_reason="replay_mode"` in that replay-first case.
+- The older hydration helpers in `pilates/runtime/restart.py` remain available for manual tooling and focused tests, but the normal launcher path does not call them.
+
+## Analysis Surface
+
+PILATES keeps the archive-side Consist database and run outputs available for post-run analysis. The analysis helpers read the archived run metadata, run outputs, and artifact facets rather than rebuilding workflow state from scratch.
 
 ## Adjacent Pages
 
-- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) first.
-- Continue to [Step Contracts](step_contracts.md) and [Artifact Semantics](artifact_semantics.md).
-- For post-run analysis, go to [Opening Archives](../analysis/opening_archives.md).
-
-## Source Material To Mine
-
-- `docs-internal/CONSIST_RESTART_ARCHIVE_INTEGRATION_PLAN.md`
-- `pilates/utils/consist_config.py`
-- `pilates/utils/consist_analysis.py`
-- current runtime and step decoration surfaces
+- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) next.
+- Continue to [Artifact Semantics](artifact_semantics.md) and [Lineage Map](lineage_map.md).
+- For the analysis-facing view of archived runs, go to [Opening Archives](../analysis/opening_archives.md).

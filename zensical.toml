@@ -19,9 +19,13 @@ nav = [
 ]
 extra_css = ["stylesheets/extra.css"]
 
+[project.theme.icon]
+logo = "lucide/building-2"
+favicon = "lucide/building-2"
+
 [project.theme]
-favicon = "assets/pilates-mark.svg"
-logo = "assets/pilates-mark.svg"
+#favicon = "lucide/building-2"
+#icon = "lucide/building-2"
 language = "en"
 features = [
     "announce.dismiss",

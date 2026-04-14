@@ -8,7 +8,7 @@ hide:
 <section id="home-page" class="home-hero">
   <div class="home-hero__inner">
     <p class="home-hero__eyebrow">Integrated simulation runtime</p>
-    <h1>PILATES coordinates long-horizon land use and transportation workflows around explicit model boundaries.</h1>
+    <h1>PILATES coordinates long-horizon land use and transportation workflows.</h1>
     <p class="tagline">Run UrbanSim, ATLAS, ActivitySim, and BEAM in a shared scenario lifecycle with Consist-backed replay, provenance, cache reuse, and post-run analysis over archived artifacts.</p>
     <div class="home-actions">
       <a class="md-button md-button--primary" href="start-here/getting_started.md">Get started</a>
@@ -101,21 +101,3 @@ It helps you:
     - [HPC Overview](run/hpc_overview.md)
     - [Lawrencium](run/lawrencium.md)
     - [Restart and Resume](run/restart_and_resume.md)
-
-## Common Tasks
-
-| I want to... | Go to |
-| --- | --- |
-| get a first local run working | [Getting Started](start-here/getting_started.md) and [First Run Walkthrough](start-here/first_run_walkthrough.md) |
-| understand what a run does from bootstrap through archive | [Scenario Lifecycle](run/scenario_lifecycle.md) |
-| understand how stages, steps, and contracts fit together | [Workflow Primer](workflow/workflow_primer.md) and [Step Contracts](workflow/step_contracts.md) |
-| learn how Consist is actually used in PILATES | [Consist in PILATES](workflow/consist_in_pilates.md) |
-| add a new model or refactor an integration | [Model Integration Guide](extend/model_integration_guide.md) and [Adding a Model](extend/adding_a_model.md) |
-| analyze archived runs with datasets or SQL | [Analysis Overview](analysis/overview.md) and [SQL and DuckDB](analysis/sql_and_duckdb.md) |
-| run on Lawrencium | [Lawrencium](run/lawrencium.md) |
-
-## What Stays Internal
-
-The public site is for current behavior. Roadmaps, migration notes, review
-writeups, and superseded design material live under `docs-internal/` so the
-public navigation stays aligned with the post-refactor runtime.

@@ -5,29 +5,43 @@ summary: Archive directory, DuckDB, and tracker mental model for post-run analys
 
 # Opening Archives
 
-## Purpose
-
-Explain how to reopen a completed PILATES run as an analysis target.
-
-## Who This Is For
-
-- Users inspecting archived outputs after local or HPC execution.
-- Analysts who need to understand the relationship between the run archive, `.consist` DB, mounts, and tracker access mode.
-
-## This Page Answers
-
-- What files and directories make up an analyzable run archive?
-- How do archive run dir, workspace mount, DB path, and recovery roots fit together?
-- Which helpers create an analysis tracker and what assumptions do they make?
-
 ## Adjacent Pages
 
 - Read [Analysis Overview](overview.md) first.
 - Then use [SQL and DuckDB](sql_and_duckdb.md) or [Consist Analysis CLI](consist_analysis_cli.md).
 - Pair this with [Workspace Layout](../reference/workspace_layout.md) for path semantics.
 
-## Source Material To Mine
+## Archive Shape
 
-- `pilates/utils/consist_analysis.py`
-- `analysis/src/pilates_consist_analysis/runtime.py`
-- replay-first archive design notes and current HPC storage behavior
+The analysis code treats the archive run directory as the storage root for a finished run.
+It resolves the Consist database from one of these paths under that directory when no explicit `--db-path` is given:
+
+- `.consist/snapshots/latest/provenance.duckdb`
+- `.consist/provenance.duckdb`
+- `.consist/snapshots/latest/consist.duckdb`
+- `.consist/consist.duckdb`
+
+`create_analysis_tracker()` builds the tracker mounts as:
+
+- `inputs` -> the repository root or explicit project root
+- `workspace` -> the archive run directory
+- `scratch` -> optional output root when provided
+
+`AnalysisSession.open()` and `open_archive()` both use that same archive resolution path.
+`open_run()` returns the session itself; `open_archive()` wraps the session in an `Archive`.
+
+## Fast Mental Model
+
+If you only need the opening rule, it is:
+
+1. point analysis at the archive run directory
+2. let the helper resolve the Consist DB under `.consist/`
+3. let the tracker mount that archive as `workspace`
+4. build higher-level views such as sessions, archives, runsets, epochs, or comparisons from there
+
+## What Fails Early
+
+- Missing archive directories raise `FileNotFoundError`.
+- Missing DB paths raise `FileNotFoundError`.
+- Invalid tagging state can raise during session open when strict tagging or fail-on-issues is enabled.
+- The default analysis access mode is `analysis`, not a write mode.

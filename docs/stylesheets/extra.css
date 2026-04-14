@@ -271,8 +271,8 @@
 
 #home-page.home-hero h1 {
   margin: 0;
-  max-width: 10ch;
-  font-size: clamp(2.05rem, 4.9vw, 4rem);
+  max-width: 20ch;
+  font-size: clamp(2.05rem, 3.9vw, 4rem);
   line-height: 0.98;
   letter-spacing: -0.04em;
   color: #f8faf8;

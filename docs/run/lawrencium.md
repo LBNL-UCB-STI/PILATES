@@ -5,29 +5,49 @@ summary: Lawrencium-specific setup, data layout, and Slurm submission path for P
 
 # Lawrencium
 
-## Purpose
+## What To Set Up
 
-Provide the concrete LBNL cluster path for setting up data, bootstrapping the environment, and submitting jobs.
+- Clone PILATES into the scratch/source location expected by the wrapper scripts unless you override `PILATES_DIR`.
+- Make sure the region data trees referenced by your active settings file are present.
+- Make sure the modules used by `hpc/job.sh` are available on the cluster node.
+- Provide a Slurm account on the submission command line.
 
-## Who This Is For
+## Current Submission Flow
 
-- PILATES users running on Lawrencium.
-- Contributors updating the cluster-specific workflow docs after wrapper or environment changes.
+The normal path is:
 
-## This Page Answers
+```bash
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+```
 
-- Where should PILATES live on Lawrencium and how is the Python environment bootstrapped?
-- Which data repos and large files need to be present before submission?
-- What is the normal `job_runner.sh` submission flow and what should users customize first?
+`job_runner.sh`:
+
+- resolves the settings file path
+- replaces `${BEAM_MEMORY}` when the template contains it
+- chooses `lr7` or `lr8`
+- fills in the partition, QoS, CPU, memory, and time request
+- submits `hpc/job.sh`
+
+`job.sh` then:
+
+- loads the current modules used by the cluster runtime
+- creates or reuses the job virtual environment
+- installs Python dependencies
+- installs `consist`
+- runs `python run.py -c <config>` or `python run.py -c <config> -S <stage>`
+
+## Path Conventions
+
+- The wrapper scripts default `PILATES_DIR` to `/global/scratch/users/$USER/sources/PILATES`.
+- The job log is written under `/global/scratch/users/$USER/pilates_logs/`.
+- The job wrapper writes a generated per-job settings file named `settings_<jobid>.yaml`.
+
+## Region Data
+
+The active cluster settings templates point at the region-specific UrbanSim, ActivitySim, and BEAM trees already used by the active scenario configs. The archived Lawrencium note is only useful here as a migration source for missing concrete path examples.
 
 ## Adjacent Pages
 
-- Read [HPC Overview](hpc_overview.md) first for the general model.
+- Read [HPC Overview](hpc_overview.md) first for the generic model.
 - Pair this with [CLI](cli.md) and [Configuration Reference](configuration_reference.md).
-- Use [Restart and Resume](restart_and_resume.md) for restart behavior after preemption or interruption.
-
-## Source Material To Mine
-
-- Archived `lawrencium-setup.md`.
-- Current `hpc/README.md`, `hpc/job_runner.sh`, and `hpc/job.sh`.
-- Active Lawrencium-oriented settings templates such as `settings-sfbay-consist-hpc.yaml`.
+- Use [Restart and Resume](restart_and_resume.md) for restart behavior after interruption.

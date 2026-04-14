@@ -5,28 +5,16 @@ summary: Operator and contributor utilities that sit beside the main run and ana
 
 # Operations Overview
 
-## Purpose
+## Current Utility Surface
 
-Provide a small home for operational utilities that are useful but not part of the main run path.
+The public operations section is intentionally small. It documents utility workflows that sit beside the main run path but are still current enough to be useful to operators and contributors.
 
-## Who This Is For
+At the moment, the main public utility is preserved test output for inspection and review. That workflow is narrow on purpose: it is for capturing the artifacts produced by a test run so they can be inspected without rerunning the scenario.
 
-- Contributors using utility workflows around tests, preserved output, or operational inspection.
-- Operators who need supporting utilities after the core docs paths are clear.
-
-## This Page Answers
-
-- Which operational utilities are worth documenting publicly?
-- Which utilities are still current versus partially broken or internal-only?
-- Where should readers go for preserved test output or DB-oriented utility workflows?
+If a utility starts to overlap with normal run execution, restart behavior, or analysis, it belongs in the run, workflow, or analysis docs instead of becoming a second operations guide.
 
 ## Adjacent Pages
 
 - Use [Test Output Preservation](test_output_preservation.md) for the concrete preserved-output workflow.
 - Pair this with [Database Documentation Guide](../reference/database_documentation_guide.md) when inspecting outputs.
 - Use [Troubleshooting](../run/troubleshooting.md) for failure handling.
-
-## Source Material To Mine
-
-- Existing utility docs and export helper caveats.
-- current scripts that are still meant to be used publicly.
