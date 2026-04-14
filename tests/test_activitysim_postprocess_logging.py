@@ -353,6 +353,35 @@ def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths
     assert captured["usim_population_blocks_table"] == "/2025/blocks"
 
 
+def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2025.h5"
+    h5_path.write_text("x")
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        lambda **_kwargs: BindingPlan(inputs={}, source_by_key={}),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=2023,
+            forecast_year=2025,
+            Stage=SimpleNamespace(land_use="land_use"),
+            is_enabled=lambda _stage: True,
+        ),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        coupler=_dummy_coupler(),
+        step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+    )
+
+    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
+    assert runtime_inputs["current_input_h5_path"] == str(h5_path)
+
+
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
-
-from consist import MaterializationResult
+from typing import Any, Callable, Mapping, Optional, Sequence
 from consist.types import CacheOptions
 
 logger = logging.getLogger(__name__)
@@ -129,83 +127,6 @@ def log_cache_miss_explanation(
             logger.debug("Cache miss details: %s", debug_payload)
 
     return explanation
-
-
-
-def merge_materialization_result(
-    *,
-    aggregate: MaterializationResult,
-    result: MaterializationResult,
-) -> None:
-    """
-    Merge one materialization result into an aggregate result in-place.
-    """
-    aggregate.materialized_from_filesystem.update(
-        dict(getattr(result, "materialized_from_filesystem", {}) or {})
-    )
-    aggregate.materialized_from_db.update(
-        dict(getattr(result, "materialized_from_db", {}) or {})
-    )
-    aggregate.skipped_existing.extend(list(getattr(result, "skipped_existing", []) or []))
-    aggregate.skipped_unmapped.extend(list(getattr(result, "skipped_unmapped", []) or []))
-    aggregate.skipped_missing_source.extend(
-        list(getattr(result, "skipped_missing_source", []) or [])
-    )
-    aggregate.failed.extend(list(getattr(result, "failed", []) or []))
-
-
-def materialize_cached_runs(
-    *,
-    tracker: Any,
-    run_ids: Sequence[str],
-    target_root: str,
-    source_root: Optional[str],
-    preserve_existing: bool,
-    run_output_keys_by_run_id: Optional[Mapping[str, Sequence[str]]] = None,
-    initial_failures: Optional[Sequence[Tuple[str, str]]] = None,
-    missing_api_context: str = "restart_reconstruction",
-) -> MaterializationResult:
-    """
-    Materialize many cached run output sets and return one aggregate result.
-    """
-    aggregate = MaterializationResult()
-    if initial_failures:
-        aggregate.failed.extend(list(initial_failures))
-
-    if not run_ids:
-        return aggregate
-
-    materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
-    if not callable(materialize_run_outputs_fn):
-        aggregate.failed.append(
-            (missing_api_context, "tracker does not expose materialize_run_outputs")
-        )
-        return aggregate
-
-    for run_id in run_ids:
-        try:
-            materialize_kwargs = {
-                "run_id": run_id,
-                "target_root": target_root,
-                "source_root": source_root,
-                "preserve_existing": preserve_existing,
-            }
-            selected_keys = (
-                list(run_output_keys_by_run_id.get(run_id, ()))
-                if run_output_keys_by_run_id is not None
-                else []
-            )
-            if selected_keys:
-                materialize_kwargs["keys"] = selected_keys
-            result = materialize_run_outputs_fn(**materialize_kwargs)
-        except Exception as exc:
-            result = MaterializationResult(
-                failed=[(run_id, f"materialize_run_outputs raised: {exc}")]
-            )
-        merge_materialization_result(aggregate=aggregate, result=result)
-
-    return aggregate
-
 
 def run_with_cache_recovery(
     *,

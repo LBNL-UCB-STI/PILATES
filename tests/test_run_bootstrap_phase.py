@@ -7,7 +7,6 @@ from pathlib import Path
 import re
 
 import pytest
-from consist import MaterializationResult
 from consist.types import CacheOptions
 
 from pilates.runtime.consist_audit import (
@@ -79,17 +78,46 @@ class DummyInitialization:
 
 
 class DummyTracker:
-    def __init__(self, responses, materialization_results=None):
+    def __init__(self, responses):
         self.responses = list(responses)
-        self.materialization_results = list(materialization_results or [])
         self.calls = []
-        self.materialization_calls = []
+
+    @staticmethod
+    def _realize_output_paths(output_paths):
+        for path in (output_paths or {}).values():
+            target = Path(path)
+            if target.suffix:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("hydrated", encoding="utf-8")
+            else:
+                target.mkdir(parents=True, exist_ok=True)
+                if target.parts[-2:] == ("activitysim", "configs"):
+                    for dirname in (
+                        "configs",
+                        "configs_extended",
+                        "configs_mp",
+                        "configs_sh_compile",
+                    ):
+                        (target / dirname).mkdir(parents=True, exist_ok=True)
+                        (target / dirname / "settings.yaml").write_text(
+                            "settings",
+                            encoding="utf-8",
+                        )
+                if target.parts[-2:] == ("beam", "input"):
+                    region_dir = target / "test"
+                    region_dir.mkdir(parents=True, exist_ok=True)
+                    (region_dir / "beam.conf").write_text(
+                        "beam",
+                        encoding="utf-8",
+                    )
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
         response = self.responses[len(self.calls) - 1]
         if response["execute_fn"] and kwargs.get("fn") is not None:
             kwargs["fn"]()
+        if response.get("hydrate_output_paths") or response["execute_fn"]:
+            self._realize_output_paths(kwargs.get("output_paths"))
         return SimpleNamespace(
             cache_hit=response["cache_hit"],
             run=SimpleNamespace(
@@ -97,12 +125,6 @@ class DummyTracker:
                 meta=response.get("meta"),
             ),
         )
-
-    def materialize_run_outputs(self, **kwargs):
-        self.materialization_calls.append(kwargs)
-        if not self.materialization_results:
-            raise AssertionError("missing prepared materialization result")
-        return self.materialization_results.pop(0)
 
 
 class DummySnapshotTracker:
@@ -137,7 +159,22 @@ def _settings(cache_enabled=True, code_identity=None):
         run=SimpleNamespace(
             bootstrap_cache_enabled=cache_enabled,
             consist_code_identity=code_identity,
-        )
+            region="test",
+            models=SimpleNamespace(
+                land_use="urbansim",
+                activity_demand="activitysim",
+                vehicle_ownership="atlas",
+                traffic_assignment="beam",
+            ),
+        ),
+        atlas=SimpleNamespace(scenario="baseline"),
+        activitysim=SimpleNamespace(main_configs_dir="configs"),
+        beam=SimpleNamespace(config="beam.conf"),
+        urbansim=SimpleNamespace(
+            region_mappings={"region_to_region_id": {"test": "000"}},
+            input_file_template="usim_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+        ),
     )
 
 
@@ -180,7 +217,9 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert result["bootstrap_cache_hit"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
-    assert "cache_options" not in first_call
+    cache_options = first_call["cache_options"]
+    assert isinstance(cache_options, CacheOptions)
+    assert cache_options.cache_hydration == "outputs-requested"
 
 
 def test_run_bootstrap_phase_propagates_code_identity_to_probe(monkeypatch):
@@ -307,19 +346,19 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation_and_writes_audit_fields
     assert bootstrap_event["cache_miss_explanation"] == explanation
 
 
-def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
+def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    materialization_result = MaterializationResult(
-        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
-        skipped_existing=["existing-cache"],
-    )
     tracker = DummyTracker(
         responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-        ],
-        materialization_results=[materialization_result],
+            {
+                "cache_hit": True,
+                "execute_fn": False,
+                "run_id": "bootstrap_probe",
+                "hydrate_output_paths": True,
+            },
+        ]
     )
     workspace = DummyWorkspace()
 
@@ -333,21 +372,14 @@ def test_run_bootstrap_phase_cache_hit_materializes_without_rerun(monkeypatch):
     )
 
     assert len(tracker.calls) == 1
+    cache_options = tracker.calls[0]["cache_options"]
+    assert isinstance(cache_options, CacheOptions)
+    assert cache_options.cache_hydration == "outputs-requested"
+    assert "output_paths" in tracker.calls[0]
     assert result["bootstrap_cache_hit"] is True
     assert result["fallback_rerun"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 0
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
-    assert result["materialization"]["complete"] is True
-    assert result["materialization"]["materialized_from_filesystem_count"] == 1
-    assert result["materialization"]["skipped_existing_count"] == 1
-    assert tracker.materialization_calls == [
-        {
-            "run_id": "bootstrap_probe",
-            "target_root": workspace.full_path,
-            "source_root": None,
-            "preserve_existing": True,
-        }
-    ]
 
 
 def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fallback_rerun(
@@ -357,15 +389,11 @@ def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fal
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    materialization_result = MaterializationResult(
-        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
-    )
     tracker = DummyTracker(
         responses=[
             {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
             {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
         ],
-        materialization_results=[materialization_result],
     )
     workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
     state = SimpleNamespace(
@@ -388,20 +416,11 @@ def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fal
     assert fallback_options.cache_mode == "off"
     assert result["bootstrap_cache_hit"] is True
     assert result["fallback_rerun"] is True
-    assert result["materialization"]["complete"] is True
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["run_reference"] == {
         "probe_run_id": "bootstrap_probe",
         "materialization_run_id": "bootstrap_fallback",
     }
-    assert tracker.materialization_calls == [
-        {
-            "run_id": "bootstrap_probe",
-            "target_root": workspace.full_path,
-            "source_root": None,
-            "preserve_existing": True,
-        }
-    ]
 
 
 def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
@@ -451,15 +470,15 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    materialization_result = MaterializationResult(
-        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
-        skipped_existing=["existing-cache"],
-    )
     tracker = DummyTracker(
         responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-        ],
-        materialization_results=[materialization_result],
+            {
+                "cache_hit": True,
+                "execute_fn": False,
+                "run_id": "bootstrap_probe",
+                "hydrate_output_paths": True,
+            },
+        ]
     )
     workspace = DummyWorkspace(full_path=str(tmp_path / "bootstrap-run"))
 
@@ -488,7 +507,7 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
     bootstrap_event = next(
         event for event in events if event["event_type"] == "bootstrap_resolution"
     )
-    assert bootstrap_event["resolution_mode"] == "cache_hit_materialized"
+    assert bootstrap_event["resolution_mode"] == "cache_hit_replay_hydrated"
     assert bootstrap_event["bootstrap_cache_enabled"] is True
     assert bootstrap_event["bootstrap_cache_hit"] is True
     assert bootstrap_event["fallback_rerun"] is False
@@ -536,23 +555,20 @@ def test_consist_audit_summary_tracks_restart_hydration_snapshot(tmp_path):
     assert summary["restart_hydration"]["latest_missing_key_count"] == 0
 
 
-def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback_rerun(monkeypatch):
+def test_run_bootstrap_phase_cache_hit_missing_replay_outputs_triggers_fallback_rerun(
+    monkeypatch,
+    tmp_path,
+):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    partial_materialization = MaterializationResult(
-        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
-        skipped_missing_source=["missing-record"],
-        failed=[("bootstrap_initialization", "missing source")],
-    )
     tracker = DummyTracker(
         responses=[
             {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
             {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_fallback"},
         ],
-        materialization_results=[partial_materialization],
     )
-    workspace = DummyWorkspace()
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
 
     result = run_module.run_bootstrap_phase(
         tracker=tracker,
@@ -573,32 +589,22 @@ def test_run_bootstrap_phase_cache_hit_partial_materialization_triggers_fallback
         "probe_run_id": "bootstrap_probe",
         "materialization_run_id": "bootstrap_fallback",
     }
-    assert result["materialization"]["complete"] is False
-    assert result["materialization"]["skipped_missing_source_count"] == 1
-    assert result["materialization"]["failed_count"] == 1
-    assert tracker.materialization_calls == [
-        {
-            "run_id": "bootstrap_probe",
-            "target_root": workspace.full_path,
-            "source_root": None,
-            "preserve_existing": True,
-        }
-    ]
 
-
-def test_run_bootstrap_phase_ignores_optional_bootstrap_missing_sources(monkeypatch):
+def test_run_bootstrap_phase_cache_hit_hydrates_declared_output_paths_without_fallback(
+    monkeypatch,
+):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
-    partial_materialization = MaterializationResult(
-        materialized_from_filesystem={"bootstrap_initialization": "/tmp/dest"},
-        skipped_missing_source=["canonical_zones", "clipped_geoms"],
-    )
     tracker = DummyTracker(
         responses=[
-            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
-        ],
-        materialization_results=[partial_materialization],
+            {
+                "cache_hit": True,
+                "execute_fn": False,
+                "run_id": "bootstrap_probe",
+                "hydrate_output_paths": True,
+            },
+        ]
     )
     workspace = DummyWorkspace()
 
@@ -614,8 +620,6 @@ def test_run_bootstrap_phase_ignores_optional_bootstrap_missing_sources(monkeypa
     assert len(tracker.calls) == 1
     assert result["bootstrap_cache_hit"] is True
     assert result["fallback_rerun"] is False
-    assert result["materialization"]["complete"] is True
-    assert result["materialization"]["skipped_missing_source_count"] == 0
 
 
 def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):

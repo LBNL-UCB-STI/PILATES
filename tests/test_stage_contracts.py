@@ -84,6 +84,7 @@ from pilates.workflows.stages.supply_demand import (
 )
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
+    _restore_supply_demand_usim_inputs_for_resume,
 )
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 import h5py
@@ -1864,6 +1865,411 @@ def test_restore_activity_demand_outputs_for_resume_manifest_restore_rehydrates_
     assert coupler.get("households_asim_out") == str(households)
     assert coupler.get("persons_asim_out") == str(persons)
     assert artifact_to_path(coupler.get(ZARR_SKIMS), workspace) == str(archived_zarr)
+
+
+def test_restore_activity_demand_outputs_for_resume_manifest_workspace_uris_rehydrate_coupler(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+
+    workspace_root = Path(workspace.full_path)
+
+    def _workspace_uri(path: Path) -> str:
+        return f"workspace://{path.relative_to(workspace_root).as_posix()}"
+
+    manifest_path = tmp_path / "activitysim_postprocess_manifest_workspace_uris.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": {
+                        "usim_datastore_h5": _workspace_uri(usim_datastore),
+                        "asim_output_dir": _workspace_uri(
+                            Path(workspace.get_asim_output_dir())
+                        ),
+                        "processed_outputs": {
+                            "beam_plans_asim_out": _workspace_uri(beam_plans),
+                            "households_asim_out": _workspace_uri(households),
+                            "persons_asim_out": _workspace_uri(persons),
+                            "asim_input_skims_zarr_archived": _workspace_uri(
+                                archived_zarr
+                            ),
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+
+    assert restored is not None
+    assert Path(restored["beam_plans_asim_out"]) == beam_plans
+    assert Path(restored["households_asim_out"]) == households
+    assert Path(restored["persons_asim_out"]) == persons
+    assert Path(restored[ZARR_SKIMS]) == archived_zarr
+    assert coupler.get("beam_plans_asim_out") == str(beam_plans)
+    assert coupler.get("households_asim_out") == str(households)
+    assert coupler.get("persons_asim_out") == str(persons)
+    assert artifact_to_path(coupler.get(ZARR_SKIMS), workspace) == str(archived_zarr)
+
+
+def test_restore_activity_demand_outputs_for_resume_seeds_activitysim_run_parent_link(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+    remembered = []
+
+    class _Scenario:
+        def remember_restored_run_id(self, **kwargs):
+            remembered.append(kwargs)
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+
+    manifest_path = tmp_path / "activitysim_postprocess_manifest_with_run_id.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "run_id": "activitysim_run_y2018_i0_prun",
+                },
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                                "asim_input_skims_zarr_archived": archived_zarr,
+                            },
+                        )
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        scenario=_Scenario(),
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+
+    assert restored is not None
+    assert remembered == [
+        {
+            "model_name": "activitysim_run",
+            "year": state.forecast_year,
+            "iteration": state.current_inner_iter,
+            "run_id": "activitysim_run_y2018_i0_prun",
+        }
+    ]
+
+
+def test_restore_activity_demand_outputs_for_resume_finds_archive_side_manifest(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+
+    local_manifest_path = (
+        Path(workspace.full_path) / ".workflow" / "year_2017_iteration_0.yaml"
+    )
+    archive_root = tmp_path / "archive_run"
+    archive_manifest_path = archive_root / "run" / ".workflow" / "year_2017_iteration_0.yaml"
+    archive_manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    archive_manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                                "asim_input_skims_zarr_archived": archived_zarr,
+                            },
+                        )
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    state.file_loc = str(archive_root / "state.yaml")
+    _write_file(Path(state.file_loc))
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=local_manifest_path,
+    )
+
+    assert restored is not None
+    assert Path(restored["beam_plans_asim_out"]) == beam_plans
+    assert Path(restored["households_asim_out"]) == households
+    assert Path(restored["persons_asim_out"]) == persons
+    assert Path(restored[ZARR_SKIMS]) == archived_zarr
+
+
+def test_restore_activity_demand_outputs_for_resume_manifest_reuses_coupler_zarr(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+    coupler.set(ZARR_SKIMS, str(archived_zarr))
+
+    manifest_path = tmp_path / "activitysim_postprocess_manifest_without_zarr.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                            },
+                        )
+                    ),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+
+    assert restored is not None
+    assert Path(restored["beam_plans_asim_out"]) == beam_plans
+    assert Path(restored["households_asim_out"]) == households
+    assert Path(restored["persons_asim_out"]) == persons
+    assert Path(restored[ZARR_SKIMS]) == archived_zarr
+    assert artifact_to_path(coupler.get(ZARR_SKIMS), workspace) == str(archived_zarr)
+
+
+def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_roles(
+    stage_env,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    base_h5 = usim_dir / get_usim_datastore_fname(settings, io="input")
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
+    _write_file(base_h5)
+    _write_file(current_h5)
+
+    restored = _restore_supply_demand_usim_inputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        state=state,
+        settings=settings,
+    )
+
+    assert restored[USIM_DATASTORE_BASE_H5] == str(base_h5)
+    assert restored[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
+    assert restored[USIM_FORECAST_OUTPUT] == str(current_h5)
+    assert restored[USIM_POPULATION_SOURCE_H5] == str(current_h5)
+    assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
+    assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(current_h5)
+
+
+def test_restore_supply_demand_usim_inputs_for_resume_falls_back_to_base_when_output_missing(
+    stage_env,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    base_h5 = usim_dir / get_usim_datastore_fname(settings, io="input")
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
+    _write_file(base_h5)
+    if current_h5.exists():
+        current_h5.unlink()
+
+    restored = _restore_supply_demand_usim_inputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        state=state,
+        settings=settings,
+    )
+
+    assert restored[USIM_DATASTORE_BASE_H5] == str(base_h5)
+    assert restored[USIM_DATASTORE_CURRENT_H5] == str(base_h5)
+    assert restored[USIM_POPULATION_SOURCE_H5] == str(base_h5)
+    assert USIM_FORECAST_OUTPUT not in restored
+    assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(base_h5)
+
+
+def test_restore_supply_demand_usim_inputs_for_resume_promotes_population_source_to_current(
+    stage_env,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    base_h5 = usim_dir / get_usim_datastore_fname(settings, io="input")
+    _write_file(base_h5)
+    coupler.set(USIM_POPULATION_SOURCE_H5, str(base_h5))
+
+    restored = _restore_supply_demand_usim_inputs_for_resume(
+        coupler=coupler,
+        workspace=workspace,
+        state=state,
+        settings=settings,
+    )
+
+    assert restored[USIM_DATASTORE_CURRENT_H5] == str(base_h5)
+    assert restored[USIM_POPULATION_SOURCE_H5] == str(base_h5)
+    assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(base_h5)
 
 
 def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_path):

@@ -493,34 +493,6 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _hydrate_rewind_runner_inputs(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    local_run_dir: str,
-    archive_run_dir: str,
-    archive_state_path: str,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> Optional[restart_runtime.RestartHydrationSummary]:
-    return restart_runtime.hydrate_rewind_runner_inputs(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path,
-        allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
-        workflow_stage=WorkflowState.Stage,
-        read_current_stage_fn=WorkflowState.read_current_stage,
-        query_facet=query_facet,
-    )
-
-
 def _restart_frontier_contract(
     *,
     settings: PilatesConfig,
@@ -530,30 +502,6 @@ def _restart_frontier_contract(
         settings=settings,
         state=state,
         workflow_stage=WorkflowState.Stage,
-    )
-
-
-def _hydrate_missing_restart_artifacts(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    local_run_dir: str,
-    archive_run_dir: str,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> restart_runtime.RestartHydrationSummary:
-    return restart_runtime.hydrate_missing_restart_artifacts(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        workflow_stage=WorkflowState.Stage,
-        query_facet=query_facet,
     )
 
 
@@ -584,8 +532,8 @@ def main(
     Caching Strategy:
     - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
     - Model outputs: Cached per iteration (convergence check)
-    - Bootstrap: pre-scenario cached run with native materialization on cache hit
-    - Restart: hydrates only the frontier artifacts required to resume execution
+    - Bootstrap: pre-scenario cached run with replay-hydrated declared output paths
+    - Restart: default path is scenario replay plus cache hits; legacy hydration helpers are manual tooling only
     """
     if clear_failure_context:
         _RUN_FAILURE_CONTEXT.clear()

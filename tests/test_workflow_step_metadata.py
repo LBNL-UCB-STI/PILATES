@@ -666,6 +666,61 @@ def test_workflow_stage_filters_requested_input_paths_to_resolved_binding_keys()
     )
 
 
+def test_workflow_stage_drops_requested_input_paths_without_resolved_input_mapping():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(
+        full_path="/tmp/workspace",
+        get_beam_mutable_data_dir=lambda: "/tmp/workspace/beam",
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        input_binding="paths",
+        input_materialization="requested",
+        input_paths=lambda *, workspace, settings: {
+            "final_skims_omx": (
+                f"{workspace.get_beam_mutable_data_dir()}/{settings.run.region}/skims.omx"
+            ),
+        },
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(
+        name="dummy_step",
+        step_func=_decorated_step,
+        binding=BindingResult(optional_input_keys=["final_skims_omx"]),
+    )
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"] == ExecutionOptions(
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+        load_inputs=None,
+        input_binding="paths",
+        input_paths={},
+        input_materialization="requested",
+    )
+
+
 def test_workflow_stage_propagates_consist_code_identity_override():
     scenario = _FakeScenario()
     workspace = SimpleNamespace(full_path="/tmp/workspace")

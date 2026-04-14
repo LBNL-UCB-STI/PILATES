@@ -630,29 +630,36 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             workspace=workspace,
             year=step_year,
         )
+    population_source_value = (
+        step_inputs.get(USIM_POPULATION_SOURCE_H5)
+        if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
+        else resolved_value_for_key(
+            resolved=resolution,
+            key=USIM_POPULATION_SOURCE_H5,
+            coupler=coupler,
+        )
+    )
+    current_input_value = (
+        step_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
+        else resolved_value_for_key(
+            resolved=resolution,
+            key=USIM_DATASTORE_CURRENT_H5,
+            coupler=coupler,
+        )
+    )
+    if population_source_value is None:
+        population_source_value = current_input_value
+    if current_input_value is None:
+        current_input_value = population_source_value
+
     runtime_inputs["population_source_h5_path"] = _resolve_activitysim_h5_runtime_path(
-        value=(
-            step_inputs.get(USIM_POPULATION_SOURCE_H5)
-            if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
-            else resolved_value_for_key(
-                resolved=resolution,
-                key=USIM_POPULATION_SOURCE_H5,
-                coupler=coupler,
-            )
-        ),
+        value=population_source_value,
         key=USIM_POPULATION_SOURCE_H5,
         workspace=workspace,
     )
     runtime_inputs["current_input_h5_path"] = _resolve_activitysim_h5_runtime_path(
-        value=(
-            step_inputs.get(USIM_DATASTORE_CURRENT_H5)
-            if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
-            else resolved_value_for_key(
-                resolved=resolution,
-                key=USIM_DATASTORE_CURRENT_H5,
-                coupler=coupler,
-            )
-        ),
+        value=current_input_value,
         key=USIM_DATASTORE_CURRENT_H5,
         workspace=workspace,
     )

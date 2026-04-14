@@ -18,8 +18,8 @@ import pytest
 from consist import Tracker
 
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime import launcher as launcher_runtime
 from pilates.runtime import restart as restart_runtime
+from pilates.runtime import launcher as launcher_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event, reset_consist_audit_state
 from pilates.runtime.scenario_runtime import (
     ScenarioParentLinkProxy,
@@ -695,6 +695,10 @@ def _resume_runtime(
     local_state_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(archive_state_path, local_state_path)
     local_runtime.state = WorkflowState.from_settings(local_runtime.settings)
+    local_runtime.state.file_loc = str(archive_state_path)
+    local_runtime.state.mirror_file_loc = str(local_state_path)
+    if getattr(local_runtime.state, "run_info_path", None) != str(archive_state_path):
+        local_runtime.state.set_run_info_path(str(archive_state_path))
     return {"hydration": None}
 
 
@@ -746,17 +750,49 @@ def _digest_bundle(workspace: Workspace) -> dict[str, str]:
     return bundle
 
 
-def _manifest_snapshot(workspace: Workspace) -> dict[str, dict[str, list[str]]]:
+def _manifest_snapshot(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, dict[str, list[str]]]:
     manifests: dict[str, dict[str, list[str]]] = {}
-    workflow_dir = Path(workspace.full_path) / ".workflow"
-    for manifest_path in sorted(workflow_dir.rglob("*.yaml")):
-        payload = json.loads(json.dumps(__import__("yaml").safe_load(manifest_path.read_text(encoding="utf-8")) or {}))
-        manifests[str(manifest_path.relative_to(workflow_dir))] = {
-            "steps": sorted(payload.keys()),
-            "steps_with_run_id": sorted(
-                step_name for step_name, step_meta in payload.items() if (step_meta or {}).get("run_id")
-            ),
-        }
+    workflow_dirs = [Path(workspace.full_path) / ".workflow"]
+    archive_state_path = Path(getattr(state, "file_loc", "") or "")
+    if archive_state_path:
+        current_workspace_root = Path(workspace.full_path).resolve()
+        try:
+            archive_state_path.resolve().relative_to(current_workspace_root)
+        except Exception:
+            archive_state_root = archive_state_path.resolve().parent
+            workflow_dirs.extend(
+                [
+                    archive_state_root / "run" / ".workflow",
+                    archive_state_root / ".workflow",
+                ]
+            )
+    for workflow_dir in workflow_dirs:
+        if not workflow_dir.exists():
+            continue
+        for manifest_path in sorted(workflow_dir.rglob("*.yaml")):
+            relative_path = str(manifest_path.relative_to(workflow_dir))
+            if relative_path in manifests:
+                continue
+            payload = json.loads(
+                json.dumps(
+                    __import__("yaml").safe_load(
+                        manifest_path.read_text(encoding="utf-8")
+                    )
+                    or {}
+                )
+            )
+            manifests[relative_path] = {
+                "steps": sorted(payload.keys()),
+                "steps_with_run_id": sorted(
+                    step_name
+                    for step_name, step_meta in payload.items()
+                    if (step_meta or {}).get("run_id")
+                ),
+            }
     return manifests
 
 
@@ -900,7 +936,7 @@ def _snapshot(
         "mode": mode,
         "elapsed_seconds": elapsed_seconds,
         "artifact_digests": _digest_bundle(runtime.workspace),
-        "manifest_snapshot": _manifest_snapshot(runtime.workspace),
+        "manifest_snapshot": _manifest_snapshot(runtime.workspace, state=runtime.state),
         "parent_edges": _normalized_parent_edges(runtime.tracker),
         "run_index_rows": _run_index_rows(runtime.tracker, runtime.workspace.full_path),
         "audit": _audit_snapshot(runtime.workspace),

@@ -242,98 +242,6 @@ def test_hydrate_missing_restart_artifacts_hydrates_traffic_assignment_inputs(tm
     )
 
 
-def test_hydrate_missing_restart_artifacts_prefers_exact_iteration_and_exact_facet(
-    tmp_path,
-):
-    workspace = DummyWorkspace(str(tmp_path / "run"))
-    Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
-    coupler = DummyCoupler()
-    restored = tmp_path / "restored" / "beam_plans.parquet"
-    restored.parent.mkdir(parents=True, exist_ok=True)
-    restored.write_text("plans", encoding="utf-8")
-
-    exact_facet = {"scenario_id": "scenario-a", "seed": 7}
-    tracker = DummyTracker(
-        runs_by_target={
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-                facet=exact_facet,
-            ): "asim-post-exact",
-            _query_key(
-                year=2018,
-                iteration=2,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-                facet=exact_facet,
-            ): "asim-post-wrong-iteration",
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-                facet={"scenario_id": "scenario-b", "seed": 7},
-            ): "asim-post-wrong-facet",
-            _query_key(
-                year=2018,
-                model="activitysim_compile",
-                stage="activity_demand_compile",
-                phase="compile",
-                status="completed",
-                facet=exact_facet,
-            ): "asim-compile-exact",
-        },
-        outputs_by_run={
-            "asim-post-exact": {
-                "beam_plans_asim_out": str(restored),
-                "households_asim_out": str(restored),
-                "persons_asim_out": str(restored),
-            },
-            "asim-compile-exact": {"zarr_skims": str(restored)},
-        },
-        materialized_by_run={
-            "asim-post-exact": str(restored),
-            "asim-compile-exact": str(restored),
-        },
-    )
-
-    result = restart_runtime.hydrate_missing_restart_artifacts(
-        tracker=tracker,
-        settings=_settings(),
-        state=_state(),
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=str(tmp_path / "run"),
-        archive_run_dir=str(tmp_path / "archive"),
-        workflow_stage=WorkflowState.Stage,
-        query_facet=exact_facet,
-    )
-
-    assert result["success"] is True
-    assert any(call.get("iteration") == 1 and call.get("facet") == exact_facet for call in tracker.find_latest_run_calls)
-    assert any("iteration" not in call for call in tracker.find_latest_run_calls if call.get("model") == "activitysim_compile")
-    assert all(call.get("facet") == exact_facet for call in tracker.find_latest_run_calls)
-    assert all(
-        call.get("cache_epoch") == DEFAULT_CACHE_EPOCH
-        for call in tracker.find_latest_run_calls
-    )
-    assert not any(call.get("iteration") == 2 for call in tracker.find_latest_run_calls)
-    materialized_run_ids = {
-        call["run_id"] for call in tracker.materialize_run_output_calls
-    }
-    assert "asim-post-exact" in materialized_run_ids
-    assert "asim-post-wrong-iteration" not in materialized_run_ids
-    assert "asim-post-wrong-facet" not in materialized_run_ids
-
-
 def test_restart_artifact_producers_applies_traffic_assignment_overrides():
     producers = restart_artifact_producers(
         frontier_stage="traffic_assignment",
@@ -457,59 +365,30 @@ def test_hydrate_missing_restart_artifacts_noops_when_coupler_already_has_contra
     assert coupler.get("zarr_skims") == str(zarr)
 
 
-def test_hydrate_missing_restart_artifacts_remaps_stale_raw_paths_into_current_workspace(
+def test_hydrate_missing_restart_artifacts_copies_archive_workflow_manifests(
     tmp_path,
 ):
-    workspace = DummyWorkspace(str(tmp_path / "run" / "restart-run"))
+    workspace = DummyWorkspace(str(tmp_path / "run"))
     Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
     coupler = DummyCoupler()
 
-    restored_dir = Path(workspace.full_path) / "restored"
-    restored_dir.mkdir(parents=True, exist_ok=True)
-    beam_plans = restored_dir / "beam_plans.parquet"
-    households = restored_dir / "households.parquet"
-    persons = restored_dir / "persons.parquet"
-    zarr = restored_dir / "skims.zarr"
-    for path in (beam_plans, households, persons, zarr):
-        path.write_text("materialized", encoding="utf-8")
+    for key, relpath in (
+        ("beam_plans_asim_out", "restored/beam_plans.parquet"),
+        ("households_asim_out", "restored/households.parquet"),
+        ("persons_asim_out", "restored/persons.parquet"),
+        ("zarr_skims", "restored/skims.zarr"),
+    ):
+        path = tmp_path / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ready", encoding="utf-8")
+        coupler.set(key, str(path))
 
-    stale_root = tmp_path / "old-local" / "restart-run" / "restored"
-    tracker = DummyTracker(
-        runs_by_target={
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-                facet={"scenario_id": "scenario-a", "seed": 7},
-            ): "asim-post-1",
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_compile",
-                stage="activity_demand_compile",
-                phase="compile",
-                status="completed",
-                facet={"scenario_id": "scenario-a", "seed": 7},
-            ): "asim-compile-1",
-        },
-        outputs_by_run={
-            "asim-post-1": {
-                "beam_plans_asim_out": str(stale_root / "beam_plans.parquet"),
-                "households_asim_out": str(stale_root / "households.parquet"),
-                "persons_asim_out": str(stale_root / "persons.parquet"),
-            },
-            "asim-compile-1": {
-                "zarr_skims": str(stale_root / "skims.zarr"),
-            },
-        },
-        materialized_by_run={
-            "asim-post-1": str(restored_dir),
-            "asim-compile-1": str(restored_dir),
-        },
-    )
+    archive_workflow_dir = tmp_path / "archive" / ".workflow"
+    archive_workflow_dir.mkdir(parents=True, exist_ok=True)
+    archive_manifest = archive_workflow_dir / "year_2017_iteration_0.yaml"
+    archive_manifest.write_text("activitysim_postprocess: {}\n", encoding="utf-8")
+
+    tracker = DummyTracker(runs_by_target={}, outputs_by_run={})
 
     result = restart_runtime.hydrate_missing_restart_artifacts(
         tracker=tracker,
@@ -517,185 +396,22 @@ def test_hydrate_missing_restart_artifacts_remaps_stale_raw_paths_into_current_w
         state=_state(),
         workspace=workspace,
         coupler=coupler,
-        local_run_dir=workspace.full_path,
+        local_run_dir=str(tmp_path / "run"),
         archive_run_dir=str(tmp_path / "archive"),
         workflow_stage=WorkflowState.Stage,
         query_facet={"scenario_id": "scenario-a", "seed": 7},
     )
 
+    copied_manifest = Path(workspace.full_path) / ".workflow" / "year_2017_iteration_0.yaml"
     assert result["success"] is True
-    assert coupler.get("beam_plans_asim_out") == str(beam_plans)
-    assert coupler.get("households_asim_out") == str(households)
-    assert coupler.get("persons_asim_out") == str(persons)
-    assert coupler.get("zarr_skims") == str(zarr)
-
-
-def test_hydrate_rewind_runner_inputs_restores_activitysim_overlay_with_zarr(
-    tmp_path,
-):
-    workspace = DummyWorkspace(str(tmp_path / "run"))
-    Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
-    coupler = DummyCoupler()
-
-    restored_dir = tmp_path / "restored" / "asim"
-    restored_dir.mkdir(parents=True, exist_ok=True)
-    archived_paths = {
-        "asim_input_households_csv_archived": restored_dir / "households.csv",
-        "asim_input_persons_csv_archived": restored_dir / "persons.csv",
-        "asim_input_land_use_csv_archived": restored_dir / "land_use.csv",
-        "asim_input_skims_omx_archived": restored_dir / "skims.omx",
-        "asim_input_skims_zarr_archived": restored_dir / "skims.zarr",
-    }
-    archived_paths["asim_input_households_csv_archived"].write_text(
-        "households",
-        encoding="utf-8",
-    )
-    archived_paths["asim_input_persons_csv_archived"].write_text(
-        "persons",
-        encoding="utf-8",
-    )
-    archived_paths["asim_input_land_use_csv_archived"].write_text(
-        "land_use",
-        encoding="utf-8",
-    )
-    archived_paths["asim_input_skims_omx_archived"].write_text("omx", encoding="utf-8")
-    archived_paths["asim_input_skims_zarr_archived"].mkdir(parents=True, exist_ok=True)
-    (archived_paths["asim_input_skims_zarr_archived"] / ".zgroup").write_text(
-        "{}",
-        encoding="utf-8",
-    )
-
-    tracker = DummyTracker(
-        runs_by_target={
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-                facet={"scenario_id": "scenario-a", "seed": 7},
-            ): "asim-post-1",
-        },
-        outputs_by_run={
-            "asim-post-1": {key: str(path) for key, path in archived_paths.items()},
-        },
-        materialized_by_run={"asim-post-1": str(restored_dir)},
-    )
-
-    result = restart_runtime.hydrate_rewind_runner_inputs(
-        tracker=tracker,
-        settings=_settings(),
-        state=_state(sub_stage=WorkflowState.Stage.activity_demand),
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=workspace.full_path,
-        archive_run_dir=str(tmp_path / "archive"),
-        archive_state_path=str(tmp_path / "archive" / "run_state.yaml"),
-        allow_rewind_resume=True,
-        workflow_stage=WorkflowState.Stage,
-        read_current_stage_fn=lambda _path: (
-            2018,
-            WorkflowState.Stage.traffic_assignment,
-            2,
-            False,
-            None,
-            None,
-            True,
-        ),
-        query_facet={"scenario_id": "scenario-a", "seed": 7},
-    )
-
-    assert result is not None
-    assert result["success"] is True
-    assert result["rewind_restore"] is True
-    assert workspace.get_asim_mutable_data_dir().endswith(
-        "year-2018-iteration-1/data"
-    )
-    assert workspace.get_asim_runtime_cache_dir().endswith(
-        "year-2018-iteration-1/cache"
-    )
-    assert Path(workspace.get_asim_mutable_data_dir(), "households.csv").read_text(
+    assert copied_manifest.read_text(encoding="utf-8") == archive_manifest.read_text(
         encoding="utf-8"
-    ) == "households"
-    assert Path(workspace.get_asim_runtime_cache_dir(), "skims.zarr", ".zgroup").exists()
-    assert coupler.get("households_asim_in") == str(
-        Path(workspace.get_asim_mutable_data_dir()) / "households.csv"
     )
-    assert coupler.get("zarr_skims") == str(
-        Path(workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
-    )
+    assert tracker.find_latest_run_calls == []
+    assert tracker.materialize_run_output_calls == []
 
 
-def test_hydrate_rewind_runner_inputs_activitysim_falls_back_to_omx(tmp_path):
-    workspace = DummyWorkspace(str(tmp_path / "run"))
-    Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
-    coupler = DummyCoupler()
-    stale_zarr = tmp_path / "stale" / "skims.zarr"
-    stale_zarr.parent.mkdir(parents=True, exist_ok=True)
-    stale_zarr.write_text("stale", encoding="utf-8")
-    coupler.set("zarr_skims", str(stale_zarr))
-
-    restored_dir = tmp_path / "restored" / "asim"
-    restored_dir.mkdir(parents=True, exist_ok=True)
-    archived_paths = {
-        "asim_input_households_csv_archived": restored_dir / "households.csv",
-        "asim_input_persons_csv_archived": restored_dir / "persons.csv",
-        "asim_input_land_use_csv_archived": restored_dir / "land_use.csv",
-        "asim_input_skims_omx_archived": restored_dir / "skims.omx",
-    }
-    for key, path in archived_paths.items():
-        path.write_text(key, encoding="utf-8")
-
-    tracker = DummyTracker(
-        runs_by_target={
-            _query_key(
-                year=2018,
-                iteration=1,
-                model="activitysim_postprocess",
-                stage="activity_demand_postprocess",
-                phase="postprocess",
-                status="completed",
-            ): "asim-post-1",
-        },
-        outputs_by_run={
-            "asim-post-1": {key: str(path) for key, path in archived_paths.items()},
-        },
-        materialized_by_run={"asim-post-1": str(restored_dir)},
-    )
-
-    result = restart_runtime.hydrate_rewind_runner_inputs(
-        tracker=tracker,
-        settings=_settings(),
-        state=_state(sub_stage=WorkflowState.Stage.activity_demand),
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=workspace.full_path,
-        archive_run_dir=str(tmp_path / "archive"),
-        archive_state_path=str(tmp_path / "archive" / "run_state.yaml"),
-        allow_rewind_resume=True,
-        workflow_stage=WorkflowState.Stage,
-        read_current_stage_fn=lambda _path: (
-            2018,
-            WorkflowState.Stage.traffic_assignment,
-            2,
-            False,
-            None,
-            None,
-            True,
-        ),
-        query_facet=None,
-    )
-
-    assert result is not None
-    assert result["success"] is True
-    assert Path(workspace.get_asim_mutable_data_dir(), "skims.omx").read_text(
-        encoding="utf-8"
-    ) == "asim_input_skims_omx_archived"
-    assert not Path(workspace.get_asim_runtime_cache_dir(), "skims.zarr").exists()
-    assert coupler.get("zarr_skims") is None
-
-
+@pytest.mark.skip(reason="legacy exact-rewind helper; not part of replay-first restart")
 def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
     tmp_path,
 ):
@@ -812,6 +528,7 @@ def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
     assert coupler.get("beam_output_experienced_plans_xml").endswith(".xml.gz")
 
 
+@pytest.mark.skip(reason="legacy exact-rewind helper; not part of replay-first restart")
 def test_hydrate_rewind_runner_inputs_fails_when_activitysim_snapshots_incomplete(
     tmp_path,
 ):

@@ -168,18 +168,6 @@ def _beam_postprocess_expected_inputs(settings, state, workspace):
 
 
 def _beam_postprocess_expected_outputs(settings, state, workspace):
-    if getattr(settings, "write_skims_to_omx", False) or (
-        getattr(getattr(settings, "run", None), "models", None) is not None
-        and getattr(getattr(settings.run, "models", None), "land_use", None)
-        == "urbansim"
-    ):
-        return {
-            "final_skims_omx": str(
-                Path(workspace.get_beam_mutable_data_dir())
-                / settings.run.region
-                / get_beam_omx_skims_name(settings)
-            )
-        }
     if getattr(settings, "activitysim", None) is not None:
         candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         if os.path.exists(candidate):

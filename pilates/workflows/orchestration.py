@@ -34,16 +34,9 @@ from pilates.workflows.catalog import (
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
-from pilates.atlas.outputs import (
-    AtlasPreprocessOutputs,
-)
 from pilates.beam.outputs import (
     BeamPreprocessOutputs,
 )
-from pilates.urbansim.outputs import (
-    UrbanSimPreprocessOutputs,
-)
-from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -163,16 +156,11 @@ def _resolved_input_keys_for_step(
     binding: Optional[BindingResult],
 ) -> Optional[Set[str]]:
     if binding is not None:
-        resolved_keys: Set[str] = set()
         if isinstance(binding.inputs, Mapping):
-            resolved_keys.update(str(key) for key in binding.inputs.keys())
-        resolved_keys.update(_normalize_key_iter(binding.input_keys))
-        resolved_keys.update(_normalize_key_iter(binding.optional_input_keys))
-        return resolved_keys
+            return {str(key) for key in binding.inputs.keys()}
+        return None
     if step.inputs is not None:
         return {str(key) for key in step.inputs.keys()}
-    if step.input_keys is not None:
-        return {str(key) for key in step.input_keys}
     return None
 
 
@@ -406,9 +394,6 @@ def _emit_output_hydration_audit(
         used_tracker_output_lookup=bool(
             recovery_meta.get("used_tracker_output_lookup", False)
         ),
-        used_cached_artifact_recovery=bool(
-            recovery_meta.get("used_cached_artifact_recovery", False)
-        ),
         used_compatibility_fallback=bool(
             recovery_meta.get("used_compatibility_fallback", False)
         ),
@@ -444,9 +429,6 @@ def _emit_step_resolution_audit(
         used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
         used_tracker_output_lookup=bool(
             recovery_meta.get("used_tracker_output_lookup", False)
-        ),
-        used_cached_artifact_recovery=bool(
-            recovery_meta.get("used_cached_artifact_recovery", False)
         ),
         used_compatibility_fallback=bool(
             recovery_meta.get("used_compatibility_fallback", False)
@@ -597,7 +579,9 @@ def _build_step_run_kwargs(
             step=step,
             binding=resolved_binding,
         )
-        if resolved_input_keys is not None:
+        if resolved_input_keys is None:
+            resolved_input_paths = {}
+        else:
             requested_input_paths = {
                 str(key): value
                 for key, value in resolved_input_paths.items()
@@ -1332,8 +1316,6 @@ def run_manifested_steps(
                 resolution_mode = "overwrite_rerun_after_cache_hit"
             elif recovery_meta.get("used_output_recoverer"):
                 resolution_mode = "cache_hit_recoverer"
-            elif recovery_meta.get("used_cached_artifact_recovery"):
-                resolution_mode = "cache_hit_cached_artifacts"
             elif recovery_meta.get("initial_cache_hit"):
                 resolution_mode = "cache_hit_direct"
             else:
@@ -1519,8 +1501,6 @@ def run_workflow(
             resolution_mode = "overwrite_rerun_after_cache_hit"
         elif recovery_meta.get("used_output_recoverer"):
             resolution_mode = "cache_hit_recoverer"
-        elif recovery_meta.get("used_cached_artifact_recovery"):
-            resolution_mode = "cache_hit_cached_artifacts"
         elif recovery_meta.get("initial_cache_hit"):
             resolution_mode = "cache_hit_direct"
         else:
@@ -1652,168 +1632,6 @@ def _expand_stale_manifest_steps(
             if dependent in scope and dependent not in expanded:
                 pending.append(dependent)
     return expanded
-
-
-def _recover_cached_outputs(
-    *,
-    step_name: str,
-    outputs_holder: StepOutputsHolder,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    coupler: CouplerProtocol,
-    step_inputs: Optional[Mapping[str, Any]] = None,
-    cached_outputs: Optional[Mapping[str, Any]] = None,
-    run_id: Optional[str] = None,
-    publish_outputs: bool = True,
-    audit_meta: Optional[Dict[str, Any]] = None,
-) -> Optional[Any]:
-    """
-    Best-effort output recovery for cache hits that skip step execution.
-    """
-    if audit_meta is None:
-        audit_meta = {}
-    _cached_run_outputs_by_key: Optional[Dict[str, Any]] = None
-
-    def _cached_run_outputs() -> Dict[str, Any]:
-        nonlocal _cached_run_outputs_by_key
-        if _cached_run_outputs_by_key is not None:
-            return _cached_run_outputs_by_key
-        audit_meta["used_tracker_output_lookup"] = True
-        _cached_run_outputs_by_key = load_tracker_run_outputs(
-            run_id,
-            logger=logger,
-            log_context="workflow cache-hit recovery",
-        )
-        return _cached_run_outputs_by_key
-
-    def _recovered_cached_paths() -> Dict[str, Path]:
-        merged = merge_canonical_output_mappings(
-            cached_outputs,
-            _cached_run_outputs(),
-        )
-        recovered_paths: Dict[str, Path] = {}
-        for key, value in merged.items():
-            path = _existing_path(value)
-            if path is None:
-                continue
-            recovered_paths[key] = Path(path)
-        return recovered_paths
-
-    def _recover_from_cached_artifacts() -> Optional[Any]:
-        recovered_paths = _recovered_cached_paths()
-        if not recovered_paths:
-            return None
-        audit_meta["used_cached_artifact_recovery"] = True
-        if step_name == "urbansim_preprocess":
-            return UrbanSimPreprocessOutputs(
-                usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
-                prepared_inputs=recovered_paths,
-            )
-        if step_name == "atlas_preprocess":
-            return AtlasPreprocessOutputs(
-                atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
-                prepared_inputs=recovered_paths,
-            )
-        return None
-
-    def _resolve_cached_value(key: str) -> Any:
-        merged = merge_canonical_output_mappings(
-            cached_outputs,
-            _cached_run_outputs(),
-        )
-        if key in merged:
-            return merged[key]
-        resolved = resolve_coupler_value(coupler, key)
-        return resolved.value
-
-    def _existing_path(value: Any) -> Optional[str]:
-        return artifact_to_existing_path(
-            value,
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-
-    def _existing_path_str(path: Any) -> Optional[str]:
-        if path is None:
-            return None
-        return resolve_existing_path(
-            str(path),
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-
-    def _resolved_content_hash(
-        value: Any,
-        *,
-        key: str,
-        fallback_path: Any = None,
-    ) -> Optional[str]:
-        candidate = value if value is not None else fallback_path
-        artifact = resolve_artifact_from_value(
-            candidate,
-            key=key,
-            workspace=workspace,
-        )
-        content_hash = getattr(artifact, "content_hash", None) or getattr(
-            artifact, "hash", None
-        )
-        if content_hash:
-            return str(content_hash)
-        return None
-
-    def _finalize_recovered_outputs(outputs: Any) -> Any:
-        validate = getattr(outputs, "validate", None)
-        if callable(validate):
-            try:
-                validate(
-                    context=ValidationContext(
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        step_name=step_name,
-                    )
-                )
-            except (AssertionError, FileNotFoundError) as exc:
-                logger.warning(
-                    "Cached outputs for %s failed validation; recovery unavailable (%s)",
-                    step_name,
-                    exc,
-                )
-                return None
-        outputs_holder.set_attribute(step_name, outputs)
-        if publish_outputs:
-            _update_coupler_from_outputs(outputs, coupler=coupler, workspace=workspace)
-        return outputs
-
-    if step_name == "beam_preprocess":
-        prepared_inputs: Dict[str, Path] = {}
-        if step_inputs:
-            allowed_keys = {
-                BEAM_PLANS_IN,
-                BEAM_HOUSEHOLDS_IN,
-                BEAM_PERSONS_IN,
-                LINKSTATS_WARMSTART,
-            }
-            for key, value in step_inputs.items():
-                if key not in allowed_keys:
-                    continue
-                path = _existing_path(value)
-                if path:
-                    prepared_inputs[key] = Path(path)
-        if not prepared_inputs:
-            return None
-        return _finalize_recovered_outputs(
-            BeamPreprocessOutputs(
-                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-                prepared_inputs=prepared_inputs,
-            )
-        )
-    else:
-        outputs = _recover_from_cached_artifacts()
-        if outputs is None:
-            return None
-        return _finalize_recovered_outputs(outputs)
 
 
 def _update_coupler_from_outputs(

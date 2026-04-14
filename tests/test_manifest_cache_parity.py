@@ -34,7 +34,6 @@ from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
-    _recover_cached_outputs,
     _recover_step_outputs,
     _update_coupler_from_outputs,
     run_manifested_steps,
@@ -318,7 +317,7 @@ def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
     def _fake_recover_step_outputs(*, outputs_holder, audit_meta=None, **_kwargs):
         if audit_meta is not None:
             audit_meta["used_output_recoverer"] = True
-            audit_meta["used_tracker_output_lookup"] = True
+            audit_meta["used_tracker_output_lookup"] = False
         outputs_holder.activitysim_preprocess = recovered_outputs
         return recovered_outputs
 
@@ -361,7 +360,7 @@ def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
     assert step_resolution["step_name"] == "activitysim_preprocess"
     assert step_resolution["resolution_mode"] == "cache_hit_recoverer"
     assert step_resolution["used_output_recoverer"] is True
-    assert step_resolution["used_tracker_output_lookup"] is True
+    assert step_resolution["used_tracker_output_lookup"] is False
 
     assert hydration_check["step_name"] == "activitysim_preprocess"
     assert hydration_check["hydration_complete"] is True
