@@ -1197,6 +1197,8 @@ def test_epoch_tagging_proxy_preserves_step_local_metadata_without_adding_keys()
 def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_metadata():
     contract = run_module.scenario_runtime.build_scenario_runtime_contract(
         settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
         scenario_id="scenario-alpha",
         seed=777,
         cache_epoch=5,

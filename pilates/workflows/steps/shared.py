@@ -191,6 +191,7 @@ import logging
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
+from types import SimpleNamespace
 from typing import (
     Any,
     Callable,
@@ -281,6 +282,8 @@ from pilates.workflows.catalog import (
     runtime_step_dependencies_from_catalog,
     step_dependencies_from_catalog,
     step_outputs_classes_from_catalog,
+    workflow_step_key_match,
+    workflow_step_spec_for_step_name,
 )
 from pilates.workflows.step_consist_meta import consist_step_meta
 from workflow_state import WorkflowState
@@ -964,6 +967,14 @@ STEP_DEPENDENCIES = step_dependencies_from_catalog()
 STEP_RUNTIME_DEPENDENCIES = runtime_step_dependencies_from_catalog()
 
 DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
+STRICT_OUTPUT_PATH_CONTRACT_STEPS = frozenset(
+    {
+        "activitysim_preprocess",
+        "activitysim_run",
+        "activitysim_postprocess",
+        "atlas_postprocess",
+    }
+)
 
 
 def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> None:
@@ -1001,11 +1012,191 @@ def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
     return None
 
 
+def _step_meta_value(step_meta: Any, name: str) -> Any:
+    if step_meta is None:
+        return None
+    direct = getattr(step_meta, name, None)
+    if direct is not None:
+        return direct
+    extra = getattr(step_meta, "extra", None) or {}
+    if isinstance(extra, Mapping):
+        return extra.get(name)
+    return None
+
+
+def _provider_source_label(provider: Any) -> str:
+    if provider is None:
+        return "<none>"
+    module = getattr(provider, "__module__", None)
+    qualname = getattr(provider, "__qualname__", None) or getattr(
+        provider, "__name__", None
+    )
+    if module and qualname:
+        return f"{module}.{qualname}"
+    if qualname:
+        return qualname
+    return repr(provider)
+
+
+def _provider_fix_location(provider: Any) -> str:
+    source_file = pyinspect.getsourcefile(provider)
+    if source_file:
+        return source_file
+    return _provider_source_label(provider)
+
+
+def _invoke_contract_provider(
+    provider: Callable[..., Any],
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Any:
+    signature = pyinspect.signature(provider)
+    params = list(signature.parameters.values())
+    if not params:
+        return provider()
+
+    context = SimpleNamespace(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        runtime_settings=settings,
+        runtime_state=state,
+        runtime_workspace=workspace,
+    )
+    keyword_values = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    accepts_var_kwargs = any(
+        param.kind == pyinspect.Parameter.VAR_KEYWORD for param in params
+    )
+    kwargs = {
+        name: value
+        for name, value in keyword_values.items()
+        if accepts_var_kwargs or name in signature.parameters
+    }
+    keyword_error: Optional[TypeError] = None
+    if kwargs:
+        try:
+            return provider(**kwargs)
+        except TypeError as exc:
+            keyword_error = exc
+
+    positional_params = [
+        param
+        for param in params
+        if param.kind
+        in (
+            pyinspect.Parameter.POSITIONAL_ONLY,
+            pyinspect.Parameter.POSITIONAL_OR_KEYWORD,
+            pyinspect.Parameter.VAR_POSITIONAL,
+        )
+    ]
+    if positional_params:
+        return provider(context)
+
+    if keyword_error is not None:
+        raise keyword_error
+    raise TypeError(
+        "provider must accept settings/state/workspace keyword args or a single context object"
+    )
+
+
+def _resolve_contract_provider_mapping(
+    provider: Any,
+    *,
+    step_name: str,
+    provider_name: str,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Optional[Mapping[str, Any]]:
+    if provider is None:
+        return None
+    resolved = provider
+    if callable(provider):
+        try:
+            resolved = _invoke_contract_provider(
+                provider,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Step '{step_name}': failed to evaluate {provider_name} provider "
+                f"{_provider_source_label(provider)}. Fix: inspect {_provider_fix_location(provider)}. "
+                f"Original error: {exc}"
+            ) from exc
+    if resolved is None:
+        return None
+    if not isinstance(resolved, Mapping):
+        raise RuntimeError(
+            f"Step '{step_name}': {provider_name} provider {_provider_source_label(provider)} "
+            f"must return a mapping, got {type(resolved).__name__}. "
+            f"Fix: inspect {_provider_fix_location(provider)}."
+        )
+    return resolved
+
+
+def _validate_contract_provider_keys(
+    *,
+    errors: list[str],
+    step_name: str,
+    direction: str,
+    provider_name: str,
+    provider: Any,
+    required_keys: Sequence[str],
+    optional_keys: Sequence[str],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> None:
+    mapping = _resolve_contract_provider_mapping(
+        provider,
+        step_name=step_name,
+        provider_name=provider_name,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if mapping is None:
+        return
+
+    canonical_provider_keys: Set[str] = set()
+    for raw_key in mapping.keys():
+        if not isinstance(raw_key, str):
+            errors.append(
+                f"Step '{step_name}': {provider_name} provider returned non-string {direction} key "
+                f"{raw_key!r}. Fix: inspect {_provider_fix_location(provider)}."
+            )
+            continue
+        match = workflow_step_key_match(step_name, raw_key, direction=direction)
+        canonical_provider_keys.add(match.canonical_key)
+
+    missing_required = [
+        key for key in required_keys if key not in canonical_provider_keys
+    ]
+    if missing_required:
+        errors.append(
+            f"Step '{step_name}': {provider_name} provider {_provider_source_label(provider)} "
+            f"is missing required catalog {direction} keys {missing_required}. "
+            f"Provider returned {sorted(canonical_provider_keys)}. "
+            f"Fix: inspect {_provider_fix_location(provider)}."
+        )
+
+
 def validate_workflow_step_contracts(
     *,
     declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
     allow_untracked_declared: Optional[Set[str]] = None,
     step_refs: Optional[Iterable[Any]] = None,
+    settings: Any = None,
+    state: Any = None,
+    workspace: Any = None,
 ) -> None:
     """
     Validate internal workflow step contracts.
@@ -1154,6 +1345,7 @@ def validate_workflow_step_contracts(
         for step_name in tracked_declared_names:
             outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
             step_func = declared_by_model.get(step_name)
+            spec = workflow_step_spec_for_step_name(step_name)
             if outputs_class is None or step_func is None:
                 continue
             required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
@@ -1173,6 +1365,40 @@ def validate_workflow_step_contracts(
                     f"{metadata_outputs}. Fix: remove metadata override or update declared_outputs in "
                     f"{outputs_class.__name__}."
                 )
+            if (
+                step_meta is not None
+                and settings is not None
+                and state is not None
+                and workspace is not None
+            ):
+                input_paths_provider = _step_meta_value(step_meta, "input_paths")
+                if input_paths_provider is not None:
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="input",
+                        provider_name="input_paths",
+                        provider=input_paths_provider,
+                        required_keys=tuple(spec.input_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_input_keys) if spec is not None else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
+                if step_name in STRICT_OUTPUT_PATH_CONTRACT_STEPS:
+                    output_paths_provider = _step_meta_value(step_meta, "output_paths")
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="output",
+                        provider_name="output_paths",
+                        provider=output_paths_provider,
+                        required_keys=tuple(spec.output_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_output_keys) if spec is not None else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
 
     if step_refs is not None:
         for step_ref in step_refs:

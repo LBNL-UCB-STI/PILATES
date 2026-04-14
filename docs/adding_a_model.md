@@ -31,6 +31,22 @@ If your new step behaves like `activitysim_compile` or `postprocessing`, it is
 not a standard tracked typed step. In that case, reuse the current custom
 patterns instead of forcing it through `StandardStepSpec`.
 
+## Contract Surfaces
+
+For tracked steps, keep the contract layers in this order:
+
+1. `WorkflowStepSpec` is the semantic source of truth
+2. `StandardStepSpec` is the standard step-factory construction surface
+3. model components own stable path knowledge through
+   `expected_inputs(settings, state, workspace)` and
+   `expected_outputs(settings, state, workspace)` when they can
+4. restart/replay hooks are exceptional and should be added only when the
+   default replay-first path is not enough
+
+If a step uses requested replay/restart staging, publish canonical destination
+paths through `input_paths`. Do not make requested staging depend on local file
+existence.
+
 ## If Restart Does Not Matter
 
 There are two simpler paths when you do not care about custom restart behavior.
@@ -178,6 +194,7 @@ Typical design rules:
 - use explicit `Path` fields for important artifacts
 - use `dict[str, Path]` only when the output family is open-ended
 - declare stable workflow-facing keys in `declared_outputs`
+- use `optional_outputs` for conditional stable artifacts
 - map dataclass fields to coupler-facing keys with `record_keys` when useful
 - define `required_path_fields`, `optional_path_fields`, and validators
 
@@ -250,6 +267,10 @@ Treat the catalog as the static contract for the step. The runtime uses it for
 validation, schema declaration, planning, restart query derivation, and
 documentation.
 
+Keep the catalog aligned with the step metadata and provider surfaces. If
+catalog semantics, `input_paths`/`output_paths`, and typed outputs disagree,
+startup validation should fail.
+
 ### 5. Add a `StepOutputsHolder` field
 
 Add the step output field to `pilates/workflows/steps/shared.py`:
@@ -299,6 +320,10 @@ For most tracked typed steps, the current default pattern is:
 2. wrap those callbacks in `StandardStepSpec`
 3. return `build_standard_step(coupler=..., outputs_holder=..., spec=...)`
 
+When a model component already knows the canonical artifact layout, point
+`input_paths` and `output_paths` at the model-owned `expected_*` providers
+instead of re-deriving those paths inside the step module.
+
 Use the current standard examples first:
 
 - `make_activitysim_preprocess_step(...)`
@@ -316,6 +341,10 @@ tracked typed workflow step. Current examples are:
 
 - `activitysim_compile`
 - `postprocessing`
+
+If you need a custom recoverer or replayer, write down the semantic reason in
+the step module. “Historical compatibility” by itself is not a good enough
+reason unless you can name the workflow boundary being preserved.
 
 ### 7. Register the schema-step builder
 

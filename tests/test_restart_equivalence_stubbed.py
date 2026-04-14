@@ -583,6 +583,8 @@ def _stage_runner(
 ) -> None:
     contract = launcher_runtime._build_scenario_runtime_contract(
         settings=runtime.settings,
+        state=runtime.state,
+        workspace=runtime.workspace,
         scenario_id=runtime.scenario_id,
         seed=runtime.seed,
         cache_epoch=resolve_cache_epoch(runtime.settings),
@@ -1088,6 +1090,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
 
     contract = launcher_runtime._build_scenario_runtime_contract(
         settings=resumed_runtime.settings,
+        state=resumed_runtime.state,
+        workspace=resumed_runtime.workspace,
         scenario_id=resumed_runtime.scenario_id,
         seed=resumed_runtime.seed,
         cache_epoch=resolve_cache_epoch(resumed_runtime.settings),

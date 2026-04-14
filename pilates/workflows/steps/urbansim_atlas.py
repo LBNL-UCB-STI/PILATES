@@ -18,7 +18,10 @@ from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -244,42 +247,29 @@ def _recover_atlas_postprocess_outputs(
     expected_outputs = AtlasPostprocessor.expected_outputs(
         settings, state, workspace
     )
-    if "atlas_vehicles2_output" not in recovered_paths:
+    if ATLAS_VEHICLES2_OUTPUT not in recovered_paths:
         vehicles2_path = artifact_to_existing_path(
-            expected_outputs.get("atlas_vehicles2_output"),
+            expected_outputs.get(ATLAS_VEHICLES2_OUTPUT),
             workspace=workspace,
             materialize_from_archive=True,
         )
         if vehicles2_path is not None:
-            recovered_paths["atlas_vehicles2_output"] = Path(vehicles2_path)
-    if "atlas_vehicles2_output" not in recovered_paths:
+            recovered_paths[ATLAS_VEHICLES2_OUTPUT] = Path(vehicles2_path)
+    if ATLAS_VEHICLES2_OUTPUT not in recovered_paths:
         return None
-    usim_datastore_h5 = recovered_paths.get(USIM_POPULATION_SOURCE_H5) or recovered_paths.get(
-        USIM_H5_UPDATED
-    ) or recovered_paths.get(USIM_DATASTORE_H5)
+    usim_datastore_h5 = (
+        recovered_paths.get(USIM_POPULATION_SOURCE_H5)
+        or recovered_paths.get(USIM_H5_UPDATED)
+        or recovered_paths.get(USIM_DATASTORE_H5)
+    )
     if usim_datastore_h5 is None:
-        recovery_candidates = []
-        if step_inputs:
-            recovery_candidates.extend(
-                step_inputs.get(key)
-                for key in (
-                    USIM_POPULATION_SOURCE_H5,
-                    USIM_H5_UPDATED,
-                    USIM_DATASTORE_H5,
-                    USIM_DATASTORE_BASE_H5,
-                )
-            )
-        recovery_candidates.append(expected_outputs.get("usim_datastore_h5"))
-        for candidate in recovery_candidates:
-            candidate_path = artifact_to_existing_path(
-                candidate,
-                workspace=workspace,
-                materialize_from_archive=True,
-            )
-            if candidate_path is None:
-                continue
+        candidate_path = artifact_to_existing_path(
+            expected_outputs.get(USIM_POPULATION_SOURCE_H5),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if candidate_path is not None:
             usim_datastore_h5 = Path(candidate_path)
-            break
     if usim_datastore_h5 is None:
         return None
     return AtlasPostprocessOutputs(

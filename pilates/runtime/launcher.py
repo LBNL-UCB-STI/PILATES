@@ -279,12 +279,16 @@ def _get_consist_schemas() -> Optional[list[type[Any]]]:
 def _build_scenario_runtime_contract(
     *,
     settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
+        state=state,
+        workspace=workspace,
         scenario_id=scenario_id,
         seed=seed,
         cache_epoch=cache_epoch,
@@ -865,6 +869,8 @@ def main(
     # The coupler is a shared dict-like object for passing artifacts between steps.
     scenario_contract = _build_scenario_runtime_contract(
         settings=settings,
+        state=state,
+        workspace=workspace,
         scenario_id=scenario_id,
         seed=run_seed,
         cache_epoch=cache_epoch,

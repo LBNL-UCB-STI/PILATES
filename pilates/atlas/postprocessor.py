@@ -15,6 +15,12 @@ from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import artifact_to_existing_path, enqueue_archive_copy
 from pilates.utils.state_access import uses_input_datastore
+from pilates.workflows.artifact_keys import (
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
+)
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
 
@@ -381,10 +387,10 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
         atlas_output_dir = workspace.get_atlas_output_dir()
         return {
-            "atlas_output_dir": (
+            ATLAS_OUTPUT_DIR: (
                 atlas_output_dir if os.path.exists(atlas_output_dir) else None
             ),
-            "usim_datastore_h5": (
+            USIM_DATASTORE_CURRENT_H5: (
                 usim_output_path if usim_output_path.exists() else None
             ),
         }
@@ -400,8 +406,9 @@ class AtlasPostprocessor(GenericPostprocessor):
         -----
         Output keys
             - ``atlas_output_dir``: ATLAS output directory after postprocessing.
-            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) emitted
-              for subsequent model stages.
+            - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
+              selected as the downstream population source.
+            - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
         Related docs
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
@@ -416,10 +423,10 @@ class AtlasPostprocessor(GenericPostprocessor):
             else None
         )
         return {
-            "atlas_output_dir": workspace.get_atlas_output_dir(),
-            "usim_datastore_h5": usim_output_path,
+            ATLAS_OUTPUT_DIR: workspace.get_atlas_output_dir(),
+            USIM_POPULATION_SOURCE_H5: usim_output_path,
             **(
-                {"atlas_vehicles2_output": vehicles2_path}
+                {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
                 if vehicles2_path is not None
                 else {}
             ),
@@ -510,7 +517,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 "ATLAS postprocess did not produce vehicles2 output for year "
                 f"{output_year}"
             )
-        output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
+        output_paths[ATLAS_VEHICLES2_OUTPUT] = Path(atlas_veh2_file)
 
         # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
         atlas_input_root = workspace.get_atlas_mutable_input_dir()

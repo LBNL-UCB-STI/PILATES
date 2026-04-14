@@ -18,17 +18,24 @@ integration drift is caught and what the expected startup failure looks like.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from consist import define_step
 
+from pilates.activitysim.runner import ActivitysimRunner
+from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_PERSONS_IN,
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     LINKSTATS,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
@@ -87,11 +94,104 @@ def _declared_schema_steps():
     ]
 
 
+def _validation_runtime_context(tmp_path: Path):
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam" / "output"),
+        get_atlas_mutable_input_dir=lambda: str(tmp_path / "atlas" / "input"),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "123"}},
+        ),
+        runtime=SimpleNamespace(
+            flags=SimpleNamespace(
+                activity_demand_enabled=True,
+                vehicle_ownership_model_enabled=True,
+            ),
+        ),
+        activitysim=SimpleNamespace(persist_sharrow_cache=True),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="scenario"),
+        atlas=SimpleNamespace(model_dump=lambda: {"max_retries": 1}),
+    )
+    state = SimpleNamespace(
+        year=2025,
+        current_year=2025,
+        forecast_year=2025,
+        iteration=1,
+        current_inner_iter=1,
+        start_year=2017,
+        is_start_year=lambda: False,
+    )
+    return settings, state, workspace
+
+
 def test_validate_workflow_step_contracts_passes_for_current_setup():
     """Happy-path: current declared steps satisfy all contract invariants."""
     step_shared.validate_workflow_step_contracts(
         declared_steps=_declared_schema_steps()
     )
+
+
+def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    settings, state, workspace = _validation_runtime_context(tmp_path)
+
+    monkeypatch.setattr(
+        AtlasPostprocessor,
+        "expected_outputs",
+        staticmethod(
+            lambda *_args, **_kwargs: {
+                "atlas_output_dir": str(tmp_path / "atlas" / "output"),
+                "atlas_vehicles2_output": str(tmp_path / "atlas" / "output" / "vehicles2_2025.csv"),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="atlas_postprocess.*missing required catalog output keys"):
+        step_shared.validate_workflow_step_contracts(
+            declared_steps=_declared_schema_steps(),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+
+def test_validate_workflow_step_contracts_flags_missing_required_input_provider_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    settings, state, workspace = _validation_runtime_context(tmp_path)
+
+    monkeypatch.setattr(
+        ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(
+            lambda *_args, **_kwargs: {
+                ASIM_LAND_USE_IN: str(tmp_path / "activitysim" / "data" / "land_use.csv"),
+                ASIM_HOUSEHOLDS_IN: str(tmp_path / "activitysim" / "data" / "households.csv"),
+                ASIM_PERSONS_IN: str(tmp_path / "activitysim" / "data" / "persons.csv"),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="activitysim_run.*missing required catalog input keys.*zarr_skims"):
+        step_shared.validate_workflow_step_contracts(
+            declared_steps=_declared_schema_steps(),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
 
 
 def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatch):

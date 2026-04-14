@@ -4,7 +4,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
-from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 
 if TYPE_CHECKING:
@@ -120,6 +123,11 @@ class AtlasPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        USIM_POPULATION_SOURCE_H5,
+        ATLAS_VEHICLES2_OUTPUT,
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
@@ -146,7 +154,7 @@ class AtlasPostprocessOutputs(StepOutputsBase):
             raise AssertionError(
                 "AtlasPostprocessOutputs must include the updated UrbanSim datastore H5."
             )
-        if "atlas_vehicles2_output" not in self.processed_outputs:
+        if ATLAS_VEHICLES2_OUTPUT not in self.processed_outputs:
             raise AssertionError(
-                "AtlasPostprocessOutputs must include atlas_vehicles2_output."
+                f"AtlasPostprocessOutputs must include {ATLAS_VEHICLES2_OUTPUT}."
             )
