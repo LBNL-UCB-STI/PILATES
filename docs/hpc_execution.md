@@ -181,6 +181,8 @@ The actual PILATES workflow is the same, but HPC adds operational differences:
 - node-local environment/bootstrap behavior
 - partition-specific memory and CPU defaults
 - more frequent need for restart-safe archive paths and snapshots
+- `run.output_directory` is the durable archive root on shared scratch, while `run.local_workspace_root` is the mutable node-local workspace.
+- Logged artifacts are mirrored through the archive helper layer; Consist DB snapshots and mirrors are handled separately.
 
 ## Related Docs
 

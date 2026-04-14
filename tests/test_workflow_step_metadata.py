@@ -85,6 +85,22 @@ class _FakeScenario:
         return SimpleNamespace(cache_hit=False)
 
 
+def _step_meta_input_paths(meta):
+    input_paths = getattr(meta, "input_paths", None)
+    if input_paths is not None:
+        return input_paths
+    extra = getattr(meta, "extra", None) or {}
+    return extra.get("input_paths")
+
+
+def _step_meta_input_materialization(meta):
+    input_materialization = getattr(meta, "input_materialization", None)
+    if input_materialization is not None:
+        return input_materialization
+    extra = getattr(meta, "extra", None) or {}
+    return extra.get("input_materialization")
+
+
 def test_make_step_factories_attach_consist_metadata():
     coupler = _DummyCoupler()
     holder = StepOutputsHolder()
@@ -168,9 +184,8 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
 
     assert preprocess_meta.input_binding == "paths"
     assert preprocess_meta.cache_hydration == "metadata"
-    assert isinstance(preprocess_meta.extra, dict)
-    assert preprocess_meta.extra.get("input_materialization") == "requested"
-    preprocess_inputs = preprocess_meta.extra["input_paths"](
+    assert _step_meta_input_materialization(preprocess_meta) == "requested"
+    preprocess_inputs = _step_meta_input_paths(preprocess_meta)(
         settings=settings, state=state, workspace=workspace
     )
     assert preprocess_inputs[FINAL_SKIMS_OMX] == str(
@@ -188,9 +203,8 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
 
     assert run_meta.input_binding == "paths"
     assert run_meta.cache_hydration == "metadata"
-    assert isinstance(run_meta.extra, dict)
-    assert run_meta.extra.get("input_materialization") == "requested"
-    run_inputs = run_meta.extra["input_paths"](
+    assert _step_meta_input_materialization(run_meta) == "requested"
+    run_inputs = _step_meta_input_paths(run_meta)(
         settings=settings, state=state, workspace=workspace
     )
     assert run_inputs[ZARR_SKIMS] == str(
@@ -214,9 +228,8 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
 
     assert postprocess_meta.input_binding == "paths"
     assert postprocess_meta.cache_hydration == "metadata"
-    assert isinstance(postprocess_meta.extra, dict)
-    assert postprocess_meta.extra.get("input_materialization") == "requested"
-    post_inputs = postprocess_meta.extra["input_paths"](
+    assert _step_meta_input_materialization(postprocess_meta) == "requested"
+    post_inputs = _step_meta_input_paths(postprocess_meta)(
         settings=settings, state=state, workspace=workspace
     )
     assert post_inputs["beam_plans_asim_out"] == str(

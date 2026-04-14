@@ -182,6 +182,26 @@ def _run_activity_demand_phase(
     if (
         bool(getattr(state, "is_restart_run", False))
         and state.is_enabled(WorkflowState.Stage.land_use)
+    ):
+        get_value = getattr(coupler, "get", None)
+        missing_restart_roles = [
+            key
+            for key in (
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+            )
+            if key not in resolved_usim_inputs
+            and not (callable(get_value) and get_value(key) is not None)
+        ]
+        if missing_restart_roles:
+            raise RuntimeError(
+                "Restart metadata is missing required post-land-use UrbanSim H5 roles "
+                f"for ActivitySim: {', '.join(missing_restart_roles)}. "
+                "This restart likely predates the explicit population-source H5 role split."
+            )
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and state.is_enabled(WorkflowState.Stage.land_use)
         and not resolved_usim_inputs
     ):
         from .supply_demand_resume import (
@@ -216,23 +236,6 @@ def _run_activity_demand_phase(
                 preprocess_explicit_inputs = {
                     USIM_POPULATION_SOURCE_H5: population_source,
                 }
-        elif bool(getattr(state, "is_restart_run", False)):
-            get_value = getattr(coupler, "get", None)
-            missing_restart_roles = [
-                key
-                for key in (
-                    USIM_POPULATION_SOURCE_H5,
-                    USIM_DATASTORE_CURRENT_H5,
-                )
-                if key not in resolved_usim_inputs
-                and not (callable(get_value) and get_value(key) is not None)
-            ]
-            if missing_restart_roles:
-                raise RuntimeError(
-                    "Restart metadata is missing required post-land-use UrbanSim H5 roles "
-                    f"for ActivitySim: {', '.join(missing_restart_roles)}. "
-                    "This restart likely predates the explicit population-source H5 role split."
-                )
 
         preprocess_binding = build_binding_plan(
                 step_name="activitysim_preprocess",

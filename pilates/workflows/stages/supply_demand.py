@@ -124,7 +124,11 @@ def run_supply_demand_stage(
         total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, Any]] = None
     resumed_usim_inputs = dict(usim_inputs)
-    if bool(getattr(state, "is_restart_run", False)) and not resumed_usim_inputs:
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and not resumed_usim_inputs
+        and not state.is_enabled(WorkflowState.Stage.land_use)
+    ):
         resumed_usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
             coupler=coupler,
             workspace=workspace,

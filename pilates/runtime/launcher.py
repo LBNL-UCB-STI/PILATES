@@ -200,6 +200,40 @@ def _resolve_cache_epoch(settings: PilatesConfig) -> int:
     return scenario_runtime.resolve_cache_epoch(settings)
 
 
+def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
+    """
+    Resolve the archive and mutable run roots for the current execution.
+
+    The launcher owns this topology:
+    - ``run.output_directory`` is the durable archive root on shared scratch.
+    - ``run.local_workspace_root`` is the mutable node-local workspace root.
+    """
+    output_directory = settings.run.output_directory
+    if not output_directory:
+        raise ValueError("output_directory not found in config")
+    archive_root = os.path.realpath(os.path.expandvars(output_directory))
+    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
+    if local_workspace_root:
+        local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
+    else:
+        local_root = archive_root
+    return archive_root, local_root
+
+
+def _configure_run_storage_environment(
+    *,
+    archive_run_dir: str,
+    local_run_dir: str,
+    enable_archive_copy: bool,
+) -> None:
+    """
+    Export the runtime storage topology for helpers that archive logged outputs.
+    """
+    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
+    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
+    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1" if enable_archive_copy else "0"
+
+
 def _build_schema_steps() -> List[Callable[..., Any]]:
     return scenario_runtime.build_schema_steps()
 
@@ -547,15 +581,7 @@ def main(
     _log_local_storage_info()
 
     # 2. SETUP PATHS
-    output_directory = settings.run.output_directory
-    if not output_directory:
-        raise ValueError("output_directory not found in config")
-    output_path = os.path.realpath(os.path.expandvars(output_directory))
-    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
-    if local_workspace_root:
-        local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
-    else:
-        local_root = output_path
+    output_path, local_root = _resolve_run_storage_roots(settings)
 
     # Split run roots:
     # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
@@ -581,6 +607,11 @@ def main(
 
     archive_run_dir = os.path.join(output_path, run_name)
     local_run_dir = os.path.join(local_root, run_name)
+    logger.info(
+        "Run storage topology resolved: archive_run_dir=%s local_run_dir=%s",
+        archive_run_dir,
+        local_run_dir,
+    )
     _set_run_failure_context(
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
@@ -589,10 +620,10 @@ def main(
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
 
-    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
-    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
-    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = (
-        "1" if settings.run.enable_archive_copy else "0"
+    _configure_run_storage_environment(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        enable_archive_copy=bool(getattr(settings.run, "enable_archive_copy", False)),
     )
 
     # 3. INITIALIZE CONSIST TRACKER

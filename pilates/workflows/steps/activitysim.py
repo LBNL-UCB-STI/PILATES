@@ -4,7 +4,6 @@ import inspect
 import logging
 import os
 import re
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, cast
 
@@ -57,6 +56,7 @@ from .shared import (
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
     build_standard_step,
+    load_recovered_cached_outputs,
     _log_named_h5_tables,
     _log_step_records,
     artifact_to_path,
@@ -71,10 +71,7 @@ from pilates.workflows.input_resolution import (
     resolved_metadata_value_for_key,
     resolved_value_for_key,
 )
-from pilates.workflows.tracker_outputs import (
-    load_tracker_run_outputs,
-    merge_canonical_output_mappings,
-)
+from pilates.workflows.tracker_outputs import merge_canonical_output_mappings
 
 logger = logging.getLogger(__name__)
 
@@ -291,38 +288,6 @@ def _activitysim_postprocess_output_paths(
     return outputs
 
 
-def _activitysim_apply_replay_metadata(
-    step_func: Callable[..., Any],
-    *,
-    input_paths: Optional[Callable[..., Any]] = None,
-    output_paths: Optional[Callable[..., Any]] = None,
-    cache_hydration: Optional[str] = None,
-    input_binding: Optional[str] = None,
-    input_materialization: Optional[str] = None,
-) -> Callable[..., Any]:
-    meta = getattr(step_func, "__consist_step__", None)
-    if meta is None:
-        return step_func
-    extra = dict(getattr(meta, "extra", None) or {})
-    if input_paths is not None:
-        extra["input_paths"] = input_paths
-    if input_materialization is not None:
-        extra["input_materialization"] = input_materialization
-    new_meta = replace(
-        meta,
-        output_paths=output_paths if output_paths is not None else meta.output_paths,
-        cache_hydration=(
-            cache_hydration if cache_hydration is not None else meta.cache_hydration
-        ),
-        input_binding=(
-            input_binding if input_binding is not None else meta.input_binding
-        ),
-        extra=extra or None,
-    )
-    setattr(step_func, "__consist_step__", new_meta)
-    return step_func
-
-
 def _execute_activitysim_preprocess(
     preprocessor: Any,
     workspace: Workspace,
@@ -438,9 +403,9 @@ def _execute_activitysim_postprocess(
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    return load_tracker_run_outputs(
+    return load_recovered_cached_outputs(
         run_id,
-        logger=logger,
+        step_logger=logger,
         log_context="ActivitySim cached output recovery",
     )
 
@@ -1162,12 +1127,10 @@ def make_activitysim_compile_step(
         schema_outputs=_compile_step_schema_outputs,
         output_paths=activitysim_compile_output_paths,
         cache_mode="overwrite",
+        cache_hydration="metadata",
         tags=["activitysim", "compile"],
     )
-    return _activitysim_apply_replay_metadata(
-        step_func,
-        cache_hydration="metadata",
-    )
+    return step_func
 
 
 def make_activitysim_preprocess_step(
@@ -1349,17 +1312,15 @@ def make_activitysim_preprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_preprocess_outputs,
+            input_paths=_activitysim_preprocess_input_paths,
+            output_paths=_activitysim_preprocess_output_paths,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
-    return _activitysim_apply_replay_metadata(
-        step_func,
-        input_paths=_activitysim_preprocess_input_paths,
-        output_paths=_activitysim_preprocess_output_paths,
-        cache_hydration="metadata",
-        input_binding="paths",
-        input_materialization="requested",
-    )
+    return step_func
 
 
 def make_activitysim_run_step(
@@ -1548,17 +1509,15 @@ def make_activitysim_run_step(
             output_recoverer=_recover_activitysim_run_outputs,
             declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
             schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+            input_paths=_activitysim_run_input_paths,
+            output_paths=_activitysim_run_output_paths,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
-    return _activitysim_apply_replay_metadata(
-        step_func,
-        input_paths=_activitysim_run_input_paths,
-        output_paths=_activitysim_run_output_paths,
-        cache_hydration="metadata",
-        input_binding="paths",
-        input_materialization="requested",
-    )
+    return step_func
 
 
 def make_activitysim_postprocess_step(
@@ -1781,14 +1740,12 @@ def make_activitysim_postprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_postprocess_outputs,
+            input_paths=_activitysim_postprocess_input_paths,
+            output_paths=_activitysim_postprocess_output_paths,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
-    return _activitysim_apply_replay_metadata(
-        step_func,
-        input_paths=_activitysim_postprocess_input_paths,
-        output_paths=_activitysim_postprocess_output_paths,
-        cache_hydration="metadata",
-        input_binding="paths",
-        input_materialization="requested",
-    )
+    return step_func

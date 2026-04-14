@@ -216,6 +216,7 @@ from pilates.utils.beam_warmstart import (
 )
 from pilates.utils.consist_types import CouplerProtocol  # noqa: F401
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,  # noqa: F401
     log_and_set_input as log_and_set_input,
     log_and_set_output as log_and_set_output,
@@ -248,6 +249,10 @@ from pilates.workflows.outputs_base import (
     ValidationContext,
     declared_outputs_for_step_outputs_class,
     required_outputs_for_step_outputs_class,
+)
+from pilates.workflows.tracker_outputs import (
+    load_tracker_run_outputs,
+    merge_canonical_output_mappings,
 )
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
@@ -812,6 +817,7 @@ class StandardStepSpec:
     output_recoverer: Optional[OutputRecoverer] = None
     declared_outputs: Optional[list[str]] = None
     schema_outputs: Optional[list[str]] = None
+    inputs: Any = None
     output_paths: Any = None
     load_inputs: Optional[bool] = None
     cache_mode: Optional[str] = None
@@ -1215,6 +1221,7 @@ def _make_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
     cache_mode: Optional[str] = None,
@@ -1351,6 +1358,7 @@ def _make_typed_step_function(
             if declared_outputs is not None
             else _declared_outputs_from_class(outputs_class)
         ),
+        inputs=inputs,
         output_paths=output_paths,
         load_inputs=load_inputs,
         cache_mode=cache_mode,
@@ -1379,6 +1387,7 @@ def _make_logged_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
     cache_mode: Optional[str] = None,
@@ -1410,6 +1419,7 @@ def _make_logged_typed_step_function(
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
+        inputs=inputs,
         output_paths=output_paths,
         load_inputs=load_inputs,
         cache_mode=cache_mode,
@@ -1471,6 +1481,7 @@ def build_standard_step(
         output_recoverer=spec.output_recoverer,
         declared_outputs=spec.declared_outputs,
         schema_outputs=spec.schema_outputs,
+        inputs=spec.inputs,
         output_paths=spec.output_paths,
         load_inputs=spec.load_inputs,
         cache_mode=spec.cache_mode,
@@ -1516,6 +1527,7 @@ def _decorate_step_with_consist(
     description: str,
     schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
+    inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
     cache_mode: Optional[str] = None,
@@ -1551,6 +1563,8 @@ def _decorate_step_with_consist(
         kwargs["schema_outputs"] = schema_outputs
     if outputs:
         kwargs["outputs"] = outputs
+    if inputs is not None:
+        kwargs["inputs"] = inputs
     if output_paths is not None:
         kwargs["output_paths"] = output_paths
     if load_inputs is not None:
@@ -1566,3 +1580,44 @@ def _decorate_step_with_consist(
     if input_materialization is not None:
         kwargs["input_materialization"] = input_materialization
     return define_step(**kwargs)(step_func)
+
+
+def load_recovered_cached_outputs(
+    run_id: Optional[str],
+    *,
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> Dict[str, Any]:
+    return load_tracker_run_outputs(
+        run_id,
+        logger=step_logger,
+        log_context=log_context,
+    )
+
+
+def recovered_cached_paths(
+    *,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+    workspace: "Workspace",
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> Dict[str, Path]:
+    merged = merge_canonical_output_mappings(
+        cached_outputs,
+        load_recovered_cached_outputs(
+            run_id,
+            step_logger=step_logger,
+            log_context=log_context,
+        ),
+    )
+    recovered: Dict[str, Path] = {}
+    for key, value in merged.items():
+        path = artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if path is not None:
+            recovered[key] = Path(path)
+    return recovered

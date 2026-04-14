@@ -1293,6 +1293,31 @@ def test_supply_demand_activitysim_restart_requires_explicit_population_roles(
         )
 
 
+def test_supply_demand_activitysim_restart_with_empty_inputs_still_requires_explicit_population_roles(
+    stage_env, tmp_path
+):
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    stage_env["coupler"].pop(USIM_POPULATION_SOURCE_H5, None)
+    stage_env["coupler"].pop(USIM_DATASTORE_CURRENT_H5, None)
+
+    with pytest.raises(RuntimeError, match="role split"):
+        run_supply_demand_stage(
+            scenario=stage_env["scenario"],
+            state=state,
+            settings=stage_env["settings"],
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+            year=state.forecast_year,
+            usim_inputs={},
+            build_manifest_path=lambda _workspace, year, iteration: tmp_path
+            / f"manifest_{year}_{iteration}.json",
+        )
+
+
 def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_input(
     stage_env, tmp_path
 ):

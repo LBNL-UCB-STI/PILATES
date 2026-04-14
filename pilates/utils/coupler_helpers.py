@@ -185,6 +185,48 @@ def _archive_dir_allowed(key: str) -> bool:
     return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
 
 
+def _resolve_archive_copy_target(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> Optional[tuple[str, str, bool, Optional[tuple[int, int, bool]]]]:
+    """
+    Resolve and validate an archive copy request.
+
+    Both async enqueueing and synchronous copies use the same target selection
+    and guardrails so path guessing stays centralized.
+    """
+    if path is None:
+        return None
+
+    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
+    if not resolved or "://" in resolved:
+        return None
+    if not os.path.exists(resolved):
+        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
+        return None
+
+    is_dir = os.path.isdir(resolved)
+    if is_dir and not _archive_dir_allowed(key):
+        logger.warning(
+            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
+            resolved,
+            key,
+        )
+        return None
+
+    roots = _archive_roots()
+    if roots is None:
+        return None
+    local_root, archive_root = roots
+    dest = _resolve_archive_path(resolved, local_root, archive_root)
+    if dest is None or dest == resolved:
+        return None
+    signature = _archive_path_signature(resolved, is_dir)
+    return resolved, dest, is_dir, signature
+
+
 def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int, bool]]:
     try:
         stat = os.stat(path)
@@ -281,30 +323,17 @@ def _ensure_archive_worker() -> None:
             _archive_thread.start()
 
 
-def _enqueue_archive_copy(key: str, path: str) -> None:
+def _enqueue_archive_copy(
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> None:
     if not _archive_enabled():
         return
-    roots = _archive_roots()
-    if roots is None:
+    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
+    if prepared is None:
         return
-    if not path or (isinstance(path, str) and "://" in path):
-        return
-    if not os.path.exists(path):
-        logger.warning("[Archive] Output path does not exist: %s (key=%s)", path, key)
-        return
-    is_dir = os.path.isdir(path)
-    if is_dir and not _archive_dir_allowed(key):
-        logger.warning(
-            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
-            path,
-            key,
-        )
-        return
-    local_root, archive_root = roots
-    dest = _resolve_archive_path(path, local_root, archive_root)
-    if dest is None or dest == path:
-        return
-    signature = _archive_path_signature(path, is_dir)
+    resolved, dest, is_dir, signature = prepared
     should_queue = False
     if signature is not None:
         with _archive_lock:
@@ -313,42 +342,42 @@ def _enqueue_archive_copy(key: str, path: str) -> None:
             if pending_signature == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (pending): %s (key=%s)",
-                    path,
+                    resolved,
                     key,
                 )
                 return
             if _archive_inflight_signature.get(dest) == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
-                    path,
+                    resolved,
                     key,
                 )
                 return
             if _archive_last_copied_signature.get(dest) == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (already copied): %s (key=%s)",
-                    path,
+                    resolved,
                     key,
                 )
                 return
-            _archive_pending_tasks[dest] = (key, path, dest, is_dir, signature)
+            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
             if dest not in _archive_queued_destinations:
                 _archive_queued_destinations.add(dest)
                 should_queue = True
     else:
         with _archive_lock:
-            _archive_pending_tasks[dest] = (key, path, dest, is_dir, signature)
+            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
             if dest not in _archive_queued_destinations:
                 _archive_queued_destinations.add(dest)
                 should_queue = True
     _ensure_archive_worker()
     if should_queue and _archive_queue is not None:
-        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
+        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key)
         _archive_queue.put(dest)
     else:
         logger.debug(
             "[Archive] Coalesced pending enqueue %s -> %s (key=%s)",
-            path,
+            resolved,
             dest,
             key,
         )
@@ -427,12 +456,7 @@ def enqueue_archive_copy(
     workspace : Workspace, optional
         Workspace used to resolve ``workspace://`` paths.
     """
-    if path is None:
-        return
-    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
-    if not resolved:
-        return
-    _enqueue_archive_copy(key, resolved)
+    _enqueue_archive_copy(key, path, workspace=workspace)
 
 
 def archive_copy_now(
@@ -446,34 +470,11 @@ def archive_copy_now(
     """
     if not _archive_enabled():
         return False
-    if path is None:
+    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
+    if prepared is None:
         return False
+    resolved, dest, is_dir, signature = prepared
 
-    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
-    if not resolved or "://" in resolved:
-        return False
-    if not os.path.exists(resolved):
-        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
-        return False
-
-    is_dir = os.path.isdir(resolved)
-    if is_dir and not _archive_dir_allowed(key):
-        logger.warning(
-            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
-            resolved,
-            key,
-        )
-        return False
-
-    roots = _archive_roots()
-    if roots is None:
-        return False
-    local_root, archive_root = roots
-    dest = _resolve_archive_path(resolved, local_root, archive_root)
-    if dest is None or dest == resolved:
-        return False
-
-    signature = _archive_path_signature(resolved, is_dir)
     if signature is not None:
         with _archive_lock:
             if _archive_last_copied_signature.get(dest) == signature:

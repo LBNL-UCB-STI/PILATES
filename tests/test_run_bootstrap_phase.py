@@ -1328,6 +1328,39 @@ def test_format_hpc_restart_command_requires_account_placeholder():
     )
 
 
+def test_resolve_run_storage_roots_expands_env_vars(monkeypatch, tmp_path):
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    monkeypatch.setenv("PILATES_TEST_ARCHIVE_ROOT", str(archive_root))
+    monkeypatch.setenv("PILATES_TEST_LOCAL_ROOT", str(local_root))
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory="$PILATES_TEST_ARCHIVE_ROOT",
+            local_workspace_root="$PILATES_TEST_LOCAL_ROOT",
+        )
+    )
+
+    resolved_archive_root, resolved_local_root = run_module._resolve_run_storage_roots(
+        settings
+    )
+
+    assert resolved_archive_root == str(archive_root.resolve())
+    assert resolved_local_root == str(local_root.resolve())
+
+
+def test_resolve_run_storage_roots_defaults_local_to_archive_root(tmp_path):
+    archive_root = tmp_path / "archive-root"
+    settings = SimpleNamespace(run=SimpleNamespace(output_directory=str(archive_root)))
+
+    resolved_archive_root, resolved_local_root = run_module._resolve_run_storage_roots(
+        settings
+    )
+
+    assert resolved_archive_root == str(archive_root.resolve())
+    assert resolved_local_root == str(archive_root.resolve())
+
+
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
     class WorkspaceStub:
         def __init__(self, _settings, local_root: str, folder_name: str):
@@ -1613,6 +1646,9 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
 
     archive_root = tmp_path / "archive-root"
     local_root = tmp_path / "local-root"
+    monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
+    monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
+    monkeypatch.delenv("PILATES_ENABLE_ARCHIVE_COPY", raising=False)
     settings = SimpleNamespace(
         run=SimpleNamespace(
             region="seattle",
@@ -1677,6 +1713,9 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     assert workspace_mount.name == archive_run_dir.name
     assert project_root == repo_root.resolve()
     assert tracker_kwargs["allow_external_paths"] is True
+    assert os.environ["PILATES_LOCAL_RUN_DIR"] == str(workspace_mount)
+    assert os.environ["PILATES_ARCHIVE_RUN_DIR"] == str(archive_run_dir)
+    assert os.environ["PILATES_ENABLE_ARCHIVE_COPY"] == "0"
 
 
 def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstrap(
