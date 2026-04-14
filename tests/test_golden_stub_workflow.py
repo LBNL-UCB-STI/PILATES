@@ -132,6 +132,14 @@ EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS = {
     normalize_asim_output_key("beam_plans"),
 }
 
+EXPECTED_ASIM_ARCHIVED_INPUT_KEYS = {
+    "asim_input_households_csv_archived",
+    "asim_input_persons_csv_archived",
+    "asim_input_land_use_csv_archived",
+    "asim_input_skims_omx_archived",
+    "asim_input_skims_zarr_archived",
+}
+
 
 def _artifact_map(raw_artifacts):
     """Normalize Consist artifact collections to a ``{key: artifact}`` mapping."""
@@ -795,6 +803,10 @@ def golden_stub_env(tmp_path, monkeypatch):
                     f"year-{state.current_year}-iteration-{state.current_inner_iter}"
                 )
                 iter_dir.mkdir(parents=True, exist_ok=True)
+                archived_inputs_dir = Path(workspace.get_asim_output_dir()) / (
+                    f"inputs-year-{state.current_year}-iteration-{state.current_inner_iter}"
+                )
+                archived_inputs_dir.mkdir(parents=True, exist_ok=True)
                 processed_outputs = {}
                 for short_name, source_path in raw_outputs.raw_outputs.items():
                     source_path = Path(source_path)
@@ -805,6 +817,38 @@ def golden_stub_env(tmp_path, monkeypatch):
                     if source_path.exists():
                         shutil.copy2(source_path, target_path)
                     processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+
+                archived_input_sources = {
+                    "asim_input_households_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "households.csv",
+                    "asim_input_persons_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "persons.csv",
+                    "asim_input_land_use_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "land_use.csv",
+                    "asim_input_skims_omx_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "skims.omx",
+                    "asim_input_skims_zarr_archived": Path(workspace.get_asim_output_dir())
+                    / "cache"
+                    / "skims.zarr",
+                }
+                for output_key, source_path in archived_input_sources.items():
+                    target_name = source_path.name
+                    target_path = archived_inputs_dir / target_name
+                    if source_path.is_dir():
+                        if target_path.exists():
+                            shutil.rmtree(target_path)
+                        shutil.copytree(source_path, target_path)
+                    elif source_path.exists():
+                        shutil.copy2(source_path, target_path)
+                    processed_outputs[output_key] = target_path
                 return ActivitySimPostprocessOutputs(
                     usim_datastore_h5=usim_merged_path,
                     asim_output_dir=Path(workspace.get_asim_output_dir()),
@@ -1032,7 +1076,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     )
     assert (
         set(manifest["activitysim_postprocess"]["outputs"]["processed_outputs"])
-        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS
+        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS | EXPECTED_ASIM_ARCHIVED_INPUT_KEYS
     )
 
     asim_output_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
@@ -1064,6 +1108,15 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     for key in EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS:
         archive_name = key.replace("_asim_out", "")
         assert (asim_archive_dir / f"{archive_name}.parquet").exists()
+    archived_inputs_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"inputs-year-{asim_archive_year}-iteration-{asim_archive_iteration}"
+    )
+    assert (archived_inputs_dir / "households.csv").exists()
+    assert (archived_inputs_dir / "persons.csv").exists()
+    assert (archived_inputs_dir / "land_use.csv").exists()
+    assert (archived_inputs_dir / "skims.omx").exists()
+    assert (archived_inputs_dir / "skims.zarr").exists()
 
     # Phase 4: provenance sanity checks against real Consist tracker output.
     runs = tracker.find_runs(tags=["golden_stub_workflow"])
