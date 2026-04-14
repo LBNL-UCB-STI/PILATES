@@ -298,5 +298,5 @@ steps are:
 ## Related Docs
 
 - `docs/land_use_skim_alignment.md`
-- `docs/configuration_reference.md`
-- `docs/troubleshooting.md`
+- `docs/run/configuration_reference.md`
+- `docs/run/troubleshooting.md`
