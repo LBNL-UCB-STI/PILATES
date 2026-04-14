@@ -65,6 +65,9 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
+from pilates.workflows.stages.supply_demand_resume import (
+    seed_supply_demand_parent_run_ids_for_resume,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -914,6 +917,12 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            if is_restart_run:
+                seed_supply_demand_parent_run_ids_for_resume(
+                    scenario=tagged_scenario,
+                    workspace=workspace,
+                    state=state,
+                )
             if is_restart_run and state.data_initialized:
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "

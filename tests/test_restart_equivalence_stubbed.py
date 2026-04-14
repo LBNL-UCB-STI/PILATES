@@ -38,6 +38,9 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages.supply_demand_resume import (
+    seed_supply_demand_parent_run_ids_for_resume,
+)
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from workflow_state import WorkflowState
@@ -407,7 +410,46 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                     target_path = iter_dir / f"{clean_name}.parquet"
                     shutil.copy2(source_path, target_path)
                     processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+                inputs_dir = (
+                    Path(workspace.get_asim_output_dir())
+                    / f"inputs-year-{state.current_year}-iteration-{state.current_inner_iter}"
+                )
+                inputs_dir.mkdir(parents=True, exist_ok=True)
+                archived_inputs = {
+                    "asim_input_households_csv_archived": (
+                        Path(workspace.get_asim_mutable_data_dir()) / "households.csv",
+                        inputs_dir / "households.csv",
+                    ),
+                    "asim_input_persons_csv_archived": (
+                        Path(workspace.get_asim_mutable_data_dir()) / "persons.csv",
+                        inputs_dir / "persons.csv",
+                    ),
+                    "asim_input_land_use_csv_archived": (
+                        Path(workspace.get_asim_mutable_data_dir()) / "land_use.csv",
+                        inputs_dir / "land_use.csv",
+                    ),
+                    "asim_input_skims_omx_archived": (
+                        Path(workspace.get_asim_mutable_data_dir()) / "skims.omx",
+                        inputs_dir / "skims.omx",
+                    ),
+                    "asim_input_skims_zarr_archived": (
+                        Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr",
+                        inputs_dir / "skims.zarr",
+                    ),
+                }
+                for short_name, (source_path, target_path) in archived_inputs.items():
+                    if not source_path.exists():
+                        continue
+                    if source_path.is_dir():
+                        if target_path.exists():
+                            shutil.rmtree(target_path)
+                        shutil.copytree(source_path, target_path)
+                    else:
+                        shutil.copy2(source_path, target_path)
+                    processed_outputs[short_name] = target_path
                 merged = Path(workspace.get_usim_mutable_data_dir()) / f"usim_input_merged{state.forecast_year}.h5"
+                if not merged.exists():
+                    _write_usim_toy_h5(merged, with_year_prefix=state.forecast_year)
                 return ActivitySimPostprocessOutputs(
                     usim_datastore_h5=merged,
                     asim_output_dir=Path(workspace.get_asim_output_dir()),
@@ -1073,6 +1115,11 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     workspace=resumed_runtime.workspace,
                     coupler=coupler,
                 )
+                seed_supply_demand_parent_run_ids_for_resume(
+                    scenario=tagged,
+                    workspace=resumed_runtime.workspace,
+                    state=resumed_runtime.state,
+                )
                 restart_runtime.hydrate_missing_restart_artifacts(
                     tracker=resumed_runtime.tracker,
                     settings=resumed_runtime.settings,
@@ -1179,6 +1226,7 @@ def test_stubbed_restart_resume_matches_uninterrupted_baseline(
 @pytest.mark.parametrize(
     "stop_boundary",
     [
+        "after_activitysim_postprocess",
         "after_beam_postprocess",
         "after_first_atlas_subyear",
         "after_year_complete",
@@ -1197,4 +1245,11 @@ def test_stubbed_replay_resume_tracks_phase0_metrics(
     assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["cache_hit"]
     assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["executed"]
     assert replayed["metrics"]["restart_hydration_event_count"] == 0
+    assert replayed["audit"]["steps_with_incomplete_hydration"] == {}
+    compatibility_fallbacks = {
+        step_name: mode_counts
+        for step_name, mode_counts in replayed["audit"]["steps_using_custom_recovery"].items()
+        if "used_compatibility_fallback" in mode_counts
+    }
+    assert compatibility_fallbacks == {}
     assert replayed["artifact_digests"] == baseline_snapshot["artifact_digests"]

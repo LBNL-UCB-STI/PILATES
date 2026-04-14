@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -39,6 +40,13 @@ _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     ZARR_SKIMS,
 )
 _ARCHIVED_ZARR_SKIMS_KEY = "asim_input_skims_zarr_archived"
+_STEP_RUN_ID_EPOCH_PATTERNS = (
+    re.compile(r"__y(?P<year>\d+)__i(?P<iteration>\d+)__"),
+    re.compile(r"_y(?P<year>\d+)_i(?P<iteration>\d+)(?:_|$)"),
+)
+_SUPPLY_DEMAND_MANIFEST_NAME = re.compile(
+    r"year_(?P<year>\d+)_iteration_(?P<iteration>\d+)\.yaml$"
+)
 
 
 def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optional[str]:
@@ -47,6 +55,81 @@ def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optiona
         workspace=workspace,
         materialize_from_archive=True,
     )
+
+
+def _parse_run_id_epoch(run_id: Any) -> tuple[Optional[int], Optional[int]]:
+    run_id_text = str(run_id or "").strip()
+    if not run_id_text:
+        return None, None
+    for pattern in _STEP_RUN_ID_EPOCH_PATTERNS:
+        match = pattern.search(run_id_text)
+        if match is None:
+            continue
+        try:
+            return int(match.group("year")), int(match.group("iteration"))
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def seed_supply_demand_parent_run_ids_for_resume(
+    *,
+    scenario: Optional[Any],
+    workspace: Workspace,
+    state: WorkflowState,
+) -> None:
+    remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
+    if not callable(remember_restored_run_id):
+        return
+
+    workflow_dirs = [Path(workspace.full_path) / ".workflow"]
+    archive_state_path = Path(getattr(state, "file_loc", "") or "")
+    if archive_state_path:
+        try:
+            archive_state_root = archive_state_path.resolve().parent
+        except Exception:
+            archive_state_root = None
+        if archive_state_root is not None:
+            workflow_dirs.extend(
+                [
+                    archive_state_root / "run" / ".workflow",
+                    archive_state_root / ".workflow",
+                ]
+            )
+
+    seen_run_ids: set[str] = set()
+    candidate_paths: list[Path] = []
+    for workflow_dir in workflow_dirs:
+        if not workflow_dir.exists():
+            continue
+        candidate_paths.extend(sorted(workflow_dir.glob("year_*_iteration_*.yaml")))
+
+    for manifest_path in candidate_paths:
+        match = _SUPPLY_DEMAND_MANIFEST_NAME.search(manifest_path.name)
+        if match is None:
+            continue
+        fallback_year = int(match.group("year"))
+        fallback_iteration = int(match.group("iteration"))
+        manifest = load_step_manifest(manifest_path)
+        for model_name in ("activitysim_run", "beam_run"):
+            step_meta = manifest.get(model_name)
+            if not isinstance(step_meta, Mapping):
+                continue
+            run_id = str(step_meta.get("run_id", "")).strip()
+            if not run_id or run_id in seen_run_ids:
+                continue
+            run_year, run_iteration = _parse_run_id_epoch(run_id)
+            remember_restored_run_id(
+                model_name=model_name,
+                year=run_year if run_year is not None else fallback_year,
+                iteration=(
+                    run_iteration
+                    if run_iteration is not None
+                    else fallback_iteration
+                ),
+                run_id=run_id,
+            )
+            seen_run_ids.add(run_id)
 
 
 def _find_input_scenario_dir(
@@ -244,10 +327,15 @@ def _restore_activity_demand_outputs_for_resume(
         run_id = activitysim_run.get("run_id")
         if not run_id:
             return
+        run_year, run_iteration = _parse_run_id_epoch(run_id)
         remember_restored_run_id(
             model_name="activitysim_run",
-            year=getattr(state, "forecast_year", None) or getattr(state, "year", None),
-            iteration=getattr(state, "current_inner_iter", None),
+            year=run_year
+            if run_year is not None
+            else getattr(state, "forecast_year", None) or getattr(state, "year", None),
+            iteration=run_iteration
+            if run_iteration is not None
+            else getattr(state, "current_inner_iter", None),
             run_id=run_id,
         )
 
