@@ -32,6 +32,11 @@ from pilates.utils.zone_utils import (
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
@@ -130,6 +135,13 @@ def _copytree_if_needed(source_dir: str, dest_dir: str) -> str:
         shutil.rmtree(dest)
     shutil.copytree(os.fspath(source), os.fspath(dest))
     return os.fspath(dest)
+
+
+def _asim_mutable_configs_dir(workspace: "Workspace") -> str:
+    get_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+    if callable(get_configs_dir):
+        return get_configs_dir()
+    return os.path.join(getattr(workspace, "full_path", os.getcwd()), "activitysim", "configs")
 
 
 def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
@@ -2004,16 +2016,32 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         """
         Declare the input paths/artifacts this preprocessor expects without disk checks.
         """
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        return {
-            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
-            "usim_population_source_h5": os.path.join(
+        del state
+        region = getattr(getattr(settings, "run", None), "region", None)
+        urbansim_settings = getattr(settings, "urbansim", None)
+        region_mappings = getattr(urbansim_settings, "region_mappings", {}) or {}
+        region_to_region_id = region_mappings.get("region_to_region_id", {})
+        region_id = region_to_region_id.get(region)
+        input_template = getattr(urbansim_settings, "input_file_template", None)
+        usim_input_path = None
+        if region_id is not None and input_template:
+            usim_input_fname = input_template.format(region_id=region_id)
+            usim_input_path = os.path.join(
                 workspace.get_usim_mutable_data_dir(), usim_input_fname
-            ),
+            )
+
+        skims_fname = getattr(getattr(getattr(settings, "shared", None), "skims", None), "fname", None)
+        final_skims_path = None
+        if region and skims_fname:
+            final_skims_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                region,
+                skims_fname,
+            )
+        return {
+            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
+            "usim_population_source_h5": usim_input_path,
+            FINAL_SKIMS_OMX: final_skims_path,
         }
 
     @staticmethod
@@ -2026,19 +2054,16 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         inputs = ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
         )
-        usim_input_path = inputs["usim_population_source_h5"]
-        inputs["usim_population_source_h5"] = (
-            usim_input_path if os.path.exists(usim_input_path) else None
-        )
+        for key in ("usim_population_source_h5", FINAL_SKIMS_OMX):
+            input_path = inputs.get(key)
+            inputs[key] = input_path if input_path and os.path.exists(input_path) else None
         return inputs
 
     @staticmethod
     def expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Union[str, None]]:
-        return ActivitysimPreprocessor.runtime_expected_inputs(
-            settings, state, workspace
-        )
+        return ActivitysimPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -2051,16 +2076,25 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         -----
         Output keys
             - ``asim_mutable_data_dir``: Local mutable data dir staged for
-              ActivitySim inputs (tables, configs, skims).
+              ActivitySim inputs.
             - ``asim_mutable_configs_dir``: Config directory for ActivitySim
               run-time settings.
+            - ``land_use_asim_in`` / ``households_asim_in`` /
+              ``persons_asim_in`` / ``omx_skims``: Canonical staged input
+              artifacts produced under the mutable data contract.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
+        del settings, state
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
         return {
-            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
-            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
+            "asim_mutable_data_dir": asim_data_dir,
+            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
+            ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
+            ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
+            ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
+            ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
         }
 
     def __init__(

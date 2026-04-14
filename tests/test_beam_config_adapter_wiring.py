@@ -12,13 +12,10 @@ pytest.importorskip("openmatrix")
 
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.beam.runner import BeamFullSkimRunner
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.workflows.artifact_keys import (
-    BEAM_CONFIG_FILE,
-    BEAM_FULL_SKIMS,
-    BEAM_MUTABLE_DATA_DIR,
     BEAM_HOUSEHOLDS_IN,
-    BEAM_OUTPUT_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
@@ -258,21 +255,8 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
         ),
         (
             make_beam_full_skim_step,
-            lambda settings, state, workspace: {
-                BEAM_CONFIG_FILE: Path(
-                    workspace.get_beam_mutable_data_dir()
-                )
-                / settings.run.region
-                / settings.beam.config,
-                BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
-                BEAM_OUTPUT_DIR: workspace.get_beam_output_dir(),
-            },
-            lambda settings, state, workspace: {
-                BEAM_FULL_SKIMS: Path(workspace.get_beam_output_dir())
-                / settings.run.region
-                / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
-                / "skimsODFull.csv.gz",
-            },
+            BeamFullSkimRunner.expected_inputs,
+            BeamFullSkimRunner.expected_outputs,
             "inputs-missing",
         ),
     ],

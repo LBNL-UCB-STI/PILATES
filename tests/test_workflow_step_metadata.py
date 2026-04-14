@@ -7,6 +7,9 @@ from consist import define_step
 from consist.types import BindingResult
 from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
+from pilates.activitysim.runner import ActivitysimRunner
 from pilates.runtime import launcher as run_module
 from pilates.atlas.outputs import (
     AtlasPostprocessOutputs,
@@ -144,6 +147,137 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
         get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "123"}},
+        ),
+        activitysim=SimpleNamespace(persist_sharrow_cache=True),
+    )
+    state = SimpleNamespace(
+        year=2025,
+        current_year=2025,
+        forecast_year=2025,
+        iteration=1,
+        current_inner_iter=1,
+    )
+    beam_skims = tmp_path / "beam" / "data" / "seattle" / "skims.omx"
+    beam_skims.parent.mkdir(parents=True, exist_ok=True)
+    beam_skims.write_text("omx", encoding="utf-8")
+    usim_input = tmp_path / "urbansim" / "data" / "custom_123.h5"
+    usim_input.parent.mkdir(parents=True, exist_ok=True)
+    usim_input.write_text("h5", encoding="utf-8")
+    asim_data_dir = tmp_path / "activitysim" / "data"
+    asim_data_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("households.csv", "persons.csv", "land_use.csv", "skims.omx"):
+        (asim_data_dir / fname).write_text(fname, encoding="utf-8")
+    final_pipeline_dir = tmp_path / "activitysim" / "output" / "final_pipeline"
+    for stem in ("beam_plans", "persons"):
+        output_path = final_pipeline_dir / stem / "final.parquet"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(stem, encoding="utf-8")
+    zarr_path = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    zarr_path.mkdir(parents=True, exist_ok=True)
+    (zarr_path / ".zgroup").write_text("{}", encoding="utf-8")
+    sharrow_cache_dir = tmp_path / "shared_cache" / "numba"
+    sharrow_cache_dir.mkdir(parents=True, exist_ok=True)
+    (sharrow_cache_dir / "compile.cache").write_text("cache", encoding="utf-8")
+
+    preprocess_step = make_activitysim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    run_step = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    postprocess_step = make_activitysim_postprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    preprocess_meta = preprocess_step.__consist_step__
+    run_meta = run_step.__consist_step__
+    postprocess_meta = postprocess_step.__consist_step__
+
+    assert preprocess_meta.input_binding == "paths"
+    assert preprocess_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(preprocess_meta) == "requested"
+    preprocess_inputs = _step_meta_input_paths(preprocess_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_inputs == ActivitysimPreprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    preprocess_outputs = preprocess_meta.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_outputs == ActivitysimPreprocessor.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_inputs[FINAL_SKIMS_OMX] == str(beam_skims)
+    assert preprocess_outputs[ASIM_HOUSEHOLDS_IN] == str(asim_data_dir / "households.csv")
+    assert preprocess_outputs["omx_skims"] == str(asim_data_dir / "skims.omx")
+
+    assert run_meta.input_binding == "paths"
+    assert run_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(run_meta) == "requested"
+    run_inputs = _step_meta_input_paths(run_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs == ActivitysimRunner.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    run_outputs = run_meta.output_paths(settings=settings, state=state, workspace=workspace)
+    assert run_outputs == ActivitysimRunner.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs[ZARR_SKIMS] == str(zarr_path)
+    assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(sharrow_cache_dir)
+    assert run_outputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
+    assert run_outputs["persons_asim_out"] == str(final_pipeline_dir / "persons" / "final.parquet")
+
+    assert postprocess_meta.input_binding == "paths"
+    assert postprocess_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(postprocess_meta) == "requested"
+    post_inputs = _step_meta_input_paths(postprocess_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_inputs == ActivitysimPostprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    post_outputs = postprocess_meta.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_outputs == ActivitysimPostprocessor.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_inputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
+    assert post_outputs[USIM_DATASTORE_H5] == str(usim_input)
+    assert post_outputs["beam_plans_asim_out"] == str(
+        tmp_path / "activitysim" / "output" / "year-2025-iteration-1" / "beam_plans.parquet"
+    )
+    assert post_outputs["asim_input_skims_zarr_archived"] == str(
+        tmp_path / "activitysim" / "output" / "inputs-year-2025-iteration-1" / "skims.zarr"
+    )
+
+
+def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_workspace(
+    tmp_path: Path,
+):
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
         get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
         get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
         get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
@@ -178,34 +312,21 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
         outputs_holder=holder,
     )
 
-    preprocess_meta = preprocess_step.__consist_step__
-    run_meta = run_step.__consist_step__
-    postprocess_meta = postprocess_step.__consist_step__
-
-    assert preprocess_meta.input_binding == "paths"
-    assert preprocess_meta.cache_hydration == "metadata"
-    assert _step_meta_input_materialization(preprocess_meta) == "requested"
-    preprocess_inputs = _step_meta_input_paths(preprocess_meta)(
+    preprocess_inputs = _step_meta_input_paths(preprocess_step.__consist_step__)(
         settings=settings, state=state, workspace=workspace
     )
+    run_inputs = _step_meta_input_paths(run_step.__consist_step__)(
+        settings=settings, state=state, workspace=workspace
+    )
+    postprocess_inputs = _step_meta_input_paths(postprocess_step.__consist_step__)(
+        settings=settings, state=state, workspace=workspace
+    )
+
     assert preprocess_inputs[FINAL_SKIMS_OMX] == str(
         tmp_path / "beam" / "data" / "seattle" / "skims.omx"
     )
-    preprocess_outputs = preprocess_meta.output_paths(
-        settings=settings, state=state, workspace=workspace
-    )
-    assert preprocess_outputs["households_asim_in"] == str(
-        tmp_path / "activitysim" / "data" / "households.csv"
-    )
-    assert preprocess_outputs["omx_skims"] == str(
-        tmp_path / "activitysim" / "data" / "skims.omx"
-    )
-
-    assert run_meta.input_binding == "paths"
-    assert run_meta.cache_hydration == "metadata"
-    assert _step_meta_input_materialization(run_meta) == "requested"
-    run_inputs = _step_meta_input_paths(run_meta)(
-        settings=settings, state=state, workspace=workspace
+    assert preprocess_inputs["usim_population_source_h5"] == str(
+        tmp_path / "urbansim" / "data" / "custom_123.h5"
     )
     assert run_inputs[ZARR_SKIMS] == str(
         tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
@@ -213,42 +334,22 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(
         tmp_path / "shared_cache" / "numba"
     )
-    run_outputs = run_meta.output_paths(settings=settings, state=state, workspace=workspace)
-    assert run_outputs["beam_plans_asim_out"] == str(
-        tmp_path
-        / "activitysim"
-        / "output"
-        / "final_pipeline"
-        / "beam_plans"
-        / "final.parquet"
-    )
-    assert run_outputs["persons_asim_out"] == str(
-        tmp_path / "activitysim" / "output" / "final_pipeline" / "persons" / "final.parquet"
+    assert postprocess_inputs[ZARR_SKIMS] == str(
+        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
 
-    assert postprocess_meta.input_binding == "paths"
-    assert postprocess_meta.cache_hydration == "metadata"
-    assert _step_meta_input_materialization(postprocess_meta) == "requested"
-    post_inputs = _step_meta_input_paths(postprocess_meta)(
+    assert ActivitysimPreprocessor.expected_inputs(
         settings=settings, state=state, workspace=workspace
-    )
-    assert post_inputs["beam_plans_asim_out"] == str(
-        tmp_path
-        / "activitysim"
-        / "output"
-        / "final_pipeline"
-        / "beam_plans"
-        / "final.parquet"
-    )
-    post_outputs = postprocess_meta.output_paths(
+    )[FINAL_SKIMS_OMX] is None
+    assert ActivitysimRunner.expected_inputs(
         settings=settings, state=state, workspace=workspace
-    )
-    assert post_outputs[USIM_DATASTORE_H5] == str(
-        tmp_path / "urbansim" / "data" / "custom_123.h5"
-    )
-    assert post_outputs["beam_plans_asim_out"] == str(
-        tmp_path / "activitysim" / "output" / "year-2025-iteration-1" / "beam_plans.parquet"
-    )
+    )[ZARR_SKIMS] is None
+    assert ActivitysimRunner.expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )[ASIM_SHARROW_CACHE_DIR] is None
+    assert ActivitysimPostprocessor.expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )[ZARR_SKIMS] is None
 
 
 def test_urbansim_and_atlas_step_factories_attach_consist_metadata():

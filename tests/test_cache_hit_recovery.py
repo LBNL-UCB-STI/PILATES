@@ -45,6 +45,7 @@ from pilates.workflows.steps import (
     make_beam_full_skim_step,
     make_beam_run_step,
     make_beam_postprocess_step,
+    make_urbansim_preprocess_step,
     make_urbansim_postprocess_step,
     make_urbansim_run_step,
 )
@@ -697,6 +698,54 @@ def test_recover_urbansim_run_outputs_from_cached_run_artifacts(tmp_path, monkey
     assert holder.urbansim_run.raw_outputs[USIM_FORECAST_OUTPUT] == usim_output
     assert coupler.get(USIM_DATASTORE_H5) is not None
     assert coupler.get(USIM_FORECAST_OUTPUT) is not None
+
+
+def test_recover_urbansim_preprocess_outputs_from_cached_run_artifacts(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    base_datastore = Path(workspace.get_usim_mutable_data_dir()) / "usim_123.h5"
+    _write_file(base_datastore)
+
+    class DummyTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "usim-pre-id"
+            return {USIM_DATASTORE_BASE_H5: str(base_datastore)}
+
+    monkeypatch.setattr(
+        "pilates.workflows.tracker_outputs.cr.current_tracker",
+        lambda: DummyTracker(),
+    )
+
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    step_func = make_urbansim_preprocess_step(coupler=coupler, outputs_holder=holder)
+    outputs = _recover_step_outputs(
+        step=StepRef(name="urbansim_preprocess", step_func=step_func),
+        step_name="urbansim_preprocess",
+        outputs_holder=holder,
+        settings=SimpleNamespace(
+            run=SimpleNamespace(region="test"),
+            urbansim=SimpleNamespace(
+                input_file_template="usim_{region_id}.h5",
+                region_mappings={"region_to_region_id": {"test": "123"}},
+            ),
+        ),
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        workspace=workspace,
+        coupler=coupler,
+        step_inputs=None,
+        cached_outputs=None,
+        run_id="usim-pre-id",
+        publish_outputs=True,
+    )
+
+    assert outputs is not None
+    assert holder.urbansim_preprocess is not None
+    assert holder.urbansim_preprocess.prepared_inputs[USIM_DATASTORE_BASE_H5] == (
+        base_datastore
+    )
+    assert coupler.get(USIM_DATASTORE_BASE_H5) is not None
 
 
 def test_recover_urbansim_postprocess_outputs_from_cached_run_artifacts(

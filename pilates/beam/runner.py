@@ -19,7 +19,13 @@ from pilates.beam.postprocessor import (
     find_iteration_file,
 )
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, BEAM_NETWORK_FINAL
+from pilates.workflows.artifact_keys import (
+    BEAM_CONFIG_FILE,
+    BEAM_FULL_SKIMS,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_NETWORK_FINAL,
+    BEAM_OUTPUT_DIR,
+)
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
@@ -635,6 +641,47 @@ class BeamFullSkimRunner(GenericRunner):
     """
     Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects without disk checks.
+        """
+        return {
+            BEAM_CONFIG_FILE: (
+                Path(workspace.get_beam_mutable_data_dir())
+                / settings.run.region
+                / settings.beam.config
+            ),
+            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            BEAM_OUTPUT_DIR: workspace.get_beam_output_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        year = getattr(state, "current_year", None)
+        if year is None:
+            year = getattr(state, "year", None)
+        iteration = getattr(state, "current_inner_iter", None)
+        if iteration is None:
+            iteration = getattr(state, "iteration", 0)
+        if year is None:
+            return {}
+        return {
+            BEAM_FULL_SKIMS: (
+                Path(workspace.get_beam_output_dir())
+                / settings.run.region
+                / f"year-{int(year)}-iteration-{int(iteration)}"
+                / "skimsODFull.csv.gz"
+            )
+        }
 
     def __init__(
         self,

@@ -52,6 +52,7 @@ from .shared import (
     build_standard_step,
     _log_beam_r5_osm_input,
     _log_step_records,
+    make_default_recoverer,
     _schema_outputs_from_class,
     cr,
     find_last_run_output_plans,
@@ -860,31 +861,14 @@ def _execute_beam_full_skim(
     )
 
 
-def _recover_beam_run_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[BeamRunOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="BEAM cached output recovery",
-    )
-    if not recovered_paths:
-        return None
-    return BeamRunOutputs(
-        beam_output_dir=Path(workspace.get_beam_output_dir()),
-        raw_outputs=recovered_paths,
-    )
+_recover_beam_run_outputs = make_default_recoverer(
+    outputs_class=BeamRunOutputs,
+    mapping_field="raw_outputs",
+    dir_field="beam_output_dir",
+    dir_getter=lambda workspace: workspace.get_beam_output_dir(),
+    step_logger=logger,
+    log_context="BEAM cached output recovery",
+)
 
 
 def _recover_beam_preprocess_outputs(
@@ -962,29 +946,15 @@ def _recover_beam_postprocess_outputs(
     )
 
 
-def _recover_beam_full_skim_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[BeamFullSkimOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="BEAM cached output recovery",
-    )
-    full_skims = recovered_paths.get("beam_full_skims")
-    if full_skims is None:
-        return None
-    return BeamFullSkimOutputs(full_skims=full_skims)
+_recover_beam_full_skim_outputs = make_default_recoverer(
+    outputs_class=BeamFullSkimOutputs,
+    primary_path_field="full_skims",
+    primary_path_resolver=lambda recovered_paths, _state: recovered_paths.get(
+        "beam_full_skims"
+    ),
+    step_logger=logger,
+    log_context="BEAM cached output recovery",
+)
 
 
 def _beam_step_settings(ctx: Any) -> Any:
@@ -1063,38 +1033,23 @@ def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
 
 
 def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
-    settings = _beam_step_settings(ctx)
-    workspace = _beam_step_workspace(ctx)
-    return {
-        BEAM_CONFIG_FILE: _require_primary_beam_config(
-            settings,
-            workspace,
-        ),
-        "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-        "beam_output_dir": workspace.get_beam_output_dir(),
-    }
+    from pilates.beam.runner import BeamFullSkimRunner
+
+    return BeamFullSkimRunner.expected_inputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
 
 
 def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
-    settings = _beam_step_settings(ctx)
-    state = _beam_step_state(ctx)
-    workspace = _beam_step_workspace(ctx)
-    year = getattr(state, "current_year", None)
-    if year is None:
-        year = getattr(state, "year", None)
-    iteration = getattr(state, "current_inner_iter", None)
-    if iteration is None:
-        iteration = getattr(state, "iteration", 0)
-    if year is None:
-        return {}
-    return {
-        "beam_full_skims": (
-            Path(workspace.get_beam_output_dir())
-            / settings.run.region
-            / f"year-{int(year)}-iteration-{int(iteration)}"
-            / "skimsODFull.csv.gz"
-        )
-    }
+    from pilates.beam.runner import BeamFullSkimRunner
+
+    return BeamFullSkimRunner.expected_outputs(
+        _beam_step_settings(ctx),
+        _beam_step_state(ctx),
+        _beam_step_workspace(ctx),
+    )
 
 
 def make_beam_preprocess_step(

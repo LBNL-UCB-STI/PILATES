@@ -18,16 +18,10 @@ from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.workflows.steps.shared import StepOutputsHolder
 from pilates.workflows.steps.urbansim_atlas import (
-    atlas_postprocess_output_paths,
-    atlas_preprocess_output_paths,
-    atlas_run_output_paths,
     _execute_atlas_postprocess_typed,
     _execute_atlas_run_typed,
     _execute_urbansim_postprocess_typed,
     _execute_urbansim_run_typed,
-    urbansim_postprocess_output_paths,
-    urbansim_preprocess_output_paths,
-    urbansim_run_output_paths,
     make_atlas_postprocess_step,
     make_atlas_preprocess_step,
     make_atlas_run_step,
@@ -240,42 +234,36 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
 
 
 @pytest.mark.parametrize(
-    ("factory", "provider", "expected_outputs_fn"),
+    ("factory", "expected_outputs_fn"),
     [
         (
             make_urbansim_preprocess_step,
-            urbansim_preprocess_output_paths,
             UrbansimPreprocessor.expected_outputs,
         ),
         (
             make_urbansim_run_step,
-            urbansim_run_output_paths,
             UrbansimRunner.expected_outputs,
         ),
         (
             make_urbansim_postprocess_step,
-            urbansim_postprocess_output_paths,
             UrbansimPostprocessor.expected_outputs,
         ),
         (
             make_atlas_preprocess_step,
-            atlas_preprocess_output_paths,
             AtlasPreprocessor.expected_outputs,
         ),
         (
             make_atlas_run_step,
-            atlas_run_output_paths,
             AtlasRunner.expected_outputs,
         ),
         (
             make_atlas_postprocess_step,
-            atlas_postprocess_output_paths,
             AtlasPostprocessor.expected_outputs,
         ),
     ],
 )
 def test_urbansim_atlas_steps_publish_replay_metadata(
-    factory, provider, expected_outputs_fn, tmp_path: Path
+    factory, expected_outputs_fn, tmp_path: Path
 ) -> None:
     coupler = object()
     holder = StepOutputsHolder()
@@ -305,7 +293,7 @@ def test_urbansim_atlas_steps_publish_replay_metadata(
     assert meta.load_inputs is None
     assert meta.input_binding == "none"
     assert meta.cache_hydration == "metadata"
-    assert meta.output_paths is provider
+    assert meta.output_paths is expected_outputs_fn
     assert meta.output_paths(
         settings=settings,
         state=state,

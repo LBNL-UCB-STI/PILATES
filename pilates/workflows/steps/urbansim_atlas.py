@@ -6,7 +6,6 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 import pandas as pd
 
-from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import (
     _resolve_atlas_h5_table_key,
@@ -45,6 +44,7 @@ from .shared import (
     build_standard_step,
     _log_named_h5_tables,
     _log_step_records,
+    make_default_recoverer,
     _urbansim_output_facet_meta,
     log_and_set_output,
     log_input_only,
@@ -138,83 +138,18 @@ def _resolve_atlas_postprocess_households_table_path(
     return resolved if str(resolved).startswith("/") else f"/{resolved}"
 
 
-def _recover_urbansim_run_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[UrbanSimRunOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="UrbanSim/ATLAS cached output recovery",
-    )
-    usim_datastore_h5 = recovered_paths.get(
-        USIM_FORECAST_OUTPUT
-    ) or recovered_paths.get(USIM_DATASTORE_H5)
-    if usim_datastore_h5 is None:
-        return None
-    return UrbanSimRunOutputs(
-        usim_datastore_h5=usim_datastore_h5,
-        raw_outputs=recovered_paths,
+def _urbansim_run_recovered_datastore(
+    recovered_paths: Mapping[str, Path], _state: WorkflowState
+) -> Optional[Path]:
+    return recovered_paths.get(USIM_FORECAST_OUTPUT) or recovered_paths.get(
+        USIM_DATASTORE_H5
     )
 
 
-def _recover_urbansim_preprocess_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[UrbanSimPreprocessOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="UrbanSim/ATLAS cached output recovery",
-    )
-    if not recovered_paths:
-        return None
-    return UrbanSimPreprocessOutputs(
-        usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
-        prepared_inputs=recovered_paths,
-    )
-
-
-def _recover_urbansim_postprocess_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[UrbanSimPostprocessOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="UrbanSim/ATLAS cached output recovery",
-    )
-    usim_datastore_h5 = next(
+def _urbansim_postprocess_recovered_datastore(
+    recovered_paths: Mapping[str, Path], _state: WorkflowState
+) -> Optional[Path]:
+    return next(
         (
             path
             for key, path in recovered_paths.items()
@@ -222,73 +157,69 @@ def _recover_urbansim_postprocess_outputs(
         ),
         None,
     ) or recovered_paths.get(USIM_DATASTORE_H5)
-    if usim_datastore_h5 is None:
-        return None
-    return UrbanSimPostprocessOutputs(
-        usim_datastore_h5=usim_datastore_h5,
-        processed_outputs=recovered_paths,
-    )
 
 
-def _recover_atlas_run_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[AtlasRunOutputs]:
-    del settings, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="UrbanSim/ATLAS cached output recovery",
-    )
+def _atlas_run_required_keys(
+    state: WorkflowState, _recovered_paths: Mapping[str, Path]
+) -> Sequence[str]:
     output_year = getattr(state, "forecast_year", None)
     if output_year is None:
-        return None
-    required_keys = (
+        return ("__missing_forecast_year__",)
+    return (
         f"householdv_{output_year}",
         f"vehicles_{output_year}",
     )
-    if any(key not in recovered_paths for key in required_keys):
-        return None
-    return AtlasRunOutputs(
-        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
-        raw_outputs=recovered_paths,
-    )
 
 
-def _recover_atlas_preprocess_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[AtlasPreprocessOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-        step_logger=logger,
-        log_context="UrbanSim/ATLAS cached output recovery",
-    )
-    if not recovered_paths:
-        return None
-    return AtlasPreprocessOutputs(
-        atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
-        prepared_inputs=recovered_paths,
-    )
+_recover_urbansim_preprocess_outputs = make_default_recoverer(
+    outputs_class=UrbanSimPreprocessOutputs,
+    mapping_field="prepared_inputs",
+    dir_field="usim_mutable_data_dir",
+    dir_getter=lambda workspace: workspace.get_usim_mutable_data_dir(),
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_urbansim_run_outputs = make_default_recoverer(
+    outputs_class=UrbanSimRunOutputs,
+    mapping_field="raw_outputs",
+    primary_path_field="usim_datastore_h5",
+    primary_path_resolver=_urbansim_run_recovered_datastore,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_urbansim_postprocess_outputs = make_default_recoverer(
+    outputs_class=UrbanSimPostprocessOutputs,
+    mapping_field="processed_outputs",
+    primary_path_field="usim_datastore_h5",
+    primary_path_resolver=_urbansim_postprocess_recovered_datastore,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_atlas_preprocess_outputs = make_default_recoverer(
+    outputs_class=AtlasPreprocessOutputs,
+    mapping_field="prepared_inputs",
+    dir_field="atlas_mutable_input_dir",
+    dir_getter=lambda workspace: workspace.get_atlas_mutable_input_dir(),
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_atlas_run_outputs = make_default_recoverer(
+    outputs_class=AtlasRunOutputs,
+    mapping_field="raw_outputs",
+    dir_field="atlas_output_dir",
+    dir_getter=lambda workspace: workspace.get_atlas_output_dir(),
+    required_keys=_atlas_run_required_keys,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
 
 
 def _recover_atlas_postprocess_outputs(
@@ -310,10 +241,8 @@ def _recover_atlas_postprocess_outputs(
         step_logger=logger,
         log_context="UrbanSim/ATLAS cached output recovery",
     )
-    expected_outputs = atlas_postprocess_output_paths(
-        settings=settings,
-        state=state,
-        workspace=workspace,
+    expected_outputs = AtlasPostprocessor.expected_outputs(
+        settings, state, workspace
     )
     if "atlas_vehicles2_output" not in recovered_paths:
         vehicles2_path = artifact_to_existing_path(
@@ -652,7 +581,7 @@ def make_urbansim_preprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_preprocess_outputs,
-            output_paths=urbansim_preprocess_output_paths,
+            output_paths=UrbansimPreprocessor.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -741,7 +670,7 @@ def make_urbansim_run_step(
             component_executor=_execute_urbansim_run_typed,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_run_outputs,
-            output_paths=urbansim_run_output_paths,
+            output_paths=UrbansimRunner.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -862,7 +791,7 @@ def make_urbansim_postprocess_step(
             component_executor=_execute_urbansim_postprocess_typed,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_postprocess_outputs,
-            output_paths=urbansim_postprocess_output_paths,
+            output_paths=UrbansimPostprocessor.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -962,7 +891,7 @@ def make_atlas_preprocess_step(
             output_logger=_log_outputs,
             output_replayer=_replay_outputs,
             output_recoverer=_recover_atlas_preprocess_outputs,
-            output_paths=atlas_preprocess_output_paths,
+            output_paths=AtlasPreprocessor.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -1059,7 +988,7 @@ def make_atlas_run_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_atlas_run_outputs,
-            output_paths=atlas_run_output_paths,
+            output_paths=AtlasRunner.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -1108,10 +1037,13 @@ def make_atlas_postprocess_step(
             raise RuntimeError(
                 "UrbanSim config is required for ATLAS postprocess logging."
             )
-        usim_output_path = resolve_atlas_usim_datastore_path(
+        expected_inputs = AtlasPostprocessor.expected_inputs(
             settings, state, workspace
         )
-        if usim_output_path.exists():
+        usim_output_path = expected_inputs.get("usim_datastore_h5")
+        if usim_output_path is not None:
+            usim_output_path = Path(usim_output_path)
+        if usim_output_path is not None and usim_output_path.exists():
             log_input_only(
                 key=USIM_DATASTORE_H5,
                 path=str(usim_output_path),
@@ -1225,7 +1157,7 @@ def make_atlas_postprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_atlas_postprocess_outputs,
-            output_paths=atlas_postprocess_output_paths,
+            output_paths=AtlasPostprocessor.expected_outputs,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,

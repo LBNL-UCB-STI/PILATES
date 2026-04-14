@@ -22,6 +22,7 @@ from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.beam.runner import BeamRunner
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
+from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
 
 
 class _StubState:
@@ -138,6 +139,7 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
             "usim_population_source_h5": os.path.join(
                 tmp_path, "usim", "data", "usim_123.h5"
             ),
+            FINAL_SKIMS_OMX: os.path.join(tmp_path, "beam", "input", "test", "skims.omx"),
         }
 
         urbansim_contract = UrbansimPreprocessor.declared_expected_inputs(

@@ -13,15 +13,72 @@ from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivityS
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     normalize_asim_output_key,
     has_asim_run_marker,
 )
-from pilates.activitysim.runner import asim_runtime_zarr_path
+from pilates.activitysim.runner import (
+    asim_required_run_output_paths,
+    asim_runtime_zarr_path,
+    asim_staged_input_paths,
+)
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _postprocess_output_stem(output_key: str) -> str:
+    return re.sub(r"_asim_out$", "", output_key)
+
+
+def _activitysim_iteration_output_paths(
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    year = getattr(state, "year", getattr(state, "current_year", None))
+    if year is None:
+        return {}
+    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
+    iteration_dir = (
+        Path(workspace.get_asim_output_dir()) / f"year-{year}-iteration-{iteration}"
+    )
+    return {
+        output_key: str(iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet")
+        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    }
+
+
+def _activitysim_archived_input_paths(
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    year = getattr(state, "year", getattr(state, "current_year", None))
+    if year is None:
+        return {}
+    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
+    archived_inputs_dir = (
+        Path(workspace.get_asim_output_dir()) / f"inputs-year-{year}-iteration-{iteration}"
+    )
+    return {
+        "asim_input_households_csv_archived": str(archived_inputs_dir / "households.csv"),
+        "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
+        "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
+        "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
+        "asim_input_skims_zarr_archived": str(archived_inputs_dir / "skims.zarr"),
+    }
+
+
+def _default_usim_datastore_output_path(
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Optional[str]:
+    try:
+        datastore_name = get_usim_datastore_fname(settings, io="input")
+    except Exception:
+        return None
+    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
 def _load_asim_outputs(
@@ -742,19 +799,49 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        Declare the input paths/artifacts this postprocessor expects without
+        disk checks.
         """
-        del settings, state
-        asim_output_dir = workspace.get_asim_output_dir()
-        return {
-            "asim_output_dir": (
-                asim_output_dir if os.path.exists(asim_output_dir) else None
-            ),
+        del settings
+        inputs: Dict[str, Any] = {
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            **asim_staged_input_paths(workspace),
+            **asim_required_run_output_paths(workspace),
         }
+        inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
+        return inputs
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimPostprocessor.declared_expected_inputs(
+            settings, state, workspace
+        )
+        asim_output_dir = inputs.get("asim_output_dir")
+        inputs["asim_output_dir"] = (
+            asim_output_dir if asim_output_dir and os.path.exists(asim_output_dir) else None
+        )
+        zarr_path = inputs.get(ZARR_SKIMS)
+        inputs[ZARR_SKIMS] = (
+            zarr_path if zarr_path and os.path.exists(zarr_path) else None
+        )
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return ActivitysimPostprocessor.runtime_expected_inputs(
+            settings, state, workspace
+        )
 
     @staticmethod
     def expected_outputs(
@@ -767,18 +854,26 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         -----
         Output keys
             - ``asim_output_dir``: ActivitySim output directory retained after
-              postprocessing.
+              postprocessing. This coarse directory contract remains because
+              archived inputs and per-iteration outputs share stable topology
+              underneath it.
             - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
               for downstream UrbanSim/ATLAS steps when land use writeback is enabled.
+            - required ``*_asim_out`` keys: Canonical postprocessed parquet
+              outputs archived under the year/iteration directory.
+            - ``asim_input_*_archived``: Archived source inputs retained for
+              provenance-aware recovery.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        del settings, state
-        return {
+        outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            "usim_datastore_h5": None,
+            USIM_DATASTORE_H5: _default_usim_datastore_output_path(settings, workspace),
         }
+        outputs.update(_activitysim_iteration_output_paths(state, workspace))
+        outputs.update(_activitysim_archived_input_paths(state, workspace))
+        return outputs
 
     def __init__(
         self,

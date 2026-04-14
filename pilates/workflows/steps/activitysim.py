@@ -7,15 +7,17 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, cast
 
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
+    ActivitysimRunner,
     asim_runtime_zarr_path,
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
-from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS, ASIM_OUTPUT_KEY_MAP
-from pilates.activitysim.postprocessor import get_usim_datastore_fname
+from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
@@ -24,7 +26,6 @@ from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import (
-    FINAL_SKIMS_OMX,
     ASIM_SHARROW_CACHE_DIR,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -145,147 +146,6 @@ def _artifact_content_hash(value: Any) -> Optional[str]:
         if content_hash:
             return str(content_hash)
     return None
-
-
-def _activitysim_preprocess_input_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    del state
-    inputs: Dict[str, str] = {}
-    run_settings = getattr(settings, "run", None)
-    shared_settings = getattr(settings, "shared", None)
-    skims_fname = getattr(getattr(shared_settings, "skims", None), "fname", None)
-    region = getattr(run_settings, "region", None)
-    if region and skims_fname:
-        inputs[FINAL_SKIMS_OMX] = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            region,
-            skims_fname,
-        )
-    return inputs
-
-
-def _activitysim_preprocess_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    del settings, state
-    asim_dir = workspace.get_asim_mutable_data_dir()
-    return {
-        ASIM_LAND_USE_IN: os.path.join(asim_dir, "land_use.csv"),
-        ASIM_HOUSEHOLDS_IN: os.path.join(asim_dir, "households.csv"),
-        ASIM_PERSONS_IN: os.path.join(asim_dir, "persons.csv"),
-        ASIM_OMX_SKIMS: os.path.join(asim_dir, "skims.omx"),
-    }
-
-
-def _activitysim_run_input_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    del settings, state
-    inputs = {
-        ASIM_LAND_USE_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "land_use.csv"
-        ),
-        ASIM_HOUSEHOLDS_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "households.csv"
-        ),
-        ASIM_PERSONS_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "persons.csv"
-        ),
-        ZARR_SKIMS: asim_runtime_zarr_path(workspace),
-        ASIM_SHARROW_CACHE_DIR: asim_sharrow_cache_dir(workspace),
-    }
-    return inputs
-
-
-def _activitysim_run_output_stem(output_key: str) -> str:
-    return re.sub(r"_asim_out$", "", output_key)
-
-
-def _activitysim_run_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    del settings, state
-    final_pipeline_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
-    return {
-        output_key: str(
-            final_pipeline_dir / _activitysim_run_output_stem(output_key) / "final.parquet"
-        )
-        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
-    }
-
-
-def _activitysim_postprocess_input_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    year = getattr(state, "year", getattr(state, "current_year", None))
-    asim_output_dir = Path(workspace.get_asim_output_dir())
-    inputs: Dict[str, str] = {
-        ASIM_LAND_USE_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "land_use.csv"
-        ),
-        ASIM_HOUSEHOLDS_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "households.csv"
-        ),
-        ASIM_PERSONS_IN: os.path.join(
-            workspace.get_asim_mutable_data_dir(), "persons.csv"
-        ),
-        ASIM_OMX_SKIMS: os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx"),
-        ZARR_SKIMS: asim_runtime_zarr_path(workspace),
-    }
-    if year is not None:
-        final_pipeline_dir = asim_output_dir / "final_pipeline"
-        for output_key in dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values()):
-            inputs[output_key] = str(
-                final_pipeline_dir / _activitysim_run_output_stem(output_key) / "final.parquet"
-            )
-    return inputs
-
-
-def _activitysim_postprocess_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, str]:
-    year = getattr(state, "year", getattr(state, "current_year", None))
-    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
-    asim_output_dir = Path(workspace.get_asim_output_dir())
-    outputs: Dict[str, str] = {}
-    if year is not None:
-        iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
-        iteration_dir = asim_output_dir / f"year-{year}-iteration-{iteration}"
-        outputs.update(
-            {
-                output_key: str(
-                    iteration_dir / f"{_activitysim_run_output_stem(output_key)}.parquet"
-                )
-                for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
-            }
-        )
-    outputs.setdefault(
-        USIM_DATASTORE_H5,
-        os.path.join(
-            workspace.get_usim_mutable_data_dir(),
-            get_usim_datastore_fname(settings, io="input"),
-        ),
-    )
-    return outputs
 
 
 def _execute_activitysim_preprocess(
@@ -658,13 +518,15 @@ def _recover_activitysim_preprocess_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[ActivitySimPreprocessOutputs]:
-    del settings, state, outputs_holder, step_inputs
+    del outputs_holder, step_inputs
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     candidates = {
-        ASIM_HOUSEHOLDS_IN: asim_dir / "households.csv",
-        ASIM_PERSONS_IN: asim_dir / "persons.csv",
-        ASIM_LAND_USE_IN: asim_dir / "land_use.csv",
-        ASIM_OMX_SKIMS: asim_dir / "skims.omx",
+        key: Path(path)
+        for key, path in ActivitysimPreprocessor.expected_outputs(
+            settings, state, workspace
+        ).items()
+        if key in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
+        and isinstance(path, str)
     }
     recovered_inputs: Dict[str, Path] = {}
     recovered_hashes: Dict[str, str] = {}
@@ -716,7 +578,7 @@ def _recover_activitysim_run_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[ActivitySimRunOutputs]:
-    del settings, step_inputs
+    del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
     raw_outputs: Dict[str, Path] = {}
     raw_output_hashes: Dict[str, str] = {}
@@ -793,7 +655,10 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
-    runtime_zarr_candidate = Path(asim_runtime_zarr_path(workspace))
+    runner_expected_inputs = ActivitysimRunner.expected_inputs(settings, state, workspace)
+    runtime_zarr_candidate = Path(
+        cast(str, runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace))
+    )
     zarr_candidate = Path(
         _existing_local_path(runtime_zarr_candidate, workspace)
         or runtime_zarr_candidate
@@ -1312,8 +1177,8 @@ def make_activitysim_preprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_preprocess_outputs,
-            input_paths=_activitysim_preprocess_input_paths,
-            output_paths=_activitysim_preprocess_output_paths,
+            input_paths=ActivitysimPreprocessor.declared_expected_inputs,
+            output_paths=ActivitysimPreprocessor.expected_outputs,
             cache_hydration="metadata",
             input_binding="paths",
             input_materialization="requested",
@@ -1509,8 +1374,8 @@ def make_activitysim_run_step(
             output_recoverer=_recover_activitysim_run_outputs,
             declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
             schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
-            input_paths=_activitysim_run_input_paths,
-            output_paths=_activitysim_run_output_paths,
+            input_paths=ActivitysimRunner.declared_expected_inputs,
+            output_paths=ActivitysimRunner.expected_outputs,
             cache_hydration="metadata",
             input_binding="paths",
             input_materialization="requested",
@@ -1740,8 +1605,8 @@ def make_activitysim_postprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_postprocess_outputs,
-            input_paths=_activitysim_postprocess_input_paths,
-            output_paths=_activitysim_postprocess_output_paths,
+            input_paths=ActivitysimPostprocessor.declared_expected_inputs,
+            output_paths=ActivitysimPostprocessor.expected_outputs,
             cache_hydration="metadata",
             input_binding="paths",
             input_materialization="requested",

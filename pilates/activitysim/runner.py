@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import inspect
 from pathlib import Path
@@ -14,6 +15,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -26,6 +28,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     ASIM_SHARROW_CACHE_DIR,
+    ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,6 +137,28 @@ def asim_runtime_cache_dir(workspace: Workspace) -> str:
 
 def asim_runtime_zarr_path(workspace: Workspace) -> str:
     return os.path.join(asim_runtime_cache_dir(workspace), "skims.zarr")
+
+
+def asim_staged_input_paths(workspace: Workspace) -> Dict[str, str]:
+    asim_data_dir = workspace.get_asim_mutable_data_dir()
+    return {
+        ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
+        ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
+        ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
+        ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
+    }
+
+
+def asim_required_run_output_paths(workspace: Workspace) -> Dict[str, str]:
+    final_pipeline_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
+    return {
+        output_key: str(
+            final_pipeline_dir
+            / re.sub(r"_asim_out$", "", output_key)
+            / "final.parquet"
+        )
+        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    }
 
 
 def _dir_contains_files(path: str) -> bool:
@@ -258,7 +283,7 @@ class ActivitysimCompileRunner(GenericRunner):
               descriptions used by ActivitySim and downstream models.
         """
         outputs: Dict[str, Any] = {
-            "zarr_skims": os.path.join(
+            ZARR_SKIMS: os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
         }
@@ -425,16 +450,45 @@ class ActivitysimRunner(GenericRunner):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this runner expects from the workflow.
+        Declare the input paths/artifacts this runner expects without disk checks.
         """
-        zarr_path = asim_runtime_zarr_path(workspace)
-        return {
-            "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
-        }
+        del state
+        inputs: Dict[str, Any] = dict(asim_staged_input_paths(workspace))
+        inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
+        cache_dir = asim_sharrow_cache_dir(workspace)
+        inputs[ASIM_SHARROW_CACHE_DIR] = (
+            cache_dir if persist_sharrow_cache_enabled(settings) else None
+        )
+        return inputs
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimRunner.declared_expected_inputs(settings, state, workspace)
+        inputs[ZARR_SKIMS] = (
+            inputs[ZARR_SKIMS]
+            if inputs.get(ZARR_SKIMS) and os.path.exists(inputs[ZARR_SKIMS])
+            else None
+        )
+        cache_dir = inputs.get(ASIM_SHARROW_CACHE_DIR)
+        inputs[ASIM_SHARROW_CACHE_DIR] = (
+            cache_dir if cache_dir and _dir_contains_files(cache_dir) else None
+        )
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return ActivitysimRunner.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -447,11 +501,16 @@ class ActivitysimRunner(GenericRunner):
         -----
         Output keys
             - ``asim_output_dir``: ActivitySim output directory for the run.
+            - required ``*_asim_out`` keys: Canonical final_pipeline parquet
+              outputs for the stable ActivitySim handoff surface.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        return {"asim_output_dir": workspace.get_asim_output_dir()}
+        del settings, state
+        outputs: Dict[str, Any] = {"asim_output_dir": workspace.get_asim_output_dir()}
+        outputs.update(asim_required_run_output_paths(workspace))
+        return outputs
 
     def __init__(
         self,

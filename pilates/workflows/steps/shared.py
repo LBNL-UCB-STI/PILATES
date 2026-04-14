@@ -199,6 +199,7 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Union,
     Set,
     TYPE_CHECKING,
     Type,
@@ -793,6 +794,13 @@ OutputLogger = Callable[
 ]
 OutputReplayer = OutputLogger
 OutputRecoverer = Callable[..., Optional[StepOutputsT]]
+RecovererRequiredKeys = Union[
+    Sequence[str],
+    Callable[[WorkflowState, Mapping[str, Path]], Sequence[str]],
+]
+RecovererPrimaryPathResolver = Callable[
+    [Mapping[str, Path], WorkflowState], Optional[Path]
+]
 
 
 @dataclass(frozen=True)
@@ -1621,3 +1629,77 @@ def recovered_cached_paths(
         if path is not None:
             recovered[key] = Path(path)
     return recovered
+
+
+def make_default_recoverer(
+    *,
+    outputs_class: Type[StepOutputsT],
+    mapping_field: Optional[str] = None,
+    dir_field: Optional[str] = None,
+    dir_getter: Optional[Callable[["Workspace"], Union[str, Path]]] = None,
+    required_keys: Optional[RecovererRequiredKeys] = None,
+    primary_path_field: Optional[str] = None,
+    primary_path_resolver: Optional[RecovererPrimaryPathResolver] = None,
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> OutputRecoverer:
+    """
+    Build a cache-hit recoverer for the common recovered-paths -> typed-outputs pattern.
+    """
+
+    def _recover(
+        *,
+        settings: "PilatesConfig",
+        state: WorkflowState,
+        workspace: "Workspace",
+        coupler: CouplerProtocol,
+        outputs_holder: StepOutputsHolder,
+        step_inputs: Optional[Mapping[str, Any]],
+        cached_outputs: Optional[Mapping[str, Any]],
+        run_id: Optional[str],
+    ) -> Optional[StepOutputsT]:
+        del settings, coupler, outputs_holder, step_inputs
+        recovered_paths = recovered_cached_paths(
+            cached_outputs=cached_outputs,
+            run_id=run_id,
+            workspace=workspace,
+            step_logger=step_logger,
+            log_context=log_context,
+        )
+        if not recovered_paths:
+            return None
+
+        resolved_required_keys: Sequence[str] = ()
+        if required_keys is not None:
+            if callable(required_keys):
+                resolved_required_keys = tuple(required_keys(state, recovered_paths))
+            else:
+                resolved_required_keys = tuple(required_keys)
+            if any(key not in recovered_paths for key in resolved_required_keys):
+                return None
+
+        init_kwargs: Dict[str, Any] = {}
+        if dir_field is not None:
+            if dir_getter is None:
+                raise ValueError(
+                    f"{outputs_class.__name__} recoverer requires dir_getter when dir_field is set."
+                )
+            dir_value = dir_getter(workspace)
+            init_kwargs[dir_field] = dir_value if isinstance(dir_value, Path) else Path(dir_value)
+
+        if primary_path_field is not None:
+            if primary_path_resolver is None:
+                raise ValueError(
+                    f"{outputs_class.__name__} recoverer requires primary_path_resolver when primary_path_field is set."
+                )
+            primary_path = primary_path_resolver(recovered_paths, state)
+            if primary_path is None:
+                return None
+            init_kwargs[primary_path_field] = primary_path
+
+        if mapping_field is not None:
+            init_kwargs[mapping_field] = dict(recovered_paths)
+
+        return outputs_class(**init_kwargs)
+
+    return _recover
