@@ -735,7 +735,7 @@ def test_workflow_stage_propagates_requested_input_staging_execution_options():
     )
 
 
-def test_workflow_stage_filters_requested_input_paths_to_resolved_binding_keys():
+def test_workflow_stage_drops_requested_input_paths_for_explicit_binding_keys():
     scenario = _FakeScenario()
     workspace = SimpleNamespace(
         full_path="/tmp/workspace",
@@ -787,9 +787,7 @@ def test_workflow_stage_filters_requested_input_paths_to_resolved_binding_keys()
         },
         load_inputs=None,
         input_binding="paths",
-        input_paths={
-            "households": "/tmp/workspace/activitysim/data/households.csv",
-        },
+        input_paths={},
         input_materialization="requested",
     )
 
@@ -822,6 +820,63 @@ def test_workflow_stage_drops_requested_input_paths_without_resolved_input_mappi
         name="dummy_step",
         step_func=_decorated_step,
         binding=BindingResult(optional_input_keys=["final_skims_omx"]),
+    )
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"] == ExecutionOptions(
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+        load_inputs=None,
+        input_binding="paths",
+        input_paths={},
+        input_materialization="requested",
+    )
+
+
+def test_workflow_stage_drops_requested_input_paths_for_explicit_binding_inputs():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(
+        full_path="/tmp/workspace",
+        get_usim_mutable_data_dir=lambda: "/tmp/workspace/urbansim/data",
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        input_binding="paths",
+        input_materialization="requested",
+        input_paths=lambda *, workspace: {
+            "usim_population_source_h5": (
+                f"{workspace.get_usim_mutable_data_dir()}/population.h5"
+            ),
+        },
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(
+        name="dummy_step",
+        step_func=_decorated_step,
+        binding=BindingResult(
+            inputs={"usim_population_source_h5": "/tmp/upstream/population.h5"}
+        ),
     )
 
     stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])

@@ -161,6 +161,19 @@ def _resolved_input_keys_for_step(
     return None
 
 
+def _explicit_input_keys_for_step(
+    *,
+    step: StepRef,
+    binding: Optional[BindingResult],
+) -> Set[str]:
+    explicit_keys: Set[str] = set()
+    if binding is not None and isinstance(binding.inputs, Mapping):
+        explicit_keys.update(str(key) for key in binding.inputs.keys())
+    if step.inputs is not None:
+        explicit_keys.update(str(key) for key in step.inputs.keys())
+    return explicit_keys
+
+
 def _warn_for_undeclared_step_inputs(
     *,
     step_name: str,
@@ -576,6 +589,10 @@ def _build_step_run_kwargs(
             step=step,
             binding=resolved_binding,
         )
+        explicit_input_keys = _explicit_input_keys_for_step(
+            step=step,
+            binding=resolved_binding,
+        )
         if resolved_input_keys is None:
             # Preserve declared requested destinations for metadata-only steps
             # that do not provide an explicit resolved input mapping. When a
@@ -601,6 +618,21 @@ def _build_step_run_kwargs(
                     skipped_input_keys,
                 )
             resolved_input_paths = requested_input_paths
+        if resolved_input_paths:
+            explicit_requested_keys = sorted(
+                key for key in resolved_input_paths.keys() if str(key) in explicit_input_keys
+            )
+            if explicit_requested_keys:
+                logger.debug(
+                    "Step '%s' skipped requested input staging for explicit input values: %s",
+                    step.name,
+                    explicit_requested_keys,
+                )
+                resolved_input_paths = {
+                    key: value
+                    for key, value in resolved_input_paths.items()
+                    if str(key) not in explicit_input_keys
+                }
     run_kwargs["execution_options"] = ExecutionOptions(
         runtime_kwargs=runtime_kwargs,
         load_inputs=resolved_load_inputs,
