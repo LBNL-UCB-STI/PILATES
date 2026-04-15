@@ -194,6 +194,19 @@ def test_validate_workflow_step_contracts_flags_missing_required_input_provider_
         )
 
 
+def test_invoke_contract_provider_does_not_mask_keyword_provider_typeerror():
+    def _provider(settings, state, workspace):
+        raise TypeError("intentional provider failure")
+
+    with pytest.raises(TypeError, match="intentional provider failure"):
+        step_shared._invoke_contract_provider(
+            _provider,
+            settings=object(),
+            state=object(),
+            workspace=object(),
+        )
+
+
 def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatch):
     """Removing a tracked output class is detected as holder/output drift."""
     patched_classes = dict(step_shared.STEP_OUTPUTS_CLASSES)

@@ -1164,6 +1164,32 @@ def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_meta
     assert scenario_kwargs["step_facet"]["seed"] == 777
 
 
+def test_build_scenario_runtime_contract_validates_only_enabled_steps():
+    all_steps = [object(), object()]
+    enabled_steps = [all_steps[1]]
+    validation_calls = []
+
+    run_module.scenario_runtime.build_scenario_runtime_contract(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        scenario_id="scenario-alpha",
+        seed=None,
+        cache_epoch=0,
+        build_scenario_consist_kwargs_fn=lambda _settings: {},
+        build_coupler_schema_fn=lambda *_args, **_kwargs: {},
+        validate_workflow_step_contracts_fn=lambda **kwargs: validation_calls.append(
+            kwargs["declared_steps"]
+        ),
+        build_schema_steps_fn=lambda: all_steps,
+        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: enabled_steps,
+        merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
+        scenario_name_template="scenario-{run_name}",
+    )
+
+    assert validation_calls == [enabled_steps]
+
+
 def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
     scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
     proxy = run_module._ScenarioParentLinkProxy(scenario)

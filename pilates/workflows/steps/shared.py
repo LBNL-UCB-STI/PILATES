@@ -1017,7 +1017,19 @@ def _invoke_contract_provider(
             pyinspect.Parameter.VAR_POSITIONAL,
         )
     ]
-    if positional_params:
+    required_positional_params = [
+        param
+        for param in positional_params
+        if param.kind != pyinspect.Parameter.VAR_POSITIONAL
+        and param.default is pyinspect.Parameter.empty
+    ]
+    accepts_single_context = (
+        not accepts_var_kwargs
+        and len(required_positional_params) == 1
+        and required_positional_params[0].name
+        not in {"settings", "state", "workspace"}
+    )
+    if accepts_single_context:
         return provider(context)
 
     if keyword_error is not None:

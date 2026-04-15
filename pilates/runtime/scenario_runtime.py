@@ -443,16 +443,16 @@ def build_scenario_runtime_contract(
     scenario_kwargs.setdefault("cache_epoch", cache_epoch)
 
     schema_steps_all = build_schema_steps_fn()
-    validate_workflow_step_contracts_fn(
-        declared_steps=schema_steps_all,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
     schema_steps_enabled = filter_schema_steps_for_enabled_models_fn(
         schema_steps_all,
         settings,
         include_optional=True,
+    )
+    validate_workflow_step_contracts_fn(
+        declared_steps=schema_steps_enabled,
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
     coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
     required_schema = build_coupler_schema_fn(
