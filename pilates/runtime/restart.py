@@ -232,6 +232,26 @@ def _progress_tuple(snapshot: RestartStateSnapshot) -> Tuple[int, int, int]:
     )
 
 
+def _hydrate_archive_workflow_manifests(
+    *,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> None:
+    if not local_run_dir or not archive_run_dir:
+        return
+    source_workflow_dir = Path(archive_run_dir) / ".workflow"
+    if not source_workflow_dir.exists():
+        return
+    target_workflow_dir = Path(local_run_dir) / ".workflow"
+    for manifest_path in source_workflow_dir.rglob("*.yaml"):
+        relative_path = manifest_path.relative_to(source_workflow_dir)
+        target_path = target_workflow_dir / relative_path
+        if target_path.exists():
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, target_path)
+
+
 def is_rewind_resume_request(
     *,
     state: Any,
@@ -931,6 +951,12 @@ def hydrate_rewind_runner_inputs(
     read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
     query_facet: Optional[Mapping[str, Any]] = None,
 ) -> Optional[RestartHydrationSummary]:
+    """
+    Legacy manual recovery helper for exact-rewind resume overlays.
+
+    The normal launcher path no longer calls this; replay-first restarts should
+    rely on scenario replay plus cache hits instead.
+    """
     contract = restart_exact_rewind_contract(
         settings=settings,
         state=state,
@@ -1082,6 +1108,13 @@ def hydrate_missing_restart_artifacts(
     workflow_stage: WorkflowStageLike,
     query_facet: Optional[Mapping[str, Any]] = None,
 ) -> RestartHydrationSummary:
+    """
+    Legacy manual recovery helper for explicit frontier artifact hydration.
+
+    The default launcher path is replay-first and does not invoke this helper.
+    It remains available as narrow operator tooling and for focused tests while
+    the legacy restart subsystem is retired incrementally.
+    """
     contract = restart_frontier_contract(
         settings=settings,
         state=state,
@@ -1131,6 +1164,10 @@ def hydrate_missing_restart_artifacts(
             reason="missing_resume_year",
         )
     if not missing_keys:
+        _hydrate_archive_workflow_manifests(
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+        )
         summary["success"] = True
         return summary
 
@@ -1289,5 +1326,9 @@ def hydrate_missing_restart_artifacts(
         if used_iteration_fallback:
             summary["fallback_reason"] = "iteration_agnostic_retry"
 
+    _hydrate_archive_workflow_manifests(
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
     summary["success"] = True
     return summary

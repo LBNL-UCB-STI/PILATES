@@ -18,17 +18,24 @@ integration drift is caught and what the expected startup failure looks like.
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from consist import define_step
 
+from pilates.activitysim.runner import ActivitysimRunner
+from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_PERSONS_IN,
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     LINKSTATS,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
@@ -87,11 +94,104 @@ def _declared_schema_steps():
     ]
 
 
+def _validation_runtime_context(tmp_path: Path):
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam" / "output"),
+        get_atlas_mutable_input_dir=lambda: str(tmp_path / "atlas" / "input"),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "123"}},
+        ),
+        runtime=SimpleNamespace(
+            flags=SimpleNamespace(
+                activity_demand_enabled=True,
+                vehicle_ownership_model_enabled=True,
+            ),
+        ),
+        activitysim=SimpleNamespace(persist_sharrow_cache=True),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="scenario"),
+        atlas=SimpleNamespace(model_dump=lambda: {"max_retries": 1}),
+    )
+    state = SimpleNamespace(
+        year=2025,
+        current_year=2025,
+        forecast_year=2025,
+        iteration=1,
+        current_inner_iter=1,
+        start_year=2017,
+        is_start_year=lambda: False,
+    )
+    return settings, state, workspace
+
+
 def test_validate_workflow_step_contracts_passes_for_current_setup():
     """Happy-path: current declared steps satisfy all contract invariants."""
     step_shared.validate_workflow_step_contracts(
         declared_steps=_declared_schema_steps()
     )
+
+
+def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    settings, state, workspace = _validation_runtime_context(tmp_path)
+
+    monkeypatch.setattr(
+        AtlasPostprocessor,
+        "expected_outputs",
+        staticmethod(
+            lambda *_args, **_kwargs: {
+                "atlas_output_dir": str(tmp_path / "atlas" / "output"),
+                "atlas_vehicles2_output": str(tmp_path / "atlas" / "output" / "vehicles2_2025.csv"),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="atlas_postprocess.*missing required catalog output keys"):
+        step_shared.validate_workflow_step_contracts(
+            declared_steps=_declared_schema_steps(),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+
+def test_validate_workflow_step_contracts_flags_missing_required_input_provider_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    settings, state, workspace = _validation_runtime_context(tmp_path)
+
+    monkeypatch.setattr(
+        ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(
+            lambda *_args, **_kwargs: {
+                ASIM_LAND_USE_IN: str(tmp_path / "activitysim" / "data" / "land_use.csv"),
+                ASIM_HOUSEHOLDS_IN: str(tmp_path / "activitysim" / "data" / "households.csv"),
+                ASIM_PERSONS_IN: str(tmp_path / "activitysim" / "data" / "persons.csv"),
+            }
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="activitysim_run.*missing required catalog input keys.*zarr_skims"):
+        step_shared.validate_workflow_step_contracts(
+            declared_steps=_declared_schema_steps(),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
 
 
 def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatch):
@@ -257,44 +357,6 @@ def test_atlas_run_output_class_expands_stateful_required_outputs():
     assert required == ("householdv_2021", "vehicles_2021")
 
 
-def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():
-    """Deprecated StepRef.required_outputs override requires rationale at validation time."""
-
-    @define_step(model="dummy_step")
-    def _dummy_step(*args, **kwargs):
-        return None
-
-    with pytest.raises(RuntimeError, match="requires StepRef.required_outputs_rationale"):
-        step_shared.validate_workflow_step_contracts(
-            step_refs=[
-                StepRef(
-                    name="dummy_step",
-                    step_func=_dummy_step,
-                    required_outputs=["override_key"],
-                )
-            ]
-        )
-
-
-def test_validate_workflow_step_contracts_accepts_rationalized_required_outputs_override():
-    """Compatibility override remains allowed when rationale is provided."""
-
-    @define_step(model="dummy_step")
-    def _dummy_step(*args, **kwargs):
-        return None
-
-    step_shared.validate_workflow_step_contracts(
-        step_refs=[
-            StepRef(
-                name="dummy_step",
-                step_func=_dummy_step,
-                required_outputs=["override_key"],
-                required_outputs_rationale="Temporary bridge during migration.",
-            )
-        ]
-    )
-
-
 def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
     """Runtime step launches must enforce required outputs, not the full declared schema."""
 
@@ -309,6 +371,21 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
             continue
 
         step_func = step_funcs[step_name]
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="test"),
+            urbansim=SimpleNamespace(
+                region_mappings={"region_to_region_id": {"test": "000"}},
+                input_file_template="usim_{region_id}.h5",
+            ),
+        )
+        workspace = SimpleNamespace(
+            full_path="/tmp/workspace",
+            get_asim_output_dir=lambda: "/tmp/activitysim/output",
+            get_asim_mutable_data_dir=lambda: "/tmp/activitysim/data",
+            get_beam_output_dir=lambda: "/tmp/beam/output",
+            get_beam_mutable_data_dir=lambda: "/tmp/beam/data",
+            get_usim_mutable_data_dir=lambda: "/tmp/usim/data",
+        )
         run_kwargs = _build_step_run_kwargs(
             step=StepRef(
                 name=step_name,
@@ -316,9 +393,9 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
                 year=2023,
                 iteration=0,
             ),
-            settings=SimpleNamespace(run=None),
+            settings=settings,
             state=SimpleNamespace(),
-            workspace=SimpleNamespace(),
+            workspace=workspace,
             runtime_kwargs={},
             stage_name="test_stage",
             default_iteration=0,

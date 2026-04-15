@@ -191,6 +191,7 @@ import logging
 import os
 from dataclasses import dataclass, fields
 from pathlib import Path
+from types import SimpleNamespace
 from typing import (
     Any,
     Callable,
@@ -199,14 +200,13 @@ from typing import (
     Mapping,
     Optional,
     Sequence,
+    Union,
     Set,
     TYPE_CHECKING,
     Type,
     TypeVar,
     cast,
 )
-
-import h5py
 from consist import define_step
 from sqlalchemy import inspect
 
@@ -216,6 +216,7 @@ from pilates.utils.beam_warmstart import (
 )
 from pilates.utils.consist_types import CouplerProtocol  # noqa: F401
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,  # noqa: F401
     log_and_set_input as log_and_set_input,
     log_and_set_output as log_and_set_output,
@@ -249,6 +250,10 @@ from pilates.workflows.outputs_base import (
     declared_outputs_for_step_outputs_class,
     required_outputs_for_step_outputs_class,
 )
+from pilates.workflows.tracker_outputs import (
+    load_tracker_run_outputs,
+    merge_canonical_output_mappings,
+)
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -275,6 +280,8 @@ from pilates.workflows.catalog import (
     runtime_step_dependencies_from_catalog,
     step_dependencies_from_catalog,
     step_outputs_classes_from_catalog,
+    workflow_step_key_match,
+    workflow_step_spec_for_step_name,
 )
 from pilates.workflows.step_consist_meta import consist_step_meta
 from workflow_state import WorkflowState
@@ -284,18 +291,6 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
-
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    """Extract a content hash from an artifact-like mapping value."""
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
-
 
 def _log_step_records(
     *,
@@ -342,70 +337,6 @@ def _log_step_records(
             description=description,
             **meta,
         )
-
-
-def _log_named_h5_tables(
-    *,
-    path: str,
-    direction: str,
-    table_keys: Dict[str, str],
-    description_by_table: Optional[Dict[str, str]] = None,
-    extra_meta_fn: Optional[Callable[[str, str], Dict[str, Any]]] = None,
-) -> None:
-    """
-    Log selected HDF5 datasets as individual ``h5_table`` artifacts.
-
-    Parameters
-    ----------
-    path : str
-        HDF5 container path.
-    direction : str
-        Consist artifact direction, usually ``"input"`` or ``"output"``.
-    table_keys : dict
-        Mapping of HDF5 table paths to artifact keys.
-    description_by_table : dict, optional
-        Optional mapping of HDF5 table paths to descriptions.
-    extra_meta_fn : callable, optional
-        Callback returning extra metadata for each `(artifact_key, table_path)`.
-    """
-    description_by_table = description_by_table or {}
-    try:
-        with h5py.File(path, "r") as h5_file:
-            for table_path, artifact_key in table_keys.items():
-                normalized_path = (
-                    table_path if str(table_path).startswith("/") else f"/{table_path}"
-                )
-                if normalized_path not in h5_file:
-                    logger.debug(
-                        "Skipping HDF5 table log for missing dataset %s in %s",
-                        normalized_path,
-                        path,
-                    )
-                    continue
-                meta: Dict[str, Any] = {
-                    "profile_file_schema": True,
-                    "h5_parent_key": artifact_key.rsplit("_table_", 1)[0]
-                    if "_table_" in artifact_key
-                    else artifact_key,
-                    "h5_table_name": normalized_path.split("/")[-1],
-                }
-                if extra_meta_fn is not None:
-                    extra_meta = extra_meta_fn(artifact_key, normalized_path)
-                    if extra_meta:
-                        meta.update(extra_meta)
-                cr.log_h5_table(
-                    path,
-                    key=artifact_key,
-                    table_path=normalized_path,
-                    direction=direction,
-                    description=description_by_table.get(
-                        table_path, f"HDF5 table {normalized_path}"
-                    ),
-                    **meta,
-                )
-    except OSError:
-        logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
-
 
 def _parse_prefixed_iteration_key(
     short_name: str, prefix: str
@@ -788,6 +719,13 @@ OutputLogger = Callable[
 ]
 OutputReplayer = OutputLogger
 OutputRecoverer = Callable[..., Optional[StepOutputsT]]
+RecovererRequiredKeys = Union[
+    Sequence[str],
+    Callable[[WorkflowState, Mapping[str, Path]], Sequence[str]],
+]
+RecovererPrimaryPathResolver = Callable[
+    [Mapping[str, Path], WorkflowState], Optional[Path]
+]
 
 
 @dataclass(frozen=True)
@@ -812,6 +750,14 @@ class StandardStepSpec:
     output_recoverer: Optional[OutputRecoverer] = None
     declared_outputs: Optional[list[str]] = None
     schema_outputs: Optional[list[str]] = None
+    inputs: Any = None
+    output_paths: Any = None
+    load_inputs: Optional[bool] = None
+    cache_mode: Optional[str] = None
+    cache_hydration: Optional[str] = None
+    input_binding: Optional[str] = None
+    input_paths: Any = None
+    input_materialization: Optional[str] = None
     use_logged_wrapper: bool = True
     step_description: Optional[str] = None
     tags: Optional[list[str]] = None
@@ -943,6 +889,14 @@ STEP_DEPENDENCIES = step_dependencies_from_catalog()
 STEP_RUNTIME_DEPENDENCIES = runtime_step_dependencies_from_catalog()
 
 DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
+STRICT_OUTPUT_PATH_CONTRACT_STEPS = frozenset(
+    {
+        "activitysim_preprocess",
+        "activitysim_run",
+        "activitysim_postprocess",
+        "atlas_postprocess",
+    }
+)
 
 
 def validate_step_ready(step_name: str, outputs_holder: StepOutputsHolder) -> None:
@@ -980,11 +934,191 @@ def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
     return None
 
 
+def _step_meta_value(step_meta: Any, name: str) -> Any:
+    if step_meta is None:
+        return None
+    direct = getattr(step_meta, name, None)
+    if direct is not None:
+        return direct
+    extra = getattr(step_meta, "extra", None) or {}
+    if isinstance(extra, Mapping):
+        return extra.get(name)
+    return None
+
+
+def _provider_source_label(provider: Any) -> str:
+    if provider is None:
+        return "<none>"
+    module = getattr(provider, "__module__", None)
+    qualname = getattr(provider, "__qualname__", None) or getattr(
+        provider, "__name__", None
+    )
+    if module and qualname:
+        return f"{module}.{qualname}"
+    if qualname:
+        return qualname
+    return repr(provider)
+
+
+def _provider_fix_location(provider: Any) -> str:
+    source_file = pyinspect.getsourcefile(provider)
+    if source_file:
+        return source_file
+    return _provider_source_label(provider)
+
+
+def _invoke_contract_provider(
+    provider: Callable[..., Any],
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Any:
+    signature = pyinspect.signature(provider)
+    params = list(signature.parameters.values())
+    if not params:
+        return provider()
+
+    context = SimpleNamespace(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        runtime_settings=settings,
+        runtime_state=state,
+        runtime_workspace=workspace,
+    )
+    keyword_values = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    accepts_var_kwargs = any(
+        param.kind == pyinspect.Parameter.VAR_KEYWORD for param in params
+    )
+    kwargs = {
+        name: value
+        for name, value in keyword_values.items()
+        if accepts_var_kwargs or name in signature.parameters
+    }
+    keyword_error: Optional[TypeError] = None
+    if kwargs:
+        try:
+            return provider(**kwargs)
+        except TypeError as exc:
+            keyword_error = exc
+
+    positional_params = [
+        param
+        for param in params
+        if param.kind
+        in (
+            pyinspect.Parameter.POSITIONAL_ONLY,
+            pyinspect.Parameter.POSITIONAL_OR_KEYWORD,
+            pyinspect.Parameter.VAR_POSITIONAL,
+        )
+    ]
+    if positional_params:
+        return provider(context)
+
+    if keyword_error is not None:
+        raise keyword_error
+    raise TypeError(
+        "provider must accept settings/state/workspace keyword args or a single context object"
+    )
+
+
+def _resolve_contract_provider_mapping(
+    provider: Any,
+    *,
+    step_name: str,
+    provider_name: str,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> Optional[Mapping[str, Any]]:
+    if provider is None:
+        return None
+    resolved = provider
+    if callable(provider):
+        try:
+            resolved = _invoke_contract_provider(
+                provider,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                f"Step '{step_name}': failed to evaluate {provider_name} provider "
+                f"{_provider_source_label(provider)}. Fix: inspect {_provider_fix_location(provider)}. "
+                f"Original error: {exc}"
+            ) from exc
+    if resolved is None:
+        return None
+    if not isinstance(resolved, Mapping):
+        raise RuntimeError(
+            f"Step '{step_name}': {provider_name} provider {_provider_source_label(provider)} "
+            f"must return a mapping, got {type(resolved).__name__}. "
+            f"Fix: inspect {_provider_fix_location(provider)}."
+        )
+    return resolved
+
+
+def _validate_contract_provider_keys(
+    *,
+    errors: list[str],
+    step_name: str,
+    direction: str,
+    provider_name: str,
+    provider: Any,
+    required_keys: Sequence[str],
+    optional_keys: Sequence[str],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> None:
+    mapping = _resolve_contract_provider_mapping(
+        provider,
+        step_name=step_name,
+        provider_name=provider_name,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if mapping is None:
+        return
+
+    canonical_provider_keys: Set[str] = set()
+    for raw_key in mapping.keys():
+        if not isinstance(raw_key, str):
+            errors.append(
+                f"Step '{step_name}': {provider_name} provider returned non-string {direction} key "
+                f"{raw_key!r}. Fix: inspect {_provider_fix_location(provider)}."
+            )
+            continue
+        match = workflow_step_key_match(step_name, raw_key, direction=direction)
+        canonical_provider_keys.add(match.canonical_key)
+
+    missing_required = [
+        key for key in required_keys if key not in canonical_provider_keys
+    ]
+    if missing_required:
+        errors.append(
+            f"Step '{step_name}': {provider_name} provider {_provider_source_label(provider)} "
+            f"is missing required catalog {direction} keys {missing_required}. "
+            f"Provider returned {sorted(canonical_provider_keys)}. "
+            f"Fix: inspect {_provider_fix_location(provider)}."
+        )
+
+
 def validate_workflow_step_contracts(
     *,
     declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
     allow_untracked_declared: Optional[Set[str]] = None,
     step_refs: Optional[Iterable[Any]] = None,
+    settings: Any = None,
+    state: Any = None,
+    workspace: Any = None,
 ) -> None:
     """
     Validate internal workflow step contracts.
@@ -998,7 +1132,6 @@ def validate_workflow_step_contracts(
     - Dependency specs reference known step names.
     - Optionally, declared step models are consistent with tracked step names.
     - For tracked declared steps, canonical outputs match step metadata outputs.
-    - Deprecated ``StepRef.required_outputs`` overrides require rationale.
     """
     errors: list[str] = []
 
@@ -1133,6 +1266,7 @@ def validate_workflow_step_contracts(
         for step_name in tracked_declared_names:
             outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
             step_func = declared_by_model.get(step_name)
+            spec = workflow_step_spec_for_step_name(step_name)
             if outputs_class is None or step_func is None:
                 continue
             required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
@@ -1152,19 +1286,40 @@ def validate_workflow_step_contracts(
                     f"{metadata_outputs}. Fix: remove metadata override or update declared_outputs in "
                     f"{outputs_class.__name__}."
                 )
-
-    if step_refs is not None:
-        for step_ref in step_refs:
-            required_outputs = getattr(step_ref, "required_outputs", None)
-            if required_outputs is None:
-                continue
-            rationale = getattr(step_ref, "required_outputs_rationale", None)
-            step_name = getattr(step_ref, "name", "<unknown>")
-            if not isinstance(rationale, str) or not rationale.strip():
-                errors.append(
-                    f"Step '{step_name}': deprecated StepRef.required_outputs override requires "
-                    "StepRef.required_outputs_rationale."
-                )
+            if (
+                step_meta is not None
+                and settings is not None
+                and state is not None
+                and workspace is not None
+            ):
+                input_paths_provider = _step_meta_value(step_meta, "input_paths")
+                if input_paths_provider is not None:
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="input",
+                        provider_name="input_paths",
+                        provider=input_paths_provider,
+                        required_keys=tuple(spec.input_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_input_keys) if spec is not None else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
+                if step_name in STRICT_OUTPUT_PATH_CONTRACT_STEPS:
+                    output_paths_provider = _step_meta_value(step_meta, "output_paths")
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="output",
+                        provider_name="output_paths",
+                        provider=output_paths_provider,
+                        required_keys=tuple(spec.output_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_output_keys) if spec is not None else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
 
     if errors:
         raise RuntimeError(
@@ -1208,6 +1363,14 @@ def _make_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    inputs: Any = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     log_start_message: bool = False,
     log_completion_message: bool = False,
     step_description: Optional[str] = None,
@@ -1337,6 +1500,14 @@ def _make_typed_step_function(
             if declared_outputs is not None
             else _declared_outputs_from_class(outputs_class)
         ),
+        inputs=inputs,
+        output_paths=output_paths,
+        load_inputs=load_inputs,
+        cache_mode=cache_mode,
+        cache_hydration=cache_hydration,
+        input_binding=input_binding,
+        input_paths=input_paths,
+        input_materialization=input_materialization,
         tags=step_tags,
     )
 
@@ -1358,6 +1529,14 @@ def _make_logged_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    inputs: Any = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     step_description: Optional[str] = None,
     tags: Optional[list[str]] = None,
     step_logger: Optional[logging.Logger] = None,
@@ -1382,6 +1561,14 @@ def _make_logged_typed_step_function(
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
+        inputs=inputs,
+        output_paths=output_paths,
+        load_inputs=load_inputs,
+        cache_mode=cache_mode,
+        cache_hydration=cache_hydration,
+        input_binding=input_binding,
+        input_paths=input_paths,
+        input_materialization=input_materialization,
         log_start_message=True,
         log_completion_message=True,
         step_logger=step_logger or logger,
@@ -1436,6 +1623,14 @@ def build_standard_step(
         output_recoverer=spec.output_recoverer,
         declared_outputs=spec.declared_outputs,
         schema_outputs=spec.schema_outputs,
+        inputs=spec.inputs,
+        output_paths=spec.output_paths,
+        load_inputs=spec.load_inputs,
+        cache_mode=spec.cache_mode,
+        cache_hydration=spec.cache_hydration,
+        input_binding=spec.input_binding,
+        input_paths=spec.input_paths,
+        input_materialization=spec.input_materialization,
         step_description=spec.step_description,
         tags=spec.tags,
         step_logger=spec.step_logger,
@@ -1474,10 +1669,14 @@ def _decorate_step_with_consist(
     description: str,
     schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
+    inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
     cache_mode: Optional[str] = None,
     cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:
     """
@@ -1496,10 +1695,18 @@ def _decorate_step_with_consist(
         # what each means for Consist cache identity and how to add new models.
         **consist_step_meta(step_model),
     }
+    if input_binding is None and load_inputs is True:
+        input_binding = "loaded"
+        load_inputs = None
+    elif input_binding is None and load_inputs is False:
+        input_binding = "none"
+        load_inputs = None
     if schema_outputs:
         kwargs["schema_outputs"] = schema_outputs
     if outputs:
         kwargs["outputs"] = outputs
+    if inputs is not None:
+        kwargs["inputs"] = inputs
     if output_paths is not None:
         kwargs["output_paths"] = output_paths
     if load_inputs is not None:
@@ -1508,4 +1715,125 @@ def _decorate_step_with_consist(
         kwargs["cache_mode"] = cache_mode
     if cache_hydration is not None:
         kwargs["cache_hydration"] = cache_hydration
+    if input_binding is not None:
+        kwargs["input_binding"] = input_binding
+    if input_paths is not None:
+        kwargs["input_paths"] = input_paths
+    if input_materialization is not None:
+        kwargs["input_materialization"] = input_materialization
     return define_step(**kwargs)(step_func)
+
+
+def load_recovered_cached_outputs(
+    run_id: Optional[str],
+    *,
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> Dict[str, Any]:
+    return load_tracker_run_outputs(
+        run_id,
+        logger=step_logger,
+        log_context=log_context,
+    )
+
+
+def recovered_cached_paths(
+    *,
+    cached_outputs: Optional[Mapping[str, Any]],
+    run_id: Optional[str],
+    workspace: "Workspace",
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> Dict[str, Path]:
+    merged = merge_canonical_output_mappings(
+        cached_outputs,
+        load_recovered_cached_outputs(
+            run_id,
+            step_logger=step_logger,
+            log_context=log_context,
+        ),
+    )
+    recovered: Dict[str, Path] = {}
+    for key, value in merged.items():
+        path = artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if path is not None:
+            recovered[key] = Path(path)
+    return recovered
+
+
+def make_default_recoverer(
+    *,
+    outputs_class: Type[StepOutputsT],
+    mapping_field: Optional[str] = None,
+    dir_field: Optional[str] = None,
+    dir_getter: Optional[Callable[["Workspace"], Union[str, Path]]] = None,
+    required_keys: Optional[RecovererRequiredKeys] = None,
+    primary_path_field: Optional[str] = None,
+    primary_path_resolver: Optional[RecovererPrimaryPathResolver] = None,
+    step_logger: Optional[logging.Logger] = None,
+    log_context: Optional[str] = None,
+) -> OutputRecoverer:
+    """
+    Build a cache-hit recoverer for the common recovered-paths -> typed-outputs pattern.
+    """
+
+    def _recover(
+        *,
+        settings: "PilatesConfig",
+        state: WorkflowState,
+        workspace: "Workspace",
+        coupler: CouplerProtocol,
+        outputs_holder: StepOutputsHolder,
+        step_inputs: Optional[Mapping[str, Any]],
+        cached_outputs: Optional[Mapping[str, Any]],
+        run_id: Optional[str],
+    ) -> Optional[StepOutputsT]:
+        del settings, coupler, outputs_holder, step_inputs
+        recovered_paths = recovered_cached_paths(
+            cached_outputs=cached_outputs,
+            run_id=run_id,
+            workspace=workspace,
+            step_logger=step_logger,
+            log_context=log_context,
+        )
+        if not recovered_paths:
+            return None
+
+        resolved_required_keys: Sequence[str] = ()
+        if required_keys is not None:
+            if callable(required_keys):
+                resolved_required_keys = tuple(required_keys(state, recovered_paths))
+            else:
+                resolved_required_keys = tuple(required_keys)
+            if any(key not in recovered_paths for key in resolved_required_keys):
+                return None
+
+        init_kwargs: Dict[str, Any] = {}
+        if dir_field is not None:
+            if dir_getter is None:
+                raise ValueError(
+                    f"{outputs_class.__name__} recoverer requires dir_getter when dir_field is set."
+                )
+            dir_value = dir_getter(workspace)
+            init_kwargs[dir_field] = dir_value if isinstance(dir_value, Path) else Path(dir_value)
+
+        if primary_path_field is not None:
+            if primary_path_resolver is None:
+                raise ValueError(
+                    f"{outputs_class.__name__} recoverer requires primary_path_resolver when primary_path_field is set."
+                )
+            primary_path = primary_path_resolver(recovered_paths, state)
+            if primary_path is None:
+                return None
+            init_kwargs[primary_path_field] = primary_path
+
+        if mapping_field is not None:
+            init_kwargs[mapping_field] = dict(recovered_paths)
+
+        return outputs_class(**init_kwargs)
+
+    return _recover

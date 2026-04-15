@@ -29,6 +29,7 @@ from .supply_demand_beam import (
 from .supply_demand_resume import (
     _find_input_scenario_dir,
     _restore_activity_demand_outputs_for_resume,
+    _restore_supply_demand_usim_inputs_for_resume,
 )
 
 logger = logging.getLogger(__name__)
@@ -122,6 +123,18 @@ def run_supply_demand_stage(
         )
         total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, Any]] = None
+    resumed_usim_inputs = dict(usim_inputs)
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and not resumed_usim_inputs
+        and not state.is_enabled(WorkflowState.Stage.land_use)
+    ):
+        resumed_usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
+            coupler=coupler,
+            workspace=workspace,
+            state=state,
+            settings=settings,
+        )
 
     for i in range(state.iteration, total_iters):
         state.iteration = i
@@ -140,7 +153,7 @@ def run_supply_demand_stage(
             activity_demand_inputs = ActivityDemandPhaseInputs(
                 year=year,
                 iteration=i,
-                usim_inputs=usim_inputs,
+                usim_inputs=resumed_usim_inputs,
             )
             activity_demand_outputs = _run_activity_demand_phase(
                 scenario=scenario,
@@ -163,6 +176,7 @@ def run_supply_demand_stage(
             )
         elif outputs_holder.activitysim_postprocess is None:
             activity_demand_outputs = _restore_activity_demand_outputs_for_resume(
+                scenario=scenario,
                 coupler=coupler,
                 workspace=workspace,
                 outputs_holder=outputs_holder,

@@ -364,7 +364,6 @@ def _stub_atlas_output_publication(monkeypatch):
     for module in (steps_activitysim, steps_urbansim_atlas):
         monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
         monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
-        monkeypatch.setattr(module, "_log_named_h5_tables", lambda **_kwargs: None)
 
 
 def _prepare_activitysim_preprocess_manifest(

@@ -232,9 +232,8 @@ def emit_consist_audit_event(
                 json.dumps(summary_payload, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
-        # Mirror diagnostics into the archive run dir when local and archive roots
-        # differ, so post-run inspection and restart debugging can use the same
-        # audit bundle.
+        # Mirror diagnostics through the artifact archive plane only. Consist DB
+        # snapshots/mirroring are owned by the launcher and snapshot manager.
         enqueue_archive_copy(
             key="workflow_diagnostics_consist_restart_audit",
             path=paths["events"],

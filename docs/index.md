@@ -1,99 +1,103 @@
-# PILATES Documentation
+---
+hide:
+  - navigation
+  - title
+  - toc
+---
 
-> [!WARNING]
-> These docs are an initial pass generated and reworked with the help of an LLM.
-> They have not been fully verified end-to-end against every workflow, config,
-> and deployment path in this repository. Treat them as a strong starting point,
-> not as guaranteed source-of-truth documentation. When behavior matters, verify
-> against the code and active configs.
-
-This page is the landing page for the current documentation set and is intended
-to be easy to migrate into a static site later.
+<section id="home-page" class="home-hero">
+  <div class="home-hero__inner">
+    <p class="home-hero__eyebrow">Integrated simulation runtime</p>
+    <h1>PILATES coordinates long-horizon land use and transportation workflows.</h1>
+    <p class="tagline">Run UrbanSim, ATLAS, ActivitySim, and BEAM in a shared scenario lifecycle with Consist-backed replay, provenance, cache reuse, and post-run analysis over archived artifacts.</p>
+    <div class="home-actions">
+      <a class="md-button md-button--primary" href="start-here/getting_started.md">Get started</a>
+      <a class="md-button" href="workflow/workflow_primer.md">See the workflow</a>
+    </div>
+    <dl class="home-summary">
+      <div class="home-summary__item">
+        <dt>Model stack</dt>
+        <dd>UrbanSim, ATLAS, ActivitySim, and BEAM</dd>
+      </div>
+      <div class="home-summary__item">
+        <dt>Execution style</dt>
+        <dd>Layered workflow runtime with explicit contracts and replay-first restart semantics</dd>
+      </div>
+      <div class="home-summary__item">
+        <dt>Best for</dt>
+        <dd>Regional forecasting, scenario analysis, model integration, and archived-run analysis</dd>
+      </div>
+    </dl>
+  </div>
+</section>
 
 ## Start Here
 
-If you are new to PILATES, read these first:
+Follow this path if you want a successful first local run:
 
-1. `getting_started.md`
-2. `cli_reference.md`
-3. `configuration_reference.md`
-4. `data_bootstrap.md`
-5. `troubleshooting.md`
+1. [Getting Started](start-here/getting_started.md)
+2. [First Run Walkthrough](start-here/first_run_walkthrough.md)
+3. [CLI](run/cli.md)
+4. [Configuration Reference](run/configuration_reference.md)
+5. [Troubleshooting](run/troubleshooting.md)
 
-## Architecture And Workflow
+!!! note
 
-- `architecture.md`
-  High-level architecture overview and reading guide.
-- `workflow_primer.md`
-  Runtime, stages, steps, manifests, restart behavior, and workflow structure.
-- `provenance_and_lineage.md`
-  High-level overview of provenance, artifacts, and lineage.
-- `artifact_flow.md`
-  Concise map of the main workflow-facing artifact handoffs.
-- `lineage_map.md`
-  More detailed artifact and step lineage reference.
+    These docs are intentionally layered. Start with the short run path first,
+    then branch into workflow semantics, model extension, or archived-run
+    analysis only when you need them.
 
-## Model Integration
+## What PILATES Does
 
-- `model_integration_guide.md`
-  Current integration architecture and contract boundaries.
-- `adding_a_model.md`
-  Practical checklist for adding a new model or workflow step family.
+PILATES is a workflow runtime for coupled regional simulation. It keeps model
+adapters decoupled, coordinates their run order across years and inner
+iterations, and makes the workflow boundary explicit through typed outputs,
+artifact keys, and a Consist-backed execution contract.
 
-## Configuration And Operations
+It helps you:
 
-- `configuration_reference.md`
-  Canonical config structure and key runtime options.
-- `cli_reference.md`
-  Supported CLI entry points and common invocation patterns.
-- `data_bootstrap.md`
-  Expected external data layout and pre-run validation.
-- `hpc_execution.md`
-  Lawrencium-style Slurm execution overview.
-- `troubleshooting.md`
-  Common failure modes and debugging starting points.
+- run local and HPC scenarios under one runtime model
+- understand what each stage and artifact means logically, not just where code lives
+- extend the workflow with new model integrations and explicit step contracts
+- reopen archived runs for SQL, datasets, runset comparisons, and scenario analysis
+- separate public current-state docs from internal design history and migration notes
 
-## Provenance And Database
+## Choose A Reading Path
 
-- `database-setup.md`
-  Enabling and validating the run-local Consist DuckDB.
-- `database_documentation_guide.md`
-  ERD generation and live DB inspection workflow.
-- `database_schema_reference.md`
-  Curated schema families and live DB caveats.
-- `artifact_facet_catalog.md`
-  Current artifact facet conventions.
+=== "Running a scenario"
 
-## Domain And Specialized Guides
+    - [Getting Started](start-here/getting_started.md)
+    - [First Run Walkthrough](start-here/first_run_walkthrough.md)
+    - [CLI](run/cli.md)
+    - [Configuration Reference](run/configuration_reference.md)
+    - [Troubleshooting](run/troubleshooting.md)
 
-- `zone_id_management.md`
-- `land_use_skim_alignment.md`
-- `test_output_preservation.md`
+=== "Understanding the workflow"
 
-## Status Notes
+    - [Workflow Primer](workflow/workflow_primer.md)
+    - [Architecture](workflow/architecture.md)
+    - [Consist in PILATES](workflow/consist_in_pilates.md)
+    - [Artifact Flow](workflow/artifact_flow.md)
+    - [Simulation Logic by Stage](workflow/simulation_logic_by_stage.md)
 
-These docs have been substantially updated to match the current runtime shape,
-but they are still early. The most trustworthy documents right now are the ones
-that were recently rewritten around the current code structure:
+=== "Extending PILATES"
 
-- `architecture.md`
-- `workflow_primer.md`
-- `model_integration_guide.md`
-- `adding_a_model.md`
-- `cli_reference.md`
-- `provenance_and_lineage.md`
-- `data_bootstrap.md`
-- `hpc_execution.md`
+    - [Model Integration Guide](extend/model_integration_guide.md)
+    - [Adding a Model](extend/adding_a_model.md)
+    - [Step Contracts](workflow/step_contracts.md)
+    - [Output Validation](extend/output_validation.md)
 
-## Source Of Truth
+=== "Analyzing archived runs"
 
-When the docs and code disagree, the code wins.
+    - [Analysis Overview](analysis/overview.md)
+    - [Opening Archives](analysis/opening_archives.md)
+    - [Consist Analysis CLI](analysis/consist_analysis_cli.md)
+    - [Run Discovery and Runsets](analysis/run_discovery_and_runsets.md)
+    - [SQL and DuckDB](analysis/sql_and_duckdb.md)
 
-The most important code entry points to cross-check are:
+=== "Running on Lawrencium"
 
-- `run.py`
-- `pilates/runtime/launcher.py`
-- `workflow_state.py`
-- `pilates/workflows/stages/*.py`
-- `pilates/workflows/steps/*.py`
-- `pilates/workflows/catalog.py`
+    - [Scenario Lifecycle](run/scenario_lifecycle.md)
+    - [HPC Overview](run/hpc_overview.md)
+    - [Lawrencium](run/lawrencium.md)
+    - [Restart and Resume](run/restart_and_resume.md)

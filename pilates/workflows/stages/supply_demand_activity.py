@@ -178,6 +178,43 @@ def _run_activity_demand_phase(
         year=inputs.year,
         iteration=inputs.iteration,
     )
+    resolved_usim_inputs = dict(inputs.usim_inputs)
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and state.is_enabled(WorkflowState.Stage.land_use)
+    ):
+        get_value = getattr(coupler, "get", None)
+        missing_restart_roles = [
+            key
+            for key in (
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+            )
+            if key not in resolved_usim_inputs
+            and not (callable(get_value) and get_value(key) is not None)
+        ]
+        if missing_restart_roles:
+            raise RuntimeError(
+                "Restart metadata is missing required post-land-use UrbanSim H5 roles "
+                f"for ActivitySim: {', '.join(missing_restart_roles)}. "
+                "This restart likely predates the explicit population-source H5 role split."
+            )
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and state.is_enabled(WorkflowState.Stage.land_use)
+        and not resolved_usim_inputs
+    ):
+        from .supply_demand_resume import (
+            _restore_supply_demand_usim_inputs_for_resume,
+        )
+
+        for key, value in _restore_supply_demand_usim_inputs_for_resume(
+            coupler=coupler,
+            workspace=workspace,
+            state=state,
+            settings=settings,
+        ).items():
+            resolved_usim_inputs.setdefault(key, value)
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
@@ -192,39 +229,22 @@ def _run_activity_demand_phase(
         preprocess_explicit_inputs: Optional[Dict[str, Union[str, os.PathLike]]] = None
         if not state.is_enabled(WorkflowState.Stage.land_use):
             population_source = (
-                inputs.usim_inputs.get(USIM_DATASTORE_BASE_H5)
-                or inputs.usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
+                resolved_usim_inputs.get(USIM_DATASTORE_BASE_H5)
+                or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
             )
             if population_source is not None:
                 preprocess_explicit_inputs = {
                     USIM_POPULATION_SOURCE_H5: population_source,
                 }
-        elif bool(getattr(state, "is_restart_run", False)):
-            get_value = getattr(coupler, "get", None)
-            missing_restart_roles = [
-                key
-                for key in (
-                    USIM_POPULATION_SOURCE_H5,
-                    USIM_DATASTORE_CURRENT_H5,
-                )
-                if key not in inputs.usim_inputs
-                and not (callable(get_value) and get_value(key) is not None)
-            ]
-            if missing_restart_roles:
-                raise RuntimeError(
-                    "Restart metadata is missing required post-land-use UrbanSim H5 roles "
-                    f"for ActivitySim: {', '.join(missing_restart_roles)}. "
-                    "This restart likely predates the explicit population-source H5 role split."
-                )
 
         preprocess_binding = build_binding_plan(
-            step_name="activitysim_preprocess",
-            coupler=coupler,
-            explicit_inputs=preprocess_explicit_inputs,
-            fallback_inputs=inputs.usim_inputs,
-            settings=settings,
-            state=state,
-            workspace=workspace,
+                step_name="activitysim_preprocess",
+                coupler=coupler,
+                explicit_inputs=preprocess_explicit_inputs,
+                fallback_inputs=resolved_usim_inputs,
+                settings=settings,
+                state=state,
+                workspace=workspace,
             year=inputs.year,
         )
 
@@ -467,6 +487,30 @@ def _run_activity_demand_phase(
     postprocess_required_keys: list[str] = []
     postprocess_optional_keys: list[str] = []
     if state.is_enabled(WorkflowState.Stage.land_use):
+        get_value = getattr(coupler, "get", None)
+        if callable(get_value):
+            coupler_population = get_value(USIM_POPULATION_SOURCE_H5)
+            coupler_current = get_value(USIM_DATASTORE_CURRENT_H5)
+            if (
+                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
+                and coupler_current is not None
+            ):
+                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_current
+            elif (
+                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
+                and coupler_population is not None
+            ):
+                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_population
+            if (
+                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
+                and coupler_population is not None
+            ):
+                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_population
+            elif (
+                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
+                and coupler_current is not None
+            ):
+                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_current
         postprocess_required_keys = [
             USIM_POPULATION_SOURCE_H5,
             USIM_DATASTORE_CURRENT_H5,
@@ -474,19 +518,27 @@ def _run_activity_demand_phase(
         postprocess_optional_keys = [USIM_DATASTORE_BASE_H5]
     activitysim_postprocess_binding = build_binding_plan(
         step_name="activitysim_postprocess",
-        coupler=coupler,
-        fallback_inputs=inputs.usim_inputs,
-        required_keys=postprocess_required_keys,
-        optional_keys=postprocess_optional_keys,
-        settings=settings,
+            coupler=coupler,
+            fallback_inputs=resolved_usim_inputs,
+            required_keys=postprocess_required_keys,
+            optional_keys=postprocess_optional_keys,
+            settings=settings,
         state=state,
         workspace=workspace,
         year=inputs.year,
     )
     if activitysim_postprocess_binding.missing_required:
+        get_value = getattr(coupler, "get", None)
+        coupler_current = get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
+        coupler_population = get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
         raise RuntimeError(
             "ActivitySim postprocess could not resolve its required UrbanSim H5 roles: "
-            f"{', '.join(activitysim_postprocess_binding.missing_required)}"
+            f"{', '.join(activitysim_postprocess_binding.missing_required)}; "
+            f"resolved_usim_inputs_keys={sorted(resolved_usim_inputs.keys())}; "
+            f"resolved_current={resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)!r}; "
+            f"resolved_population={resolved_usim_inputs.get(USIM_POPULATION_SOURCE_H5)!r}; "
+            f"coupler_current={coupler_current!r}; "
+            f"coupler_population={coupler_population!r}"
         )
 
     stage_runner.run_step(

@@ -16,6 +16,7 @@ from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
@@ -33,17 +34,6 @@ from pilates.workflows.artifact_keys import (
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
-
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
-
 
 def _record_store_from_artifact_mappings(
     *,
@@ -76,7 +66,7 @@ def _record_store_from_artifact_mappings(
                     file_path=str(path),
                     short_name=record_key,
                     description=f"{description_prefix}: {record_key}",
-                    content_hash=_artifact_content_hash(value),
+                    content_hash=artifact_fingerprint(value),
                 )
             )
 

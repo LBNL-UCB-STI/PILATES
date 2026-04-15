@@ -31,13 +31,14 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     output_logger = captured["output_logger"]
     output_only_keys = []
     set_output_keys = []
-    h5_table_calls = []
+    publish_meta = []
 
     def _log_output_only(*, key, path, description, **meta):
         output_only_keys.append(key)
 
     def _log_and_set_output(*, key, path, description, coupler, **meta):
         set_output_keys.append(key)
+        publish_meta.append(meta)
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", _log_output_only)
     monkeypatch.setattr(
@@ -45,12 +46,6 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         "log_and_set_output",
         _log_and_set_output,
     )
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
-
     h5_path = tmp_path / "model_data_2023.h5"
     h5_path.write_text("x")
     vehicles2_path = tmp_path / "vehicles2_2023.csv"
@@ -75,9 +70,11 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 
     assert output_only_keys == ["atlas_vehicles2_output"]
     assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["direction"] == "output"
-    assert h5_table_calls[0]["table_keys"] == {
+    assert len(publish_meta) == 1
+    assert publish_meta[0]["child_selection"] == "include_only"
+    assert {
+        path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
+    } == {
         "/2023/households": "atlas_postprocess_usim_households_table_updated"
     }
 
@@ -102,22 +99,17 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
 
     input_logger = captured["input_logger"]
     calls = []
-    h5_table_calls = []
 
     def _log_input_only(*, key, path, description, **meta):
         calls.append((key, path, meta))
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
 
     usim_path = tmp_path / "model_data_2023.h5"
     usim_path.write_text("x")
     workspace = SimpleNamespace(
         get_usim_mutable_data_dir=lambda: str(tmp_path),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
     )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
@@ -135,9 +127,10 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["direction"] == "input"
-    assert h5_table_calls[0]["table_keys"] == {
+    assert calls[0][2]["child_selection"] == "include_only"
+    assert {
+        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
+    } == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
@@ -164,23 +157,18 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
 
     input_logger = captured["input_logger"]
     calls = []
-    h5_table_calls = []
 
     def _log_input_only(*, key, path, description, **meta):
         calls.append((key, path, meta))
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
 
     base_h5 = tmp_path / "model_data_000.h5"
     forecast_h5 = tmp_path / "model_data_2023.h5"
     base_h5.write_text("base")
     workspace = SimpleNamespace(
         get_usim_mutable_data_dir=lambda: str(tmp_path),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
     )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(
@@ -207,8 +195,9 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(base_h5)
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["table_keys"] == {
+    assert {
+        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
+    } == {
         "/households": "atlas_postprocess_usim_households_table_input"
     }
 
@@ -235,17 +224,11 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
 
     input_logger = captured["input_logger"]
     calls = []
-    h5_table_calls = []
 
     def _log_input_only(*, key, path, description, **meta):
         calls.append((key, path, meta))
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_input_only", _log_input_only)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
 
     year_scoped_h5 = tmp_path / "model_data_2023.h5"
     pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
@@ -253,6 +236,7 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
     )
     workspace = SimpleNamespace(
         get_usim_mutable_data_dir=lambda: str(tmp_path),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
     )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(
@@ -278,8 +262,9 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(year_scoped_h5)
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["table_keys"] == {
+    assert {
+        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
+    } == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
@@ -311,48 +296,31 @@ def test_atlas_postprocess_logs_resolved_fallback_households_table(
     )
     workspace = SimpleNamespace(
         get_usim_mutable_data_dir=lambda: str(tmp_path),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas_output"),
     )
     settings = SimpleNamespace(
         urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5"),
     )
     state = SimpleNamespace(forecast_year=2023, is_start_year=lambda: False)
 
-    input_h5_calls = []
-    output_h5_calls = []
+    input_calls = []
+    output_calls = []
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
         "log_input_only",
-        lambda **kwargs: None,
+        lambda **kwargs: input_calls.append(kwargs),
     )
     monkeypatch.setattr(
         steps_urbansim_atlas,
         "log_and_set_output",
-        lambda **kwargs: None,
-    )
-
-    def _capture_input_tables(**kwargs):
-        input_h5_calls.append(kwargs)
-
-    def _capture_output_tables(**kwargs):
-        output_h5_calls.append(kwargs)
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        _capture_input_tables,
+        lambda **kwargs: output_calls.append(kwargs),
     )
     captured["input_logger"](
         settings=settings,
         state=state,
         workspace=workspace,
         holder=SimpleNamespace(),
-    )
-
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        _capture_output_tables,
     )
     captured["output_logger"](
         AtlasPostprocessOutputs(
@@ -366,10 +334,14 @@ def test_atlas_postprocess_logs_resolved_fallback_households_table(
         holder=SimpleNamespace(),
     )
 
-    assert input_h5_calls[0]["table_keys"] == {
+    assert {
+        path: spec.key for path, spec in input_calls[0]["child_specs"].items()
+    } == {
         "/2024/households": "atlas_postprocess_usim_households_table_input"
     }
-    assert output_h5_calls[0]["table_keys"] == {
+    assert {
+        path: spec.key for path, spec in output_calls[0]["child_specs"].items()
+    } == {
         "/2024/households": "atlas_postprocess_usim_households_table_updated"
     }
 

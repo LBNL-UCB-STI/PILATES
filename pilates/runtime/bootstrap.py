@@ -4,7 +4,6 @@ import logging
 import os
 from typing import Any, Callable, Dict, Optional
 
-from consist import MaterializationResult
 from consist.types import CacheOptions
 
 from pilates.config import PilatesConfig
@@ -25,9 +24,6 @@ from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
-_OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES = frozenset(
-    {"canonical_zones", "clipped_geoms"}
-)
 
 
 def is_bootstrap_cache_enabled(settings: PilatesConfig) -> bool:
@@ -40,14 +36,16 @@ def _bootstrap_cache_options(
     *,
     cache_options_cls: type[CacheOptions],
     cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
 ) -> Optional[CacheOptions]:
     run_cfg = getattr(settings, "run", None)
     code_identity = getattr(run_cfg, "consist_code_identity", None)
-    if cache_mode is None and code_identity is None:
+    if cache_mode is None and code_identity is None and cache_hydration is None:
         return None
     return cache_options_cls(
         cache_mode=cache_mode,
         code_identity=code_identity,
+        cache_hydration=cache_hydration,
     )
 
 
@@ -81,59 +79,41 @@ def build_bootstrap_run_reference(
     return reference
 
 
-def _bootstrap_materialization_metadata(
-    result: MaterializationResult,
-) -> Dict[str, Any]:
-    return {
-        "summary": result.summary,
-        "complete": result.complete,
-        "has_failures": result.has_failures,
-        "materialized_from_filesystem_count": len(result.materialized_from_filesystem),
-        "materialized_from_db_count": len(result.materialized_from_db),
-        "skipped_existing_count": len(result.skipped_existing),
-        "skipped_unmapped_count": len(result.skipped_unmapped),
-        "skipped_missing_source_count": len(result.skipped_missing_source),
-        "failed_count": len(result.failed),
-        "skipped_unmapped": list(result.skipped_unmapped),
-        "skipped_missing_source": list(result.skipped_missing_source),
-        "failed": list(result.failed),
-    }
+def _bootstrap_output_paths(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    output_paths: Dict[str, str] = {}
+    run_models = getattr(getattr(settings, "run", None), "models", None)
 
+    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    if callable(get_usim_data_dir) and (
+        getattr(run_models, "land_use", None) == "urbansim"
+        or getattr(run_models, "activity_demand", None) == "activitysim"
+        or getattr(run_models, "vehicle_ownership", None) == "atlas"
+    ):
+        output_paths["urbansim_mutable_data_dir"] = get_usim_data_dir()
 
-def _bootstrap_materialization_entry_name(entry: Any) -> str:
-    if isinstance(entry, str):
-        return entry
-    if isinstance(entry, (tuple, list)) and entry:
-        return str(entry[0])
-    if isinstance(entry, dict):
-        for key in ("key", "name", "short_name"):
-            value = entry.get(key)
-            if value:
-                return str(value)
-    return str(entry)
+    if get_activity_demand_model(settings) == "activitysim":
+        get_asim_data_dir = getattr(workspace, "get_asim_mutable_data_dir", None)
+        if callable(get_asim_data_dir):
+            output_paths["activitysim_mutable_data_dir"] = get_asim_data_dir()
+        get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+        if callable(get_asim_configs_dir):
+            output_paths["activitysim_mutable_configs_dir"] = get_asim_configs_dir()
 
+    if getattr(run_models, "vehicle_ownership", None) == "atlas":
+        get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+        if callable(get_atlas_input_dir):
+            output_paths["atlas_mutable_input_dir"] = get_atlas_input_dir()
 
-def _prune_optional_bootstrap_missing_sources(
-    result: MaterializationResult,
-) -> MaterializationResult:
-    tolerated = [
-        entry
-        for entry in list(getattr(result, "skipped_missing_source", []) or [])
-        if _bootstrap_materialization_entry_name(entry)
-        in _OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES
-    ]
-    if tolerated:
-        result.skipped_missing_source = [
-            entry
-            for entry in list(getattr(result, "skipped_missing_source", []) or [])
-            if _bootstrap_materialization_entry_name(entry)
-            not in _OPTIONAL_BOOTSTRAP_MISSING_SOURCE_NAMES
-        ]
-        logger.info(
-            "BOOTSTRAP CACHE HIT ignoring optional missing-source artifacts: %s",
-            [_bootstrap_materialization_entry_name(entry) for entry in tolerated],
-        )
-    return result
+    if get_traffic_assignment_model(settings) == "beam":
+        get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+        if callable(get_beam_input_dir):
+            output_paths["beam_mutable_data_dir"] = get_beam_input_dir()
+
+    return output_paths
 
 
 def _bootstrap_required_workspace_artifacts(
@@ -197,7 +177,7 @@ def _find_missing_bootstrap_workspace_artifacts(
                 "path": normalized_path,
                 "reason": (
                     "Bootstrap cache-hit validation requires this workspace "
-                    "artifact to exist locally after materialization."
+                    "artifact to exist locally after replay hydration."
                 ),
             }
         )
@@ -283,8 +263,7 @@ def run_bootstrap_phase(
         *,
         cache_hit: bool,
         probe_run_id: Optional[str],
-        materialization_run_id: Optional[str] = None,
-        materialization_result: Optional[MaterializationResult] = None,
+        fallback_run_id: Optional[str] = None,
         fallback_rerun: bool = False,
         resolution_mode: str,
         cache_miss_explanation: Optional[Dict[str, Any]] = None,
@@ -297,12 +276,7 @@ def run_bootstrap_phase(
             "staged_artifact_summary": staged_artifact_summary,
             "run_reference": build_bootstrap_run_reference(
                 probe_run_id=probe_run_id,
-                materialization_run_id=materialization_run_id,
-            ),
-            "materialization": (
-                _bootstrap_materialization_metadata(materialization_result)
-                if materialization_result is not None
-                else None
+                materialization_run_id=fallback_run_id,
             ),
             "fallback_rerun": fallback_rerun,
             "cache_miss_explanation": cache_miss_explanation,
@@ -319,8 +293,7 @@ def run_bootstrap_phase(
             bootstrap_cache_hit=cache_hit,
             fallback_rerun=fallback_rerun,
             probe_run_id=probe_run_id,
-            materialization_run_id=materialization_run_id,
-            materialization=result.get("materialization"),
+            materialization_run_id=fallback_run_id,
             staged_artifact_summary=staged_artifact_summary,
             **cache_miss_audit_fields(cache_miss_explanation),
         )
@@ -340,6 +313,12 @@ def run_bootstrap_phase(
             workspace_path=workspace.full_path,
         ),
     }
+    bootstrap_output_paths = _bootstrap_output_paths(
+        settings=settings,
+        workspace=workspace,
+    )
+    if bootstrap_output_paths:
+        run_kwargs["output_paths"] = bootstrap_output_paths
     run_kwargs["tags"] = merge_tag_list_fn(
         run_kwargs.get("tags"),
         [
@@ -380,6 +359,7 @@ def run_bootstrap_phase(
     cache_options = _bootstrap_cache_options(
         settings,
         cache_options_cls=cache_options_cls,
+        cache_hydration="outputs-requested" if bootstrap_output_paths else None,
     )
     if cache_options is not None:
         probe_result = tracker.run(**run_kwargs, cache_options=cache_options)
@@ -390,62 +370,23 @@ def run_bootstrap_phase(
 
     if cache_hit:
         logger.info(
-            "BOOTSTRAP CACHE HIT. Materializing cached bootstrap outputs into "
-            "workspace root=%s run_id=%s preserve_existing=True",
+            "BOOTSTRAP CACHE HIT. Replaying declared bootstrap output paths into "
+            "workspace root=%s run_id=%s",
             workspace.full_path,
             probe_run_id,
         )
-        materialize_run_outputs_fn = getattr(tracker, "materialize_run_outputs", None)
-        materialization_exc = None
-        if not probe_run_id:
-            materialization_result = MaterializationResult(
-                failed=[("bootstrap_initialization", "cache hit missing run id")]
-            )
-        elif not callable(materialize_run_outputs_fn):
-            materialization_result = MaterializationResult(
-                failed=[("bootstrap_initialization", "tracker does not expose materialize_run_outputs")]
-            )
-        else:
-            try:
-                materialization_result = materialize_run_outputs_fn(
-                    run_id=probe_run_id,
-                    target_root=workspace.full_path,
-                    source_root=None,
-                    preserve_existing=True,
-                )
-            except Exception as exc:
-                materialization_result = MaterializationResult(
-                    failed=[("bootstrap_initialization", f"materialize_run_outputs raised: {exc}")]
-                )
-                materialization_exc = exc
-        if materialization_exc is not None:
-            logger.warning(
-                "BOOTSTRAP CACHE HIT materialization failed with exception; "
-                "falling back to explicit rerun. run_id=%s error=%s",
-                probe_run_id,
-                materialization_exc,
-            )
-        materialization_result = _prune_optional_bootstrap_missing_sources(
-            materialization_result
+        missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
+            settings=settings,
+            workspace=workspace,
         )
-
-        missing_workspace_artifacts: list[Dict[str, str]] = []
-        if materialization_result.complete:
-            missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
-                settings=settings,
-                workspace=workspace,
-            )
-
-        if materialization_result.complete and not missing_workspace_artifacts:
+        if not missing_workspace_artifacts:
             logger.info(
-                "BOOTSTRAP CACHE HIT materialization complete. %s",
-                materialization_result.summary,
+                "BOOTSTRAP CACHE HIT replay hydration restored required workspace artifacts."
             )
             return _finalize_bootstrap_result(
                 cache_hit=True,
                 probe_run_id=probe_run_id,
-                materialization_result=materialization_result,
-                resolution_mode="cache_hit_materialized",
+                resolution_mode="cache_hit_replay_hydrated",
             )
 
         fallback_cache_options = _bootstrap_cache_options(
@@ -453,45 +394,16 @@ def run_bootstrap_phase(
             cache_options_cls=cache_options_cls,
             cache_mode="off",
         )
-        if missing_workspace_artifacts:
-            logger.warning(
-                "BOOTSTRAP CACHE HIT materialization completed, but required "
-                "workspace artifacts are still missing: %s",
-                _format_missing_bootstrap_workspace_artifacts(
-                    missing_workspace_artifacts
-                ),
-            )
-            logger.warning(
-                "BOOTSTRAP fallback rerun triggered because cached bootstrap outputs "
-                "did not restore required workspace invariants."
-            )
-            fallback_result = tracker.run(
-                **run_kwargs,
-                cache_options=fallback_cache_options,
-            )
-            return _finalize_bootstrap_result(
-                cache_hit=True,
-                probe_run_id=probe_run_id,
-                materialization_run_id=getattr(
-                    getattr(fallback_result, "run", None),
-                    "id",
-                    None,
-                ),
-                materialization_result=materialization_result,
-                fallback_rerun=True,
-                resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
-            )
-
         logger.warning(
-            "BOOTSTRAP CACHE HIT materialization incomplete. %s "
-            "(skipped_unmapped=%s skipped_missing_source=%s failed=%s)",
-            materialization_result.summary,
-            materialization_result.skipped_unmapped,
-            materialization_result.skipped_missing_source,
-            materialization_result.failed,
+            "BOOTSTRAP CACHE HIT replay hydration left required workspace "
+            "artifacts missing: %s",
+            _format_missing_bootstrap_workspace_artifacts(
+                missing_workspace_artifacts
+            ),
         )
         logger.warning(
-            "BOOTSTRAP fallback rerun triggered because cached output recovery was incomplete."
+            "BOOTSTRAP fallback rerun triggered because replay hydration did not "
+            "restore required workspace invariants."
         )
         fallback_result = tracker.run(
             **run_kwargs,
@@ -500,10 +412,9 @@ def run_bootstrap_phase(
         return _finalize_bootstrap_result(
             cache_hit=True,
             probe_run_id=probe_run_id,
-            materialization_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
-            materialization_result=materialization_result,
+            fallback_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
             fallback_rerun=True,
-            resolution_mode="cache_hit_incomplete_fallback_rerun",
+            resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
         )
 
     cache_miss_explanation = log_cache_miss_explanation(

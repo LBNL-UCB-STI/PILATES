@@ -1,0 +1,1029 @@
+erDiagram
+    AccessibilityAsimOut {
+        BIGINT zone_id
+        FLOAT auPkRetail
+        FLOAT auPkTotal
+        FLOAT auOpRetail
+        FLOAT auOpTotal
+        FLOAT trPkRetail
+        FLOAT trPkTotal
+        FLOAT trOpRetail
+        FLOAT trOpTotal
+        FLOAT nmRetail
+        FLOAT nmTotal
+    }
+    ActivitysimPostprocessUsimHouseholdsUpdated {
+        BIGINT household_id
+        VARCHAR tenure_mover
+        VARCHAR block_id
+        FLOAT workers
+        VARCHAR hh_size
+        VARCHAR sf_detached
+        VARCHAR hh_seniors
+        FLOAT income
+        FLOAT seniors
+        FLOAT gt2
+        VARCHAR hh_age_of_head
+        VARCHAR hh_children
+        VARCHAR hh_cars
+        VARCHAR hh_income
+        FLOAT hispanic_status_of_head
+        VARCHAR hh_race_of_head
+        VARCHAR lcm_county_id
+        FLOAT race_of_head
+        VARCHAR recent_mover
+        BIGINT serialno
+        VARCHAR tenure
+        BIGINT cars
+        VARCHAR hh_workers
+        FLOAT gt55
+        FLOAT age_of_head
+        VARCHAR hispanic_head
+        FLOAT hh_type
+        BIGINT persons
+    }
+    ActivitysimPostprocessUsimPersonsUpdated {
+        BIGINT person_id
+        FLOAT hispanic
+        VARCHAR person_sex
+        FLOAT age
+        VARCHAR person_age
+        VARCHAR education_group
+        FLOAT edu
+        INTEGER workplace_taz
+        VARCHAR race
+        FLOAT race_id
+        FLOAT earning
+        FLOAT student
+        VARCHAR age_group
+        VARCHAR p_hispanic
+        VARCHAR work_block_id
+        FLOAT hispanic_1
+        INTEGER school_zone_id
+        INTEGER work_zone_id
+        FLOAT household_id
+        FLOAT worker
+        VARCHAR school_block_id
+        VARCHAR school_id
+        FLOAT sex
+        BIGINT member_id
+        FLOAT relate
+        FLOAT work_at_home
+        FLOAT hours
+        FLOAT MAR
+        INTEGER school_taz
+    }
+    AtlasBlocks {
+        VARCHAR block_id
+        BIGINT cousub
+        BIGINT square_meters_land
+        VARCHAR tract_id
+        FLOAT residential_unit_capacity
+        FLOAT y
+        FLOAT employment_capacity
+        VARCHAR county_id
+        BIGINT zone_id
+        BIGINT taz_zone_id
+        FLOAT x
+        VARCHAR block_group_id
+        VARCHAR MPO_ID
+        FLOAT sum_acres
+        VARCHAR state_id
+        BIGINT node_id
+    }
+    AtlasGrave {
+        BIGINT person_id
+        BOOLEAN p_hispanic
+        VARCHAR person_age
+        FLOAT race_id
+        BIGINT school_id
+        VARCHAR education_group
+        BIGINT workplace_taz
+        BIGINT school_block_id
+        BIGINT school_zone_id
+        VARCHAR person_sex
+        FLOAT relate
+        FLOAT work_at_home
+        FLOAT hours
+        FLOAT earning
+        VARCHAR work_block_id
+        FLOAT student
+        FLOAT hispanic
+        FLOAT worker
+        VARCHAR age_group
+        BIGINT member_id
+        BIGINT work_zone_id
+        FLOAT sex
+        VARCHAR race
+        FLOAT hispanic_1
+        FLOAT age
+        FLOAT household_id
+        BIGINT school_taz
+        FLOAT MAR
+        FLOAT edu
+    }
+    AtlasHousehold {
+        FLOAT household_id
+        VARCHAR tenure
+        VARCHAR block_id
+        VARCHAR hh_age_of_head
+        FLOAT gt55
+        FLOAT age_of_head
+        BIGINT serialno
+        FLOAT gt2
+        FLOAT seniors
+        BOOLEAN hh_children
+        VARCHAR recent_mover
+        BOOLEAN hh_seniors
+        VARCHAR tenure_mover
+        FLOAT workers
+        FLOAT race_of_head
+        FLOAT hispanic_status_of_head
+        FLOAT cars
+        VARCHAR hh_cars
+        VARCHAR lcm_county_id
+        BOOLEAN hispanic_head
+        VARCHAR hh_size
+        FLOAT income
+        VARCHAR hh_race_of_head
+        VARCHAR hh_income
+        VARCHAR hh_workers
+        VARCHAR sf_detached
+        BIGINT persons
+        BIGINT hh_type
+    }
+    AtlasJobs {
+        BIGINT job_id
+        BIGINT sector_id
+        BIGINT agg_sector
+        VARCHAR lcm_county_id
+        VARCHAR block_id
+    }
+    AtlasPersons {
+        BIGINT person_id
+        BOOLEAN p_hispanic
+        VARCHAR person_age
+        FLOAT race_id
+        BIGINT school_id
+        VARCHAR education_group
+        BIGINT workplace_taz
+        BIGINT school_block_id
+        BIGINT school_zone_id
+        VARCHAR person_sex
+        BIGINT relate
+        FLOAT work_at_home
+        FLOAT hours
+        FLOAT earning
+        FLOAT student
+        VARCHAR work_block_id
+        FLOAT hispanic
+        FLOAT worker
+        VARCHAR age_group
+        BIGINT member_id
+        BIGINT work_zone_id
+        FLOAT sex
+        VARCHAR race
+        FLOAT hispanic_1
+        FLOAT age
+        FLOAT household_id
+        BIGINT school_taz
+        BIGINT MAR
+        FLOAT edu
+    }
+    AtlasPostprocessUsimHouseholdsUpdated {
+        BIGINT household_id
+    }
+    AtlasResidential {
+        BIGINT unit_id
+        VARCHAR block_id
+        FLOAT ACS_18_rent
+        FLOAT ACS_13_value
+        VARCHAR lcm_county_id
+        BIGINT year_built
+        BIGINT building_type_id
+        VARCHAR block_group_id
+        FLOAT ACS_13_rent
+        FLOAT ACS_18_value
+    }
+    BeamEventsActEnd {
+        BIGINT actendEventId
+        VARCHAR actType
+        FLOAT time
+        INTEGER link
+        BIGINT person
+        VARCHAR type
+    }
+    BeamEventsActStart {
+        BIGINT actstartEventId
+        VARCHAR actType
+        FLOAT time
+        INTEGER link
+        BIGINT person
+        VARCHAR type
+    }
+    BeamEventsArrival {
+        BIGINT arrivalEventId
+        FLOAT time
+        INTEGER link
+        BIGINT person
+        VARCHAR type
+        VARCHAR legMode
+    }
+    BeamEventsDeparture {
+        BIGINT departureEventId
+        FLOAT time
+        INTEGER link
+        VARCHAR PayloadIds
+        BIGINT person
+        BIGINT trip_id
+        VARCHAR type
+        VARCHAR PayloadWeightInKg
+        VARCHAR legMode
+    }
+    BeamEventsLeavingParkingEvent {
+        BIGINT LeavingParkingEventEventId
+        BIGINT driver
+        VARCHAR chargingPointType
+        VARCHAR vehicle
+        FLOAT time
+        VARCHAR parkingType
+        FLOAT cost
+        VARCHAR parkingTaz
+        FLOAT duration
+        VARCHAR links
+        VARCHAR type
+        FLOAT score
+        VARCHAR pricingModel
+        VARCHAR parkingZoneId
+        VARCHAR emissions
+    }
+    BeamEventsModeChoice {
+        BIGINT ModeChoiceEventId
+        INTEGER tourIndex
+        VARCHAR currentActivity
+        BIGINT tripId
+        FLOAT time
+        BOOLEAN personalVehicleAvailable
+        VARCHAR currentTourMode
+        VARCHAR nextActivity
+        INTEGER location
+        BIGINT person
+        VARCHAR availableAlternatives
+        VARCHAR legModes
+        FLOAT length
+        VARCHAR mode
+        VARCHAR type
+        VARCHAR legVehicleIds
+    }
+    BeamEventsParkingEvent {
+        BIGINT ParkingEventEventId
+        BIGINT driver
+        VARCHAR chargingPointType
+        FLOAT locationY
+        VARCHAR vehicle
+        FLOAT time
+        VARCHAR parkingType
+        FLOAT cost
+        VARCHAR parkingTaz
+        VARCHAR links
+        VARCHAR type
+        FLOAT locationX
+        VARCHAR pricingModel
+        VARCHAR parkingZoneId
+    }
+    BeamEventsParquet {
+        INTEGER capacity
+        INTEGER tourIndex
+        VARCHAR weight
+        VARCHAR currentActivity
+        VARCHAR fromStopIndex
+        VARCHAR driver
+        INTEGER numPassengers
+        FLOAT startY
+        VARCHAR actType
+        VARCHAR tollCost
+        VARCHAR tripId
+        VARCHAR chargingPointType
+        FLOAT locationY
+        VARCHAR vehicle
+        VARCHAR y
+        FLOAT endX
+        VARCHAR shiftStatus
+        FLOAT secondaryFuelLevel
+        FLOAT time
+        INTEGER link
+        BOOLEAN personalVehicleAvailable
+        VARCHAR PayloadIds
+        VARCHAR primaryFuelType
+        VARCHAR currentTourMode
+        VARCHAR linkTravelTime
+        VARCHAR reason
+        VARCHAR netCost
+        FLOAT fuel
+        VARCHAR nextActivity
+        INTEGER departTime
+        INTEGER seatingCapacity
+        VARCHAR parkingType
+        INTEGER location
+        FLOAT secondaryFuel
+        VARCHAR person
+        VARCHAR availableAlternatives
+        INTEGER departureTime
+        VARCHAR secondaryFuelType
+        INTEGER arrivalTime
+        FLOAT cost
+        VARCHAR parkingTaz
+        FLOAT tollPaid
+        VARCHAR trip_id
+        VARCHAR payloads
+        FLOAT duration
+        FLOAT expectedMaximumUtility
+        VARCHAR legModes
+        FLOAT length
+        VARCHAR toStopIndex
+        VARCHAR links
+        FLOAT endY
+        VARCHAR mode
+        VARCHAR type
+        FLOAT score
+        FLOAT startX
+        VARCHAR facility
+        FLOAT locationX
+        VARCHAR incentive
+        VARCHAR x
+        FLOAT primaryFuel
+        VARCHAR riders
+        VARCHAR currentTripMode
+        VARCHAR legVehicleIds
+        VARCHAR PayloadWeightInKg
+        VARCHAR requireWheelchair
+        VARCHAR pricingModel
+        VARCHAR vehicleType
+        VARCHAR parkingZoneId
+        VARCHAR legMode
+        VARCHAR emissions
+        FLOAT primaryFuelLevel
+        FLOAT price
+    }
+    BeamEventsPathTraversal {
+        BIGINT PathTraversalEventId
+        INTEGER capacity
+        VARCHAR weight
+        BIGINT driver
+        VARCHAR fromStopIndex
+        INTEGER numPassengers
+        FLOAT startY
+        BIGINT vehicle
+        FLOAT endX
+        FLOAT secondaryFuelLevel
+        FLOAT time
+        VARCHAR primaryFuelType
+        INTEGER seatingCapacity
+        FLOAT secondaryFuel
+        INTEGER departureTime
+        VARCHAR secondaryFuelType
+        INTEGER arrivalTime
+        FLOAT tollPaid
+        VARCHAR payloads
+        FLOAT length
+        VARCHAR toStopIndex
+        FLOAT endY
+        VARCHAR mode
+        VARCHAR type
+        FLOAT startX
+        FLOAT primaryFuel
+        VARCHAR riders
+        VARCHAR currentTripMode
+        VARCHAR vehicleType
+        VARCHAR emissions
+        FLOAT primaryFuelLevel
+    }
+    BeamEventsPersonCost {
+        BIGINT PersonCostEventId
+        VARCHAR tollCost
+        FLOAT time
+        VARCHAR netCost
+        BIGINT person
+        VARCHAR mode
+        VARCHAR type
+        VARCHAR incentive
+    }
+    BeamEventsPersonEntersVehicle {
+        BIGINT PersonEntersVehicleEventId
+        VARCHAR vehicle
+        FLOAT time
+        BIGINT person
+        VARCHAR type
+    }
+    BeamEventsPersonLeavesVehicle {
+        BIGINT PersonLeavesVehicleEventId
+        VARCHAR vehicle
+        FLOAT time
+        BIGINT person
+        VARCHAR type
+    }
+    BeamEventsReplanning {
+        BIGINT ReplanningEventId
+        FLOAT startY
+        FLOAT endX
+        FLOAT time
+        VARCHAR reason
+        BIGINT person
+        FLOAT endY
+        VARCHAR type
+        FLOAT startX
+    }
+    BeamEventsReserveRideHail {
+        BIGINT ReserveRideHailEventId
+        FLOAT startY
+        FLOAT endX
+        FLOAT time
+        INTEGER departTime
+        BIGINT person
+        FLOAT endY
+        VARCHAR type
+        FLOAT startX
+        VARCHAR requireWheelchair
+    }
+    BeamEventsTeleportationEvent {
+        BIGINT TeleportationEventEventId
+        FLOAT startY
+        FLOAT endX
+        FLOAT time
+        BIGINT person
+        INTEGER departureTime
+        INTEGER arrivalTime
+        FLOAT endY
+        VARCHAR type
+        FLOAT startX
+        VARCHAR currentTripMode
+    }
+    BeamFinalVehicles {
+        BIGINT vehicleId
+        VARCHAR vehicleTypeId
+        FLOAT stateOfCharge
+        BIGINT householdId
+    }
+    BeamLinkstats {
+        BIGINT link
+        BIGINT from
+        BIGINT to
+        INTEGER hour
+        FLOAT length
+        FLOAT freespeed
+        FLOAT capacity
+        VARCHAR stat
+        FLOAT volume
+        FLOAT volume_Class456Vocational
+        FLOAT volume_Class78Vocational
+        FLOAT volume_Class78Tractor
+        FLOAT traveltime
+    }
+    BeamNetworkFinal {
+        BIGINT linkId
+        FLOAT linkLength
+        FLOAT linkFreeSpeed
+        FLOAT linkCapacity
+        FLOAT numberOfLanes
+        VARCHAR linkModes
+        FLOAT attributeOrigId
+        VARCHAR attributeOrigType
+        BIGINT fromNodeId
+        BIGINT toNodeId
+        FLOAT fromLocationX
+        FLOAT fromLocationY
+        FLOAT toLocationX
+        FLOAT toLocationY
+    }
+    BeamPathTraversalLinks {
+        BIGINT PathTraversalEventId
+        BIGINT link_index
+        BIGINT linkId
+        FLOAT travelTimeSeconds
+    }
+    BeamPlansAsimOut {
+        BIGINT tour_id
+        BIGINT trip_id
+        BIGINT person_id
+        FLOAT number_of_participants
+        VARCHAR tour_mode
+        VARCHAR trip_mode
+        BIGINT PlanElementIndex
+        VARCHAR ActivityElement
+        VARCHAR ActivityType
+        FLOAT x
+        FLOAT y
+        FLOAT departure_time
+        FLOAT trip_dur_min
+        FLOAT trip_cost_dollars
+    }
+    BeamPlansOut {
+        BIGINT tripId
+        BIGINT personId
+        BIGINT planIndex
+        FLOAT planScore
+        BOOLEAN planSelected
+        VARCHAR planElementType
+        BIGINT planElementIndex
+        VARCHAR activityType
+        FLOAT activityLocationX
+        FLOAT activityLocationY
+        FLOAT activityEndTime
+        VARCHAR legMode
+        FLOAT legDepartureTime
+        VARCHAR trip_dur_min
+        VARCHAR trip_cost_dollars
+        FLOAT legTravelTime
+        VARCHAR legRouteType
+        BIGINT legRouteStartLink
+        BIGINT legRouteEndLink
+        FLOAT legRouteTravelTime
+        FLOAT legRouteDistance
+        VARCHAR legRouteLinks
+    }
+    BeamRouteHistory {
+        BIGINT timeBin
+        BIGINT originLinkId
+        BIGINT destLinkId
+        VARCHAR route
+    }
+    HouseholdVAtlasOut {
+        BIGINT household_id
+        BIGINT nvehicles
+        BIGINT year
+        VARCHAR newhhflag
+    }
+    HouseholdsAsimIn {
+        BIGINT household_id
+        FLOAT gt2
+        FLOAT workers
+        VARCHAR hispanic_head
+        BIGINT block_id
+        VARCHAR recent_mover
+        FLOAT seniors
+        BIGINT cars
+        VARCHAR hh_race_of_head
+        FLOAT age_of_head
+        BIGINT serialno
+        BIGINT lcm_county_id
+        VARCHAR hh_children
+        VARCHAR tenure
+        VARCHAR hh_age_of_head
+        VARCHAR sf_detached
+        FLOAT income
+        VARCHAR tenure_mover
+        FLOAT race_of_head
+        VARCHAR hh_seniors
+        VARCHAR hh_size
+        VARCHAR hh_cars
+        FLOAT hispanic_status_of_head
+        FLOAT gt55
+        VARCHAR hh_workers
+        VARCHAR hh_income
+        BIGINT hh_type
+        BIGINT persons
+        BIGINT TAZ
+        BIGINT HHT
+    }
+    HouseholdsAsimOut {
+        BIGINT household_id
+        BIGINT block_id
+        BIGINT home_zone_id
+        FLOAT income
+        BIGINT hhsize
+        BIGINT HHT
+        BIGINT auto_ownership
+        FLOAT num_workers
+        FLOAT sample_rate
+        FLOAT income_in_thousands
+        BIGINT income_segment
+        FLOAT median_value_of_time
+        FLOAT hh_value_of_time
+        FLOAT num_non_workers
+        BIGINT num_drivers
+        BIGINT num_adults
+        BIGINT num_children
+        BIGINT num_young_children
+        BIGINT num_children_5_to_15
+        BIGINT num_children_16_to_17
+        BIGINT num_college_age
+        BIGINT num_young_adults
+        BOOLEAN non_family
+        BOOLEAN family
+        BOOLEAN home_is_urban
+        BOOLEAN home_is_rural
+        FLOAT hh_work_auto_savings_ratio
+        BIGINT num_under16_not_at_school
+        BIGINT num_travel_active
+        BIGINT num_travel_active_adults
+        BIGINT num_travel_active_preschoolers
+        BIGINT num_travel_active_children
+        BIGINT num_travel_active_non_preschoolers
+        BOOLEAN participates_in_jtf_model
+        VARCHAR joint_tour_frequency
+        BIGINT num_hh_joint_tours
+    }
+    HouseholdsBeamIn {
+        BIGINT household_id
+    }
+    JointTourParticipantsAsimOut {
+        BIGINT tour_id
+        FLOAT household_id
+        BIGINT person_id
+        BIGINT participant_num
+        BIGINT participant_id
+    }
+    LandUseAsimIn {
+        BIGINT TAZ
+        BIGINT objectid
+        BIGINT district
+        VARCHAR county
+        FLOAT gacres
+        VARCHAR geometry
+        FLOAT AGE0004
+        FLOAT AGE0519
+        FLOAT AGE2044
+        FLOAT AGE4564
+        FLOAT AGE64P
+        FLOAT AGE62P
+        FLOAT TOTPOP
+        FLOAT HHINCQ1
+        FLOAT HHINCQ2
+        FLOAT HHINCQ3
+        FLOAT HHINCQ4
+        FLOAT EMPRES
+        FLOAT TOTHH
+        BIGINT RETEMPN
+        BIGINT FPSEMPN
+        BIGINT HEREMPN
+        BIGINT AGREMPN
+        BIGINT MWTEMPN
+        BIGINT TOTEMP
+        BIGINT OTHEMPN
+        FLOAT SHPOP62P
+        FLOAT TOTACRE
+        FLOAT HSENROLL
+        BIGINT TOPOLOGY
+        FLOAT employment_density
+        FLOAT pop_density
+        FLOAT hh_density
+        FLOAT hq1_density
+        FLOAT PRKCST
+        FLOAT OPRKCST
+        FLOAT COLLFTE
+        FLOAT COLLPTE
+        BIGINT TERMINAL
+        FLOAT area_type_metric
+        BIGINT area_type
+        BIGINT COUNTY
+    }
+    LandUseAsimOut {
+        BIGINT zone_id
+        VARCHAR geometry
+        BIGINT county_id
+        FLOAT TOTHH
+        FLOAT TOTPOP
+        FLOAT TOTACRE
+        BIGINT TOTEMP
+        FLOAT AGE0519
+        BIGINT RETEMPN
+        BIGINT FPSEMPN
+        BIGINT HEREMPN
+        BIGINT OTHEMPN
+        BIGINT AGREMPN
+        BIGINT MWTEMPN
+        FLOAT PRKCST
+        FLOAT OPRKCST
+        BIGINT area_type
+        FLOAT HSENROLL
+        FLOAT COLLFTE
+        FLOAT COLLPTE
+        BIGINT TOPOLOGY
+        BIGINT TERMINAL
+        BIGINT original_zone_id
+        FLOAT household_density
+        FLOAT employment_density
+        FLOAT density_index
+        BOOLEAN is_cbd
+        FLOAT TOTENR_univ
+        FLOAT ext_work_share
+        FLOAT RETEMPN_scaled
+        FLOAT FPSEMPN_scaled
+        FLOAT HEREMPN_scaled
+        FLOAT OTHEMPN_scaled
+        FLOAT AGREMPN_scaled
+        FLOAT MWTEMPN_scaled
+        FLOAT TOTEMP_scaled
+    }
+    PersonsAsimIn {
+        BIGINT person_id
+        BIGINT relate
+        FLOAT hispanic
+        FLOAT student
+        VARCHAR person_sex
+        VARCHAR p_hispanic
+        BIGINT MAR
+        VARCHAR person_age
+        FLOAT edu
+        FLOAT age
+        FLOAT work_at_home
+        VARCHAR race
+        VARCHAR age_group
+        FLOAT hours
+        FLOAT earning
+        BIGINT household_id
+        FLOAT sex
+        BIGINT member_id
+        BIGINT school_taz
+        BIGINT school_zone_id
+        BIGINT school_id
+        FLOAT hispanic_1
+        FLOAT race_id
+        FLOAT worker
+        BIGINT work_block_id
+        VARCHAR education_group
+        BIGINT work_zone_id
+        BIGINT workplace_taz
+        BIGINT school_block_id
+        BIGINT TAZ
+        BIGINT ptype
+        BIGINT pemploy
+        BIGINT pstudent
+        FLOAT home_x
+        FLOAT home_y
+    }
+    PersonsAsimOut {
+        BIGINT person_id
+        BIGINT household_id
+        BIGINT age
+        BIGINT PNUM
+        BIGINT sex
+        BIGINT pemploy
+        BIGINT pstudent
+        BIGINT ptype
+        FLOAT home_x
+        FLOAT home_y
+        BOOLEAN age_16_to_19
+        BOOLEAN age_16_p
+        BOOLEAN adult
+        BOOLEAN male
+        BOOLEAN female
+        BOOLEAN has_non_worker
+        BOOLEAN has_retiree
+        BOOLEAN has_preschool_kid
+        BOOLEAN has_driving_kid
+        BOOLEAN has_school_kid
+        BOOLEAN has_full_time
+        BOOLEAN has_part_time
+        BOOLEAN has_university
+        BOOLEAN student_is_employed
+        BOOLEAN nonstudent_to_school
+        BOOLEAN is_student
+        BOOLEAN is_gradeschool
+        BOOLEAN is_highschool
+        BOOLEAN is_university
+        BIGINT school_segment
+        BOOLEAN is_worker
+        BIGINT home_zone_id
+        FLOAT value_of_time
+        BIGINT school_zone_id
+        FLOAT school_location_logsum
+        FLOAT distance_to_school
+        FLOAT roundtrip_auto_time_to_school
+        BIGINT workplace_zone_id
+        FLOAT workplace_location_logsum
+        FLOAT distance_to_work
+        BOOLEAN workplace_in_cbd
+        FLOAT work_zone_area_type
+        FLOAT roundtrip_auto_time_to_work
+        FLOAT work_auto_savings
+        FLOAT work_auto_savings_ratio
+        BOOLEAN free_parking_at_work
+        VARCHAR cdap_activity
+        BOOLEAN travel_active
+        BOOLEAN under16_not_at_school
+        BOOLEAN has_preschool_kid_at_home
+        BOOLEAN has_school_kid_at_home
+        VARCHAR mandatory_tour_frequency
+        BOOLEAN work_and_school_and_worker
+        BOOLEAN work_and_school_and_student
+        BIGINT num_mand
+        BIGINT num_work_tours
+        BIGINT num_joint_tours
+        BIGINT non_mandatory_tour_frequency
+        BIGINT num_non_mand
+        BIGINT num_escort_tours
+        BIGINT num_eatout_tours
+        BIGINT num_shop_tours
+        BIGINT num_maint_tours
+        BIGINT num_discr_tours
+        BIGINT num_social_tours
+        BIGINT num_non_escort_tours
+    }
+    PersonsBeamIn {
+        BIGINT person_id
+    }
+    PlansBeamIn {
+        BIGINT tour_id
+        BIGINT trip_id
+        BIGINT person_id
+        FLOAT number_of_participants
+        VARCHAR tour_mode
+        VARCHAR trip_mode
+        BIGINT PlanElementIndex
+        VARCHAR ActivityElement
+        VARCHAR ActivityType
+        FLOAT x
+        FLOAT y
+        FLOAT departure_time
+        FLOAT trip_dur_min
+        FLOAT trip_cost_dollars
+        BIGINT planindex
+        BOOLEAN planselected
+        FLOAT planscore
+        FLOAT legtraveltime
+        VARCHAR legroutetype
+        BIGINT legroutestartlink
+        BIGINT legrouteendlink
+        FLOAT legroutetraveltime
+        FLOAT legroutedistance
+        VARCHAR legroutelinks
+    }
+    ToursAsimOut {
+        BIGINT tour_id
+        BIGINT person_id
+        VARCHAR tour_type
+        BIGINT tour_type_count
+        BIGINT tour_type_num
+        BIGINT tour_num
+        BIGINT tour_count
+        VARCHAR tour_category
+        BIGINT number_of_participants
+        FLOAT destination
+        FLOAT origin
+        BIGINT household_id
+        FLOAT tdd
+        FLOAT start
+        FLOAT end
+        FLOAT duration
+        VARCHAR composition
+        FLOAT destination_logsum
+        VARCHAR tour_mode
+        FLOAT mode_choice_logsum
+        VARCHAR atwork_subtour_frequency
+        FLOAT parent_tour_id
+        VARCHAR stop_frequency
+        VARCHAR primary_purpose
+    }
+    VehiclesAtlasOut {
+        BIGINT household_id
+        BIGINT vehicle_id
+        VARCHAR bodytype
+        VARCHAR pred_power
+        VARCHAR ownlease
+        BIGINT modelyear
+        VARCHAR adopt_fuel
+        VARCHAR adopt_veh
+        VARCHAR acquire_year
+        VARCHAR vehicle_tag
+        BIGINT year
+        VARCHAR newhhflag
+        VARCHAR maindriver_id
+        VARCHAR vintage_category
+    }
+    VehiclesBeamIn {
+        BIGINT household_id
+        BIGINT vehicle_id
+        VARCHAR bodytype
+        VARCHAR pred_power
+        VARCHAR ownlease
+        BIGINT modelyear
+        VARCHAR adopt_fuel
+        VARCHAR adopt_veh
+        VARCHAR acquire_year
+        VARCHAR vehicle_tag
+        BIGINT year
+        VARCHAR newhhflag
+        BIGINT maindriver_id
+        VARCHAR vintage_category
+        VARCHAR vehicleTypeId
+    }
+    tripsAsimOut {
+        BIGINT trip_id
+        BIGINT person_id
+        BIGINT household_id
+        VARCHAR primary_purpose
+        BIGINT trip_num
+        BOOLEAN outbound
+        BIGINT trip_count
+        BIGINT destination
+        BIGINT origin
+        BIGINT tour_id
+        VARCHAR purpose
+        FLOAT destination_logsum
+        FLOAT depart
+        VARCHAR trip_mode
+        FLOAT mode_choice_logsum
+    }
+    AccessibilityAsimOut }o--|| LandUseAsimIn : "zone_id -> TAZ"
+    ActivitysimPostprocessUsimHouseholdsUpdated }o--|| AtlasBlocks : "block_id -> block_id"
+    ActivitysimPostprocessUsimHouseholdsUpdated }o--|| HouseholdsAsimIn : "household_id -> household_id"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| PersonsAsimOut : "person_id -> person_id"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| AtlasBlocks : "school_block_id -> block_id"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| LandUseAsimIn : "school_taz -> TAZ"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| LandUseAsimIn : "school_zone_id -> TAZ"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| AtlasBlocks : "work_block_id -> block_id"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| LandUseAsimIn : "work_zone_id -> TAZ"
+    ActivitysimPostprocessUsimPersonsUpdated }o--|| LandUseAsimIn : "workplace_taz -> TAZ"
+    AtlasBlocks }o--|| LandUseAsimIn : "taz_zone_id -> TAZ"
+    AtlasBlocks }o--|| LandUseAsimIn : "zone_id -> TAZ"
+    AtlasGrave }o--|| AtlasHousehold : "household_id -> household_id"
+    AtlasGrave }o--|| AtlasBlocks : "school_block_id -> block_id"
+    AtlasGrave }o--|| LandUseAsimIn : "school_taz -> TAZ"
+    AtlasGrave }o--|| LandUseAsimIn : "school_zone_id -> TAZ"
+    AtlasGrave }o--|| AtlasBlocks : "work_block_id -> block_id"
+    AtlasGrave }o--|| LandUseAsimIn : "work_zone_id -> TAZ"
+    AtlasGrave }o--|| LandUseAsimIn : "workplace_taz -> TAZ"
+    AtlasHousehold }o--|| AtlasBlocks : "block_id -> block_id"
+    AtlasJobs }o--|| AtlasBlocks : "block_id -> block_id"
+    AtlasPersons }o--|| AtlasHousehold : "household_id -> household_id"
+    AtlasPersons }o--|| AtlasBlocks : "school_block_id -> block_id"
+    AtlasPersons }o--|| LandUseAsimIn : "school_taz -> TAZ"
+    AtlasPersons }o--|| LandUseAsimIn : "school_zone_id -> TAZ"
+    AtlasPersons }o--|| AtlasBlocks : "work_block_id -> block_id"
+    AtlasPersons }o--|| LandUseAsimIn : "work_zone_id -> TAZ"
+    AtlasPersons }o--|| LandUseAsimIn : "workplace_taz -> TAZ"
+    AtlasPostprocessUsimHouseholdsUpdated }o--|| AtlasHousehold : "household_id -> household_id"
+    AtlasResidential }o--|| AtlasBlocks : "block_id -> block_id"
+    BeamEventsActEnd }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamEventsActEnd }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsActStart }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamEventsActStart }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsArrival }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamEventsArrival }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsDeparture }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamEventsDeparture }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsDeparture }o--|| tripsAsimOut : "trip_id -> trip_id"
+    BeamEventsLeavingParkingEvent }o--|| PersonsBeamIn : "driver -> person_id"
+    BeamEventsModeChoice }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsModeChoice }o--|| tripsAsimOut : "tripId -> trip_id"
+    BeamEventsParkingEvent }o--|| PersonsBeamIn : "driver -> person_id"
+    BeamEventsParquet }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamEventsPathTraversal }o--|| PersonsBeamIn : "driver -> person_id"
+    BeamEventsPathTraversal }o--|| VehiclesBeamIn : "vehicle -> vehicle_id"
+    BeamEventsPersonCost }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsPersonEntersVehicle }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsPersonLeavesVehicle }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsReplanning }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsReserveRideHail }o--|| PersonsBeamIn : "person -> person_id"
+    BeamEventsTeleportationEvent }o--|| PersonsBeamIn : "person -> person_id"
+    BeamFinalVehicles }o--|| HouseholdsBeamIn : "householdId -> household_id"
+    BeamLinkstats }o--|| BeamNetworkFinal : "link -> linkId"
+    BeamPathTraversalLinks }o--|| BeamEventsPathTraversal : "PathTraversalEventId -> PathTraversalEventId"
+    BeamPathTraversalLinks }o--|| BeamNetworkFinal : "linkId -> linkId"
+    BeamPlansAsimOut }o--|| PersonsAsimOut : "person_id -> person_id"
+    BeamPlansAsimOut }o--|| ToursAsimOut : "tour_id -> tour_id"
+    BeamPlansAsimOut }o--|| tripsAsimOut : "trip_id -> trip_id"
+    BeamPlansOut }o--|| BeamNetworkFinal : "legRouteEndLink -> linkId"
+    BeamPlansOut }o--|| BeamNetworkFinal : "legRouteStartLink -> linkId"
+    BeamPlansOut }o--|| PersonsBeamIn : "personId -> person_id"
+    BeamRouteHistory }o--|| BeamNetworkFinal : "destLinkId -> linkId"
+    BeamRouteHistory }o--|| BeamNetworkFinal : "originLinkId -> linkId"
+    HouseholdVAtlasOut }o--|| AtlasHousehold : "household_id -> household_id"
+    HouseholdsAsimIn }o--|| LandUseAsimIn : "TAZ -> TAZ"
+    HouseholdsAsimOut }o--|| LandUseAsimIn : "home_zone_id -> TAZ"
+    HouseholdsBeamIn }o--|| HouseholdsAsimOut : "household_id -> household_id"
+    JointTourParticipantsAsimOut }o--|| PersonsAsimOut : "participant_id -> person_id"
+    JointTourParticipantsAsimOut }o--|| PersonsAsimOut : "person_id -> person_id"
+    JointTourParticipantsAsimOut }o--|| ToursAsimOut : "tour_id -> tour_id"
+    LandUseAsimOut }o--|| LandUseAsimIn : "zone_id -> TAZ"
+    PersonsAsimIn }o--|| LandUseAsimIn : "TAZ -> TAZ"
+    PersonsAsimIn }o--|| HouseholdsAsimIn : "household_id -> household_id"
+    PersonsAsimIn }o--|| LandUseAsimIn : "school_taz -> TAZ"
+    PersonsAsimIn }o--|| LandUseAsimIn : "school_zone_id -> TAZ"
+    PersonsAsimIn }o--|| LandUseAsimIn : "work_zone_id -> TAZ"
+    PersonsAsimIn }o--|| LandUseAsimIn : "workplace_taz -> TAZ"
+    PersonsAsimOut }o--|| LandUseAsimIn : "home_zone_id -> TAZ"
+    PersonsAsimOut }o--|| HouseholdsAsimOut : "household_id -> household_id"
+    PersonsAsimOut }o--|| LandUseAsimIn : "school_zone_id -> TAZ"
+    PersonsAsimOut }o--|| LandUseAsimIn : "workplace_zone_id -> TAZ"
+    PersonsBeamIn }o--|| PersonsAsimOut : "person_id -> person_id"
+    PlansBeamIn }o--|| BeamNetworkFinal : "legrouteendlink -> linkId"
+    PlansBeamIn }o--|| BeamNetworkFinal : "legroutestartlink -> linkId"
+    PlansBeamIn }o--|| PersonsBeamIn : "person_id -> person_id"
+    PlansBeamIn }o--|| ToursAsimOut : "tour_id -> tour_id"
+    PlansBeamIn }o--|| tripsAsimOut : "trip_id -> trip_id"
+    ToursAsimOut }o--|| LandUseAsimIn : "destination -> TAZ"
+    ToursAsimOut }o--|| HouseholdsAsimOut : "household_id -> household_id"
+    ToursAsimOut }o--|| LandUseAsimIn : "origin -> TAZ"
+    ToursAsimOut }o--|| ToursAsimOut : "parent_tour_id -> tour_id"
+    ToursAsimOut }o--|| PersonsAsimOut : "person_id -> person_id"
+    VehiclesAtlasOut }o--|| AtlasHousehold : "household_id -> household_id"
+    VehiclesAtlasOut }o--|| AtlasPersons : "maindriver_id -> person_id"
+    VehiclesBeamIn }o--|| HouseholdsBeamIn : "household_id -> household_id"
+    VehiclesBeamIn }o--|| PersonsBeamIn : "maindriver_id -> person_id"
+    tripsAsimOut }o--|| LandUseAsimIn : "destination -> TAZ"
+    tripsAsimOut }o--|| HouseholdsAsimOut : "household_id -> household_id"
+    tripsAsimOut }o--|| LandUseAsimIn : "origin -> TAZ"
+    tripsAsimOut }o--|| PersonsAsimOut : "person_id -> person_id"
+    tripsAsimOut }o--|| ToursAsimOut : "tour_id -> tour_id"

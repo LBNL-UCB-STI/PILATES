@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-labelledby="title desc">
+  <title id="title">PILATES mark</title>
+  <desc id="desc">A geometric mark with blocks and a connecting transit line.</desc>
+  <rect x="8" y="8" width="112" height="112" rx="24" fill="#f6f3ee"/>
+  <rect x="24" y="24" width="34" height="34" rx="8" fill="#1f3d39"/>
+  <rect x="70" y="24" width="34" height="14" rx="7" fill="#ba6a2d"/>
+  <rect x="70" y="44" width="34" height="14" rx="7" fill="#7c9386"/>
+  <path
+    d="M24 90c10-14 22-21 36-21 11 0 20 4 30 15l9 9"
+    fill="none"
+    stroke="#1f3d39"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    stroke-width="10"
+  />
+  <circle cx="24" cy="90" r="8" fill="#ba6a2d"/>
+  <circle cx="60" cy="69" r="8" fill="#d6a449"/>
+  <circle cx="99" cy="103" r="8" fill="#537c97"/>
+</svg>

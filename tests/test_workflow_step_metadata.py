@@ -4,8 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 from consist import define_step
-from consist.types import CacheOptions, OutputPolicyOptions
+from consist.types import BindingResult
+from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
 
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
+from pilates.activitysim.runner import ActivitysimRunner
 from pilates.runtime import launcher as run_module
 from pilates.atlas.outputs import (
     AtlasPostprocessOutputs,
@@ -35,6 +39,7 @@ from pilates.workflows.steps import (
     StepOutputsHolder,
     activitysim_compile_output_paths,
     make_activitysim_compile_step,
+    make_activitysim_postprocess_step,
     make_atlas_postprocess_step,
     make_atlas_preprocess_step,
     make_atlas_run_step,
@@ -43,6 +48,7 @@ from pilates.workflows.steps import (
     make_beam_run_step,
     make_beam_full_skim_step,
     make_activitysim_preprocess_step,
+    make_activitysim_run_step,
     make_urbansim_preprocess_step,
     make_urbansim_postprocess_step,
     make_urbansim_run_step,
@@ -51,6 +57,14 @@ from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
+)
+from pilates.workflows.artifact_keys import (
+    ASIM_SHARROW_CACHE_DIR,
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 
 
@@ -72,6 +86,22 @@ class _FakeScenario:
     def run(self, **kwargs):
         self.calls.append(kwargs)
         return SimpleNamespace(cache_hit=False)
+
+
+def _step_meta_input_paths(meta):
+    input_paths = getattr(meta, "input_paths", None)
+    if input_paths is not None:
+        return input_paths
+    extra = getattr(meta, "extra", None) or {}
+    return extra.get("input_paths")
+
+
+def _step_meta_input_materialization(meta):
+    input_materialization = getattr(meta, "input_materialization", None)
+    if input_materialization is not None:
+        return input_materialization
+    extra = getattr(meta, "extra", None) or {}
+    return extra.get("input_materialization")
 
 
 def test_make_step_factories_attach_consist_metadata():
@@ -108,6 +138,232 @@ def test_make_step_factories_attach_consist_metadata():
     assert callable(preprocess_meta.config)
     assert callable(preprocess_meta.identity_inputs)
     assert callable(preprocess_meta.facet)
+    assert compile_meta.cache_hydration == "metadata"
+
+
+def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "123"}},
+        ),
+        activitysim=SimpleNamespace(persist_sharrow_cache=True),
+    )
+    state = SimpleNamespace(
+        year=2025,
+        current_year=2025,
+        forecast_year=2025,
+        iteration=1,
+        current_inner_iter=1,
+    )
+    beam_skims = tmp_path / "beam" / "data" / "seattle" / "skims.omx"
+    beam_skims.parent.mkdir(parents=True, exist_ok=True)
+    beam_skims.write_text("omx", encoding="utf-8")
+    usim_input = tmp_path / "urbansim" / "data" / "custom_123.h5"
+    usim_input.parent.mkdir(parents=True, exist_ok=True)
+    usim_input.write_text("h5", encoding="utf-8")
+    asim_data_dir = tmp_path / "activitysim" / "data"
+    asim_data_dir.mkdir(parents=True, exist_ok=True)
+    for fname in ("households.csv", "persons.csv", "land_use.csv", "skims.omx"):
+        (asim_data_dir / fname).write_text(fname, encoding="utf-8")
+    final_pipeline_dir = tmp_path / "activitysim" / "output" / "final_pipeline"
+    for stem in ("beam_plans", "persons"):
+        output_path = final_pipeline_dir / stem / "final.parquet"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(stem, encoding="utf-8")
+    zarr_path = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    zarr_path.mkdir(parents=True, exist_ok=True)
+    (zarr_path / ".zgroup").write_text("{}", encoding="utf-8")
+    sharrow_cache_dir = tmp_path / "shared_cache" / "numba"
+    sharrow_cache_dir.mkdir(parents=True, exist_ok=True)
+    (sharrow_cache_dir / "compile.cache").write_text("cache", encoding="utf-8")
+
+    preprocess_step = make_activitysim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    run_step = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    postprocess_step = make_activitysim_postprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    preprocess_meta = preprocess_step.__consist_step__
+    run_meta = run_step.__consist_step__
+    postprocess_meta = postprocess_step.__consist_step__
+
+    assert preprocess_meta.input_binding == "paths"
+    assert preprocess_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(preprocess_meta) == "requested"
+    preprocess_inputs = _step_meta_input_paths(preprocess_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_inputs == ActivitysimPreprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    preprocess_outputs = preprocess_meta.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_outputs == ActivitysimPreprocessor.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert preprocess_inputs[FINAL_SKIMS_OMX] == str(beam_skims)
+    assert preprocess_outputs[ASIM_HOUSEHOLDS_IN] == str(asim_data_dir / "households.csv")
+    assert preprocess_outputs["omx_skims"] == str(asim_data_dir / "skims.omx")
+
+    assert run_meta.input_binding == "paths"
+    assert run_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(run_meta) == "requested"
+    run_inputs = _step_meta_input_paths(run_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs == ActivitysimRunner.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    run_outputs = run_meta.output_paths(settings=settings, state=state, workspace=workspace)
+    assert run_outputs == ActivitysimRunner.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs[ZARR_SKIMS] == str(zarr_path)
+    assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(sharrow_cache_dir)
+    assert run_outputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
+    assert run_outputs["persons_asim_out"] == str(final_pipeline_dir / "persons" / "final.parquet")
+
+    assert postprocess_meta.input_binding == "paths"
+    assert postprocess_meta.cache_hydration == "metadata"
+    assert _step_meta_input_materialization(postprocess_meta) == "requested"
+    post_inputs = _step_meta_input_paths(postprocess_meta)(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_inputs == ActivitysimPostprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    post_outputs = postprocess_meta.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_outputs == ActivitysimPostprocessor.expected_outputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert post_inputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
+    assert post_outputs[USIM_DATASTORE_H5] == str(usim_input)
+    assert post_outputs["beam_plans_asim_out"] == str(
+        tmp_path / "activitysim" / "output" / "year-2025-iteration-1" / "beam_plans.parquet"
+    )
+    assert post_outputs["asim_input_skims_zarr_archived"] == str(
+        tmp_path / "activitysim" / "output" / "inputs-year-2025-iteration-1" / "skims.zarr"
+    )
+
+
+def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_workspace(
+    tmp_path: Path,
+):
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam" / "data"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "123"}},
+        ),
+        activitysim=SimpleNamespace(persist_sharrow_cache=True),
+    )
+    state = SimpleNamespace(
+        year=2025,
+        current_year=2025,
+        forecast_year=2025,
+        iteration=1,
+        current_inner_iter=1,
+    )
+
+    preprocess_step = make_activitysim_preprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    run_step = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+    postprocess_step = make_activitysim_postprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    preprocess_inputs = _step_meta_input_paths(preprocess_step.__consist_step__)(
+        settings=settings, state=state, workspace=workspace
+    )
+    run_inputs = _step_meta_input_paths(run_step.__consist_step__)(
+        settings=settings, state=state, workspace=workspace
+    )
+    postprocess_inputs = _step_meta_input_paths(postprocess_step.__consist_step__)(
+        settings=settings, state=state, workspace=workspace
+    )
+
+    assert preprocess_inputs == ActivitysimPreprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert run_inputs == ActivitysimRunner.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    assert postprocess_inputs == ActivitysimPostprocessor.declared_expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+
+    assert preprocess_inputs[FINAL_SKIMS_OMX] == str(
+        tmp_path / "beam" / "data" / "seattle" / "skims.omx"
+    )
+    assert preprocess_inputs["usim_population_source_h5"] == str(
+        tmp_path / "urbansim" / "data" / "custom_123.h5"
+    )
+    assert run_inputs[ZARR_SKIMS] == str(
+        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    )
+    assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(
+        tmp_path / "shared_cache" / "numba"
+    )
+    assert postprocess_inputs[ZARR_SKIMS] == str(
+        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    )
+
+    preprocess_runtime_inputs = ActivitysimPreprocessor.expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    run_runtime_inputs = ActivitysimRunner.expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+    postprocess_runtime_inputs = ActivitysimPostprocessor.expected_inputs(
+        settings=settings, state=state, workspace=workspace
+    )
+
+    assert preprocess_runtime_inputs["usim_population_source_h5"] is None
+    assert preprocess_runtime_inputs[FINAL_SKIMS_OMX] is None
+    assert run_runtime_inputs[ZARR_SKIMS] is None
+    assert run_runtime_inputs[ASIM_SHARROW_CACHE_DIR] is None
+    assert postprocess_runtime_inputs["asim_output_dir"] is None
+    assert postprocess_runtime_inputs[ZARR_SKIMS] is None
 
 
 def test_urbansim_and_atlas_step_factories_attach_consist_metadata():
@@ -229,9 +485,24 @@ def test_atlas_run_runtime_kwargs_use_stateful_required_outputs():
             year=2021,
             iteration=0,
         ),
-        settings=SimpleNamespace(run=None),
-        state=SimpleNamespace(year=2021, forecast_year=2023, iteration=0),
-        workspace=SimpleNamespace(),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(region="test"),
+            urbansim=SimpleNamespace(
+                output_file_template="usim_{year}.h5",
+                input_file_template="usim_{region_id}.h5",
+                region_mappings={"region_to_region_id": {"test": "123"}},
+            ),
+        ),
+        state=SimpleNamespace(
+            year=2021,
+            forecast_year=2023,
+            iteration=0,
+            is_start_year=lambda: False,
+        ),
+        workspace=SimpleNamespace(
+            get_atlas_output_dir=lambda: "/tmp/workspace/atlas/output",
+            get_usim_mutable_data_dir=lambda: "/tmp/workspace/usim/data",
+        ),
         runtime_kwargs={},
         stage_name="test_stage",
         default_iteration=0,
@@ -364,7 +635,8 @@ def test_workflow_stage_uses_top_level_runtime_kwargs_with_load_inputs_option():
         "state": state,
         "workspace": workspace,
     }
-    assert call["execution_options"].load_inputs is True
+    assert call["execution_options"].load_inputs is None
+    assert call["execution_options"].input_binding == "loaded"
 
 
 def test_workflow_stage_uses_decorator_runtime_defaults_for_execution_options():
@@ -397,11 +669,183 @@ def test_workflow_stage_uses_decorator_runtime_defaults_for_execution_options():
     )
 
     call = scenario.calls[0]
-    assert call["execution_options"].load_inputs is False
+    assert call["execution_options"].load_inputs is None
+    assert call["execution_options"].input_binding == "none"
     assert call["cache_options"] == CacheOptions(
         cache_hydration=None,
         cache_mode="overwrite",
         code_identity=None,
+    )
+
+
+def test_workflow_stage_propagates_requested_input_staging_execution_options():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(
+        full_path="/tmp/workspace",
+        get_asim_mutable_data_dir=lambda: "/tmp/workspace/activitysim/data",
+    )
+    settings = SimpleNamespace()
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        input_binding="paths",
+        input_materialization="requested",
+        input_paths=lambda *, workspace: {
+            "households": f"{workspace.get_asim_mutable_data_dir()}/households.csv",
+        },
+        cache_hydration="inputs-missing",
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(name="dummy_step", step_func=_decorated_step)
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"] == ExecutionOptions(
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+        load_inputs=None,
+        input_binding="paths",
+        input_paths={
+            "households": "/tmp/workspace/activitysim/data/households.csv",
+        },
+        input_materialization="requested",
+    )
+    assert call["cache_options"] == CacheOptions(
+        cache_hydration="inputs-missing",
+        cache_mode=None,
+        code_identity=None,
+    )
+
+
+def test_workflow_stage_filters_requested_input_paths_to_resolved_binding_keys():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(
+        full_path="/tmp/workspace",
+        get_asim_mutable_data_dir=lambda: "/tmp/workspace/activitysim/data",
+        get_beam_mutable_data_dir=lambda: "/tmp/workspace/beam",
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        input_binding="paths",
+        input_materialization="requested",
+        input_paths=lambda *, workspace, settings: {
+            "households": f"{workspace.get_asim_mutable_data_dir()}/households.csv",
+            "final_skims_omx": (
+                f"{workspace.get_beam_mutable_data_dir()}/{settings.run.region}/skims.omx"
+            ),
+        },
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(
+        name="dummy_step",
+        step_func=_decorated_step,
+        binding=BindingResult(inputs={"households": "/tmp/upstream/households.csv"}),
+    )
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"] == ExecutionOptions(
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+        load_inputs=None,
+        input_binding="paths",
+        input_paths={
+            "households": "/tmp/workspace/activitysim/data/households.csv",
+        },
+        input_materialization="requested",
+    )
+
+
+def test_workflow_stage_drops_requested_input_paths_without_resolved_input_mapping():
+    scenario = _FakeScenario()
+    workspace = SimpleNamespace(
+        full_path="/tmp/workspace",
+        get_beam_mutable_data_dir=lambda: "/tmp/workspace/beam",
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2020, iteration=0)
+    outputs_holder = StepOutputsHolder()
+    coupler = _DummyCoupler()
+
+    @define_step(
+        model="dummy_step",
+        input_binding="paths",
+        input_materialization="requested",
+        input_paths=lambda *, workspace, settings: {
+            "final_skims_omx": (
+                f"{workspace.get_beam_mutable_data_dir()}/{settings.run.region}/skims.omx"
+            ),
+        },
+    )
+    def _decorated_step(settings, state, workspace):
+        return None
+
+    spec = StepRef(
+        name="dummy_step",
+        step_func=_decorated_step,
+        binding=BindingResult(optional_input_keys=["final_skims_omx"]),
+    )
+
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert call["execution_options"] == ExecutionOptions(
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+        load_inputs=None,
+        input_binding="paths",
+        input_paths={},
+        input_materialization="requested",
     )
 
 
@@ -499,80 +943,6 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
         output_missing="error",
         output_mismatch="error",
     )
-
-
-def test_workflow_stage_explicit_output_enforcement_overrides_defaults():
-    scenario = _FakeScenario()
-    workspace = SimpleNamespace(full_path="/tmp/workspace")
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, iteration=0)
-    outputs_holder = StepOutputsHolder()
-    coupler = _DummyCoupler()
-
-    @define_step(model="dummy_step", outputs=["artifact_a"])
-    def _decorated_step(settings, state, workspace):
-        return None
-
-    spec = StepRef(
-        name="dummy_step",
-        step_func=_decorated_step,
-        required_outputs=["artifact_override"],
-        required_outputs_rationale="Temporary compatibility while migrating metadata.",
-        output_missing="warn",
-        output_mismatch="warn",
-    )
-    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
-    with pytest.warns(DeprecationWarning, match="StepRef.required_outputs is deprecated"):
-        stage.run(
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            name_suffix="unit",
-        )
-
-    call = scenario.calls[0]
-    assert call["outputs"] == ["artifact_override"]
-    assert call["output_policy"] == OutputPolicyOptions(
-        output_missing="warn",
-        output_mismatch="warn",
-    )
-
-
-def test_workflow_stage_required_outputs_override_requires_rationale():
-    scenario = _FakeScenario()
-    workspace = SimpleNamespace(full_path="/tmp/workspace")
-    settings = SimpleNamespace()
-    state = SimpleNamespace(year=2020, iteration=0)
-    outputs_holder = StepOutputsHolder()
-    coupler = _DummyCoupler()
-
-    @define_step(model="dummy_step", outputs=["artifact_a"])
-    def _decorated_step(settings, state, workspace):
-        return None
-
-    spec = StepRef(
-        name="dummy_step",
-        step_func=_decorated_step,
-        required_outputs=["artifact_override"],
-    )
-    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
-
-    with pytest.raises(
-        RuntimeError,
-        match="required_outputs_rationale",
-    ):
-        stage.run(
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            name_suffix="unit",
-        )
 
 
 def test_tracked_step_uses_canonical_outputs_instead_of_metadata_outputs():
@@ -767,6 +1137,8 @@ def test_epoch_tagging_proxy_preserves_step_local_metadata_without_adding_keys()
 def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_metadata():
     contract = run_module.scenario_runtime.build_scenario_runtime_contract(
         settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
         scenario_id="scenario-alpha",
         seed=777,
         cache_epoch=5,

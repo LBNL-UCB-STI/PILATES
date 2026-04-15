@@ -10,6 +10,9 @@ class DummyWorkspace:
     def __init__(self, root):
         self._root = root
 
+    def get_asim_mutable_data_dir(self):
+        return str(self._root / "activitysim" / "data")
+
     def get_asim_output_dir(self):
         return str(self._root / "activitysim" / "output")
 

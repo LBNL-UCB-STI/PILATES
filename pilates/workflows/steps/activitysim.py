@@ -7,14 +7,19 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Optional, cast
 
+from consist.types import H5ChildSpec
+
+from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
+    ActivitysimRunner,
     asim_runtime_zarr_path,
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
@@ -22,6 +27,7 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
     USIM_POPULATION_BLOCKS_TABLE,
@@ -54,7 +60,7 @@ from .shared import (
     _activitysim_output_facet_meta,
     _decorate_step_with_consist,
     build_standard_step,
-    _log_named_h5_tables,
+    load_recovered_cached_outputs,
     _log_step_records,
     artifact_to_path,
     cr,
@@ -68,10 +74,7 @@ from pilates.workflows.input_resolution import (
     resolved_metadata_value_for_key,
     resolved_value_for_key,
 )
-from pilates.workflows.tracker_outputs import (
-    load_tracker_run_outputs,
-    merge_canonical_output_mappings,
-)
+from pilates.workflows.tracker_outputs import merge_canonical_output_mappings
 
 logger = logging.getLogger(__name__)
 
@@ -132,20 +135,6 @@ def _filter_kwargs_for_callable(
     if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in parameters}
-
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    """
-    Extract a content hash from an artifact-like value when available.
-    """
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
-
 
 def _execute_activitysim_preprocess(
     preprocessor: Any,
@@ -262,9 +251,9 @@ def _execute_activitysim_postprocess(
 
 
 def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    return load_tracker_run_outputs(
+    return load_recovered_cached_outputs(
         run_id,
-        logger=logger,
+        step_logger=logger,
         log_context="ActivitySim cached output recovery",
     )
 
@@ -454,29 +443,36 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             workspace=workspace,
             year=step_year,
         )
+    population_source_value = (
+        step_inputs.get(USIM_POPULATION_SOURCE_H5)
+        if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
+        else resolved_value_for_key(
+            resolved=resolution,
+            key=USIM_POPULATION_SOURCE_H5,
+            coupler=coupler,
+        )
+    )
+    current_input_value = (
+        step_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
+        else resolved_value_for_key(
+            resolved=resolution,
+            key=USIM_DATASTORE_CURRENT_H5,
+            coupler=coupler,
+        )
+    )
+    if population_source_value is None:
+        population_source_value = current_input_value
+    if current_input_value is None:
+        current_input_value = population_source_value
+
     runtime_inputs["population_source_h5_path"] = _resolve_activitysim_h5_runtime_path(
-        value=(
-            step_inputs.get(USIM_POPULATION_SOURCE_H5)
-            if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
-            else resolved_value_for_key(
-                resolved=resolution,
-                key=USIM_POPULATION_SOURCE_H5,
-                coupler=coupler,
-            )
-        ),
+        value=population_source_value,
         key=USIM_POPULATION_SOURCE_H5,
         workspace=workspace,
     )
     runtime_inputs["current_input_h5_path"] = _resolve_activitysim_h5_runtime_path(
-        value=(
-            step_inputs.get(USIM_DATASTORE_CURRENT_H5)
-            if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
-            else resolved_value_for_key(
-                resolved=resolution,
-                key=USIM_DATASTORE_CURRENT_H5,
-                coupler=coupler,
-            )
-        ),
+        value=current_input_value,
         key=USIM_DATASTORE_CURRENT_H5,
         workspace=workspace,
     )
@@ -496,7 +492,7 @@ def _resolved_content_hash(
         key=key,
         workspace=workspace,
     )
-    return _artifact_content_hash(artifact)
+    return artifact_fingerprint(artifact)
 
 
 def _recover_activitysim_preprocess_outputs(
@@ -510,13 +506,15 @@ def _recover_activitysim_preprocess_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[ActivitySimPreprocessOutputs]:
-    del settings, state, outputs_holder, step_inputs
+    del outputs_holder, step_inputs
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     candidates = {
-        ASIM_HOUSEHOLDS_IN: asim_dir / "households.csv",
-        ASIM_PERSONS_IN: asim_dir / "persons.csv",
-        ASIM_LAND_USE_IN: asim_dir / "land_use.csv",
-        ASIM_OMX_SKIMS: asim_dir / "skims.omx",
+        key: Path(path)
+        for key, path in ActivitysimPreprocessor.expected_outputs(
+            settings, state, workspace
+        ).items()
+        if key in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
+        and isinstance(path, str)
     }
     recovered_inputs: Dict[str, Path] = {}
     recovered_hashes: Dict[str, str] = {}
@@ -568,7 +566,7 @@ def _recover_activitysim_run_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[ActivitySimRunOutputs]:
-    del settings, step_inputs
+    del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
     raw_outputs: Dict[str, Path] = {}
     raw_output_hashes: Dict[str, str] = {}
@@ -645,7 +643,10 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
-    runtime_zarr_candidate = Path(asim_runtime_zarr_path(workspace))
+    runner_expected_inputs = ActivitysimRunner.expected_inputs(settings, state, workspace)
+    runtime_zarr_candidate = Path(
+        cast(str, runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace))
+    )
     zarr_candidate = Path(
         _existing_local_path(runtime_zarr_candidate, workspace)
         or runtime_zarr_candidate
@@ -816,7 +817,7 @@ def _recover_activitysim_postprocess_outputs(
 
 
 def _compile_step_schema_outputs(ctx: Any) -> list[str]:
-    settings = getattr(ctx, "runtime_settings", None)
+    settings = ctx.require_runtime("settings")
     outputs = [ZARR_SKIMS]
     if settings is not None and persist_sharrow_cache_enabled(settings):
         outputs.append(ASIM_SHARROW_CACHE_DIR)
@@ -979,6 +980,7 @@ def make_activitysim_compile_step(
         schema_outputs=_compile_step_schema_outputs,
         output_paths=activitysim_compile_output_paths,
         cache_mode="overwrite",
+        cache_hydration="metadata",
         tags=["activitysim", "compile"],
     )
     return step_func
@@ -1061,8 +1063,7 @@ def make_activitysim_preprocess_step(
                 (USIM_POPULATION_BLOCKS_TABLE, "blocks"),
             )
             h5_tables_used = []
-            table_keys = {}
-            table_descriptions = {}
+            child_specs: Dict[str, H5ChildSpec] = {}
             start_year = getattr(state, "start_year", None)
             for table_key, table_name in table_config:
                 table_path = runtime_inputs.get(table_key)
@@ -1081,11 +1082,16 @@ def make_activitysim_preprocess_step(
                     and table_path.startswith(f"/{start_year}/")
                     else "resolved"
                 )
-                table_keys[table_path] = (
-                    f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
-                )
-                table_descriptions[table_path] = (
-                    f"UrbanSim {year_label} {table_name} table used by ActivitySim preprocess"
+                artifact_key = f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                child_specs[table_path] = H5ChildSpec(
+                    key=artifact_key,
+                    description=(
+                        f"UrbanSim {year_label} {table_name} table used by ActivitySim preprocess"
+                    ),
+                    metadata={
+                        "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                        "h5_table_name": table_path.split("/")[-1],
+                    },
                 )
             log_and_set_input(
                 key=USIM_POPULATION_SOURCE_H5,
@@ -1095,12 +1101,8 @@ def make_activitysim_preprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 h5_tables_used=h5_tables_used,
-            )
-            _log_named_h5_tables(
-                path=usim_path,
-                direction="input",
-                table_keys=table_keys,
-                description_by_table=table_descriptions,
+                child_specs=child_specs,
+                child_selection="include_only",
             )
         return {
             "population_source_h5_path": usim_path,
@@ -1148,7 +1150,7 @@ def make_activitysim_preprocess_step(
             profile_schema_keys={ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN},
         )
 
-    return build_standard_step(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1163,9 +1165,15 @@ def make_activitysim_preprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_preprocess_outputs,
+            input_paths=ActivitysimPreprocessor.declared_expected_inputs,
+            output_paths=ActivitysimPreprocessor.expected_outputs,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
+    return step_func
 
 
 def make_activitysim_run_step(
@@ -1230,7 +1238,7 @@ def make_activitysim_run_step(
                 key=ZARR_SKIMS,
                 workspace=workspace,
             )
-        zarr_content_hash = _artifact_content_hash(zarr_value)
+        zarr_content_hash = artifact_fingerprint(zarr_value)
         if zarr_content_hash:
             compile_input_hashes[ZARR_SKIMS] = zarr_content_hash
         zarr_path = artifact_to_path(zarr_value, workspace)
@@ -1251,7 +1259,7 @@ def make_activitysim_run_step(
                 key=ASIM_SHARROW_CACHE_DIR,
                 workspace=workspace,
             )
-        cache_content_hash = _artifact_content_hash(cache_value)
+        cache_content_hash = artifact_fingerprint(cache_value)
         if cache_content_hash:
             compile_input_hashes[ASIM_SHARROW_CACHE_DIR] = cache_content_hash
         cache_path = artifact_to_path(cache_value, workspace)
@@ -1297,7 +1305,7 @@ def make_activitysim_run_step(
         )
         if zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
-            content_hash = _artifact_content_hash(
+            content_hash = artifact_fingerprint(
                 zarr_value
             ) or compile_input_hashes.get(ZARR_SKIMS)
             if content_hash:
@@ -1312,7 +1320,7 @@ def make_activitysim_run_step(
         )
         if cache_path and _is_non_empty_directory(cache_path):
             outputs.source_input_paths[ASIM_SHARROW_CACHE_DIR] = Path(cache_path)
-            content_hash = _artifact_content_hash(
+            content_hash = artifact_fingerprint(
                 cache_value
             ) or compile_input_hashes.get(ASIM_SHARROW_CACHE_DIR)
             if content_hash:
@@ -1332,12 +1340,12 @@ def make_activitysim_run_step(
                     iteration=state.iteration,
                 ),
             )
-            content_hash = _artifact_content_hash(artifact)
+            content_hash = artifact_fingerprint(artifact)
             if content_hash:
                 outputs.raw_output_hashes[short_name] = content_hash
                 outputs.raw_output_hashes.setdefault(output_key, content_hash)
 
-    return build_standard_step(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1354,9 +1362,15 @@ def make_activitysim_run_step(
             output_recoverer=_recover_activitysim_run_outputs,
             declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
             schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+            input_paths=ActivitysimRunner.declared_expected_inputs,
+            output_paths=ActivitysimRunner.expected_outputs,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
+    return step_func
 
 
 def make_activitysim_postprocess_step(
@@ -1539,6 +1553,24 @@ def make_activitysim_postprocess_step(
             extra_meta_fn=_extra_meta,
         )
         if outputs.usim_datastore_h5 is not None:
+            child_specs = {
+                "/households": H5ChildSpec(
+                    key="activitysim_postprocess_usim_households_table_updated",
+                    description="UrbanSim households table updated by ActivitySim postprocess",
+                    metadata={
+                        "h5_parent_key": "activitysim_postprocess_usim_households",
+                        "h5_table_name": "households",
+                    },
+                ),
+                "/persons": H5ChildSpec(
+                    key="activitysim_postprocess_usim_persons_table_updated",
+                    description="UrbanSim persons table updated by ActivitySim postprocess",
+                    metadata={
+                        "h5_parent_key": "activitysim_postprocess_usim_persons",
+                        "h5_table_name": "persons",
+                    },
+                ),
+            }
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -1550,21 +1582,12 @@ def make_activitysim_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
-            )
-            _log_named_h5_tables(
-                path=str(outputs.usim_datastore_h5),
-                direction="output",
-                table_keys={
-                    "/households": "activitysim_postprocess_usim_households_table_updated",
-                    "/persons": "activitysim_postprocess_usim_persons_table_updated",
-                },
-                description_by_table={
-                    "/households": "UrbanSim households table updated by ActivitySim postprocess",
-                    "/persons": "UrbanSim persons table updated by ActivitySim postprocess",
-                },
+                h5_tables_used=list(child_specs.keys()),
+                child_specs=child_specs,
+                child_selection="include_only",
             )
 
-    return build_standard_step(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
         spec=StandardStepSpec(
@@ -1579,6 +1602,12 @@ def make_activitysim_postprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_activitysim_postprocess_outputs,
+            input_paths=ActivitysimPostprocessor.declared_expected_inputs,
+            output_paths=ActivitysimPostprocessor.expected_outputs,
+            cache_hydration="metadata",
+            input_binding="paths",
+            input_materialization="requested",
             step_logger=logger,
         ),
     )
+    return step_func

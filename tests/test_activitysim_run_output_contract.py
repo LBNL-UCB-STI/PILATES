@@ -74,7 +74,11 @@ def test_activitysim_run_stepref_uses_required_outputs_for_runtime_contract():
         step=step,
         settings=SimpleNamespace(run=None),
         state=SimpleNamespace(),
-        workspace=SimpleNamespace(),
+        workspace=SimpleNamespace(
+            full_path="/tmp/workspace",
+            get_asim_output_dir=lambda: "/tmp/activitysim/output",
+            get_asim_mutable_data_dir=lambda: "/tmp/activitysim/data",
+        ),
         runtime_kwargs={},
         stage_name="activity_demand_run",
         default_iteration=0,

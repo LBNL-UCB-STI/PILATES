@@ -65,6 +65,9 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
+from pilates.workflows.stages.supply_demand_resume import (
+    seed_supply_demand_parent_run_ids_for_resume,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -200,6 +203,40 @@ def _resolve_cache_epoch(settings: PilatesConfig) -> int:
     return scenario_runtime.resolve_cache_epoch(settings)
 
 
+def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
+    """
+    Resolve the archive and mutable run roots for the current execution.
+
+    The launcher owns this topology:
+    - ``run.output_directory`` is the durable archive root on shared scratch.
+    - ``run.local_workspace_root`` is the mutable node-local workspace root.
+    """
+    output_directory = settings.run.output_directory
+    if not output_directory:
+        raise ValueError("output_directory not found in config")
+    archive_root = os.path.realpath(os.path.expandvars(output_directory))
+    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
+    if local_workspace_root:
+        local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
+    else:
+        local_root = archive_root
+    return archive_root, local_root
+
+
+def _configure_run_storage_environment(
+    *,
+    archive_run_dir: str,
+    local_run_dir: str,
+    enable_archive_copy: bool,
+) -> None:
+    """
+    Export the runtime storage topology for helpers that archive logged outputs.
+    """
+    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
+    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
+    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1" if enable_archive_copy else "0"
+
+
 def _build_schema_steps() -> List[Callable[..., Any]]:
     return scenario_runtime.build_schema_steps()
 
@@ -242,12 +279,16 @@ def _get_consist_schemas() -> Optional[list[type[Any]]]:
 def _build_scenario_runtime_contract(
     *,
     settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
+        state=state,
+        workspace=workspace,
         scenario_id=scenario_id,
         seed=seed,
         cache_epoch=cache_epoch,
@@ -493,34 +534,6 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _hydrate_rewind_runner_inputs(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    local_run_dir: str,
-    archive_run_dir: str,
-    archive_state_path: str,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> Optional[restart_runtime.RestartHydrationSummary]:
-    return restart_runtime.hydrate_rewind_runner_inputs(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path,
-        allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
-        workflow_stage=WorkflowState.Stage,
-        read_current_stage_fn=WorkflowState.read_current_stage,
-        query_facet=query_facet,
-    )
-
-
 def _restart_frontier_contract(
     *,
     settings: PilatesConfig,
@@ -530,30 +543,6 @@ def _restart_frontier_contract(
         settings=settings,
         state=state,
         workflow_stage=WorkflowState.Stage,
-    )
-
-
-def _hydrate_missing_restart_artifacts(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    local_run_dir: str,
-    archive_run_dir: str,
-    query_facet: Optional[Mapping[str, Any]] = None,
-) -> restart_runtime.RestartHydrationSummary:
-    return restart_runtime.hydrate_missing_restart_artifacts(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        workflow_stage=WorkflowState.Stage,
-        query_facet=query_facet,
     )
 
 
@@ -584,8 +573,8 @@ def main(
     Caching Strategy:
     - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
     - Model outputs: Cached per iteration (convergence check)
-    - Bootstrap: pre-scenario cached run with native materialization on cache hit
-    - Restart: hydrates only the frontier artifacts required to resume execution
+    - Bootstrap: pre-scenario cached run with replay-hydrated declared output paths
+    - Restart: default path is scenario replay plus cache hits; legacy hydration helpers are manual tooling only
     """
     if clear_failure_context:
         _RUN_FAILURE_CONTEXT.clear()
@@ -599,15 +588,7 @@ def main(
     _log_local_storage_info()
 
     # 2. SETUP PATHS
-    output_directory = settings.run.output_directory
-    if not output_directory:
-        raise ValueError("output_directory not found in config")
-    output_path = os.path.realpath(os.path.expandvars(output_directory))
-    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
-    if local_workspace_root:
-        local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
-    else:
-        local_root = output_path
+    output_path, local_root = _resolve_run_storage_roots(settings)
 
     # Split run roots:
     # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
@@ -633,6 +614,11 @@ def main(
 
     archive_run_dir = os.path.join(output_path, run_name)
     local_run_dir = os.path.join(local_root, run_name)
+    logger.info(
+        "Run storage topology resolved: archive_run_dir=%s local_run_dir=%s",
+        archive_run_dir,
+        local_run_dir,
+    )
     _set_run_failure_context(
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
@@ -641,10 +627,10 @@ def main(
     if archive_run_dir != local_run_dir:
         os.makedirs(archive_run_dir, exist_ok=True)
 
-    os.environ["PILATES_LOCAL_RUN_DIR"] = local_run_dir
-    os.environ["PILATES_ARCHIVE_RUN_DIR"] = archive_run_dir
-    os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = (
-        "1" if settings.run.enable_archive_copy else "0"
+    _configure_run_storage_environment(
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        enable_archive_copy=bool(getattr(settings.run, "enable_archive_copy", False)),
     )
 
     # 3. INITIALIZE CONSIST TRACKER
@@ -883,6 +869,8 @@ def main(
     # The coupler is a shared dict-like object for passing artifacts between steps.
     scenario_contract = _build_scenario_runtime_contract(
         settings=settings,
+        state=state,
+        workspace=workspace,
         scenario_id=scenario_id,
         seed=run_seed,
         cache_epoch=cache_epoch,
@@ -935,78 +923,29 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
-            restart_frontier_contract = (
-                _restart_frontier_contract(settings=settings, state=state)
-                if is_restart_run and state.data_initialized
-                else None
-            )
+            if is_restart_run:
+                seed_supply_demand_parent_run_ids_for_resume(
+                    scenario=tagged_scenario,
+                    workspace=workspace,
+                    state=state,
+                )
             if is_restart_run and state.data_initialized:
-                try:
-                    rewind_restore = _hydrate_rewind_runner_inputs(
-                        tracker=tracker,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        local_run_dir=local_run_dir,
-                        archive_run_dir=archive_run_dir,
-                        archive_state_path=archive_state_path,
-                        query_facet=restart_query_facet,
-                    )
-                except restart_runtime.RestartHydrationError as exc:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_rewind_restore",
-                        **exc.summary,
-                    )
-                    raise
-                if rewind_restore is not None:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_rewind_restore",
-                        **rewind_restore,
-                    )
-                    logger.info(
-                        "Restart exact rewind restore complete: frontier_stage=%s "
-                        "frontier_step=%s hydrated_keys=%s overlay_root=%s",
-                        rewind_restore.get("frontier_stage"),
-                        rewind_restore.get("frontier_step"),
-                        rewind_restore.get("hydrated_keys"),
-                        rewind_restore.get("overlay_root"),
-                    )
-            if restart_frontier_contract is not None:
-                try:
-                    restart_hydration = _hydrate_missing_restart_artifacts(
-                        tracker=tracker,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        local_run_dir=local_run_dir,
-                        archive_run_dir=archive_run_dir,
-                        query_facet=restart_query_facet,
-                    )
-                except restart_runtime.RestartHydrationError as exc:
-                    emit_consist_audit_event(
-                        workspace=workspace,
-                        event_type="restart_hydration",
-                        **exc.summary,
-                    )
-                    raise
+                logger.info(
+                    "Restart replay mode active: skipping bespoke restart "
+                    "hydration and relying on scenario replay plus Consist cache hits."
+                )
                 emit_consist_audit_event(
                     workspace=workspace,
                     event_type="restart_hydration",
-                    **restart_hydration,
-                )
-                logger.info(
-                    "Restart frontier hydration complete: frontier_stage=%s "
-                    "frontier_step=%s hydrated_keys=%s missing_keys=%s "
-                    "fallback_reason=%s",
-                    restart_hydration.get("frontier_stage"),
-                    restart_hydration.get("frontier_step"),
-                    restart_hydration.get("hydrated_keys"),
-                    restart_hydration.get("missing_keys"),
-                    restart_hydration.get("fallback_reason"),
+                    frontier_stage=None,
+                    frontier_step=None,
+                    success=True,
+                    hydrated_keys=[],
+                    missing_keys=[],
+                    producer_steps_by_key={},
+                    fallback_reason="replay_mode",
+                    rewind_restore=False,
+                    overlay_root=None,
                 )
 
             # 7. MAIN WORKFLOW LOOP

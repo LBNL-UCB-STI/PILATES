@@ -134,6 +134,22 @@ def log_input(
         )
 
 
+def artifact_fingerprint(value: Any) -> Optional[str]:
+    """
+    Return Consist's canonical public artifact fingerprint when available.
+
+    Downstream workflow code should treat ``Artifact.hash`` as the only stable
+    fingerprint surface. Missing fingerprints remain ``None``; callers should
+    not probe legacy or wrapper-specific fields.
+    """
+    if value is None:
+        return None
+    fingerprint = getattr(value, "hash", None)
+    if not fingerprint:
+        return None
+    return str(fingerprint)
+
+
 def log_output(
     path: Any,
     key: Optional[str] = None,

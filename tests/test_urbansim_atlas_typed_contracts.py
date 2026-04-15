@@ -22,6 +22,12 @@ from pilates.workflows.steps.urbansim_atlas import (
     _execute_atlas_run_typed,
     _execute_urbansim_postprocess_typed,
     _execute_urbansim_run_typed,
+    make_atlas_postprocess_step,
+    make_atlas_preprocess_step,
+    make_atlas_run_step,
+    make_urbansim_postprocess_step,
+    make_urbansim_preprocess_step,
+    make_urbansim_run_step,
 )
 
 
@@ -225,6 +231,74 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
     assert outputs is expected
     assert seen["previous_records"] is previous_records
     assert seen["final_skims_omx"] is None
+
+
+@pytest.mark.parametrize(
+    ("factory", "expected_outputs_fn"),
+    [
+        (
+            make_urbansim_preprocess_step,
+            UrbansimPreprocessor.expected_outputs,
+        ),
+        (
+            make_urbansim_run_step,
+            UrbansimRunner.expected_outputs,
+        ),
+        (
+            make_urbansim_postprocess_step,
+            UrbansimPostprocessor.expected_outputs,
+        ),
+        (
+            make_atlas_preprocess_step,
+            AtlasPreprocessor.expected_outputs,
+        ),
+        (
+            make_atlas_run_step,
+            AtlasRunner.expected_outputs,
+        ),
+        (
+            make_atlas_postprocess_step,
+            AtlasPostprocessor.expected_outputs,
+        ),
+    ],
+)
+def test_urbansim_atlas_steps_publish_replay_metadata(
+    factory, expected_outputs_fn, tmp_path: Path
+) -> None:
+    coupler = object()
+    holder = StepOutputsHolder()
+    step = factory(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        urbansim=SimpleNamespace(
+            input_file_template="usim_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+            region_mappings={"region_to_region_id": {"test": "123"}},
+        ),
+        atlas=SimpleNamespace(),
+    )
+    state = SimpleNamespace(
+        year=2023,
+        forecast_year=2023,
+        is_start_year=lambda: True,
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_atlas_mutable_input_dir=lambda: str(tmp_path / "atlas" / "input"),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
+    )
+
+    assert meta.load_inputs is None
+    assert meta.input_binding == "none"
+    assert meta.cache_hydration == "metadata"
+    assert meta.output_paths is expected_outputs_fn
+    assert meta.output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    ) == expected_outputs_fn(settings, state, workspace)
 
 
 def test_atlas_preprocess_outputs_require_grave_csv_for_non_start_year(

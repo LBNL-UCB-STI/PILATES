@@ -42,17 +42,11 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     )
     output_logger = step_fn.pilates_output_replayer
     calls = []
-    h5_table_calls = []
 
     def _log_output_only(*, key, path, description, **meta):
         calls.append((key, meta))
 
     monkeypatch.setattr(steps_activitysim, "log_output_only", _log_output_only)
-    monkeypatch.setattr(
-        steps_activitysim,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
 
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
@@ -76,7 +70,6 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     assert len(calls) == 1
     assert calls[0][0] == "asim_input_skims_zarr_archived"
     assert calls[0][1]["content_hash"] == "abc123"
-    assert h5_table_calls == []
 
 
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
@@ -97,7 +90,6 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     )
     monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
     monkeypatch.setattr(steps_activitysim, "log_and_set_output", lambda **_kwargs: None)
-    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
     calls = []
 
     def _log_input_only(*, key, path, description, **meta):
@@ -268,7 +260,7 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         "get_preprocessor",
         lambda self, *args, **kwargs: fake_preprocessor,
     )
-    table_calls = []
+    input_calls = []
 
     monkeypatch.setattr(
         steps_activitysim,
@@ -284,11 +276,10 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
             },
         ),
     )
-    monkeypatch.setattr(steps_activitysim, "log_and_set_input", lambda **_kwargs: None)
     monkeypatch.setattr(
         steps_activitysim,
-        "_log_named_h5_tables",
-        lambda **kwargs: table_calls.append(kwargs),
+        "log_and_set_input",
+        lambda **kwargs: input_calls.append(kwargs),
     )
     monkeypatch.setattr(steps_activitysim, "_log_step_records", lambda **_kwargs: None)
 
@@ -312,10 +303,10 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
         workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_data_dir)),
     )
 
-    assert len(table_calls) == 1
-    assert table_calls[0]["direction"] == "input"
-    assert table_calls[0]["path"] == str(h5_path)
-    assert table_calls[0]["table_keys"]["/2025/households"] == (
+    assert len(input_calls) == 1
+    assert input_calls[0]["path"] == str(h5_path)
+    assert input_calls[0]["child_selection"] == "include_only"
+    assert input_calls[0]["child_specs"]["/2025/households"].key == (
         "activitysim_preprocess_usim_households_table_input"
     )
 
@@ -353,20 +344,48 @@ def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths
     assert captured["usim_population_blocks_table"] == "/2025/blocks"
 
 
+def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2025.h5"
+    h5_path.write_text("x")
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        lambda **_kwargs: BindingPlan(inputs={}, source_by_key={}),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=2023,
+            forecast_year=2025,
+            Stage=SimpleNamespace(land_use="land_use"),
+            is_enabled=lambda _stage: True,
+        ),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        coupler=_dummy_coupler(),
+        step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+    )
+
+    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
+    assert runtime_inputs["current_input_h5_path"] == str(h5_path)
+
+
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),
     )
     output_logger = step_fn.pilates_output_replayer
-    table_calls = []
+    publish_calls = []
 
     monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
-    monkeypatch.setattr(steps_activitysim, "log_and_set_output", lambda **_kwargs: None)
     monkeypatch.setattr(
         steps_activitysim,
-        "_log_named_h5_tables",
-        lambda **kwargs: table_calls.append(kwargs),
+        "log_and_set_output",
+        lambda **kwargs: publish_calls.append(kwargs),
     )
 
     h5_path = tmp_path / "next_iteration.h5"
@@ -385,9 +404,12 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_pa
         holder=SimpleNamespace(),
     )
 
-    assert len(table_calls) == 1
-    assert table_calls[0]["direction"] == "output"
-    assert table_calls[0]["table_keys"] == {
+    assert len(publish_calls) == 1
+    assert publish_calls[0]["key"] == "usim_datastore_h5"
+    assert publish_calls[0]["child_selection"] == "include_only"
+    assert {
+        path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
+    } == {
         "/households": "activitysim_postprocess_usim_households_table_updated",
         "/persons": "activitysim_postprocess_usim_persons_table_updated",
     }
@@ -414,7 +436,6 @@ def test_activitysim_postprocess_publishes_beam_handoff_outputs_to_coupler(
         "log_and_set_output",
         lambda **kwargs: publish_calls.append(kwargs["key"]),
     )
-    monkeypatch.setattr(steps_activitysim, "_log_named_h5_tables", lambda **_kwargs: None)
 
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
