@@ -274,6 +274,20 @@ def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
     )
 
 
+def test_validate_workflow_step_contracts_allows_filtered_declared_subset_when_requested():
+    subset = [
+        step
+        for step in _declared_schema_steps()
+        if step.__consist_step__.model.startswith("activitysim_")
+        or step.__consist_step__.model.startswith("beam_")
+    ]
+
+    step_shared.validate_workflow_step_contracts(
+        declared_steps=subset,
+        require_all_tracked_declared=False,
+    )
+
+
 def test_validate_workflow_step_contracts_reports_output_contract_conflicts():
     """Tracked-step metadata outputs must match canonical StepOutputs declarations."""
     steps = _declared_schema_steps()

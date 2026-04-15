@@ -329,3 +329,23 @@ def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule()
         "beam_postprocess",
         "beam_full_skim",
     ]
+
+
+def test_static_execution_plan_supports_beam_only_run():
+    settings = load_config("settings-seattle-consist-local.yaml")
+    settings.run.models.activity_demand = None
+    settings.activity_demand_enabled = False
+    settings.run.models.land_use = None
+    settings.land_use_enabled = False
+    settings.run.models.vehicle_ownership = None
+    settings.vehicle_ownership_model_enabled = False
+    settings.run.models.travel = "beam"
+    settings.traffic_assignment_enabled = True
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    step_names = [step.step_name for step in plan.step_runs]
+    assert any(name.startswith("beam_") for name in step_names)
+    assert all(not name.startswith("activitysim_") for name in step_names)
+    assert all(not name.startswith("urbansim_") for name in step_names)
+    assert all(not name.startswith("atlas_") for name in step_names)

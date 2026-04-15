@@ -1131,6 +1131,7 @@ def validate_workflow_step_contracts(
     settings: Any = None,
     state: Any = None,
     workspace: Any = None,
+    require_all_tracked_declared: bool = True,
 ) -> None:
     """
     Validate internal workflow step contracts.
@@ -1256,7 +1257,7 @@ def validate_workflow_step_contracts(
 
         declared_names = set(declared_counts.keys())
         missing_declared = tracked_step_names - declared_names
-        if missing_declared:
+        if require_all_tracked_declared and missing_declared:
             errors.append(
                 "Tracked step names missing from declared steps: "
                 + ", ".join(sorted(missing_declared))

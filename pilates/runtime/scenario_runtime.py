@@ -453,6 +453,7 @@ def build_scenario_runtime_contract(
         settings=settings,
         state=state,
         workspace=workspace,
+        require_all_tracked_declared=False,
     )
     coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
     required_schema = build_coupler_schema_fn(
