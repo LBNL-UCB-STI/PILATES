@@ -15,8 +15,33 @@ run:
   travel_model_freq: 6
   vehicle_ownership_freq: 6
   supply_demand_iters: 1
-  output_directory: /global/scratch/users/$USER/pilates-output
-  output_run_name: new-asim-snapshots-usim
+  # Normal run dirs
+  output_directory: /clusterfs/beem-core-data-nfs/pilates-outputs
+  output_run_name: consist-sfbay-usim-base
+  local_workspace_root: /local/job${SLURM_JOB_ID}/pilates-workspace
+  enable_archive_copy: true
+  consist_hashing_strategy: full
+  restart_strict: true
+  consist_code_identity: callable_module  
+
+
+  # Keep active DB on node-local flash
+  consist_db_local_run: true
+  consist_db_filename: provenance.duckdb
+
+  # Startup order: restore from run snapshot first
+  consist_db_restore_on_start: true
+  consist_db_restore_strict: false
+
+  # If no snapshot exists, seed from shared DB
+  consist_db_seed_from_shared_on_start: true
+  consist_db_seed_strict: false
+
+  # Periodic + final snapshots
+  consist_db_snapshot_enabled: true
+  consist_db_snapshot_interval_seconds: 600
+  consist_db_snapshot_on_outer_iteration: true
+  consist_db_snapshot_keep_last: 3
   use_stubs: false
   models:
     land_use: urbansim
@@ -47,15 +72,8 @@ shared:
     zones:
       zone_type: "taz"
       source_file: "pilates/activitysim/data/sfbay/taz_sfbay.geojson"
-      source_crs: "EPSG:4326"
       canonical_id_col: "taz1454"
       activitysim_index_col: "TAZ"
-    alternative_zones:
-      zone_type: taz
-      source_file: "pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp"
-      canonical_id_col: taz1454
-      activitysim_index_col: TAZ
-      source_crs: "EPSG:26910"
   skims:
     fname: as-base-skims-sfbay-taz.omx
     origin_fname: as-origin-skims-sfbay-taz.csv.gz
@@ -226,7 +244,7 @@ shared:
   database:
     enabled: true
     type: duckdb
-    path: pilates/database/sfbay_pilates_data_consist.duckdb
+    path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_sfbay_clean.duckdb
     use_consist: true
 
 # =============================================================================
@@ -238,12 +256,12 @@ infrastructure:
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
-    activitysim: docker://zaneedell/activitysim:0.2.7
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260408
+    activitysim: docker://zaneedell/activitysim:0.2.17
+    beam: docker://zaneedell/beam:1.1-beta-v260403
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260408
+    beam: zaneedell/beam:0.9.10
     activitysim: zaneedell/activitysim:0.1.4
     polaris: tbd
   docker_config:
@@ -303,7 +321,7 @@ atlas:
 activitysim:
   household_sample_size: 0
   chunk_size: 12000000000
-  num_processes: 45
+  num_processes: 22
   file_format: parquet
   clipped_geoms_path: "clipped_tazs.csv"
   local_input_folder: pilates/activitysim/data/
@@ -314,6 +332,9 @@ activitysim:
   validation_folder: pilates/activitysim/validation
   subdir: configs
   main_configs_dir: configs_extended
+  workplace_reassignment_share: 0.2
+  school_reassignment_share: 0.4
+  
   region_mappings:
     region_to_subdir:
       austin: austin
@@ -372,16 +393,15 @@ activitysim:
 # Transportation network simulation settings
 # =============================================================================
 beam:
-  config: sfbay-pilates-base-omx.conf
-  sample: 1.0
+  config: scenarios/sfbay-pilates-base-calibrated.conf
+  sample: 0.1
   replanning_portion: 0.4
-  memory: "${BEAM_MEMORY}"
+  memory: 180g
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/sfbay-cbg5500-weakConn-network
-  warmstart_linkstats_path:
   skims_shapefile: shape/block-groups-32048.shp
   skim_zone_source_id_col: sk_zone
   skim_zone_geoid_col: geoid10
