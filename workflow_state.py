@@ -5,6 +5,7 @@ import yaml
 import logging
 
 from pilates.config import PilatesConfig
+from pilates.workflows.profile import WorkflowProfile
 
 logger = logging.getLogger(__name__)
 
@@ -223,21 +224,40 @@ class WorkflowState:
         ]
 
     @classmethod
-    def from_settings(cls, settings: PilatesConfig):
+    def from_settings(
+        cls,
+        settings: PilatesConfig,
+        profile: WorkflowProfile | None = None,
+    ):
         # Get settings from nested or legacy locations
         start_year = settings.run.start_year
         end_year = settings.run.end_year
         travel_model_freq = settings.run.travel_model_freq
         runtime_flags = settings.runtime.flags
+        resolved_profile = profile
         runtime_options = settings.runtime.options
 
         # These are always added at top-level by parse_args_and_settings()
-        land_use_enabled = runtime_flags.land_use_enabled
-        vehicle_ownership_model_enabled = (
-            runtime_flags.vehicle_ownership_model_enabled
+        land_use_enabled = (
+            resolved_profile.land_use_enabled
+            if resolved_profile is not None
+            else runtime_flags.land_use_enabled
         )
-        activity_demand_enabled = runtime_flags.activity_demand_enabled
-        traffic_assignment_enabled = runtime_flags.traffic_assignment_enabled
+        vehicle_ownership_model_enabled = (
+            resolved_profile.vehicle_ownership_model_enabled
+            if resolved_profile is not None
+            else runtime_flags.vehicle_ownership_model_enabled
+        )
+        activity_demand_enabled = (
+            resolved_profile.activity_demand_enabled
+            if resolved_profile is not None
+            else runtime_flags.activity_demand_enabled
+        )
+        traffic_assignment_enabled = (
+            resolved_profile.traffic_assignment_enabled
+            if resolved_profile is not None
+            else runtime_flags.traffic_assignment_enabled
+        )
         file_loc = runtime_options.state_file_loc
 
         if file_loc:

@@ -23,6 +23,7 @@ from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
+from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
 
 
 _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS = {
@@ -139,6 +140,18 @@ def _attach_enabled_flags(settings: PilatesConfig) -> Dict[str, bool]:
     return enabled_flags
 
 
+def _resolve_workflow_profile(
+    settings: PilatesConfig,
+    *,
+    profile: Optional[WorkflowProfile],
+) -> WorkflowProfile:
+    if profile is not None:
+        return profile
+    if not settings.runtime.flags_initialized:
+        _attach_enabled_flags(settings)
+    return build_workflow_profile(settings)
+
+
 def load_settings_for_planning(config_path: str) -> PilatesConfig:
     settings = load_config(config_path)
     _attach_enabled_flags(settings)
@@ -149,9 +162,13 @@ def _interval_step_for_year(settings: PilatesConfig, year: int) -> int:
     return 7 if year == 2010 else int(settings.run.travel_model_freq)
 
 
-def _iter_planning_years(settings: PilatesConfig) -> List[Dict[str, int]]:
+def _iter_planning_years(
+    settings: PilatesConfig,
+    *,
+    profile: WorkflowProfile,
+) -> List[Dict[str, int]]:
     years: List[Dict[str, int]] = []
-    land_use_enabled = settings.runtime.flags.land_use_enabled
+    land_use_enabled = profile.land_use_enabled
     current_year = int(settings.run.start_year)
     end_year = int(settings.run.end_year)
 
@@ -205,9 +222,13 @@ def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
     return False
 
 
-def _effective_supply_demand_iterations(settings: PilatesConfig) -> int:
+def _effective_supply_demand_iterations(
+    settings: PilatesConfig,
+    *,
+    profile: WorkflowProfile,
+) -> int:
     total_iters = int(settings.run.supply_demand_iters)
-    if settings.run.models.activity_demand is None and total_iters > 1:
+    if not profile.activity_demand_enabled and total_iters > 1:
         return 1
     return total_iters
 
@@ -461,10 +482,12 @@ class _PlanBuilder:
         self,
         *,
         settings: PilatesConfig,
+        profile: WorkflowProfile,
         config_path: Optional[str],
         include_postprocessing: bool,
     ) -> None:
         self.settings = settings
+        self.profile = profile
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
         self.contracts = workflow_step_contracts_by_name(settings=self.settings)
@@ -490,22 +513,16 @@ class _PlanBuilder:
         return artifact_key not in _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS
 
     def _build_metadata(self) -> Dict[str, Any]:
-        years = _iter_planning_years(self.settings)
-        enabled_flags = {
-            key: bool(getattr(self.settings, key, False))
-            for key in (
-                "land_use_enabled",
-                "vehicle_ownership_model_enabled",
-                "activity_demand_enabled",
-                "traffic_assignment_enabled",
-                "replanning_enabled",
-            )
-        }
+        years = _iter_planning_years(self.settings, profile=self.profile)
+        enabled_flags = self.profile.to_dict()
         return {
             "start_year": int(self.settings.run.start_year),
             "end_year": int(self.settings.run.end_year),
             "travel_model_freq": int(self.settings.run.travel_model_freq),
-            "supply_demand_iters": _effective_supply_demand_iterations(self.settings),
+            "supply_demand_iters": _effective_supply_demand_iterations(
+                self.settings,
+                profile=self.profile,
+            ),
             "enabled_flags": enabled_flags,
             "years": years,
             "full_skim_schedule": _full_skim_run_schedule(self.settings),
@@ -532,7 +549,7 @@ class _PlanBuilder:
         return self.plan
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
-        if self.settings.runtime.flags.land_use_enabled:
+        if self.profile.land_use_enabled:
             self._add_step_run("urbansim_preprocess", year=year, forecast_year=forecast_year)
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
@@ -541,7 +558,7 @@ class _PlanBuilder:
                 forecast_year=forecast_year,
             )
 
-        if self.settings.runtime.flags.vehicle_ownership_model_enabled:
+        if self.profile.vehicle_ownership_model_enabled:
             for atlas_year in _atlas_sub_years(year, forecast_year):
                 self._add_step_run(
                     "atlas_preprocess",
@@ -562,19 +579,19 @@ class _PlanBuilder:
                     atlas_year=atlas_year,
                 )
 
-        if (
-            self.settings.runtime.flags.activity_demand_enabled
-            or self.settings.runtime.flags.traffic_assignment_enabled
-        ):
+        if self.profile.supply_demand_loop_enabled:
             self._add_supply_demand_steps(year=year, forecast_year=forecast_year)
 
         if self.include_postprocessing:
             self._add_step_run("postprocessing", year=year, forecast_year=forecast_year)
 
     def _add_supply_demand_steps(self, *, year: int, forecast_year: int) -> None:
-        total_iters = _effective_supply_demand_iterations(self.settings)
-        activity_enabled = self.settings.runtime.flags.activity_demand_enabled
-        traffic_enabled = self.settings.runtime.flags.traffic_assignment_enabled
+        total_iters = _effective_supply_demand_iterations(
+            self.settings,
+            profile=self.profile,
+        )
+        activity_enabled = self.profile.activity_demand_enabled
+        traffic_enabled = self.profile.traffic_assignment_enabled
         compile_added = False
         schedule = _full_skim_run_schedule(self.settings)
 
@@ -1056,9 +1073,9 @@ def build_static_execution_plan(
     *,
     config_path: Optional[str] = None,
     include_postprocessing: Optional[bool] = None,
+    profile: Optional[WorkflowProfile] = None,
 ) -> StaticExecutionPlan:
-    if not settings.runtime.flags_initialized:
-        _attach_enabled_flags(settings)
+    resolved_profile = _resolve_workflow_profile(settings, profile=profile)
 
     include_post = (
         bool(getattr(settings, "postprocessing", None))
@@ -1067,6 +1084,7 @@ def build_static_execution_plan(
     )
     builder = _PlanBuilder(
         settings=settings,
+        profile=resolved_profile,
         config_path=config_path,
         include_postprocessing=include_post,
     )

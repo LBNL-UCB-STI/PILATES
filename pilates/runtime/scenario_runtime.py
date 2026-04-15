@@ -5,6 +5,10 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pilates.config import PilatesConfig
 from pilates.workflows.catalog import enabled_schema_step_models, schema_step_names
+from pilates.workflows.profile import (
+    WorkflowProfile,
+    profile_enabled_schema_models,
+)
 from pilates.workflows.steps import (
     StepOutputsHolder,
     schema_step_builder_registry,
@@ -383,12 +387,19 @@ def filter_schema_steps_for_enabled_models(
     settings: PilatesConfig,
     *,
     include_optional: bool = True,
+    profile: Optional[WorkflowProfile] = None,
 ) -> List[Callable[..., Any]]:
-    enabled_models = enabled_schema_step_models(
-        settings,
-        is_model_enabled=is_model_enabled,
-        include_optional=include_optional,
-    )
+    if profile is None:
+        enabled_models = enabled_schema_step_models(
+            settings,
+            is_model_enabled=is_model_enabled,
+            include_optional=include_optional,
+        )
+    else:
+        enabled_models = profile_enabled_schema_models(
+            profile,
+            include_optional=include_optional,
+        )
 
     filtered: List[Callable[..., Any]] = []
     for step_func in steps:
@@ -405,6 +416,7 @@ def build_scenario_runtime_contract(
     settings: PilatesConfig,
     state: Any,
     workspace: Any,
+    profile: Optional[WorkflowProfile] = None,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
@@ -447,6 +459,7 @@ def build_scenario_runtime_contract(
         schema_steps_all,
         settings,
         include_optional=True,
+        profile=profile,
     )
     validate_workflow_step_contracts_fn(
         declared_steps=schema_steps_enabled,
@@ -461,6 +474,7 @@ def build_scenario_runtime_contract(
             schema_steps_all,
             settings,
             include_optional=False,
+            profile=profile,
         ),
         settings=settings,
         include_extras=False,

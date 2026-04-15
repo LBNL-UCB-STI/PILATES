@@ -1223,11 +1223,27 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
     all_steps = [object(), object()]
     enabled_steps = [all_steps[1]]
     validation_calls = []
+    filter_profiles = []
+    settings = SimpleNamespace(
+        runtime=SimpleNamespace(
+            flags_initialized=True,
+            flags=SimpleNamespace(
+                land_use_enabled=False,
+                vehicle_ownership_model_enabled=False,
+                activity_demand_enabled=True,
+                traffic_assignment_enabled=True,
+                replanning_enabled=False,
+            ),
+        ),
+        run=SimpleNamespace(models=SimpleNamespace()),
+    )
+    profile = run_module.build_workflow_profile(settings)
 
     run_module.scenario_runtime.build_scenario_runtime_contract(
-        settings=SimpleNamespace(),
+        settings=settings,
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
+        profile=profile,
         scenario_id="scenario-alpha",
         seed=None,
         cache_epoch=0,
@@ -1237,12 +1253,16 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
             kwargs["declared_steps"]
         ),
         build_schema_steps_fn=lambda: all_steps,
-        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: enabled_steps,
+        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **kwargs: (
+            filter_profiles.append(kwargs.get("profile")),
+            enabled_steps,
+        )[1],
         merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
         scenario_name_template="scenario-{run_name}",
     )
 
     assert validation_calls == [enabled_steps]
+    assert filter_profiles == [profile, profile]
 
 
 def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():

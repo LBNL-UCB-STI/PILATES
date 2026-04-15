@@ -25,6 +25,7 @@ from consist import define_step
 
 from pilates.activitysim.runner import ActivitysimRunner
 from pilates.atlas.postprocessor import AtlasPostprocessor
+from pilates.runtime import scenario_runtime
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -42,6 +43,7 @@ from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.outputs_base import required_outputs_for_step_outputs_class
+from pilates.workflows.profile import build_workflow_profile
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -141,6 +143,38 @@ def test_validate_workflow_step_contracts_passes_for_current_setup():
     step_shared.validate_workflow_step_contracts(
         declared_steps=_declared_schema_steps()
     )
+
+
+def test_filter_schema_steps_for_enabled_models_supports_profile_subset():
+    settings = SimpleNamespace(
+        runtime=SimpleNamespace(
+            flags_initialized=True,
+            flags=SimpleNamespace(
+                land_use_enabled=False,
+                vehicle_ownership_model_enabled=False,
+                activity_demand_enabled=True,
+                traffic_assignment_enabled=True,
+                replanning_enabled=False,
+            )
+        ),
+        run=SimpleNamespace(models=SimpleNamespace()),
+    )
+    profile = build_workflow_profile(settings)
+
+    filtered = scenario_runtime.filter_schema_steps_for_enabled_models(
+        _declared_schema_steps(),
+        settings,
+        include_optional=True,
+        profile=profile,
+    )
+
+    filtered_names = {
+        getattr(getattr(step, "__consist_step__", None), "model", None) for step in filtered
+    }
+    assert "activitysim_preprocess" in filtered_names
+    assert "beam_preprocess" in filtered_names
+    assert "urbansim_preprocess" not in filtered_names
+    assert "atlas_preprocess" not in filtered_names
 
 
 def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(

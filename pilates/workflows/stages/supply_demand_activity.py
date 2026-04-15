@@ -19,6 +19,7 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
+from pilates.workflows.profile import build_workflow_profile
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StageRunner,
@@ -178,10 +179,11 @@ def _run_activity_demand_phase(
         year=inputs.year,
         iteration=inputs.iteration,
     )
+    profile = build_workflow_profile(settings)
     resolved_usim_inputs = dict(inputs.usim_inputs)
     if (
         bool(getattr(state, "is_restart_run", False))
-        and state.is_enabled(WorkflowState.Stage.land_use)
+        and profile.land_use_enabled
     ):
         get_value = getattr(coupler, "get", None)
         missing_restart_roles = [
@@ -201,7 +203,7 @@ def _run_activity_demand_phase(
             )
     if (
         bool(getattr(state, "is_restart_run", False))
-        and state.is_enabled(WorkflowState.Stage.land_use)
+        and profile.land_use_enabled
         and not resolved_usim_inputs
     ):
         from .supply_demand_resume import (
@@ -227,7 +229,7 @@ def _run_activity_demand_phase(
         )
     else:
         preprocess_explicit_inputs: Optional[Dict[str, Union[str, os.PathLike]]] = None
-        if not state.is_enabled(WorkflowState.Stage.land_use):
+        if not profile.land_use_enabled:
             population_source = (
                 resolved_usim_inputs.get(USIM_DATASTORE_BASE_H5)
                 or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
@@ -238,14 +240,15 @@ def _run_activity_demand_phase(
                 }
 
         preprocess_binding = build_binding_plan(
-                step_name="activitysim_preprocess",
-                coupler=coupler,
-                explicit_inputs=preprocess_explicit_inputs,
-                fallback_inputs=resolved_usim_inputs,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+            step_name="activitysim_preprocess",
+            coupler=coupler,
+            explicit_inputs=preprocess_explicit_inputs,
+            fallback_inputs=resolved_usim_inputs,
+            settings=settings,
+            state=state,
+            workspace=workspace,
             year=inputs.year,
+            profile=profile,
         )
 
         if preprocess_binding.missing_required:
@@ -486,7 +489,7 @@ def _run_activity_demand_phase(
 
     postprocess_required_keys: list[str] = []
     postprocess_optional_keys: list[str] = []
-    if state.is_enabled(WorkflowState.Stage.land_use):
+    if profile.land_use_enabled:
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             coupler_population = get_value(USIM_POPULATION_SOURCE_H5)
@@ -518,14 +521,15 @@ def _run_activity_demand_phase(
         postprocess_optional_keys = [USIM_DATASTORE_BASE_H5]
     activitysim_postprocess_binding = build_binding_plan(
         step_name="activitysim_postprocess",
-            coupler=coupler,
-            fallback_inputs=resolved_usim_inputs,
-            required_keys=postprocess_required_keys,
-            optional_keys=postprocess_optional_keys,
-            settings=settings,
+        coupler=coupler,
+        fallback_inputs=resolved_usim_inputs,
+        required_keys=postprocess_required_keys,
+        optional_keys=postprocess_optional_keys,
+        settings=settings,
         state=state,
         workspace=workspace,
         year=inputs.year,
+        profile=profile,
     )
     if activitysim_postprocess_binding.missing_required:
         get_value = getattr(coupler, "get", None)

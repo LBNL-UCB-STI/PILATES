@@ -24,6 +24,7 @@ from pilates.workflows.binding import (
     activitysim_population_source_selection_rules,
     build_binding_plan,
 )
+from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
 from pilates.workflows.input_resolution import (
     resolved_value_for_key,
     selected_candidate_key,
@@ -44,6 +45,7 @@ def build_activitysim_inputs(
     usim_inputs: Optional[Dict[str, Any]] = None,
     *,
     include_omx_skims: bool = False,
+    profile: Optional[WorkflowProfile] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
     """
     Build ActivitySim input paths from available sources.
@@ -111,16 +113,8 @@ def build_activitysim_inputs(
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 
-    land_use_enabled = False
-    is_enabled = getattr(state, "is_enabled", None)
-    stage_enum = getattr(state, "Stage", None)
-    if callable(is_enabled) and stage_enum is not None:
-        land_use_stage = getattr(stage_enum, "land_use", None)
-        if land_use_stage is not None:
-            try:
-                land_use_enabled = bool(is_enabled(land_use_stage))
-            except Exception:
-                land_use_enabled = False
+    resolved_profile = profile or build_workflow_profile(settings)
+    land_use_enabled = resolved_profile.land_use_enabled
 
     explicit_usim_inputs: Dict[str, Any] = {}
     if usim_inputs and not land_use_enabled:
@@ -138,6 +132,7 @@ def build_activitysim_inputs(
         artifact_rules=activitysim_population_source_selection_rules(),
         required_keys=[USIM_POPULATION_SOURCE_H5],
         fallback_inputs=usim_inputs,
+        profile=resolved_profile,
     )
     selected_usim_key = selected_candidate_key(
         usim_resolution,

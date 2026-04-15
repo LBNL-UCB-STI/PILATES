@@ -45,6 +45,22 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     assert '"kind": "depends_on"' in json_payload
 
 
+def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_steps():
+    settings = load_config("settings-seattle-consist-local.yaml")
+    settings.land_use_enabled = False
+    settings.vehicle_ownership_model_enabled = False
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = build_static_execution_plan(settings, include_postprocessing=False)
+
+    step_names = [step.step_name for step in plan.step_runs]
+    assert any(name.startswith("activitysim_") for name in step_names)
+    assert any(name.startswith("beam_") for name in step_names)
+    assert all(not name.startswith("urbansim_") for name in step_names)
+    assert all(not name.startswith("atlas_") for name in step_names)
+
+
 def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True

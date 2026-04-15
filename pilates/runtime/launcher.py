@@ -59,6 +59,7 @@ from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
 from pilates.workflows.binding import is_restart_prebootstrap_deferred_artifact_key
 from pilates.workflows.coupler_schema import build_coupler_schema
+from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -259,11 +260,13 @@ def _filter_schema_steps_for_enabled_models(
     settings: PilatesConfig,
     *,
     include_optional: bool = True,
+    profile: Optional[WorkflowProfile] = None,
 ) -> List[Callable[..., Any]]:
     return scenario_runtime.filter_schema_steps_for_enabled_models(
         steps,
         settings,
         include_optional=include_optional,
+        profile=profile,
     )
 
 
@@ -281,6 +284,7 @@ def _build_scenario_runtime_contract(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    profile: WorkflowProfile,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
@@ -289,6 +293,7 @@ def _build_scenario_runtime_contract(
         settings=settings,
         state=state,
         workspace=workspace,
+        profile=profile,
         scenario_id=scenario_id,
         seed=seed,
         cache_epoch=cache_epoch,
@@ -581,8 +586,9 @@ def main(
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     if settings is None:
         settings = parse_args_and_settings()
+    profile = build_workflow_profile(settings)
     if state is None:
-        state = WorkflowState.from_settings(settings)
+        state = WorkflowState.from_settings(settings, profile=profile)
     _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -871,6 +877,7 @@ def main(
         settings=settings,
         state=state,
         workspace=workspace,
+        profile=profile,
         scenario_id=scenario_id,
         seed=run_seed,
         cache_epoch=cache_epoch,

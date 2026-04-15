@@ -24,9 +24,10 @@ from consist.types import BindingResult
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
+from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
@@ -341,6 +342,7 @@ def beam_preprocess_binding_plan(
     year: Optional[int],
     activity_demand_outputs: Optional[Mapping[str, Any]],
     previous_beam_outputs: Optional[Mapping[str, Any]],
+    profile: Optional[WorkflowProfile] = None,
 ) -> BindingPlan:
     """
     Build the BEAM preprocess binding plan from explicit upstream artifacts.
@@ -348,9 +350,8 @@ def beam_preprocess_binding_plan(
     The plan itself owns fallback selection for the BEAM-only exchange inputs,
     warm-start linkstats, and optional ATLAS vehicles2 resolution.
     """
-    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
-    if activity_demand_model is not None and activity_demand_outputs is None:
+    resolved_profile = profile or build_workflow_profile(settings)
+    if resolved_profile.activity_demand_enabled and activity_demand_outputs is None:
         if previous_beam_outputs is None:
             raise RuntimeError(
                 "TrafficAssignment iteration 0 requires activity_demand_outputs "
@@ -375,7 +376,7 @@ def beam_preprocess_binding_plan(
             if key.startswith("linkstats"):
                 explicit_inputs[key] = value
 
-    if activity_demand_model is None:
+    if not resolved_profile.activity_demand_enabled:
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
             for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
@@ -386,6 +387,7 @@ def beam_preprocess_binding_plan(
             settings=settings,
             state=state,
             workspace=workspace,
+            profile=resolved_profile,
         )
         if exchange_inputs:
             for key, value in exchange_inputs.items():
@@ -406,6 +408,7 @@ def beam_preprocess_binding_plan(
             settings=settings,
             coupler=coupler,
             workspace=workspace,
+            profile=resolved_profile,
         )
         if warmstart_inputs:
             for key, value in warmstart_inputs.items():
@@ -415,6 +418,7 @@ def beam_preprocess_binding_plan(
         settings=settings,
         state=state,
         workspace=workspace,
+        profile=resolved_profile,
     )
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
@@ -435,6 +439,7 @@ def beam_preprocess_binding_plan(
         state=state,
         workspace=workspace,
         year=year,
+        profile=resolved_profile,
     )
 
 
@@ -740,13 +745,14 @@ def _beam_preprocess_exchange_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
+    profile: Optional[WorkflowProfile] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
-    activity_demand_model = get_activity_demand_model(settings)
-    if activity_demand_model is not None:
+    resolved_profile = profile or build_workflow_profile(settings)
+    if resolved_profile.activity_demand_enabled:
         return None
 
     from pilates.beam.beam_exchange import register_existing_beam_exchange_inputs
@@ -781,6 +787,7 @@ def _beam_preprocess_warmstart_inputs(
     settings: Any,
     coupler: Optional[CouplerProtocol],
     workspace: Any,
+    profile: Optional[WorkflowProfile] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
@@ -804,11 +811,13 @@ def _beam_preprocess_atlas_inputs(
     settings: Any,
     state: Any,
     workspace: Any,
+    profile: Optional[WorkflowProfile] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
         return None
-    if not getattr(settings, "vehicle_ownership_model_enabled", False):
+    resolved_profile = profile or build_workflow_profile(settings)
+    if not resolved_profile.vehicle_ownership_model_enabled:
         return None
 
     current_iter = iteration_index(state, default=0)
@@ -972,6 +981,7 @@ def _lookup_fallback_inputs(
     workspace: Any,
     coupler: Optional[CouplerProtocol],
     year: Optional[int],
+    profile: Optional[WorkflowProfile],
 ) -> Optional[Mapping[str, Any]]:
     combined: Dict[str, Any] = dict(explicit_fallback_inputs or {})
     if rule.fallback_provider:
@@ -988,6 +998,7 @@ def _lookup_fallback_inputs(
             coupler=coupler,
             explicit_fallback_inputs=explicit_fallback_inputs,
             year=year,
+            profile=profile,
         )
         if provided:
             combined.update(provided)
@@ -1035,6 +1046,7 @@ def _resolve_rule_binding(
     state: Any,
     workspace: Any,
     year: Optional[int],
+    profile: Optional[WorkflowProfile],
 ) -> tuple[str, Optional[str], Optional[Any], Optional[str], Dict[str, list[str]]]:
     candidates = rule.preferred_keys or (rule.semantic_key,)
     rule_fallback_inputs = (
@@ -1046,6 +1058,7 @@ def _resolve_rule_binding(
             workspace=workspace,
             coupler=coupler,
             year=year,
+            profile=profile,
         )
         if rule.allow_fallback or rule.fallback_provider
         else None
@@ -1099,6 +1112,7 @@ def build_binding_plan(
     state: Any = None,
     workspace: Any = None,
     year: Optional[int] = None,
+    profile: Optional[WorkflowProfile] = None,
 ) -> BindingPlan:
     spec = binding_spec_for_step_name(step_name)
     rule_lookup = _binding_rule_lookup(spec)
@@ -1169,6 +1183,7 @@ def build_binding_plan(
             state=state,
             workspace=workspace,
             year=year,
+            profile=profile,
         )
         source_by_key[semantic_key] = source
         if candidate_paths:

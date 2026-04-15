@@ -604,3 +604,81 @@ def test_initialization_beam_only_does_not_stage_disabled_models(monkeypatch, tm
         assert "atlas" not in summary["input_records_by_model"]
     finally:
         cr.set_enabled(None)
+
+
+def test_initialization_activitysim_beam_stages_only_required_model_families(
+    monkeypatch, tmp_path
+):
+    from pilates.utils import consist_runtime as cr
+
+    cr.set_enabled(False)
+
+    class _CountingPreprocessor:
+        def __init__(self, model_name, calls):
+            self.model_name = model_name
+            self.calls = calls
+
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
+            self.calls.append((self.model_name, output_dir, workspace))
+            record = FileRecord(
+                unique_id=f"{self.model_name}-out",
+                short_name=f"{self.model_name}_output",
+                file_path=str(tmp_path / f"{self.model_name}.txt"),
+            )
+            return RecordStore(), RecordStore(recordList=[record])
+
+    class _Factory:
+        def __init__(self):
+            self.calls = []
+
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            return _CountingPreprocessor(model_name, self.calls)
+
+    factory = _Factory()
+    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+
+    workspace = DummyWorkspace()
+    workspace.beam_mutable_dir = str(tmp_path / "beam")
+    workspace.activitysim_mutable_dir = str(tmp_path / "asim")
+    workspace.usim_mutable_dir = str(tmp_path / "usim")
+    workspace.atlas_mutable_input_dir = str(tmp_path / "atlas_in")
+    workspace.atlas_output_dir = str(tmp_path / "atlas_out")
+    zones_path = tmp_path / "canonical_zones.geojson"
+    zones_path.write_text("{}", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel="beam",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+                land_use=None,
+            ),
+            start_year=2020,
+            region="seattle",
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="urbansim"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(zones_path),
+                    activitysim_index_col="TAZ",
+                    zone_type="block_group",
+                    canonical_id_col="zone_key",
+                )
+            )
+        ),
+    )
+
+    try:
+        init = Initialization("init", None)
+        copied_records = init.run(settings, workspace)
+
+        assert [call[0] for call in factory.calls] == ["beam", "urbansim", "activitysim"]
+        summary = build_bootstrap_artifact_summary(workspace, copied_records)
+        assert "beam" in summary["models"]
+        assert "activitysim" in summary["models"]
+        assert "atlas" not in summary["models"]
+    finally:
+        cr.set_enabled(None)
