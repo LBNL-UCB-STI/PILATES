@@ -75,6 +75,10 @@ FIELD_ANNOTATIONS = {
         "hash_scope": "metadata",
         "description": "Optional node-local workspace root - affects file locations",
     },
+    "run.recovery_archive_roots": {
+        "hash_scope": "metadata",
+        "description": "Optional long-term recovery/archive roots for post-run promotion",
+    },
     "run.enable_archive_copy": {
         "hash_scope": "metadata",
         "description": "Copy logged outputs to archive root as they are produced",

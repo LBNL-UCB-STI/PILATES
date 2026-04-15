@@ -86,3 +86,19 @@ def test_runtime_values_are_excluded_from_model_dump():
     assert "runtime" not in dumped
     assert "land_use_enabled" not in dumped
     assert "state_file_loc" not in dumped
+
+
+def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
+    monkeypatch.setenv("PILATES_RECOVERY_ROOT", "/tmp/recovery-root")
+    config = _minimal_config()
+    config["run"]["recovery_archive_roots"] = [
+        "${PILATES_RECOVERY_ROOT}",
+        "/tmp/static-root",
+    ]
+
+    settings = PilatesConfig(**config)
+
+    assert settings.run.recovery_archive_roots == [
+        "/tmp/recovery-root",
+        "/tmp/static-root",
+    ]

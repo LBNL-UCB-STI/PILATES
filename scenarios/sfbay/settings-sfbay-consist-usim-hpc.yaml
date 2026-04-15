@@ -15,10 +15,15 @@ run:
   travel_model_freq: 6
   vehicle_ownership_freq: 6
   supply_demand_iters: 1
-  # Normal run dirs
-  output_directory: /clusterfs/beem-core-data-nfs/pilates-outputs
+  # Lawrencium storage posture:
+  # - output_directory: active durable archive root on Lustre scratch
+  # - local_workspace_root: mutable node-local workspace during execution
+  # - recovery_archive_roots: colder NFS destinations for post-run promotion
+  output_directory: /global/scratch/users/${USER}/pilates-outputs
   output_run_name: consist-sfbay-usim-base
   local_workspace_root: /local/job${SLURM_JOB_ID}/pilates-workspace
+  recovery_archive_roots:
+    - /clusterfs/beem-core-data-nfs/pilates-outputs
   enable_archive_copy: true
   consist_hashing_strategy: full
   restart_strict: true

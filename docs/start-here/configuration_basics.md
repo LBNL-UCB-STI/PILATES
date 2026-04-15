@@ -24,6 +24,7 @@ summary: Mental model for how PILATES config is organized before the full refere
 
 - `run.output_directory` sets the parent directory where the launcher creates the archive run directory for each run.
 - `run.local_workspace_root` sets the parent directory for the mutable workspace when you want it to differ from the archive side.
+- `run.recovery_archive_roots` sets optional colder post-run archive destinations for promotion after the run finishes.
 - `run.output_run_name` is part of the generated run-directory name.
 - `run.enable_archive_copy`, `run.bootstrap_cache_enabled`, `run.restart_strict`, and the Consist DB snapshot fields change runtime behavior, not model science.
 - `run.models` decides which model sections must be present and which stages the launcher enables.
@@ -41,7 +42,7 @@ Most readers do not need to change deeper model sections until the active templa
 
 ## Validation And Normalization
 
-PILATES loads config with Pydantic validation. The current loader expands environment variables in `run.output_directory`, `run.local_workspace_root`, and the database path. It also enforces basic guardrails such as `end_year >= start_year`, a basename-only `consist_db_filename`, and the `atlas.beamac` restriction that appears in the loader.
+PILATES loads config with Pydantic validation. The current loader expands environment variables in `run.output_directory`, `run.local_workspace_root`, `run.recovery_archive_roots`, and the database path. It also enforces basic guardrails such as `end_year >= start_year`, a basename-only `consist_db_filename`, and the `atlas.beamac` restriction that appears in the loader.
 
 ## Adjacent Pages
 

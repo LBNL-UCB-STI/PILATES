@@ -28,9 +28,30 @@ Local and HPC runs go through the same launcher and workflow logic. The main dif
 
 ## Storage Posture
 
-- `run.output_directory` remains the archive run root.
-- `run.local_workspace_root` can point at a node-local mutable workspace.
+- `run.output_directory` is the active durable archive root for the run. On HPC this should normally live on shared scratch, not on node-local storage.
+- `run.local_workspace_root` can point at a node-local mutable workspace for the actual model execution.
+- `run.recovery_archive_roots` is an optional list of colder post-run promotion roots, such as project NFS storage.
 - The launcher exports `PILATES_LOCAL_RUN_DIR`, `PILATES_ARCHIVE_RUN_DIR`, and `PILATES_ENABLE_ARCHIVE_COPY` so archive-copy helpers know where to write.
+
+## Recommended HPC Storage Split
+
+For the replay-first archive model, treat the three tiers differently:
+
+- shared scratch: active archive root during the run via `run.output_directory`
+- node-local scratch: mutable workspace via `run.local_workspace_root`
+- colder shared storage: post-run promotion destination via `run.recovery_archive_roots`
+
+This keeps slower archival storage out of the hot path while preserving a complete run archive after promotion.
+
+## Post-Run Promotion
+
+PILATES now supports a manual promotion helper for copying a completed archive run into one or more recovery roots and recording those promoted roots on the run's logged artifacts:
+
+```bash
+python -m pilates.runtime.promote_run_archive -c path/to/settings.yaml
+```
+
+Use `--run-dir` when you want to promote a specific completed archive directory, and `--root` to add or override recovery roots for a one-off promotion. The helper copies the full archive run directory, updates artifact `recovery_roots` in the run-local Consist DB, syncs the updated `.consist` state into the promoted copy, and writes a promotion marker at `.consist/recovery_promotion.json`.
 
 ## Practical Environment Variables
 

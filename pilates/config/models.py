@@ -101,6 +101,13 @@ class RunConfig(BaseModel):
             "Optional node-local workspace root (defaults to output_directory)"
         ),
     )
+    recovery_archive_roots: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Optional long-term recovery/archive roots used for post-run promotion "
+            "of a completed archive run"
+        ),
+    )
     enable_archive_copy: bool = Field(
         False, description="Copy logged outputs to archive root as they are produced"
     )
@@ -214,6 +221,12 @@ class RunConfig(BaseModel):
         if v is None:
             return v
         return os.path.expandvars(v)
+
+    @field_validator("recovery_archive_roots")
+    @classmethod
+    def expand_recovery_archive_roots(cls, v):
+        """Expand environment variables in recovery archive roots."""
+        return [os.path.expandvars(str(root)) for root in (v or [])]
 
     @field_validator("consist_db_filename")
     @classmethod
