@@ -691,11 +691,15 @@ def _build_step_run_kwargs(
         )
 
     resolved_required_outputs: Optional[Sequence[str]] = None
+    optional_declared_outputs: list[str] = []
     if outputs_class is not None:
         # Tracked steps use StepOutputs required_outputs as the strict runtime
         # output contract. declared_outputs remains available for schema/catalog
         # publication without forcing every optional artifact to materialize.
         resolved_required_outputs = required_outputs or None
+        optional_declared_outputs = list(
+            getattr(outputs_class, "optional_output_keys", lambda: ())()
+        )
     elif step_meta is not None:
         # Metadata-only steps remain supported for non-catalog call sites.
         resolved_required_outputs = _normalize_output_keys(
@@ -709,7 +713,10 @@ def _build_step_run_kwargs(
     output_missing = step.output_missing
     output_mismatch = step.output_mismatch
     if output_missing is None and resolved_required_outputs:
-        output_missing = "error"
+        # Consist applies missing-output policy to every declared output_path,
+        # including optional tracked outputs. Let tracked-step hydration enforce
+        # required outputs after execution while tolerating absent optional paths.
+        output_missing = "ignore" if optional_declared_outputs else "error"
     if output_mismatch is None and resolved_required_outputs:
         output_mismatch = "error"
     if output_missing is not None or output_mismatch is not None:

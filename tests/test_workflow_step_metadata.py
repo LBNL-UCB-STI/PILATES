@@ -1000,6 +1000,59 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
     )
 
 
+def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(tmp_path):
+    scenario = _FakeScenario()
+    coupler = _DummyCoupler()
+    outputs_holder = StepOutputsHolder()
+    outputs_holder.activitysim_run = SimpleNamespace()
+
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "53199100"}},
+            output_file_template="forecast_{year}.h5",
+        ),
+    )
+    state = SimpleNamespace(
+        year=2020,
+        current_year=2020,
+        forecast_year=2020,
+        iteration=0,
+        current_inner_iter=0,
+    )
+
+    step_func = make_activitysim_postprocess_step(
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+    )
+    spec = StepRef(name="activitysim_postprocess", step_func=step_func)
+    stage = WorkflowStage(name="unit_stage", stage_type="unit", steps=[spec])
+    stage.run(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        name_suffix="unit",
+    )
+
+    call = scenario.calls[0]
+    assert "asim_input_skims_omx_archived" in call["output_paths"]
+    assert "asim_input_skims_zarr_archived" in call["output_paths"]
+    assert call["output_policy"] == OutputPolicyOptions(
+        output_missing="ignore",
+        output_mismatch="error",
+    )
+
+
 def test_tracked_step_uses_canonical_outputs_instead_of_metadata_outputs():
     scenario = _FakeScenario()
     workspace = SimpleNamespace(full_path="/tmp/workspace")
