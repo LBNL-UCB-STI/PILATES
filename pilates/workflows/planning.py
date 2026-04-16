@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
 import re
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from pilates.atlas.inputs import (
     atlas_run_years,
@@ -24,6 +24,9 @@ from pilates.workflows.catalog import (
     workflow_step_spec_for_step_name,
 )
 from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS = {
@@ -144,7 +147,10 @@ def _resolve_workflow_profile(
     settings: PilatesConfig,
     *,
     profile: Optional[WorkflowProfile],
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> WorkflowProfile:
+    if surface is not None:
+        return surface.profile
     if profile is not None:
         return profile
     if not settings.runtime.flags_initialized:
@@ -1074,8 +1080,17 @@ def build_static_execution_plan(
     config_path: Optional[str] = None,
     include_postprocessing: Optional[bool] = None,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> StaticExecutionPlan:
-    resolved_profile = _resolve_workflow_profile(settings, profile=profile)
+    if surface is None:
+        from pilates.workflows.surface import build_enabled_workflow_surface
+
+        surface = build_enabled_workflow_surface(settings)
+    resolved_profile = _resolve_workflow_profile(
+        settings,
+        profile=profile,
+        surface=surface,
+    )
 
     include_post = (
         bool(getattr(settings, "postprocessing", None))

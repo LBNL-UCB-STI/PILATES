@@ -13,6 +13,7 @@ This module assembles and runs the full simulation lifecycle:
 import warnings
 from contextlib import nullcontext
 from datetime import datetime
+import inspect
 import os
 import logging
 import shlex
@@ -57,9 +58,9 @@ from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
-from pilates.workflows.binding import is_restart_prebootstrap_deferred_artifact_key
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
+from pilates.workflows.surface import EnabledWorkflowSurface, build_enabled_workflow_surface
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -288,6 +289,7 @@ def _build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
@@ -304,7 +306,20 @@ def _build_scenario_runtime_contract(
         filter_schema_steps_for_enabled_models_fn=_filter_schema_steps_for_enabled_models,
         merge_epoch_facet_fn=_merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
+        surface=surface,
     )
+
+
+def _workflow_state_from_settings(
+    settings: PilatesConfig,
+    *,
+    profile: WorkflowProfile,
+) -> WorkflowState:
+    from_settings = WorkflowState.from_settings
+    parameters = inspect.signature(from_settings).parameters
+    if "profile" in parameters:
+        return from_settings(settings, profile=profile)
+    return from_settings(settings)
 
 
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
@@ -458,6 +473,7 @@ def run_bootstrap_phase(
     workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> Dict[str, Any]:
     return bootstrap_runtime.run_bootstrap_phase(
         tracker=tracker,
@@ -466,6 +482,7 @@ def run_bootstrap_phase(
         workspace=workspace,
         scenario_id=scenario_id,
         seed=seed,
+        surface=surface,
         initialization_cls=Initialization,
         build_bootstrap_artifact_summary_fn=build_bootstrap_artifact_summary,
         build_step_consist_kwargs_fn=build_step_consist_kwargs,
@@ -486,11 +503,13 @@ def _restart_required_local_artifacts(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> List[restart_runtime.RestartArtifactDiagnostic]:
     return restart_runtime.restart_required_local_artifacts(
         settings=settings,
         state=state,
         workspace=workspace,
+        surface=surface,
         get_usim_datastore_fname_fn=get_usim_datastore_fname,
         required_asim_config_dirs_fn=required_asim_config_dirs,
         atlas_static_input_relpaths_fn=atlas_static_input_relpaths,
@@ -503,11 +522,13 @@ def _find_missing_restart_local_artifacts(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> List[restart_runtime.RestartArtifactDiagnostic]:
     return restart_runtime.find_missing_restart_local_artifacts(
         settings=settings,
         state=state,
         workspace=workspace,
+        surface=surface,
         restart_required_local_artifacts_fn=_restart_required_local_artifacts,
     )
 
@@ -543,11 +564,13 @@ def _restart_frontier_contract(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> Optional[restart_runtime.RestartFrontierContract]:
     return restart_runtime.restart_frontier_contract(
         settings=settings,
         state=state,
         workflow_stage=WorkflowState.Stage,
+        surface=surface,
     )
 
 
@@ -588,7 +611,9 @@ def main(
         settings = parse_args_and_settings()
     profile = build_workflow_profile(settings)
     if state is None:
-        state = WorkflowState.from_settings(settings, profile=profile)
+        state = _workflow_state_from_settings(settings, profile=profile)
+    surface = build_enabled_workflow_surface(settings, state=state)
+    profile = surface.profile
     _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -764,19 +789,20 @@ def main(
             settings=settings,
             state=state,
             workspace=workspace,
+            surface=surface,
         )
         if restart_missing_artifacts_initial:
             blocking_missing = [
                 item
                 for item in restart_missing_artifacts_initial
-                if not is_restart_prebootstrap_deferred_artifact_key(
+                if not surface.is_restart_prebootstrap_deferred_artifact_key(
                     item.get("key", "")
                 )
             ]
             deferred_missing = [
                 item
                 for item in restart_missing_artifacts_initial
-                if is_restart_prebootstrap_deferred_artifact_key(
+                if surface.is_restart_prebootstrap_deferred_artifact_key(
                     item.get("key", "")
                 )
             ]
@@ -816,6 +842,7 @@ def main(
             workspace=workspace,
             scenario_id=scenario_id,
             seed=run_seed,
+            surface=surface,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
         if not state.data_initialized:
@@ -846,6 +873,7 @@ def main(
             settings=settings,
             state=state,
             workspace=workspace,
+            surface=surface,
         )
         if restart_missing_artifacts_after_bootstrap:
             logger.warning(
@@ -881,6 +909,7 @@ def main(
         scenario_id=scenario_id,
         seed=run_seed,
         cache_epoch=cache_epoch,
+        surface=surface,
     )
     scenario_kwargs = scenario_contract["scenario_kwargs"]
     schema_steps_all = scenario_contract["schema_steps_all"]
@@ -1023,6 +1052,7 @@ def main(
                                 )
                             )
                         ),
+                        surface=surface,
                     )
                     snapshot_manager.maybe_snapshot_interval(
                         reason=f"after_supply_demand_y{year}"

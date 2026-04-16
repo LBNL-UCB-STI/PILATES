@@ -44,28 +44,39 @@ def workflow_profile_from_flags(enabled_flags: Dict[str, bool]) -> WorkflowProfi
     )
 
 
-def build_workflow_profile(settings: Any) -> WorkflowProfile:
+def resolve_workflow_enabled_flags(settings: Any) -> Dict[str, bool]:
+    """Return the enabled-model flags used by both profile and surface builders.
+
+    This helper is the compatibility seam for the refactor: callers that still
+    build a `WorkflowProfile` and callers that build an `EnabledWorkflowSurface`
+    must see the same enabled/disabled shape. If runtime flags were already
+    attached to `settings`, reuse them verbatim; otherwise compute and attach
+    them once so later consumers observe the same projection.
+    """
     runtime = getattr(settings, "runtime", None)
     runtime_flags = getattr(runtime, "flags", None)
     flags_initialized = bool(getattr(runtime, "flags_initialized", False))
     if runtime_flags is not None and flags_initialized:
-        return workflow_profile_from_flags(
-            {
-                "land_use_enabled": bool(runtime_flags.land_use_enabled),
-                "vehicle_ownership_model_enabled": bool(
-                    runtime_flags.vehicle_ownership_model_enabled
-                ),
-                "activity_demand_enabled": bool(runtime_flags.activity_demand_enabled),
-                "traffic_assignment_enabled": bool(
-                    runtime_flags.traffic_assignment_enabled
-                ),
-                "replanning_enabled": bool(runtime_flags.replanning_enabled),
-            }
-        )
+        return {
+            "land_use_enabled": bool(runtime_flags.land_use_enabled),
+            "vehicle_ownership_model_enabled": bool(
+                runtime_flags.vehicle_ownership_model_enabled
+            ),
+            "activity_demand_enabled": bool(runtime_flags.activity_demand_enabled),
+            "traffic_assignment_enabled": bool(
+                runtime_flags.traffic_assignment_enabled
+            ),
+            "replanning_enabled": bool(runtime_flags.replanning_enabled),
+        }
 
     enabled_flags = compute_model_enabled_flags(settings)
     apply_runtime_flags(settings, enabled_flags)
-    return workflow_profile_from_flags(enabled_flags)
+    return enabled_flags
+
+
+def build_workflow_profile(settings: Any) -> WorkflowProfile:
+    """Build the legacy compatibility profile from the shared runtime flags."""
+    return workflow_profile_from_flags(resolve_workflow_enabled_flags(settings))
 
 
 def profile_enabled_schema_models(

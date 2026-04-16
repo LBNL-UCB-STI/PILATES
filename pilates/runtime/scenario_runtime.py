@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pilates.config import PilatesConfig
 from pilates.workflows.catalog import enabled_schema_step_models, schema_step_names
@@ -15,6 +15,9 @@ from pilates.workflows.steps import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 def coerce_int(value: Any) -> Optional[int]:
@@ -388,8 +391,13 @@ def filter_schema_steps_for_enabled_models(
     *,
     include_optional: bool = True,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> List[Callable[..., Any]]:
-    if profile is None:
+    if surface is not None:
+        enabled_models = surface.enabled_schema_step_names(
+            include_optional=include_optional
+        )
+    elif profile is None:
         enabled_models = enabled_schema_step_models(
             settings,
             is_model_enabled=is_model_enabled,
@@ -420,6 +428,7 @@ def build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
+    surface: Optional["EnabledWorkflowSurface"] = None,
     build_scenario_consist_kwargs_fn: Callable[[Any], Dict[str, Any]],
     build_coupler_schema_fn: Callable[..., Dict[str, str]],
     validate_workflow_step_contracts_fn: Callable[..., None],
@@ -428,6 +437,11 @@ def build_scenario_runtime_contract(
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
     scenario_name_template: str,
 ) -> Dict[str, Any]:
+    if surface is None:
+        from pilates.workflows.surface import build_enabled_workflow_surface
+
+        surface = build_enabled_workflow_surface(settings, state=state)
+    resolved_profile = profile or surface.profile
     scenario_kwargs = build_scenario_consist_kwargs_fn(settings)
     scenario_step_tags = [f"scenario_id:{scenario_id}"]
     if seed is not None:
@@ -459,7 +473,8 @@ def build_scenario_runtime_contract(
         schema_steps_all,
         settings,
         include_optional=True,
-        profile=profile,
+        profile=resolved_profile,
+        surface=surface,
     )
     validate_workflow_step_contracts_fn(
         declared_steps=schema_steps_enabled,
@@ -474,7 +489,8 @@ def build_scenario_runtime_contract(
             schema_steps_all,
             settings,
             include_optional=False,
-            profile=profile,
+            profile=resolved_profile,
+            surface=surface,
         ),
         settings=settings,
         include_extras=False,

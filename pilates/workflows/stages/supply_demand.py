@@ -46,6 +46,7 @@ def run_supply_demand_stage(
     usim_inputs: Mapping[str, Union[str, os.PathLike]],
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> None:
     """
     Run the supply-demand loop (ActivitySim + BEAM) for the year.
@@ -164,6 +165,7 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 outputs_holder=outputs_holder,
                 manifest_config=manifest_config,
+                surface=surface,
             ).activity_demand_outputs
         elif (
             settings.run.models.activity_demand is None

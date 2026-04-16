@@ -120,6 +120,7 @@ def _bootstrap_required_workspace_artifacts(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
+    surface: Any = None,
 ) -> Dict[str, str]:
     required: Dict[str, str] = {}
 
@@ -153,6 +154,13 @@ def _bootstrap_required_workspace_artifacts(
                     beam_config_name,
                 )
 
+    if surface is not None:
+        required = {
+            key: path
+            for key, path in required.items()
+            if surface.is_bootstrap_owned_artifact_key(key)
+        }
+
     return required
 
 
@@ -160,11 +168,13 @@ def _find_missing_bootstrap_workspace_artifacts(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
+    surface: Any = None,
 ) -> list[Dict[str, str]]:
     missing: list[Dict[str, str]] = []
     for key, path in _bootstrap_required_workspace_artifacts(
         settings=settings,
         workspace=workspace,
+        surface=surface,
     ).items():
         if not path:
             continue
@@ -237,6 +247,7 @@ def run_bootstrap_phase(
     workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
+    surface: Any = None,
     initialization_cls: type[Initialization] = Initialization,
     build_bootstrap_artifact_summary_fn: Callable[..., Dict[str, Any]] = build_bootstrap_artifact_summary,
     build_step_consist_kwargs_fn: Callable[..., Dict[str, Any]],
@@ -378,6 +389,7 @@ def run_bootstrap_phase(
         missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
             settings=settings,
             workspace=workspace,
+            surface=surface,
         )
         if not missing_workspace_artifacts:
             logger.info(

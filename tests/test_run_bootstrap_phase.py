@@ -13,6 +13,7 @@ from pilates.runtime.consist_audit import (
     emit_consist_audit_event,
     reset_consist_audit_state,
 )
+from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
 from pilates.generic.records import FileRecord, RecordStore
@@ -220,6 +221,27 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     cache_options = first_call["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_hydration == "outputs-requested"
+
+
+def test_find_missing_bootstrap_workspace_artifacts_respects_surface_bootstrap_owned_keys(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap"))
+    surface = SimpleNamespace(
+        is_bootstrap_owned_artifact_key=lambda key: key.startswith("beam_")
+    )
+
+    missing = bootstrap_runtime._find_missing_bootstrap_workspace_artifacts(
+        settings=_settings(cache_enabled=True),
+        workspace=workspace,
+        surface=surface,
+    )
+
+    assert {item["key"] for item in missing} == {
+        "beam_mutable_data_dir",
+        "beam_region_input_dir",
+        "beam_primary_config_file",
+    }
 
 
 def test_run_bootstrap_phase_propagates_code_identity_to_probe(monkeypatch):
@@ -1846,6 +1868,102 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
         run_module.main()
 
     assert missing_sequences == []
+
+
+def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
+    tmp_path, monkeypatch, caplog
+):
+    class StopAfterBootstrap(RuntimeError):
+        pass
+
+    class StateStub:
+        def __init__(self, run_info_path: str):
+            self.run_info_path = run_info_path
+            self.data_initialized = True
+            self.file_loc = None
+            self.mirror_file_loc = None
+
+        def set_run_info_path(self, path: str) -> None:
+            self.run_info_path = path
+
+        def set_data_initialized(self, initialized: bool) -> None:
+            self.data_initialized = initialized
+
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    archive_root = tmp_path / "archive-root"
+    local_root = tmp_path / "local-root"
+    run_name = "restart-surface-deferred"
+    archive_run_dir = archive_root / run_name
+    archive_run_dir.mkdir(parents=True, exist_ok=True)
+    run_state_path = archive_run_dir / "run_state.yaml"
+    run_state_path.write_text("state", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=str(local_root),
+            enable_archive_copy=False,
+            output_run_name="unused-on-restart",
+            restart_strict=False,
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+    )
+    state = StateStub(str(run_state_path))
+    surface = SimpleNamespace(
+        profile=SimpleNamespace(),
+        is_restart_prebootstrap_deferred_artifact_key=lambda key: key == "deferred_key",
+    )
+
+    monkeypatch.setattr(run_module, "build_workflow_profile", lambda _settings: SimpleNamespace())
+    monkeypatch.setattr(run_module, "build_enabled_workflow_surface", lambda *_args, **_kwargs: surface)
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(
+        run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
+    )
+    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module,
+        "_find_missing_restart_local_artifacts",
+        lambda **_kwargs: [
+            {"key": "blocking_key", "path": "/missing/blocking", "reason": "blocking"},
+            {"key": "deferred_key", "path": "/missing/deferred", "reason": "deferred"},
+        ],
+    )
+    monkeypatch.setattr(
+        run_module,
+        "run_bootstrap_phase",
+        lambda **_kwargs: (_ for _ in ()).throw(StopAfterBootstrap("stop after classification")),
+    )
+
+    with caplog.at_level("INFO"):
+        with pytest.raises(StopAfterBootstrap, match="stop after classification"):
+            run_module.main(settings=settings, state=state)
+
+    assert "missing local workspace inputs while data_initialized=True: blocking_key:/missing/blocking" in caplog.text
+    assert "deferring bootstrap-owned workspace inputs until bootstrap hydration: deferred_key:/missing/deferred" in caplog.text
 
 
 def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(

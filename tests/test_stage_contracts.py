@@ -1442,6 +1442,66 @@ def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_us
     assert USIM_DATASTORE_CURRENT_H5 not in binding_optional_keys
 
 
+def test_supply_demand_activitysim_postprocess_surface_policy_is_authoritative(
+    stage_env, tmp_path
+):
+    from pilates.workflows.surface import build_enabled_workflow_surface
+    from dataclasses import replace
+
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    surface = build_enabled_workflow_surface(stage_env["settings"], state=state)
+    postprocess = surface.step_surface("activitysim_postprocess")
+    assert postprocess is not None
+    shadow_surface = replace(
+        surface,
+        step_surfaces={
+            **surface.step_surfaces,
+            "activitysim_postprocess": replace(
+                postprocess,
+                required_input_keys=tuple(
+                    key
+                    for key in postprocess.required_input_keys
+                    if key != USIM_DATASTORE_CURRENT_H5
+                ),
+            ),
+        },
+    )
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+        surface=shadow_surface,
+    )
+
+    postprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_postprocess"
+    ]
+    assert postprocess_calls, "Expected an ActivitySim postprocess step call."
+    binding = postprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert USIM_DATASTORE_CURRENT_H5 not in (binding.input_keys or [])
+
+
 def test_supply_demand_activitysim_run_keeps_numba_cache_optional(
     stage_env, tmp_path
 ):

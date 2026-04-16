@@ -148,6 +148,27 @@ def test_restart_frontier_contract_scopes_v1_to_traffic_assignment():
     )
 
 
+def test_restart_frontier_contract_prefers_surface_projection():
+    surface_contract = SimpleNamespace(
+        frontier_stage="traffic_assignment",
+        frontier_step="beam_preprocess",
+        required_keys=("surface_only_key",),
+    )
+    surface = SimpleNamespace(restart_frontier=lambda: surface_contract)
+
+    contract = restart_runtime.restart_frontier_contract(
+        settings=_settings(activity_demand=None, traffic_assignment=None),
+        state=_state(major_stage=WorkflowState.Stage.vehicle_ownership_model),
+        workflow_stage=WorkflowState.Stage,
+        surface=surface,
+    )
+
+    assert contract is not None
+    assert contract.frontier_stage == "traffic_assignment"
+    assert contract.frontier_step == "beam_preprocess"
+    assert contract.required_keys == ("surface_only_key",)
+
+
 def test_hydrate_missing_restart_artifacts_hydrates_traffic_assignment_inputs(tmp_path):
     workspace = DummyWorkspace(str(tmp_path / "run"))
     Path(workspace.full_path).mkdir(parents=True, exist_ok=True)

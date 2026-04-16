@@ -47,6 +47,7 @@ from pilates.workflows.catalog import (
     restart_artifact_producers,
     restart_query_scope_for_step,
 )
+from pilates.workflows.surface import RestartFrontierContract
 from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 
 logger = logging.getLogger(__name__)
@@ -87,13 +88,17 @@ def restart_required_local_artifacts(
     settings: Any,
     state: Any,
     workspace: Any,
+    surface: Any = None,
     get_usim_datastore_fname_fn: Callable[..., str],
     required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
     atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
     workflow_stage: Any,
 ) -> List[RestartArtifactDiagnostic]:
-    """
-    Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
+    """Build the local restart artifact inventory used by preflight checks.
+
+    This stays operational rather than semantic: the surface decides which
+    frontier/bootstrap classifications are active, while this function keeps the
+    existing path resolution and local-materialization checks.
     """
     required: List[RestartArtifactDiagnostic] = []
     for rule in restart_required_local_artifact_policy():
@@ -129,12 +134,19 @@ def find_missing_restart_local_artifacts(
     settings: Any,
     state: Any,
     workspace: Any,
+    surface: Any = None,
     restart_required_local_artifacts_fn: Callable[..., List[RestartArtifactDiagnostic]],
 ) -> List[RestartArtifactDiagnostic]:
+    """Resolve the restart inventory against local/archive materialization state."""
     missing: List[RestartArtifactDiagnostic] = []
-    for artifact in restart_required_local_artifacts_fn(
-        settings=settings, state=state, workspace=workspace
-    ):
+    kwargs = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    if surface is not None:
+        kwargs["surface"] = surface
+    for artifact in restart_required_local_artifacts_fn(**kwargs):
         path = os.path.realpath(artifact["path"])
         resolved_path = resolve_existing_path(
             path,
@@ -293,13 +305,6 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
-@dataclass(frozen=True)
-class RestartFrontierContract:
-    frontier_stage: str
-    frontier_step: str
-    required_keys: Tuple[str, ...]
-
-
 class RestartHydrationError(RuntimeError):
     def __init__(self, message: str, *, summary: Mapping[str, Any]):
         super().__init__(message)
@@ -321,6 +326,20 @@ class RestartExactRewindContract:
     overlay_family: str
     required_snapshot_keys: Tuple[str, ...]
     optional_snapshot_keys: Tuple[str, ...] = ()
+
+
+def _surface_restart_frontier_contract(surface: Any) -> Optional[RestartFrontierContract]:
+    if surface is None:
+        return None
+    getter = getattr(surface, "restart_frontier", None)
+    contract = getter() if callable(getter) else getattr(surface, "restart_frontier_contract", None)
+    if contract is None:
+        return None
+    return RestartFrontierContract(
+        frontier_stage=str(contract.frontier_stage),
+        frontier_step=str(contract.frontier_step),
+        required_keys=tuple(contract.required_keys),
+    )
 
 
 def _enabled_restart_models(settings: Any) -> Tuple[str, ...]:
@@ -350,7 +369,17 @@ def restart_frontier_contract(
     settings: Any,
     state: Any,
     workflow_stage: WorkflowStageLike,
+    surface: Any = None,
 ) -> Optional[RestartFrontierContract]:
+    """Return the effective restart frontier, preferring the shared surface.
+
+    Keeping this bridge lets older restart callers continue using the legacy
+    module API while the runtime authority moves into `EnabledWorkflowSurface`.
+    """
+    surface_contract = _surface_restart_frontier_contract(surface)
+    if surface_contract is not None:
+        return surface_contract
+
     if getattr(state, "current_major_stage", None) != workflow_stage.supply_demand_loop:
         return None
     if getattr(state, "current_sub_stage", None) != workflow_stage.traffic_assignment:
@@ -1107,6 +1136,7 @@ def hydrate_missing_restart_artifacts(
     archive_run_dir: str,
     workflow_stage: WorkflowStageLike,
     query_facet: Optional[Mapping[str, Any]] = None,
+    surface: Any = None,
 ) -> RestartHydrationSummary:
     """
     Legacy manual recovery helper for explicit frontier artifact hydration.
@@ -1119,6 +1149,7 @@ def hydrate_missing_restart_artifacts(
         settings=settings,
         state=state,
         workflow_stage=workflow_stage,
+        surface=surface,
     )
     if contract is None:
         return {

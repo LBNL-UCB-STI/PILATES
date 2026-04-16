@@ -17,7 +17,7 @@ does not become a second manually maintained semantic registry.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Literal
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Literal
 
 from consist.types import BindingResult
 
@@ -53,6 +53,9 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 _CANDIDATE_PATHS_METADATA_KEY = "candidate_paths_by_semantic_key"
 _RESOLVED_VALUES_METADATA_KEY = "resolved_values_by_semantic_key"
@@ -114,23 +117,25 @@ class StepBindingSpec:
         cls,
         step_name: str,
         *,
+        settings: Any = None,
         notes: Optional[str] = None,
     ) -> "StepBindingSpec":
-        from pilates.workflows.catalog import workflow_step_spec_for_step_name
+        from pilates.workflows.catalog import workflow_step_contracts_by_name
 
-        step_spec = workflow_step_spec_for_step_name(step_name)
-        if step_spec is None:
+        contracts = workflow_step_contracts_by_name(settings=settings)
+        contract = contracts.get(step_name)
+        if contract is None:
             raise KeyError(f"Unknown workflow step '{step_name}'.")
 
         artifact_rules = tuple(
             [
                 *(
                     ArtifactBindingRule(semantic_key=key, required=True)
-                    for key in step_spec.input_keys
+                    for key in contract.get("input_keys", ())
                 ),
                 *(
                     ArtifactBindingRule(semantic_key=key, required=False)
-                    for key in step_spec.optional_input_keys
+                    for key in contract.get("optional_input_keys", ())
                 ),
             ]
         )
@@ -138,8 +143,8 @@ class StepBindingSpec:
             step_name=step_name,
             derive_from_catalog=True,
             artifact_rules=artifact_rules,
-            required_output_paths=tuple(step_spec.output_keys),
-            optional_output_paths=tuple(step_spec.optional_output_keys),
+            required_output_paths=tuple(contract.get("output_keys", ())),
+            optional_output_paths=tuple(contract.get("optional_output_keys", ())),
             notes=notes,
         )
 
@@ -945,7 +950,11 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
     }
 
 
-def binding_spec_for_step_name(step_name: str) -> Optional[StepBindingSpec]:
+def binding_spec_for_step_name(
+    step_name: str,
+    *,
+    settings: Any = None,
+) -> Optional[StepBindingSpec]:
     """
     Return a runtime binding spec for ``step_name``.
 
@@ -955,7 +964,7 @@ def binding_spec_for_step_name(step_name: str) -> Optional[StepBindingSpec]:
     """
 
     try:
-        spec = StepBindingSpec.from_catalog(step_name)
+        spec = StepBindingSpec.from_catalog(step_name, settings=settings)
     except KeyError:
         return None
     overrides = _pilot_binding_overrides().get(step_name)
@@ -1113,30 +1122,45 @@ def build_binding_plan(
     workspace: Any = None,
     year: Optional[int] = None,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> BindingPlan:
-    spec = binding_spec_for_step_name(step_name)
+    spec = binding_spec_for_step_name(step_name, settings=settings)
     rule_lookup = _binding_rule_lookup(spec)
     for rule in artifact_rules or ():
         rule_lookup[rule.semantic_key] = rule
     if year is None and state is not None:
         year = getattr(state, "year", None)
+    resolved_profile = (
+        surface.profile
+        if surface is not None
+        else (profile or (build_workflow_profile(settings) if settings is not None else None))
+    )
+    runtime_surface = surface.step_surface(step_name) if surface is not None else None
 
     required_semantic_keys = tuple(
         required_keys
         if required_keys is not None
         else (
-            rule.semantic_key
-            for rule in rule_lookup.values()
-            if rule.required
+            runtime_surface.required_input_keys
+            if runtime_surface is not None
+            else (
+                rule.semantic_key
+                for rule in rule_lookup.values()
+                if rule.required
+            )
         )
     )
     optional_semantic_keys = tuple(
         optional_keys
         if optional_keys is not None
         else (
-            rule.semantic_key
-            for rule in rule_lookup.values()
-            if not rule.required
+            runtime_surface.optional_input_keys
+            if runtime_surface is not None
+            else (
+                rule.semantic_key
+                for rule in rule_lookup.values()
+                if not rule.required
+            )
         )
     )
     caller_scoped_fallback_inputs = fallback_inputs is not None and (
@@ -1163,6 +1187,19 @@ def build_binding_plan(
         rule = rule_lookup.get(semantic_key) or _default_rule(
             semantic_key, required=is_required
         )
+        if runtime_surface is not None:
+            role_policy = runtime_surface.input_role_policies.get(semantic_key)
+            if role_policy is not None:
+                rule = ArtifactBindingRule(
+                    semantic_key=rule.semantic_key,
+                    required=is_required,
+                    allow_explicit=role_policy.explicit_inputs_allowed,
+                    allow_coupler=role_policy.coupler_fallback_allowed,
+                    allow_fallback=role_policy.workspace_archive_fallback_allowed,
+                    preferred_keys=rule.preferred_keys,
+                    fallback_provider=rule.fallback_provider,
+                    pass_mode=rule.pass_mode,
+                )
         if caller_scoped_fallback_inputs and not rule.allow_fallback:
             rule = ArtifactBindingRule(
                 semantic_key=rule.semantic_key,
@@ -1183,7 +1220,7 @@ def build_binding_plan(
             state=state,
             workspace=workspace,
             year=year,
-            profile=profile,
+            profile=resolved_profile,
         )
         source_by_key[semantic_key] = source
         if candidate_paths:
@@ -1243,6 +1280,7 @@ def build_key_only_binding_plan(
     state: Any = None,
     workspace: Any = None,
     year: Optional[int] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> BindingPlan:
     """
     Build a binding plan for steps that consume coupler-backed keys only.
@@ -1270,6 +1308,7 @@ def build_key_only_binding_plan(
         state=state,
         workspace=workspace,
         year=year,
+        surface=surface,
     )
 
 

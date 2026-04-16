@@ -51,6 +51,12 @@ from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
+_ACTIVITYSIM_PILOT_H5_ROLE_KEYS = (
+    USIM_POPULATION_SOURCE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_BASE_H5,
+)
+
 
 @dataclass
 class ActivityDemandPhaseInputs:
@@ -129,6 +135,81 @@ def _seed_exact_rewind_activitysim_preprocess_outputs(
     return preprocess_outputs
 
 
+def _resolve_activitysim_surface(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    surface: Optional["EnabledWorkflowSurface"] = None,
+) -> Optional["EnabledWorkflowSurface"]:
+    if surface is not None:
+        return surface
+    from pilates.workflows.surface import build_enabled_workflow_surface
+
+    return build_enabled_workflow_surface(settings, state=state)
+
+
+def _surface_restart_missing_explicit_roles(
+    *,
+    coupler: CouplerProtocol,
+    resolved_usim_inputs: Mapping[str, Union[str, os.PathLike]],
+    surface: Optional["EnabledWorkflowSurface"],
+) -> tuple[str, ...]:
+    if surface is None:
+        return ()
+    runtime_surface = surface.step_surface("activitysim_preprocess")
+    if runtime_surface is None or not runtime_surface.enabled:
+        return ()
+    get_value = getattr(coupler, "get", None)
+    return tuple(
+        key
+        for key in (
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+        )
+        if bool(
+            getattr(
+                runtime_surface.input_role_policies.get(key),
+                "restart_requires_explicit_before_execution",
+                False,
+            )
+        )
+        and key not in resolved_usim_inputs
+        and not (callable(get_value) and get_value(key) is not None)
+    )
+
+
+def _seed_postprocess_role_fallbacks_from_coupler(
+    *,
+    coupler: CouplerProtocol,
+    resolved_usim_inputs: Dict[str, Union[str, os.PathLike]],
+) -> None:
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return
+    coupler_population = get_value(USIM_POPULATION_SOURCE_H5)
+    coupler_current = get_value(USIM_DATASTORE_CURRENT_H5)
+    if (
+        USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
+        and coupler_current is not None
+    ):
+        resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_current
+    elif (
+        USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
+        and coupler_population is not None
+    ):
+        resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_population
+    if (
+        USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
+        and coupler_population is not None
+    ):
+        resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_population
+    elif (
+        USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
+        and coupler_current is not None
+    ):
+        resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_current
+
+
 def _run_activity_demand_phase(
     *,
     scenario: ScenarioWithCoupler,
@@ -139,6 +220,7 @@ def _run_activity_demand_phase(
     inputs: ActivityDemandPhaseInputs,
     outputs_holder: StepOutputsHolder,
     manifest_config: ManifestConfig,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> ActivityDemandPhaseOutputs:
     """
     Run ActivitySim for a single supply-demand iteration.
@@ -179,28 +261,28 @@ def _run_activity_demand_phase(
         year=inputs.year,
         iteration=inputs.iteration,
     )
-    profile = build_workflow_profile(settings)
+    runtime_surface = _resolve_activitysim_surface(
+        settings=settings,
+        state=state,
+        surface=surface,
+    )
+    profile = (
+        runtime_surface.profile
+        if runtime_surface is not None
+        else build_workflow_profile(settings)
+    )
     resolved_usim_inputs = dict(inputs.usim_inputs)
-    if (
-        bool(getattr(state, "is_restart_run", False))
-        and profile.land_use_enabled
-    ):
-        get_value = getattr(coupler, "get", None)
-        missing_restart_roles = [
-            key
-            for key in (
-                USIM_POPULATION_SOURCE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-            )
-            if key not in resolved_usim_inputs
-            and not (callable(get_value) and get_value(key) is not None)
-        ]
-        if missing_restart_roles:
-            raise RuntimeError(
-                "Restart metadata is missing required post-land-use UrbanSim H5 roles "
-                f"for ActivitySim: {', '.join(missing_restart_roles)}. "
-                "This restart likely predates the explicit population-source H5 role split."
-            )
+    missing_restart_roles = _surface_restart_missing_explicit_roles(
+        coupler=coupler,
+        resolved_usim_inputs=resolved_usim_inputs,
+        surface=runtime_surface,
+    )
+    if missing_restart_roles:
+        raise RuntimeError(
+            "Restart metadata is missing required post-land-use UrbanSim H5 roles "
+            f"for ActivitySim: {', '.join(missing_restart_roles)}. "
+            "This restart likely predates the explicit population-source H5 role split."
+        )
     if (
         bool(getattr(state, "is_restart_run", False))
         and profile.land_use_enabled
@@ -249,6 +331,7 @@ def _run_activity_demand_phase(
             workspace=workspace,
             year=inputs.year,
             profile=profile,
+            surface=runtime_surface,
         )
 
         if preprocess_binding.missing_required:
@@ -397,6 +480,7 @@ def _run_activity_demand_phase(
             state=state,
             workspace=workspace,
             year=inputs.year,
+            surface=runtime_surface,
         )
         if compile_binding.missing_required:
             raise RuntimeError(
@@ -479,6 +563,7 @@ def _run_activity_demand_phase(
                 state=state,
                 workspace=workspace,
                 year=inputs.year,
+                surface=runtime_surface,
             ),
             year=state.forecast_year,
         ),
@@ -487,38 +572,26 @@ def _run_activity_demand_phase(
     if outputs_holder.activitysim_run is None:
         raise RuntimeError("ActivitySim run must complete first")
 
-    postprocess_required_keys: list[str] = []
-    postprocess_optional_keys: list[str] = []
+    postprocess_required_keys: tuple[str, ...] = ()
+    postprocess_optional_keys: tuple[str, ...] = ()
+    if runtime_surface is not None:
+        postprocess_surface = runtime_surface.step_surface("activitysim_postprocess")
+        if postprocess_surface is not None:
+            postprocess_required_keys = tuple(
+                key
+                for key in postprocess_surface.required_input_keys
+                if key in _ACTIVITYSIM_PILOT_H5_ROLE_KEYS
+            )
+            postprocess_optional_keys = tuple(
+                key
+                for key in postprocess_surface.optional_input_keys
+                if key in _ACTIVITYSIM_PILOT_H5_ROLE_KEYS
+            )
     if profile.land_use_enabled:
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            coupler_population = get_value(USIM_POPULATION_SOURCE_H5)
-            coupler_current = get_value(USIM_DATASTORE_CURRENT_H5)
-            if (
-                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
-                and coupler_current is not None
-            ):
-                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_current
-            elif (
-                USIM_DATASTORE_CURRENT_H5 not in resolved_usim_inputs
-                and coupler_population is not None
-            ):
-                resolved_usim_inputs[USIM_DATASTORE_CURRENT_H5] = coupler_population
-            if (
-                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
-                and coupler_population is not None
-            ):
-                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_population
-            elif (
-                USIM_POPULATION_SOURCE_H5 not in resolved_usim_inputs
-                and coupler_current is not None
-            ):
-                resolved_usim_inputs[USIM_POPULATION_SOURCE_H5] = coupler_current
-        postprocess_required_keys = [
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-        ]
-        postprocess_optional_keys = [USIM_DATASTORE_BASE_H5]
+        _seed_postprocess_role_fallbacks_from_coupler(
+            coupler=coupler,
+            resolved_usim_inputs=resolved_usim_inputs,
+        )
     activitysim_postprocess_binding = build_binding_plan(
         step_name="activitysim_postprocess",
         coupler=coupler,
@@ -530,6 +603,7 @@ def _run_activity_demand_phase(
         workspace=workspace,
         year=inputs.year,
         profile=profile,
+        surface=runtime_surface,
     )
     if activitysim_postprocess_binding.missing_required:
         get_value = getattr(coupler, "get", None)
