@@ -19,7 +19,6 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
-from pilates.workflows.profile import build_workflow_profile
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StageRunner,
@@ -266,11 +265,7 @@ def _run_activity_demand_phase(
         state=state,
         surface=surface,
     )
-    profile = (
-        runtime_surface.profile
-        if runtime_surface is not None
-        else build_workflow_profile(settings)
-    )
+    profile = runtime_surface.profile
     resolved_usim_inputs = dict(inputs.usim_inputs)
     missing_restart_roles = _surface_restart_missing_explicit_roles(
         coupler=coupler,

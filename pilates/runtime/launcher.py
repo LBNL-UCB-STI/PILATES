@@ -611,9 +611,12 @@ def main(
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     if settings is None:
         settings = parse_args_and_settings()
-    profile = build_workflow_profile(settings)
+    provisional_surface = build_enabled_workflow_surface(settings)
     if state is None:
-        state = _workflow_state_from_settings(settings, profile=profile)
+        state = _workflow_state_from_settings(
+            settings,
+            profile=provisional_surface.profile,
+        )
     surface = build_enabled_workflow_surface(settings, state=state)
     profile = surface.profile
     _set_run_failure_context(settings=settings, state=state)

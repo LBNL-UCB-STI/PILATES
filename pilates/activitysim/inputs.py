@@ -33,6 +33,7 @@ from pilates.workflows.input_resolution import (
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
     from workflow_state import WorkflowState
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 def build_activitysim_inputs(
@@ -46,6 +47,7 @@ def build_activitysim_inputs(
     *,
     include_omx_skims: bool = False,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, Optional[str]]]:
     """
     Build ActivitySim input paths from available sources.
@@ -113,7 +115,11 @@ def build_activitysim_inputs(
                     f"ActivitySim compile input skims (OMX) for year {year}"
                 )
 
-    resolved_profile = profile or build_workflow_profile(settings)
+    resolved_profile = (
+        profile
+        or (surface.profile if surface is not None else None)
+        or build_workflow_profile(settings)
+    )
     land_use_enabled = resolved_profile.land_use_enabled
 
     explicit_usim_inputs: Dict[str, Any] = {}
@@ -133,6 +139,7 @@ def build_activitysim_inputs(
         required_keys=[USIM_POPULATION_SOURCE_H5],
         fallback_inputs=usim_inputs,
         profile=resolved_profile,
+        surface=surface,
     )
     selected_usim_key = selected_candidate_key(
         usim_resolution,

@@ -79,6 +79,27 @@ def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
         return False
 
 
+def _resolve_binding_profile(
+    *,
+    settings: Any,
+    profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
+) -> Optional[WorkflowProfile]:
+    """Resolve the runtime profile from the shared surface when available.
+
+    Binding helpers should not independently decide whether to rebuild the
+    workflow shape. This keeps profile resolution on one path while the
+    codebase migrates from direct profile usage to the surface.
+    """
+    if surface is not None:
+        return surface.profile
+    if profile is not None:
+        return profile
+    if settings is None:
+        return None
+    return build_workflow_profile(settings)
+
+
 @dataclass(frozen=True)
 class ArtifactBindingRule:
     """
@@ -348,6 +369,7 @@ def beam_preprocess_binding_plan(
     activity_demand_outputs: Optional[Mapping[str, Any]],
     previous_beam_outputs: Optional[Mapping[str, Any]],
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> BindingPlan:
     """
     Build the BEAM preprocess binding plan from explicit upstream artifacts.
@@ -355,7 +377,11 @@ def beam_preprocess_binding_plan(
     The plan itself owns fallback selection for the BEAM-only exchange inputs,
     warm-start linkstats, and optional ATLAS vehicles2 resolution.
     """
-    resolved_profile = profile or build_workflow_profile(settings)
+    resolved_profile = _resolve_binding_profile(
+        settings=settings,
+        profile=profile,
+        surface=surface,
+    )
     if resolved_profile.activity_demand_enabled and activity_demand_outputs is None:
         if previous_beam_outputs is None:
             raise RuntimeError(
@@ -393,6 +419,7 @@ def beam_preprocess_binding_plan(
             state=state,
             workspace=workspace,
             profile=resolved_profile,
+            surface=surface,
         )
         if exchange_inputs:
             for key, value in exchange_inputs.items():
@@ -414,6 +441,7 @@ def beam_preprocess_binding_plan(
             coupler=coupler,
             workspace=workspace,
             profile=resolved_profile,
+            surface=surface,
         )
         if warmstart_inputs:
             for key, value in warmstart_inputs.items():
@@ -424,6 +452,7 @@ def beam_preprocess_binding_plan(
         state=state,
         workspace=workspace,
         profile=resolved_profile,
+        surface=surface,
     )
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
@@ -751,12 +780,17 @@ def _beam_preprocess_exchange_inputs(
     state: Any,
     workspace: Any,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
-    resolved_profile = profile or build_workflow_profile(settings)
+    resolved_profile = _resolve_binding_profile(
+        settings=settings,
+        profile=profile,
+        surface=surface,
+    )
     if resolved_profile.activity_demand_enabled:
         return None
 
@@ -793,6 +827,7 @@ def _beam_preprocess_warmstart_inputs(
     coupler: Optional[CouplerProtocol],
     workspace: Any,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
@@ -817,11 +852,16 @@ def _beam_preprocess_atlas_inputs(
     state: Any,
     workspace: Any,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     if get_traffic_assignment_model(settings) != "beam":
         return None
-    resolved_profile = profile or build_workflow_profile(settings)
+    resolved_profile = _resolve_binding_profile(
+        settings=settings,
+        profile=profile,
+        surface=surface,
+    )
     if not resolved_profile.vehicle_ownership_model_enabled:
         return None
 
@@ -991,6 +1031,7 @@ def _lookup_fallback_inputs(
     coupler: Optional[CouplerProtocol],
     year: Optional[int],
     profile: Optional[WorkflowProfile],
+    surface: Optional["EnabledWorkflowSurface"],
 ) -> Optional[Mapping[str, Any]]:
     combined: Dict[str, Any] = dict(explicit_fallback_inputs or {})
     if rule.fallback_provider:
@@ -1008,6 +1049,7 @@ def _lookup_fallback_inputs(
             explicit_fallback_inputs=explicit_fallback_inputs,
             year=year,
             profile=profile,
+            surface=surface,
         )
         if provided:
             combined.update(provided)
@@ -1056,6 +1098,7 @@ def _resolve_rule_binding(
     workspace: Any,
     year: Optional[int],
     profile: Optional[WorkflowProfile],
+    surface: Optional["EnabledWorkflowSurface"],
 ) -> tuple[str, Optional[str], Optional[Any], Optional[str], Dict[str, list[str]]]:
     candidates = rule.preferred_keys or (rule.semantic_key,)
     rule_fallback_inputs = (
@@ -1068,6 +1111,7 @@ def _resolve_rule_binding(
             coupler=coupler,
             year=year,
             profile=profile,
+            surface=surface,
         )
         if rule.allow_fallback or rule.fallback_provider
         else None
@@ -1130,10 +1174,10 @@ def build_binding_plan(
         rule_lookup[rule.semantic_key] = rule
     if year is None and state is not None:
         year = getattr(state, "year", None)
-    resolved_profile = (
-        surface.profile
-        if surface is not None
-        else (profile or (build_workflow_profile(settings) if settings is not None else None))
+    resolved_profile = _resolve_binding_profile(
+        settings=settings,
+        profile=profile,
+        surface=surface,
     )
     runtime_surface = surface.step_surface(step_name) if surface is not None else None
 
@@ -1221,6 +1265,7 @@ def build_binding_plan(
             workspace=workspace,
             year=year,
             profile=resolved_profile,
+            surface=surface,
         )
         source_by_key[semantic_key] = source
         if candidate_paths:

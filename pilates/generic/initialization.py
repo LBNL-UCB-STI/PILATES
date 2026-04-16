@@ -12,7 +12,7 @@ from pilates.utils.zone_utils import (
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
-from pilates.workflows.profile import build_workflow_profile
+from pilates.workflows.surface import build_enabled_workflow_surface
 
 import os
 import logging
@@ -295,7 +295,7 @@ class Initialization(Model):
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
-        profile = build_workflow_profile(settings)
+        profile = build_enabled_workflow_surface(settings).profile
         urbansim_enabled = profile.land_use_enabled
         model_factory = ModelFactory()
 

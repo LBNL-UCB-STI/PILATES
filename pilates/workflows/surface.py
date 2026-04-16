@@ -6,9 +6,6 @@ from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
 
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.workflows.artifact_keys import (
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 from pilates.workflows.catalog import (
@@ -20,6 +17,10 @@ from pilates.workflows.profile import (
     profile_enabled_schema_models,
     resolve_workflow_enabled_flags,
     workflow_profile_from_flags,
+)
+from pilates.workflows.runtime_overlays import (
+    resolve_runtime_input_output_overrides,
+    resolve_runtime_role_policy_overrides,
 )
 
 
@@ -312,74 +313,6 @@ def _restart_frontier_contract(
     )
 
 
-def _step_role_overrides(
-    *,
-    step_name: str,
-    profile: WorkflowProfile,
-    run_mode: RunMode,
-) -> Dict[str, Dict[str, Any]]:
-    """Apply the small set of runtime overlays that do not belong in catalog.
-
-    These are intentionally narrow and must remain projections over existing
-    semantics, not a second contract registry.
-    """
-    overrides: Dict[str, Dict[str, Any]] = {}
-    if (
-        step_name == "activitysim_preprocess"
-        and run_mode == RunMode.RESTART
-        and profile.land_use_enabled
-    ):
-        for key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5):
-            overrides[key] = {
-                "workspace_archive_fallback_allowed": False,
-                "restart_may_restore_synthetically": False,
-                "restart_requires_explicit_before_execution": True,
-            }
-    return overrides
-
-
-def _apply_step_input_output_overrides(
-    *,
-    step_name: str,
-    profile: WorkflowProfile,
-    run_mode: RunMode,
-    required_inputs: Tuple[str, ...],
-    optional_inputs: Tuple[str, ...],
-) -> tuple[Tuple[str, ...], Tuple[str, ...]]:
-    if (
-        step_name == "activitysim_preprocess"
-        and profile.land_use_enabled
-        and run_mode == RunMode.RESTART
-    ):
-        optional = _ordered_unique(optional_inputs, (USIM_DATASTORE_CURRENT_H5,))
-        return required_inputs, optional
-    if step_name != "activitysim_postprocess":
-        return required_inputs, optional_inputs
-    if not profile.land_use_enabled:
-        optional = tuple(
-            key
-            for key in optional_inputs
-            if key
-            not in {
-                USIM_POPULATION_SOURCE_H5,
-                USIM_DATASTORE_CURRENT_H5,
-                USIM_DATASTORE_BASE_H5,
-            }
-        )
-        return required_inputs, optional
-
-    required = _ordered_unique(
-        required_inputs,
-        (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5),
-    )
-    optional = tuple(
-        key
-        for key in _ordered_unique(optional_inputs, (USIM_DATASTORE_BASE_H5,))
-        if key not in {USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5}
-    )
-    return required, optional
-
-
 def _make_input_role_policy(
     *,
     rule: Any,
@@ -430,7 +363,10 @@ def _build_step_runtime_surface(
     optional_inputs = tuple(contract.get("optional_input_keys", ()))
     required_outputs = tuple(contract.get("output_keys", ()))
     optional_outputs = tuple(contract.get("optional_output_keys", ()))
-    required_inputs, optional_inputs = _apply_step_input_output_overrides(
+    # Runtime overlays are intentionally resolved through a tiny registry module
+    # so `surface.py` stays a projection engine instead of accumulating
+    # step-specific conditionals over time.
+    required_inputs, optional_inputs = resolve_runtime_input_output_overrides(
         step_name=step_name,
         profile=profile,
         run_mode=run_mode,
@@ -438,7 +374,7 @@ def _build_step_runtime_surface(
         optional_inputs=optional_inputs,
     )
 
-    policy_overrides = _step_role_overrides(
+    policy_overrides = resolve_runtime_role_policy_overrides(
         step_name=step_name,
         profile=profile,
         run_mode=run_mode,

@@ -172,9 +172,14 @@ def _iter_planning_years(
     settings: PilatesConfig,
     *,
     profile: WorkflowProfile,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> List[Dict[str, int]]:
     years: List[Dict[str, int]] = []
-    land_use_enabled = profile.land_use_enabled
+    land_use_enabled = (
+        surface.stage_enabled("land_use")
+        if surface is not None
+        else profile.land_use_enabled
+    )
     current_year = int(settings.run.start_year)
     end_year = int(settings.run.end_year)
 
@@ -232,9 +237,15 @@ def _effective_supply_demand_iterations(
     settings: PilatesConfig,
     *,
     profile: WorkflowProfile,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> int:
     total_iters = int(settings.run.supply_demand_iters)
-    if not profile.activity_demand_enabled and total_iters > 1:
+    activity_enabled = (
+        surface.stage_enabled("activity_demand")
+        if surface is not None
+        else profile.activity_demand_enabled
+    )
+    if not activity_enabled and total_iters > 1:
         return 1
     return total_iters
 
@@ -489,11 +500,13 @@ class _PlanBuilder:
         *,
         settings: PilatesConfig,
         profile: WorkflowProfile,
+        surface: Optional["EnabledWorkflowSurface"],
         config_path: Optional[str],
         include_postprocessing: bool,
     ) -> None:
         self.settings = settings
         self.profile = profile
+        self.surface = surface
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
         self.contracts = workflow_step_contracts_by_name(settings=self.settings)
@@ -513,22 +526,44 @@ class _PlanBuilder:
         self._artifacts_by_id: Dict[str, PlannedArtifact] = {}
         self._external_artifact_ids: Dict[str, str] = {}
 
+    def _stage_enabled(self, stage_name: str) -> bool:
+        if self.surface is not None:
+            return self.surface.stage_enabled(stage_name)
+        return {
+            "land_use": self.profile.land_use_enabled,
+            "vehicle_ownership_model": self.profile.vehicle_ownership_model_enabled,
+            "activity_demand": self.profile.activity_demand_enabled,
+            "traffic_assignment": self.profile.traffic_assignment_enabled,
+            "supply_demand_loop": self.profile.supply_demand_loop_enabled,
+        }.get(stage_name, False)
+
+    def _iter_years(self) -> List[Dict[str, int]]:
+        return _iter_planning_years(
+            self.settings,
+            profile=self.profile,
+            surface=self.surface,
+        )
+
+    def _effective_supply_demand_iterations(self) -> int:
+        return _effective_supply_demand_iterations(
+            self.settings,
+            profile=self.profile,
+            surface=self.surface,
+        )
+
     def _scope_external_artifact(self, artifact_key: str, *, dynamic: bool) -> bool:
         if dynamic:
             return True
         return artifact_key not in _RUN_GLOBAL_EXTERNAL_ARTIFACT_KEYS
 
     def _build_metadata(self) -> Dict[str, Any]:
-        years = _iter_planning_years(self.settings, profile=self.profile)
+        years = self._iter_years()
         enabled_flags = self.profile.to_dict()
         return {
             "start_year": int(self.settings.run.start_year),
             "end_year": int(self.settings.run.end_year),
             "travel_model_freq": int(self.settings.run.travel_model_freq),
-            "supply_demand_iters": _effective_supply_demand_iterations(
-                self.settings,
-                profile=self.profile,
-            ),
+            "supply_demand_iters": self._effective_supply_demand_iterations(),
             "enabled_flags": enabled_flags,
             "years": years,
             "full_skim_schedule": _full_skim_run_schedule(self.settings),
@@ -547,7 +582,7 @@ class _PlanBuilder:
         return assumptions
 
     def build(self) -> StaticExecutionPlan:
-        for year_info in self.plan.metadata["years"]:
+        for year_info in self._iter_years():
             self._add_year_steps(
                 year=year_info["year"],
                 forecast_year=year_info["forecast_year"],
@@ -555,7 +590,7 @@ class _PlanBuilder:
         return self.plan
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
-        if self.profile.land_use_enabled:
+        if self._stage_enabled("land_use"):
             self._add_step_run("urbansim_preprocess", year=year, forecast_year=forecast_year)
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
@@ -564,7 +599,7 @@ class _PlanBuilder:
                 forecast_year=forecast_year,
             )
 
-        if self.profile.vehicle_ownership_model_enabled:
+        if self._stage_enabled("vehicle_ownership_model"):
             for atlas_year in _atlas_sub_years(year, forecast_year):
                 self._add_step_run(
                     "atlas_preprocess",
@@ -585,19 +620,16 @@ class _PlanBuilder:
                     atlas_year=atlas_year,
                 )
 
-        if self.profile.supply_demand_loop_enabled:
+        if self._stage_enabled("supply_demand_loop"):
             self._add_supply_demand_steps(year=year, forecast_year=forecast_year)
 
         if self.include_postprocessing:
             self._add_step_run("postprocessing", year=year, forecast_year=forecast_year)
 
     def _add_supply_demand_steps(self, *, year: int, forecast_year: int) -> None:
-        total_iters = _effective_supply_demand_iterations(
-            self.settings,
-            profile=self.profile,
-        )
-        activity_enabled = self.profile.activity_demand_enabled
-        traffic_enabled = self.profile.traffic_assignment_enabled
+        total_iters = self._effective_supply_demand_iterations()
+        activity_enabled = self._stage_enabled("activity_demand")
+        traffic_enabled = self._stage_enabled("traffic_assignment")
         compile_added = False
         schedule = _full_skim_run_schedule(self.settings)
 
@@ -1082,6 +1114,7 @@ def build_static_execution_plan(
     profile: Optional[WorkflowProfile] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> StaticExecutionPlan:
+    user_supplied_surface = surface is not None
     if surface is None:
         from pilates.workflows.surface import build_enabled_workflow_surface
 
@@ -1100,6 +1133,7 @@ def build_static_execution_plan(
     builder = _PlanBuilder(
         settings=settings,
         profile=resolved_profile,
+        surface=surface if user_supplied_surface or profile is None else None,
         config_path=config_path,
         include_postprocessing=include_post,
     )
