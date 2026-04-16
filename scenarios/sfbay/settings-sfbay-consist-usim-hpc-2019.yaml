@@ -14,11 +14,16 @@ run:
   land_use_freq: 1
   travel_model_freq: 2
   vehicle_ownership_freq: 2
-  supply_demand_iters: 4
-  # Normal run dirs
-  output_directory: /clusterfs/beem-core-data-nfs/pilates-outputs
+  supply_demand_iters: 1
+  # Lawrencium storage posture:
+  # - output_directory: active durable archive root on Lustre scratch
+  # - local_workspace_root: mutable node-local workspace during execution
+  # - recovery_archive_roots: colder NFS destinations for post-run promotion
+  output_directory: /global/scratch/users/${USER}/pilates-outputs
   output_run_name: consist-sfbay-usim-base-short
   local_workspace_root: /local/job${SLURM_JOB_ID}/pilates-workspace
+  recovery_archive_roots:
+    - /clusterfs/beem-core-data-nfs/pilates-outputs
   enable_archive_copy: true
   consist_hashing_strategy: full
   restart_strict: true
@@ -393,7 +398,7 @@ activitysim:
 # Transportation network simulation settings
 # =============================================================================
 beam:
-  config: scenarios/network-calibration/beam-pilates-run--sfbay--jdeq-calibration-FC07-0.conf
+  config: scenarios/sfbay-pilates-base-calibrated.conf
   sample: 0.1
   replanning_portion: 0.4
   memory: 180g
@@ -401,7 +406,7 @@ beam:
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
-  router_directory: r5/r5-partially-simplified-sfres
+  router_directory: r5/sfbay-cbg5500-weakConn-network
   skims_shapefile: shape/block-groups-32048.shp
   skim_zone_source_id_col: sk_zone
   skim_zone_geoid_col: geoid10
