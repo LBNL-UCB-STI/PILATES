@@ -424,7 +424,17 @@ def required_outputs_for_step_outputs_class(
                 continue
         if expanded:
             return tuple(dict.fromkeys(expanded))
-    return declared_outputs_for_step_outputs_class(outputs_class)
+    declared = declared_outputs_for_step_outputs_class(outputs_class)
+    optional = tuple(
+        dict.fromkeys(
+            key
+            for key in (getattr(outputs_class, "optional_outputs", None) or ())
+            if isinstance(key, str)
+        )
+    )
+    if not optional:
+        return declared
+    return tuple(key for key in declared if key not in set(optional))
 
 
 class StepOutputsBase:
