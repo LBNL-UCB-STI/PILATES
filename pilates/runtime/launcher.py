@@ -262,12 +262,14 @@ def _filter_schema_steps_for_enabled_models(
     *,
     include_optional: bool = True,
     profile: Optional[WorkflowProfile] = None,
+    surface: Optional[EnabledWorkflowSurface] = None,
 ) -> List[Callable[..., Any]]:
     return scenario_runtime.filter_schema_steps_for_enabled_models(
         steps,
         settings,
         include_optional=include_optional,
         profile=profile,
+        surface=surface,
     )
 
 
