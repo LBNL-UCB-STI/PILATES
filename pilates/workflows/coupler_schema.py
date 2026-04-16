@@ -97,6 +97,18 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     "beam_plans_asim_out": (
         "ActivitySim-to-BEAM plans handoff parquet used to stage BEAM plans input."
     ),
+    "asim_input_households_csv_archived": (
+        "Archived ActivitySim preprocess households CSV restored on replay/restart."
+    ),
+    "asim_input_persons_csv_archived": (
+        "Archived ActivitySim preprocess persons CSV restored on replay/restart."
+    ),
+    "asim_input_land_use_csv_archived": (
+        "Archived ActivitySim preprocess land use CSV restored on replay/restart."
+    ),
+    "asim_input_skims_zarr_archived": (
+        "Archived ActivitySim preprocess Zarr skims restored on replay/restart."
+    ),
     BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
     BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (

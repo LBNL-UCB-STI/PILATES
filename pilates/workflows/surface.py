@@ -235,11 +235,22 @@ def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
     keys = []
     models = getattr(getattr(settings, "run", None), "models", None)
     activity_demand = getattr(models, "activity_demand", None) if models is not None else None
+    land_use = getattr(models, "land_use", None) if models is not None else None
+    vehicle_ownership = (
+        getattr(models, "vehicle_ownership", None) if models is not None else None
+    )
     traffic_assignment = None
     if models is not None:
         traffic_assignment = getattr(models, "traffic_assignment", None) or getattr(
             models, "travel", None
         )
+
+    if (
+        land_use == "urbansim"
+        or activity_demand == "activitysim"
+        or vehicle_ownership == "atlas"
+    ):
+        keys.append("usim_datastore_base_h5")
 
     if activity_demand == "activitysim":
         main_configs_dir = (

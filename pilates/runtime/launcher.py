@@ -855,9 +855,13 @@ def main(
         cache_miss_explanation = bootstrap_result.get("cache_miss_explanation")
         if isinstance(cache_miss_explanation, dict):
             logger.info(
-                "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s "
+                "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+                "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s "
                 "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
                 bootstrap_result.get("bootstrap_cache_hit"),
+                bootstrap_result.get("cache_probe_hit"),
+                bootstrap_result.get("replay_hydration_complete"),
+                bootstrap_result.get("fallback_rerun_triggered"),
                 bootstrap_result.get("run_reference"),
                 bootstrap_result.get("staged_artifact_summary"),
                 cache_miss_explanation.get("reason"),
@@ -865,8 +869,12 @@ def main(
             )
         else:
             logger.info(
-                "Bootstrap phase complete: cache_hit=%s run_ref=%s summary=%s",
+                "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+                "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s",
                 bootstrap_result.get("bootstrap_cache_hit"),
+                bootstrap_result.get("cache_probe_hit"),
+                bootstrap_result.get("replay_hydration_complete"),
+                bootstrap_result.get("fallback_rerun_triggered"),
                 bootstrap_result.get("run_reference"),
                 bootstrap_result.get("staged_artifact_summary"),
             )

@@ -111,6 +111,11 @@ class DummyTracker:
                         "beam",
                         encoding="utf-8",
                     )
+                if target.parts[-2:] == ("urbansim", "data"):
+                    (target / "usim_000.h5").write_text(
+                        "usim",
+                        encoding="utf-8",
+                    )
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
@@ -399,7 +404,10 @@ def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatc
     assert cache_options.cache_hydration == "outputs-requested"
     assert "output_paths" in tracker.calls[0]
     assert result["bootstrap_cache_hit"] is True
+    assert result["cache_probe_hit"] is True
+    assert result["replay_hydration_complete"] is True
     assert result["fallback_rerun"] is False
+    assert result["fallback_rerun_triggered"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 0
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
 
@@ -437,7 +445,10 @@ def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fal
     assert isinstance(fallback_options, CacheOptions)
     assert fallback_options.cache_mode == "off"
     assert result["bootstrap_cache_hit"] is True
+    assert result["cache_probe_hit"] is True
+    assert result["replay_hydration_complete"] is False
     assert result["fallback_rerun"] is True
+    assert result["fallback_rerun_triggered"] is True
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["run_reference"] == {
         "probe_run_id": "bootstrap_probe",
@@ -532,7 +543,10 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
     assert bootstrap_event["resolution_mode"] == "cache_hit_replay_hydrated"
     assert bootstrap_event["bootstrap_cache_enabled"] is True
     assert bootstrap_event["bootstrap_cache_hit"] is True
+    assert bootstrap_event["cache_probe_hit"] is True
+    assert bootstrap_event["replay_hydration_complete"] is True
     assert bootstrap_event["fallback_rerun"] is False
+    assert bootstrap_event["fallback_rerun_triggered"] is False
     assert bootstrap_event["scenario_id"] == "seattle-baseline"
 
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
@@ -605,7 +619,10 @@ def test_run_bootstrap_phase_cache_hit_missing_replay_outputs_triggers_fallback_
     fallback_options = tracker.calls[1]["cache_options"]
     assert isinstance(fallback_options, CacheOptions)
     assert result["bootstrap_cache_hit"] is True
+    assert result["cache_probe_hit"] is True
+    assert result["replay_hydration_complete"] is False
     assert result["fallback_rerun"] is True
+    assert result["fallback_rerun_triggered"] is True
     assert result["staged_artifact_summary"]["copied_records_total"] == 2
     assert result["run_reference"] == {
         "probe_run_id": "bootstrap_probe",
@@ -641,7 +658,10 @@ def test_run_bootstrap_phase_cache_hit_hydrates_declared_output_paths_without_fa
 
     assert len(tracker.calls) == 1
     assert result["bootstrap_cache_hit"] is True
+    assert result["cache_probe_hit"] is True
+    assert result["replay_hydration_complete"] is True
     assert result["fallback_rerun"] is False
+    assert result["fallback_rerun_triggered"] is False
 
 
 def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):

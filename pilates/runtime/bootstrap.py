@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict, Optional
 
 from consist.types import CacheOptions
 
+from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.config import PilatesConfig
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.generic.model_factory import ModelFactory
@@ -154,6 +155,20 @@ def _bootstrap_required_workspace_artifacts(
                     beam_config_name,
                 )
 
+    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    run_models = getattr(getattr(settings, "run", None), "models", None)
+    if callable(get_usim_data_dir) and run_models is not None:
+        if (
+            getattr(run_models, "land_use", None) == "urbansim"
+            or getattr(run_models, "activity_demand", None) == "activitysim"
+            or getattr(run_models, "vehicle_ownership", None) == "atlas"
+        ):
+            usim_data_dir = get_usim_data_dir()
+            required["usim_datastore_base_h5"] = os.path.join(
+                usim_data_dir,
+                get_usim_datastore_fname(settings, io="input"),
+            )
+
     if surface is not None:
         required = {
             key: path
@@ -276,20 +291,28 @@ def run_bootstrap_phase(
         probe_run_id: Optional[str],
         fallback_run_id: Optional[str] = None,
         fallback_rerun: bool = False,
+        replay_hydration_complete: Optional[bool] = None,
         resolution_mode: str,
         cache_miss_explanation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary_fn(workspace)
+        cache_probe_hit = bool(cache_hit)
+        fallback_rerun_triggered = bool(fallback_rerun)
+        if replay_hydration_complete is None:
+            replay_hydration_complete = not fallback_rerun_triggered if cache_probe_hit else False
         result = {
             "bootstrap_cache_hit": cache_hit,
+            "cache_probe_hit": cache_probe_hit,
+            "replay_hydration_complete": bool(replay_hydration_complete),
             "staged_artifact_summary": staged_artifact_summary,
             "run_reference": build_bootstrap_run_reference(
                 probe_run_id=probe_run_id,
                 materialization_run_id=fallback_run_id,
             ),
             "fallback_rerun": fallback_rerun,
+            "fallback_rerun_triggered": fallback_rerun_triggered,
             "cache_miss_explanation": cache_miss_explanation,
         }
         emit_consist_audit_event(
@@ -302,7 +325,10 @@ def run_bootstrap_phase(
             resolution_mode=resolution_mode,
             bootstrap_cache_enabled=is_bootstrap_cache_enabled(settings),
             bootstrap_cache_hit=cache_hit,
+            cache_probe_hit=cache_probe_hit,
+            replay_hydration_complete=bool(replay_hydration_complete),
             fallback_rerun=fallback_rerun,
+            fallback_rerun_triggered=fallback_rerun_triggered,
             probe_run_id=probe_run_id,
             materialization_run_id=fallback_run_id,
             staged_artifact_summary=staged_artifact_summary,
@@ -398,6 +424,7 @@ def run_bootstrap_phase(
             return _finalize_bootstrap_result(
                 cache_hit=True,
                 probe_run_id=probe_run_id,
+                replay_hydration_complete=True,
                 resolution_mode="cache_hit_replay_hydrated",
             )
 
@@ -426,6 +453,7 @@ def run_bootstrap_phase(
             probe_run_id=probe_run_id,
             fallback_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
             fallback_rerun=True,
+            replay_hydration_complete=False,
             resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
         )
 
