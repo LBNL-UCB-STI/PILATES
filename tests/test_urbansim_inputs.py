@@ -1,6 +1,7 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+from pilates.urbansim import inputs as urbansim_inputs_module
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
@@ -162,3 +163,32 @@ def test_build_urbansim_inputs_prefers_archive_output_for_current_when_local_mis
 
     assert inputs[USIM_DATASTORE_BASE_H5] == str(archive_base)
     assert inputs[USIM_DATASTORE_CURRENT_H5] == str(archive_output)
+
+
+def test_build_urbansim_inputs_forwards_surface(monkeypatch, tmp_path: Path):
+    captured = {}
+    original = urbansim_inputs_module.build_binding_plan
+    surface = SimpleNamespace(profile=None, step_surface=lambda _name: None)
+
+    def _record_surface(*args, **kwargs):
+        captured["surface"] = kwargs.get("surface")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(urbansim_inputs_module, "build_binding_plan", _record_surface)
+
+    settings = _settings_stub()
+    workspace = _WorkspaceStub(tmp_path, tmp_path)
+    state = _StateStub(start_year=True, land_use_enabled=True)
+
+    base_h5 = tmp_path / "usim_000.h5"
+    base_h5.write_text("base")
+
+    build_urbansim_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=2018,
+        surface=surface,
+    )
+
+    assert captured["surface"] is surface

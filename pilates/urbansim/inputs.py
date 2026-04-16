@@ -16,6 +16,7 @@ from pilates.workflows.input_resolution import (
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
+    from pilates.workflows.surface import EnabledWorkflowSurface
     from workflow_state import WorkflowState
 
 def build_urbansim_inputs(
@@ -23,6 +24,7 @@ def build_urbansim_inputs(
     state: "WorkflowState",
     workspace: "Workspace",
     year: int,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Build UrbanSim input paths and per-key log descriptions for a run year.
@@ -71,6 +73,7 @@ def build_urbansim_inputs(
         state=state,
         workspace=workspace,
         year=year,
+        surface=surface,
         artifact_rules=urbansim_datastore_selection_rules(),
         required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )

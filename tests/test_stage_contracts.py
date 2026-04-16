@@ -77,6 +77,7 @@ from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages import supply_demand as supply_demand_stage
 from pilates.workflows.stages.supply_demand import (
     _build_beam_postprocess_input_keys,
     _run_traffic_assignment_phase,
@@ -1500,6 +1501,49 @@ def test_supply_demand_activitysim_postprocess_surface_policy_is_authoritative(
     binding = postprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
     assert USIM_DATASTORE_CURRENT_H5 not in (binding.input_keys or [])
+
+
+def test_supply_demand_stage_forwards_surface_to_traffic_assignment(
+    stage_env, tmp_path, monkeypatch
+):
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    captured = {}
+
+    monkeypatch.setattr(
+        supply_demand_stage,
+        "_run_activity_demand_phase",
+        lambda **_kwargs: SimpleNamespace(activity_demand_outputs={}),
+    )
+
+    def _fake_traffic_assignment_phase(**kwargs):
+        captured["surface"] = kwargs.get("surface")
+        return SimpleNamespace(previous_beam_outputs=None)
+
+    monkeypatch.setattr(
+        supply_demand_stage,
+        "_run_traffic_assignment_phase",
+        _fake_traffic_assignment_phase,
+    )
+
+    surface = object()
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs={},
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+        surface=surface,
+    )
+
+    assert captured["surface"] is surface
 
 
 def test_supply_demand_activitysim_run_keeps_numba_cache_optional(

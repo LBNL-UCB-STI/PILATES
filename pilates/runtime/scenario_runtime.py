@@ -4,11 +4,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from pilates.config import PilatesConfig
-from pilates.workflows.catalog import enabled_schema_step_models, schema_step_names
-from pilates.workflows.profile import (
-    WorkflowProfile,
-    profile_enabled_schema_models,
-)
+from pilates.workflows.catalog import schema_step_names
 from pilates.workflows.steps import (
     StepOutputsHolder,
     schema_step_builder_registry,
@@ -371,43 +367,13 @@ def build_schema_steps() -> List[Callable[..., Any]]:
     ]
 
 
-def is_model_enabled(
-    settings: PilatesConfig,
-    *,
-    flag_attr: str,
-    model_attr: str,
-) -> bool:
-    explicit_flag = getattr(settings, flag_attr, None)
-    if explicit_flag is not None:
-        return bool(explicit_flag)
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None) if run_cfg is not None else None
-    return bool(getattr(model_cfg, model_attr, None))
-
-
 def filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
-    settings: PilatesConfig,
     *,
+    surface: "EnabledWorkflowSurface",
     include_optional: bool = True,
-    profile: Optional[WorkflowProfile] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> List[Callable[..., Any]]:
-    if surface is not None:
-        enabled_models = surface.enabled_schema_step_names(
-            include_optional=include_optional
-        )
-    elif profile is None:
-        enabled_models = enabled_schema_step_models(
-            settings,
-            is_model_enabled=is_model_enabled,
-            include_optional=include_optional,
-        )
-    else:
-        enabled_models = profile_enabled_schema_models(
-            profile,
-            include_optional=include_optional,
-        )
+    enabled_models = surface.enabled_schema_step_names(include_optional=include_optional)
 
     filtered: List[Callable[..., Any]] = []
     for step_func in steps:
@@ -419,12 +385,31 @@ def filter_schema_steps_for_enabled_models(
     return filtered
 
 
+def _required_output_keys_for_surface(
+    *,
+    surface: "EnabledWorkflowSurface",
+) -> List[str]:
+    required_output_keys: List[str] = []
+    seen = set()
+    for step_name in schema_step_names():
+        if not surface.step_enabled(step_name, include_optional=False):
+            continue
+        step_surface = surface.step_surface(step_name)
+        if step_surface is None:
+            continue
+        for key in step_surface.required_output_keys:
+            if key in seen:
+                continue
+            required_output_keys.append(key)
+            seen.add(key)
+    return required_output_keys
+
+
 def build_scenario_runtime_contract(
     *,
     settings: PilatesConfig,
     state: Any,
     workspace: Any,
-    profile: Optional[WorkflowProfile] = None,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
@@ -441,7 +426,6 @@ def build_scenario_runtime_contract(
         from pilates.workflows.surface import build_enabled_workflow_surface
 
         surface = build_enabled_workflow_surface(settings, state=state)
-    resolved_profile = profile or surface.profile
     scenario_kwargs = build_scenario_consist_kwargs_fn(settings)
     scenario_step_tags = [f"scenario_id:{scenario_id}"]
     if seed is not None:
@@ -471,9 +455,7 @@ def build_scenario_runtime_contract(
     schema_steps_all = build_schema_steps_fn()
     schema_steps_enabled = filter_schema_steps_for_enabled_models_fn(
         schema_steps_all,
-        settings,
         include_optional=True,
-        profile=resolved_profile,
         surface=surface,
     )
     validate_workflow_step_contracts_fn(
@@ -484,18 +466,7 @@ def build_scenario_runtime_contract(
         require_all_tracked_declared=False,
     )
     coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
-    required_schema = build_coupler_schema_fn(
-        filter_schema_steps_for_enabled_models_fn(
-            schema_steps_all,
-            settings,
-            include_optional=False,
-            profile=resolved_profile,
-            surface=surface,
-        ),
-        settings=settings,
-        include_extras=False,
-    )
-    required_output_keys = list(required_schema.keys())
+    required_output_keys = _required_output_keys_for_surface(surface=surface)
     scenario_kwargs["require_outputs"] = required_output_keys
     return {
         "scenario_kwargs": scenario_kwargs,

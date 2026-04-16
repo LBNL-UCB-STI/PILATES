@@ -23,8 +23,6 @@ from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
-from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
-
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
 
@@ -143,21 +141,6 @@ def _attach_enabled_flags(settings: PilatesConfig) -> Dict[str, bool]:
     return enabled_flags
 
 
-def _resolve_workflow_profile(
-    settings: PilatesConfig,
-    *,
-    profile: Optional[WorkflowProfile],
-    surface: Optional["EnabledWorkflowSurface"] = None,
-) -> WorkflowProfile:
-    if surface is not None:
-        return surface.profile
-    if profile is not None:
-        return profile
-    if not settings.runtime.flags_initialized:
-        _attach_enabled_flags(settings)
-    return build_workflow_profile(settings)
-
-
 def load_settings_for_planning(config_path: str) -> PilatesConfig:
     settings = load_config(config_path)
     _attach_enabled_flags(settings)
@@ -171,15 +154,10 @@ def _interval_step_for_year(settings: PilatesConfig, year: int) -> int:
 def _iter_planning_years(
     settings: PilatesConfig,
     *,
-    profile: WorkflowProfile,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    surface: "EnabledWorkflowSurface",
 ) -> List[Dict[str, int]]:
     years: List[Dict[str, int]] = []
-    land_use_enabled = (
-        surface.stage_enabled("land_use")
-        if surface is not None
-        else profile.land_use_enabled
-    )
+    land_use_enabled = surface.stage_enabled("land_use")
     current_year = int(settings.run.start_year)
     end_year = int(settings.run.end_year)
 
@@ -236,15 +214,10 @@ def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
 def _effective_supply_demand_iterations(
     settings: PilatesConfig,
     *,
-    profile: WorkflowProfile,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    surface: "EnabledWorkflowSurface",
 ) -> int:
     total_iters = int(settings.run.supply_demand_iters)
-    activity_enabled = (
-        surface.stage_enabled("activity_demand")
-        if surface is not None
-        else profile.activity_demand_enabled
-    )
+    activity_enabled = surface.stage_enabled("activity_demand")
     if not activity_enabled and total_iters > 1:
         return 1
     return total_iters
@@ -499,13 +472,11 @@ class _PlanBuilder:
         self,
         *,
         settings: PilatesConfig,
-        profile: WorkflowProfile,
-        surface: Optional["EnabledWorkflowSurface"],
+        surface: "EnabledWorkflowSurface",
         config_path: Optional[str],
         include_postprocessing: bool,
     ) -> None:
         self.settings = settings
-        self.profile = profile
         self.surface = surface
         self.config_path = config_path
         self.include_postprocessing = include_postprocessing
@@ -527,27 +498,17 @@ class _PlanBuilder:
         self._external_artifact_ids: Dict[str, str] = {}
 
     def _stage_enabled(self, stage_name: str) -> bool:
-        if self.surface is not None:
-            return self.surface.stage_enabled(stage_name)
-        return {
-            "land_use": self.profile.land_use_enabled,
-            "vehicle_ownership_model": self.profile.vehicle_ownership_model_enabled,
-            "activity_demand": self.profile.activity_demand_enabled,
-            "traffic_assignment": self.profile.traffic_assignment_enabled,
-            "supply_demand_loop": self.profile.supply_demand_loop_enabled,
-        }.get(stage_name, False)
+        return self.surface.stage_enabled(stage_name)
 
     def _iter_years(self) -> List[Dict[str, int]]:
         return _iter_planning_years(
             self.settings,
-            profile=self.profile,
             surface=self.surface,
         )
 
     def _effective_supply_demand_iterations(self) -> int:
         return _effective_supply_demand_iterations(
             self.settings,
-            profile=self.profile,
             surface=self.surface,
         )
 
@@ -558,7 +519,7 @@ class _PlanBuilder:
 
     def _build_metadata(self) -> Dict[str, Any]:
         years = self._iter_years()
-        enabled_flags = self.profile.to_dict()
+        enabled_flags = self.surface.profile.to_dict()
         return {
             "start_year": int(self.settings.run.start_year),
             "end_year": int(self.settings.run.end_year),
@@ -1111,19 +1072,12 @@ def build_static_execution_plan(
     *,
     config_path: Optional[str] = None,
     include_postprocessing: Optional[bool] = None,
-    profile: Optional[WorkflowProfile] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> StaticExecutionPlan:
-    user_supplied_surface = surface is not None
     if surface is None:
         from pilates.workflows.surface import build_enabled_workflow_surface
 
         surface = build_enabled_workflow_surface(settings)
-    resolved_profile = _resolve_workflow_profile(
-        settings,
-        profile=profile,
-        surface=surface,
-    )
 
     include_post = (
         bool(getattr(settings, "postprocessing", None))
@@ -1132,8 +1086,7 @@ def build_static_execution_plan(
     )
     builder = _PlanBuilder(
         settings=settings,
-        profile=resolved_profile,
-        surface=surface if user_supplied_surface or profile is None else None,
+        surface=surface,
         config_path=config_path,
         include_postprocessing=include_post,
     )

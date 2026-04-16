@@ -56,6 +56,20 @@ class _CouplerStub:
         return self._values.get(key, default)
 
 
+def _surface_stub(
+    *,
+    activity_demand_enabled: bool,
+    vehicle_ownership_model_enabled: bool = False,
+):
+    return SimpleNamespace(
+        profile=SimpleNamespace(
+            activity_demand_enabled=activity_demand_enabled,
+            vehicle_ownership_model_enabled=vehicle_ownership_model_enabled,
+        ),
+        step_surface=lambda _name: None,
+    )
+
+
 def test_binding_plan_converts_to_consist_binding_result():
     plan = BindingPlan(
         step_name="activitysim_compile",
@@ -164,6 +178,10 @@ def test_beam_preprocess_binding_plan_seeds_default_exchange_and_atlas_inputs(
         year=2030,
         activity_demand_outputs=None,
         previous_beam_outputs=None,
+        surface=_surface_stub(
+            activity_demand_enabled=False,
+            vehicle_ownership_model_enabled=True,
+        ),
     )
 
     assert plan.inputs[BEAM_PLANS_IN] == "/tmp/plans.parquet"
@@ -216,6 +234,7 @@ def test_beam_preprocess_binding_plan_prefers_coupler_exchange_inputs_over_defau
         year=2030,
         activity_demand_outputs=None,
         previous_beam_outputs=None,
+        surface=_surface_stub(activity_demand_enabled=False),
     )
 
     assert plan.inputs[BEAM_PLANS_IN] == "/tmp/coupler-plans.parquet"
@@ -260,6 +279,10 @@ def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_input_from_
         year=2030,
         activity_demand_outputs={},
         previous_beam_outputs=None,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
     )
 
     assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == "/tmp/restored-vehicles.csv.gz"
@@ -302,10 +325,66 @@ def test_beam_preprocess_binding_plan_prefers_previous_linkstats_over_coupler_an
         year=2030,
         activity_demand_outputs=None,
         previous_beam_outputs={LINKSTATS: prev_linkstats},
+        surface=_surface_stub(activity_demand_enabled=True),
     )
 
     assert plan.inputs[LINKSTATS_WARMSTART] == prev_linkstats
     assert plan.source_by_key[LINKSTATS_WARMSTART] == "explicit"
+
+
+def test_beam_preprocess_binding_plan_forwards_surface_to_build_binding_plan(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    captured = {}
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: None,
+    )
+
+    def _capturing_build_binding_plan(**kwargs):
+        captured.update(kwargs)
+        return BindingPlan(step_name=kwargs["step_name"])
+
+    monkeypatch.setattr(
+        binding_module,
+        "build_binding_plan",
+        _capturing_build_binding_plan,
+    )
+
+    surface = SimpleNamespace(
+        profile=SimpleNamespace(activity_demand_enabled=False),
+        step_surface=lambda _name: None,
+    )
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand=None)),
+            vehicle_ownership_model_enabled=False,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs=None,
+        surface=surface,
+    )
+
+    assert plan.step_name == "beam_preprocess"
+    assert captured["surface"] is surface
 
 
 def test_build_binding_plan_uses_activitysim_preprocess_fallback_provider(monkeypatch):

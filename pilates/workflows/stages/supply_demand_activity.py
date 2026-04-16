@@ -325,7 +325,6 @@ def _run_activity_demand_phase(
             state=state,
             workspace=workspace,
             year=inputs.year,
-            profile=profile,
             surface=runtime_surface,
         )
 
@@ -342,6 +341,7 @@ def _run_activity_demand_phase(
                 step_func=make_activitysim_preprocess_step(
                     coupler=coupler,
                     outputs_holder=outputs_holder,
+                    surface=runtime_surface,
                 ),
                 binding=preprocess_binding,
                 year=state.forecast_year,
@@ -597,7 +597,6 @@ def _run_activity_demand_phase(
         state=state,
         workspace=workspace,
         year=inputs.year,
-        profile=profile,
         surface=runtime_surface,
     )
     if activitysim_postprocess_binding.missing_required:
@@ -621,6 +620,7 @@ def _run_activity_demand_phase(
             step_func=make_activitysim_postprocess_step(
                 coupler=coupler,
                 outputs_holder=outputs_holder,
+                surface=runtime_surface,
             ),
             binding=activitysim_postprocess_binding,
             year=state.forecast_year,

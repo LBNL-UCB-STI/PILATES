@@ -17,6 +17,7 @@ from pilates.atlas.static_inputs import (
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
+    from pilates.workflows.surface import EnabledWorkflowSurface
     from workflow_state import WorkflowState
 
 
@@ -27,6 +28,7 @@ def build_atlas_inputs(
     year: int,
     coupler: CouplerProtocol,
     usim_datastore_h5_path: Optional[str],
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Build ATLAS input paths and per-key log descriptions for a sub-year.
@@ -85,6 +87,7 @@ def build_atlas_inputs(
         state=state,
         workspace=workspace,
         year=year,
+        surface=surface,
     )
     atlas_usim_input = resolved_value_for_key(
         resolved=atlas_resolution,

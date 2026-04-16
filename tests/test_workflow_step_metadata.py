@@ -1243,6 +1243,10 @@ def test_epoch_tagging_proxy_preserves_step_local_metadata_without_adding_keys()
 
 
 def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_metadata():
+    empty_surface = SimpleNamespace(
+        step_enabled=lambda *_args, **_kwargs: False,
+        step_surface=lambda *_args, **_kwargs: None,
+    )
     contract = run_module.scenario_runtime.build_scenario_runtime_contract(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
@@ -1261,6 +1265,7 @@ def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_meta
         filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: steps,
         merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
         scenario_name_template="scenario-{run_name}",
+        surface=empty_surface,
     )
 
     scenario_kwargs = contract["scenario_kwargs"]
@@ -1276,7 +1281,7 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
     all_steps = [object(), object()]
     enabled_steps = [all_steps[1]]
     validation_calls = []
-    filter_profiles = []
+    filter_surfaces = []
     settings = SimpleNamespace(
         runtime=SimpleNamespace(
             flags_initialized=True,
@@ -1290,13 +1295,12 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
         ),
         run=SimpleNamespace(models=SimpleNamespace()),
     )
-    profile = run_module.build_workflow_profile(settings)
+    surface = run_module.build_enabled_workflow_surface(settings)
 
     run_module.scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
-        profile=profile,
         scenario_id="scenario-alpha",
         seed=None,
         cache_epoch=0,
@@ -1307,15 +1311,16 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
         ),
         build_schema_steps_fn=lambda: all_steps,
         filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **kwargs: (
-            filter_profiles.append(kwargs.get("profile")),
+            filter_surfaces.append(kwargs.get("surface")),
             enabled_steps,
         )[1],
         merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
         scenario_name_template="scenario-{run_name}",
+        surface=surface,
     )
 
     assert validation_calls == [enabled_steps]
-    assert filter_profiles == [profile, profile]
+    assert filter_surfaces == [surface]
 
 
 def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():

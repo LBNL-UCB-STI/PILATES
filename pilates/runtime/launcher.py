@@ -13,7 +13,6 @@ This module assembles and runs the full simulation lifecycle:
 import warnings
 from contextlib import nullcontext
 from datetime import datetime
-import inspect
 import os
 import logging
 import shlex
@@ -58,8 +57,8 @@ from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
+from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.profile import WorkflowProfile, build_workflow_profile
 from pilates.workflows.surface import EnabledWorkflowSurface, build_enabled_workflow_surface
 from pilates.workflows.stages import (
     run_land_use_stage,
@@ -243,32 +242,15 @@ def _build_schema_steps() -> List[Callable[..., Any]]:
     return scenario_runtime.build_schema_steps()
 
 
-def _is_model_enabled(
-    settings: PilatesConfig,
-    *,
-    flag_attr: str,
-    model_attr: str,
-) -> bool:
-    return scenario_runtime.is_model_enabled(
-        settings,
-        flag_attr=flag_attr,
-        model_attr=model_attr,
-    )
-
-
 def _filter_schema_steps_for_enabled_models(
     steps: List[Callable[..., Any]],
-    settings: PilatesConfig,
     *,
     include_optional: bool = True,
-    profile: Optional[WorkflowProfile] = None,
-    surface: Optional[EnabledWorkflowSurface] = None,
+    surface: EnabledWorkflowSurface,
 ) -> List[Callable[..., Any]]:
     return scenario_runtime.filter_schema_steps_for_enabled_models(
         steps,
-        settings,
         include_optional=include_optional,
-        profile=profile,
         surface=surface,
     )
 
@@ -287,7 +269,6 @@ def _build_scenario_runtime_contract(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    profile: WorkflowProfile,
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
@@ -297,7 +278,6 @@ def _build_scenario_runtime_contract(
         settings=settings,
         state=state,
         workspace=workspace,
-        profile=profile,
         scenario_id=scenario_id,
         seed=seed,
         cache_epoch=cache_epoch,
@@ -310,19 +290,6 @@ def _build_scenario_runtime_contract(
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
         surface=surface,
     )
-
-
-def _workflow_state_from_settings(
-    settings: PilatesConfig,
-    *,
-    profile: WorkflowProfile,
-) -> WorkflowState:
-    from_settings = WorkflowState.from_settings
-    parameters = inspect.signature(from_settings).parameters
-    if "profile" in parameters:
-        return from_settings(settings, profile=profile)
-    return from_settings(settings)
-
 
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
     return (
@@ -611,14 +578,10 @@ def main(
     # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
     if settings is None:
         settings = parse_args_and_settings()
-    provisional_surface = build_enabled_workflow_surface(settings)
+    ensure_runtime_flags_initialized(settings)
     if state is None:
-        state = _workflow_state_from_settings(
-            settings,
-            profile=provisional_surface.profile,
-        )
+        state = WorkflowState.from_settings(settings)
     surface = build_enabled_workflow_surface(settings, state=state)
-    profile = surface.profile
     _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -918,7 +881,6 @@ def main(
         settings=settings,
         state=state,
         workspace=workspace,
-        profile=profile,
         scenario_id=scenario_id,
         seed=run_seed,
         cache_epoch=cache_epoch,
@@ -1023,6 +985,7 @@ def main(
                         coupler=coupler,
                         year=year,
                         outputs_holder_year=outputs_holder_year,
+                        surface=surface,
                     )
                     state.complete_step(WorkflowState.Stage.land_use)
                     snapshot_manager.maybe_snapshot_interval(
@@ -1041,6 +1004,7 @@ def main(
                         coupler=coupler,
                         year=year,
                         build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
+                        surface=surface,
                     )
                     state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
                     snapshot_manager.maybe_snapshot_interval(

@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Callable, Dict, Mapping, Union, Optional, cast
+from typing import Callable, Dict, Mapping, Union, Optional, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -39,6 +39,9 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 def _atlas_subyear_manifest_path(
@@ -217,6 +220,7 @@ def run_vehicle_ownership_stage(
     build_atlas_static_inputs_fallback: Callable[
         [Workspace], Mapping[str, Union[str, os.PathLike]]
     ],
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> None:
     """
     Run the ATLAS vehicle ownership stage for the current forecast year.
@@ -273,7 +277,13 @@ def run_vehicle_ownership_stage(
     usim_datastore_h5_default_path = os.path.join(
         urbansim_datastore_dir, usim_datastore_fname
     )
-    fallback_usim_inputs, _ = build_urbansim_inputs(settings, state, workspace, year)
+    fallback_usim_inputs, _ = build_urbansim_inputs(
+        settings,
+        state,
+        workspace,
+        year,
+        surface=surface,
+    )
     usim_datastore_h5_current_path = str(
         fallback_usim_inputs.get(
             USIM_DATASTORE_CURRENT_H5, usim_datastore_h5_default_path
@@ -332,6 +342,7 @@ def run_vehicle_ownership_stage(
             atlas_year,
             coupler,
             atlas_usim_datastore_h5_path,
+            surface=surface,
         )
         log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
         step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
@@ -364,6 +375,7 @@ def run_vehicle_ownership_stage(
             state=atlas_state,
             workspace=workspace,
             year=atlas_year,
+            surface=surface,
         )
 
         atlas_interval_start_year = max(atlas_state.start_year, atlas_year - 2)
@@ -408,6 +420,7 @@ def run_vehicle_ownership_stage(
             state=atlas_state,
             workspace=workspace,
             year=atlas_year,
+            surface=surface,
         )
         if atlas_run_binding.missing_required:
             raise RuntimeError(

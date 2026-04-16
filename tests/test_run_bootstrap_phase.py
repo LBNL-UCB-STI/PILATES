@@ -1938,7 +1938,6 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
         is_restart_prebootstrap_deferred_artifact_key=lambda key: key == "deferred_key",
     )
 
-    monkeypatch.setattr(run_module, "build_workflow_profile", lambda _settings: SimpleNamespace())
     monkeypatch.setattr(run_module, "build_enabled_workflow_surface", lambda *_args, **_kwargs: surface)
     monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
     monkeypatch.setattr(

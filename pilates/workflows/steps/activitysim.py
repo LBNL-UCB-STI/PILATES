@@ -335,6 +335,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
     step_inputs: Optional[Mapping[str, Any]] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Any]:
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
@@ -348,6 +349,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
             state=state,
             workspace=workspace,
             year=step_year,
+            surface=surface,
         )
         population_source_value = resolved_value_for_key(
             resolved=resolution,
@@ -420,6 +422,7 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
     step_inputs: Optional[Mapping[str, Any]] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Optional[str]]:
     runtime_inputs: Dict[str, Optional[str]] = {
         "population_source_h5_path": None,
@@ -442,6 +445,7 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             state=state,
             workspace=workspace,
             year=step_year,
+            surface=surface,
         )
     population_source_value = (
         step_inputs.get(USIM_POPULATION_SOURCE_H5)
@@ -990,6 +994,7 @@ def make_activitysim_preprocess_step(
     *,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Callable[..., None]:
     """
     Build the ActivitySim preprocess step function.
@@ -1049,6 +1054,7 @@ def make_activitysim_preprocess_step(
             workspace=workspace,
             coupler=coupler,
             step_inputs=step_inputs,
+            surface=surface,
         )
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
@@ -1377,6 +1383,7 @@ def make_activitysim_postprocess_step(
     *,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Callable[..., None]:
     """
     Build the ActivitySim postprocess step function.
@@ -1453,6 +1460,7 @@ def make_activitysim_postprocess_step(
             workspace=workspace,
             coupler=coupler,
             step_inputs=step_inputs,
+            surface=surface,
         )
         if state.is_enabled(WorkflowState.Stage.land_use):
             population_source_h5_path = runtime_inputs["population_source_h5_path"]

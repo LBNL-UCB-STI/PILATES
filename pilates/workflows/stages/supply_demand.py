@@ -11,6 +11,7 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.orchestration import ManifestConfig
+from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -111,6 +112,9 @@ def run_supply_demand_stage(
     - Do not mutate coupler keys between iterations; they carry warm-start
       state to the next iteration.
     """
+    if surface is None:
+        surface = build_enabled_workflow_surface(settings, state=state)
+
     total_iters = settings.run.supply_demand_iters
     if settings.run.models.activity_demand is None and total_iters > 1:
         resumed_iteration = int(getattr(state, "iteration", 0) or 0)
@@ -207,6 +211,7 @@ def run_supply_demand_stage(
                 coupler=coupler,
                 inputs=traffic_inputs,
                 outputs_holder=outputs_holder,
+                surface=surface,
             ).previous_beam_outputs
 
         if os.path.exists(manifest_path):

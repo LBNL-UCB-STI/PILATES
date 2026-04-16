@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -14,6 +14,7 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
+from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.orchestration import StageRunner
 from pilates.workflows.outputs_base import step_output_handoff_mapping
@@ -37,6 +38,9 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 
 @dataclass
@@ -321,6 +325,7 @@ def _run_beam_steps(
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
@@ -399,6 +404,7 @@ def _run_beam_steps(
             state=state,
             workspace=workspace,
             year=year,
+            surface=surface,
         )
 
     stage_runner.run_step(
@@ -486,6 +492,7 @@ def _run_traffic_assignment_phase(
     coupler: CouplerProtocol,
     inputs: TrafficAssignmentPhaseInputs,
     outputs_holder: StepOutputsHolder,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> TrafficAssignmentPhaseOutputs:
     """
     Run BEAM for a single supply-demand iteration.
@@ -517,6 +524,8 @@ def _run_traffic_assignment_phase(
         Combined BEAM outputs for warm-starting the next iteration.
     """
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
+    if surface is None:
+        surface = build_enabled_workflow_surface(settings, state=state)
 
     previous_beam_outputs = _collect_previous_beam_outputs(
         coupler=coupler,
@@ -533,6 +542,7 @@ def _run_traffic_assignment_phase(
         year=inputs.year,
         activity_demand_outputs=inputs.activity_demand_outputs,
         previous_beam_outputs=previous_beam_outputs,
+        surface=surface,
     )
     beam_preprocess_inputs = dict(beam_preprocess_binding.inputs or {})
     beam_run_input_keys = _derive_beam_run_input_keys(
@@ -594,6 +604,7 @@ def _run_traffic_assignment_phase(
             beam_run_input_keys=beam_run_input_keys,
             include_zarr_skims=bool(inputs.activity_demand_outputs),
             runtime_kwargs_extra=traffic_runtime_kwargs,
+            surface=surface,
         )
         if _should_run_full_skim(settings, inputs.iteration):
             full_skim_outputs = _run_beam_full_skim_step(

@@ -9,13 +9,13 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.catalog import (
+    schema_step_specs,
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
-from pilates.workflows.profile import (
+from pilates.workflows._profile import (
     WorkflowProfile,
-    profile_enabled_schema_models,
-    resolve_workflow_enabled_flags,
+    ensure_runtime_flags_initialized,
     workflow_profile_from_flags,
 )
 from pilates.workflows.runtime_overlays import (
@@ -33,6 +33,23 @@ class RunMode(str, Enum):
 
     FRESH = "fresh"
     RESTART = "restart"
+
+
+def _enabled_schema_step_names_from_profile(
+    profile: WorkflowProfile,
+    *,
+    include_optional: bool,
+) -> FrozenSet[str]:
+    enabled_steps = set()
+    for spec in schema_step_specs(include_optional=include_optional):
+        flag_attr = spec.enabled_flag_attr
+        model_attr = spec.enabled_model_attr
+        if flag_attr is None or model_attr is None:
+            enabled_steps.add(spec.step_name)
+            continue
+        if profile.model_enabled(flag_attr):
+            enabled_steps.add(spec.step_name)
+    return frozenset(enabled_steps)
 
 
 @dataclass(frozen=True)
@@ -491,7 +508,7 @@ def build_enabled_workflow_surface(
     Returns:
         The enabled workflow surface that runtime callers should share.
     """
-    enabled_flags = resolve_workflow_enabled_flags(settings)
+    enabled_flags = ensure_runtime_flags_initialized(settings)
     profile = workflow_profile_from_flags(enabled_flags)
     run_mode = (
         RunMode.RESTART
@@ -499,11 +516,13 @@ def build_enabled_workflow_surface(
         else RunMode.FRESH
     )
 
-    enabled_step_names = frozenset(
-        profile_enabled_schema_models(profile, include_optional=True)
+    enabled_step_names = _enabled_schema_step_names_from_profile(
+        profile,
+        include_optional=True,
     )
-    required_enabled_step_names = frozenset(
-        profile_enabled_schema_models(profile, include_optional=False)
+    required_enabled_step_names = _enabled_schema_step_names_from_profile(
+        profile,
+        include_optional=False,
     )
     step_contracts = workflow_step_contracts_by_name(settings=settings)
     step_names = tuple(step_contracts.keys())

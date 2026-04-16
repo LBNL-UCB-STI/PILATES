@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Union, cast
+from typing import Dict, Optional, Union, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
@@ -41,6 +41,9 @@ from pilates.urbansim.inputs import build_urbansim_inputs
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
+
 
 def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
     return Path(workspace.full_path) / ".workflow" / f"land_use_year_{year}.yaml"
@@ -55,6 +58,7 @@ def run_land_use_stage(
     coupler: CouplerProtocol,
     year: int,
     outputs_holder_year: StepOutputsHolder,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Union[str, os.PathLike]]:
     """
     Run the UrbanSim land-use stage and return updated UrbanSim inputs.
@@ -99,7 +103,7 @@ def run_land_use_stage(
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
 
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(
-        settings, state, workspace, year
+        settings, state, workspace, year, surface=surface
     )
     log_inputs(usim_inputs, cast(Dict[str, Optional[str]], usim_input_descriptions))
     usim_inputs = merge_model_expected_inputs(
@@ -135,6 +139,7 @@ def run_land_use_stage(
         coupler=coupler,
         explicit_inputs=preprocess_inputs,
         optional_keys=preprocess_keys,
+        surface=surface,
     )
 
     preprocess_step = make_urbansim_preprocess_step(
@@ -183,6 +188,7 @@ def run_land_use_stage(
         coupler=coupler,
         explicit_inputs=run_inputs,
         optional_keys=list(run_inputs.keys()),
+        surface=surface,
     )
     postprocess_binding = build_binding_plan(
         step_name="urbansim_postprocess",
@@ -190,6 +196,7 @@ def run_land_use_stage(
         explicit_inputs={USIM_DATASTORE_CURRENT_H5: usim_inputs.get(USIM_DATASTORE_CURRENT_H5)},
         fallback_inputs=usim_inputs,
         required_keys=[USIM_DATASTORE_CURRENT_H5],
+        surface=surface,
     )
     if postprocess_binding.missing_required:
         raise RuntimeError(

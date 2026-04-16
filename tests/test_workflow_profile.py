@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from pilates.workflows.profile import (
     WorkflowProfile,
     build_workflow_profile,
-    profile_enabled_schema_models,
 )
+from pilates.workflows.surface import build_enabled_workflow_surface
 
 
 def _settings(
@@ -101,12 +101,12 @@ def test_build_workflow_profile_respects_initialized_runtime_flags():
     assert profile.activity_demand_enabled is True
 
 
-def test_profile_enabled_schema_models_filters_disabled_model_steps():
-    profile = build_workflow_profile(
+def test_surface_enabled_schema_step_names_filters_disabled_model_steps():
+    surface = build_enabled_workflow_surface(
         _settings(land_use=None, vehicle_ownership=None)
     )
 
-    enabled_steps = profile_enabled_schema_models(profile, include_optional=True)
+    enabled_steps = surface.enabled_schema_step_names(include_optional=True)
 
     assert "activitysim_preprocess" in enabled_steps
     assert "beam_preprocess" in enabled_steps

@@ -43,7 +43,7 @@ from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.outputs_base import required_outputs_for_step_outputs_class
-from pilates.workflows.profile import build_workflow_profile
+from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_compile_step,
@@ -145,7 +145,7 @@ def test_validate_workflow_step_contracts_passes_for_current_setup():
     )
 
 
-def test_filter_schema_steps_for_enabled_models_supports_profile_subset():
+def test_filter_schema_steps_for_enabled_models_supports_surface_subset():
     settings = SimpleNamespace(
         runtime=SimpleNamespace(
             flags_initialized=True,
@@ -159,13 +159,12 @@ def test_filter_schema_steps_for_enabled_models_supports_profile_subset():
         ),
         run=SimpleNamespace(models=SimpleNamespace()),
     )
-    profile = build_workflow_profile(settings)
+    surface = build_enabled_workflow_surface(settings)
 
     filtered = scenario_runtime.filter_schema_steps_for_enabled_models(
         _declared_schema_steps(),
-        settings,
         include_optional=True,
-        profile=profile,
+        surface=surface,
     )
 
     filtered_names = {

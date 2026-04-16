@@ -72,6 +72,42 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     assert calls[0][1]["content_hash"] == "abc123"
 
 
+def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def _fake_runtime_inputs(**kwargs):
+        captured["surface"] = kwargs.get("surface")
+        return {"population_source_h5_path": None}
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "_resolve_activitysim_preprocess_runtime_inputs",
+        _fake_runtime_inputs,
+    )
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_standard_step",
+        lambda **kwargs: SimpleNamespace(pilates_input_logger=kwargs["spec"].input_logger),
+    )
+
+    step_fn = steps.make_activitysim_preprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(),
+        surface="sentinel-surface",
+    )
+
+    step_fn.pilates_input_logger(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2023),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(),
+    )
+
+    assert captured["surface"] == "sentinel-surface"
+
+
 def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) -> None:
     usim_next = tmp_path / "urbansim" / "data" / "model_data_next.h5"
     usim_next.parent.mkdir(parents=True, exist_ok=True)
@@ -159,6 +195,54 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
     assert "zarr_skims" in keys
     assert "usim_population_source_h5" in keys
     assert "usim_datastore_h5" in keys
+
+
+def test_activitysim_postprocess_step_forwards_surface_to_runtime_resolution(
+    monkeypatch,
+) -> None:
+    captured = {}
+
+    def _fake_runtime_inputs(**kwargs):
+        captured["surface"] = kwargs.get("surface")
+        return {
+            "population_source_h5_path": None,
+            "current_input_h5_path": None,
+        }
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "_resolve_activitysim_postprocess_runtime_inputs",
+        _fake_runtime_inputs,
+    )
+    monkeypatch.setattr(steps_activitysim, "log_input_only", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_standard_step",
+        lambda **kwargs: SimpleNamespace(pilates_input_logger=kwargs["spec"].input_logger),
+    )
+
+    step_fn = steps.make_activitysim_postprocess_step(
+        coupler=_dummy_coupler(),
+        outputs_holder=SimpleNamespace(),
+        surface="sentinel-surface",
+    )
+
+    step_fn.pilates_input_logger(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            forecast_year=2023,
+            iteration=0,
+            is_enabled=lambda _stage: True,
+            Stage=SimpleNamespace(land_use="land_use"),
+        ),
+        workspace=SimpleNamespace(
+            get_asim_mutable_data_dir=lambda: "/tmp/missing",
+            get_asim_output_dir=lambda: "/tmp/missing",
+        ),
+        holder=SimpleNamespace(),
+    )
+
+    assert captured["surface"] == "sentinel-surface"
 
 
 def test_activitysim_postprocess_rejects_legacy_only_run_outputs(

@@ -2,7 +2,6 @@ from pilates.workflows import catalog
 from pilates.workflows.steps import schema_step_builder_registry
 from pilates.workflows.steps import shared as step_shared
 from pilates.runtime.launcher import _build_schema_steps
-from pilates.runtime.launcher import _is_model_enabled
 from types import SimpleNamespace
 
 
@@ -93,7 +92,16 @@ def test_enabled_schema_step_models_honors_settings_flags():
     )
     enabled = catalog.enabled_schema_step_models(
         settings,
-        is_model_enabled=_is_model_enabled,
+        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: bool(
+            getattr(current_settings, flag_attr, None)
+        )
+        or bool(
+            getattr(
+                getattr(getattr(current_settings, "run", None), "models", None),
+                model_attr,
+                None,
+            )
+        ),
         include_optional=False,
     )
     assert all(not model.startswith("urbansim_") for model in enabled)
