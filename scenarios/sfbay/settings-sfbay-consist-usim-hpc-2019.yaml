@@ -308,7 +308,7 @@ atlas:
   basedir: /
   codedir: /
   sample_size: 0     # zero means no sampling, whole pop.
-  num_processes: 40  # suggested <9 for hima
+  num_processes: 8  # suggested <9 for hima
   beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
   mod: 2 # 1 (static) or 2 (dynamic)
   scenario: baseline # ess_cons; zev_mandate; baseline
