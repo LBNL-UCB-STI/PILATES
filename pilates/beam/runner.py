@@ -248,15 +248,14 @@ class BeamRunner(GenericRunner):
         """
         Declare runtime expected inputs, including filesystem presence checks.
         """
-        zarr_path = None
+        inputs = {
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+        }
         if getattr(settings, "activitysim", None) is not None:
             candidate = asim_runtime_zarr_path(workspace)
             if os.path.exists(candidate):
-                zarr_path = candidate
-        return {
-            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-            "zarr_skims": zarr_path,
-        }
+                inputs["zarr_skims"] = candidate
+        return inputs
 
     @staticmethod
     def expected_inputs(

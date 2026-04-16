@@ -301,6 +301,29 @@ def test_urbansim_atlas_steps_publish_replay_metadata(
     ) == expected_outputs_fn(settings, state, workspace)
 
 
+def test_atlas_runner_expected_outputs_only_include_runner_artifacts(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        urbansim=SimpleNamespace(
+            input_file_template="usim_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+            region_mappings={"region_to_region_id": {"test": "123"}},
+        ),
+    )
+    state = SimpleNamespace(
+        forecast_year=2023,
+        is_start_year=lambda: False,
+    )
+
+    outputs = AtlasRunner.expected_outputs(settings, state, workspace)
+
+    assert outputs == {"atlas_output_dir": str(tmp_path / "atlas" / "output")}
+
+
 def test_atlas_preprocess_outputs_require_grave_csv_for_non_start_year(
     tmp_path: Path,
 ) -> None:

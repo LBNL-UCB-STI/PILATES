@@ -116,30 +116,13 @@ class AtlasRunner(GenericRunner):
         -----
         Output keys
             - ``atlas_output_dir``: ATLAS output directory for the run.
-            - ``usim_datastore_h5``: UrbanSim datastore updated for the
-              forecast year.
         Related docs
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
         """
         atlas_output_dir = workspace.get_atlas_output_dir()
-        usim_output_path = None
-        if state.is_start_year():
-            region = settings.run.region
-            region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-            usim_output_fname = settings.urbansim.input_file_template.format(
-                region_id=region_id
-            )
-        else:
-            usim_output_fname = settings.urbansim.output_file_template.format(
-                year=state.forecast_year
-            )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
-        )
         return {
             "atlas_output_dir": atlas_output_dir,
-            "usim_datastore_h5": usim_output_path,
         }
 
     def __init__(
