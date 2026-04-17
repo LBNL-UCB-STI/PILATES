@@ -7,11 +7,14 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
+from pilates.runtime.context import (
+    WorkflowRuntimeContext,
+    ensure_workflow_runtime_context,
+)
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.orchestration import ManifestConfig
-from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -39,14 +42,15 @@ logger = logging.getLogger(__name__)
 def run_supply_demand_stage(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     year: int,
     usim_inputs: Mapping[str, Union[str, os.PathLike]],
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
+    context: Optional[WorkflowRuntimeContext] = None,
+    state: Optional[WorkflowState] = None,
+    settings: Optional[PilatesConfig] = None,
+    workspace: Optional[Workspace] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> None:
     """
@@ -112,8 +116,17 @@ def run_supply_demand_stage(
     - Do not mutate coupler keys between iterations; they carry warm-start
       state to the next iteration.
     """
-    if surface is None:
-        surface = build_enabled_workflow_surface(settings, state=state)
+    runtime_context = ensure_workflow_runtime_context(
+        context=context,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    settings = runtime_context.settings
+    state = runtime_context.state
+    workspace = runtime_context.workspace
+    surface = runtime_context.surface
 
     total_iters = settings.run.supply_demand_iters
     if settings.run.models.activity_demand is None and total_iters > 1:
@@ -162,13 +175,11 @@ def run_supply_demand_stage(
             )
             activity_demand_outputs = _run_activity_demand_phase(
                 scenario=scenario,
-                state=state,
-                settings=settings,
-                workspace=workspace,
                 coupler=coupler,
                 inputs=activity_demand_inputs,
                 outputs_holder=outputs_holder,
                 manifest_config=manifest_config,
+                context=runtime_context,
                 surface=surface,
             ).activity_demand_outputs
         elif (
@@ -205,12 +216,10 @@ def run_supply_demand_stage(
             )
             previous_beam_outputs = _run_traffic_assignment_phase(
                 scenario=scenario,
-                state=state,
-                settings=settings,
-                workspace=workspace,
                 coupler=coupler,
                 inputs=traffic_inputs,
                 outputs_holder=outputs_holder,
+                context=runtime_context,
                 surface=surface,
             ).previous_beam_outputs
 

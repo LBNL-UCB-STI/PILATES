@@ -18,8 +18,11 @@ PILATES treats the model families as workflow roles, not as generic simulation n
 
 PILATES also keeps a few registry-level step variants separate from the broad model families. For example, `activitysim_compile` is a tracked step variant inside the ActivitySim family, and `beam_full_skim` is a separate tracked step that publishes full-skim outputs.
 
+If you need the real workflow-facing inputs, outputs, downstream consumers, and restart-relevant artifacts for each model family, use [Model Boundaries](model_boundaries.md). This page stays intentionally short.
+
 ## Reading Path
 
-- Continue to [Simulation Logic by Stage](../workflow/simulation_logic_by_stage.md).
+- Continue to [Model Boundaries](model_boundaries.md).
+- Then use [Simulation Logic by Stage](../workflow/simulation_logic_by_stage.md).
 - Then use [Artifact Flow](../workflow/artifact_flow.md).
 - For developer work, continue to [Model Integration Guide](../extend/model_integration_guide.md).

@@ -23,7 +23,9 @@ python run.py -c path/to/your-settings.yaml
 ## What The Launcher Does
 
 - It loads the YAML file with Pydantic validation.
-- It attaches the runtime flags and runtime options used by the launcher.
+- It initializes the runtime flags that define the active run shape.
+- It creates or restores `WorkflowState` for durable year / stage / iteration progress.
+- It builds the enabled workflow surface that planning, binding, restart preflight, and runtime validation consume.
 - It resolves a run-specific archive directory under `run.output_directory`.
 - It uses `run.local_workspace_root` as the mutable workspace parent when that field is set; otherwise it uses the archive side.
 - It creates the run-specific archive directory and mutable workspace, then starts the scenario lifecycle.

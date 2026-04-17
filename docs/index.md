@@ -54,6 +54,12 @@ adapters decoupled, coordinates their run order across years and inner
 iterations, and makes the workflow boundary explicit through typed outputs,
 artifact keys, and a Consist-backed execution contract.
 
+The current runtime mental model is intentionally simple:
+
+- the launcher initializes runtime flags and workflow state
+- the enabled workflow surface projects the active run shape
+- stages and step factories execute against that shared projection
+
 It helps you:
 
 - run local and HPC scenarios under one runtime model
@@ -76,12 +82,14 @@ It helps you:
 
     - [Workflow Primer](workflow/workflow_primer.md)
     - [Architecture](workflow/architecture.md)
-    - [Consist in PILATES](workflow/consist_in_pilates.md)
-    - [Artifact Flow](workflow/artifact_flow.md)
+    - [Model Boundaries](reference/model_boundaries.md)
     - [Simulation Logic by Stage](workflow/simulation_logic_by_stage.md)
+    - [Artifact Flow](workflow/artifact_flow.md)
+    - [Consist in PILATES](workflow/consist_in_pilates.md)
 
 === "Extending PILATES"
 
+    - [Model Boundaries](reference/model_boundaries.md)
     - [Model Integration Guide](extend/model_integration_guide.md)
     - [Adding a Model](extend/adding_a_model.md)
     - [Step Contracts](workflow/step_contracts.md)

@@ -21,7 +21,7 @@ summary: What Consist owns in PILATES and how replay, caching, staging, and anal
 
 ## Current Runtime Shape
 
-`pilates/runtime/launcher.py` builds the scenario contract, declares the coupler outputs, seeds bootstrap artifacts into the coupler, and then runs the year loop inside Consist scenario/step contexts.
+`pilates/runtime/launcher.py` initializes runtime flags, restores `WorkflowState`, builds the enabled workflow surface, declares the scenario contract, seeds bootstrap artifacts into the coupler, and then runs the year loop inside Consist scenario/step contexts.
 
 `pilates/utils/consist_config.py` keeps the Consist inputs narrow and explicit:
 
@@ -30,6 +30,11 @@ summary: What Consist owns in PILATES and how replay, caching, staging, and anal
 - `identity_inputs` are only added for steps that need file or directory digests.
 
 The launcher also records run context metadata such as `scenario_id`, `seed`, `archive_run_dir`, `local_run_dir`, and `restart_run`.
+
+The key ownership boundary is:
+
+- the enabled workflow surface decides which stages, step contracts, and restart requirements are active
+- Consist executes those declared boundaries, records lineage, and provides replay / cache behavior for them
 
 ## Public Artifact Surface
 

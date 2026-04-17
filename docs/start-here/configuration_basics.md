@@ -20,6 +20,8 @@ summary: Mental model for how PILATES config is organized before the full refere
 - `python run.py -c ...` is the normal invocation for choosing a settings file.
 - `-S/--stage` points at an existing state file for restart or resume.
 
+Those runtime flags are initialized once during launcher startup and then reused through the enabled workflow surface. PILATES no longer expects each subsystem to rebuild its own view of which stages, steps, or restart contracts are active.
+
 ## The Practical Config Split
 
 - `run.output_directory` sets the parent directory where the launcher creates the archive run directory for each run.

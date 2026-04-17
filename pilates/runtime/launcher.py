@@ -55,6 +55,7 @@ from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
 from pilates.workflows._profile import ensure_runtime_flags_initialized
@@ -582,6 +583,12 @@ def main(
     if state is None:
         state = WorkflowState.from_settings(settings)
     surface = build_enabled_workflow_surface(settings, state=state)
+    runtime_context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
     _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -979,13 +986,10 @@ def main(
                 if state.should_run(WorkflowState.Stage.land_use):
                     usim_inputs = run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        state=state,
-                        settings=settings,
-                        workspace=workspace,
                         coupler=coupler,
                         year=year,
                         outputs_holder_year=outputs_holder_year,
-                        surface=surface,
+                        context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.land_use)
                     snapshot_manager.maybe_snapshot_interval(
@@ -998,13 +1002,10 @@ def main(
                     )
                     run_vehicle_ownership_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        state=state,
-                        settings=settings,
-                        workspace=workspace,
                         coupler=coupler,
                         year=year,
                         build_atlas_static_inputs_fallback=build_atlas_static_inputs_fallback,
-                        surface=surface,
+                        context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
                     snapshot_manager.maybe_snapshot_interval(
@@ -1014,9 +1015,6 @@ def main(
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        state=state,
-                        settings=settings,
-                        workspace=workspace,
                         coupler=coupler,
                         year=year,
                         usim_inputs=usim_inputs,
@@ -1029,7 +1027,7 @@ def main(
                                 )
                             )
                         ),
-                        surface=surface,
+                        context=runtime_context,
                     )
                     snapshot_manager.maybe_snapshot_interval(
                         reason=f"after_supply_demand_y{year}"
@@ -1039,11 +1037,9 @@ def main(
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        state=state,
-                        settings=settings,
-                        workspace=workspace,
                         coupler=coupler,
                         year=year,
+                        context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.postprocessing)
                     snapshot_manager.maybe_snapshot_interval(

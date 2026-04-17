@@ -10,6 +10,7 @@ summary: Stable layer map for the current PILATES runtime and where responsibili
 PILATES assembles a run in `pilates/runtime/launcher.py`, then moves through a staged workflow with three main coordination objects:
 
 - `WorkflowState` tracks year, stage, iteration, restart flags, and persisted progress.
+- `EnabledWorkflowSurface` projects the active run shape from initialized runtime flags plus the current workflow state. It is the shared authority for enabled stages, enabled steps, restart-facing contracts, and required outputs.
 - `Workspace` resolves filesystem locations for mutable model inputs, outputs, and archive roots.
 - The coupler stores published artifacts that later steps can resolve without recomputing them.
 
@@ -22,11 +23,15 @@ The runtime keeps two handoff channels separate:
 
 ### Runtime assembly
 
-`pilates/runtime/launcher.py` owns startup, restart hydration, Consist scenario/step setup, the yearly stage loop, and workflow contract validation. It also creates the coupler schema and publishes bootstrap artifacts before the first major stage runs.
+`pilates/runtime/launcher.py` owns startup, runtime-flag initialization, `WorkflowState` restore/create, enabled-surface construction, restart hydration, Consist scenario/step setup, the yearly stage loop, and workflow contract validation. It also creates the coupler schema and publishes bootstrap artifacts before the first major stage runs.
 
 ### Workflow catalog
 
 `pilates/workflows/catalog.py` stores static `WorkflowStepSpec` entries. Those entries describe inputs, optional inputs, outputs, optional outputs, dependency edges, holder dependencies, dynamic key families, and provenance metadata. The catalog is static inspection data; it does not execute the models.
+
+### Enabled workflow surface
+
+`pilates/workflows/surface.py` turns initialized runtime flags, the static catalog, and the current `WorkflowState` into one run-shape projection. Planning, binding, schema filtering, restart preflight, and runtime output validation consume that surface instead of rebuilding their own model-enablement views.
 
 ### Step factories
 
@@ -43,6 +48,7 @@ The runtime keeps two handoff channels separate:
 ## Adjacent Pages
 
 - Read [Workflow Primer](workflow_primer.md) for the workflow overview.
+- Read [Model Boundaries](../reference/model_boundaries.md) for the per-model requirements and handoffs.
 - Continue to [Stages and Steps](stages_and_steps.md) for execution units.
 - Continue to [Step Contracts](step_contracts.md) for the contract layer.
 - For implementation work, read [Model Integration Guide](../extend/model_integration_guide.md).

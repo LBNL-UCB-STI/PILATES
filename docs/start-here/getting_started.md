@@ -24,7 +24,7 @@ For most readers, the shortest path is:
 
 ## What To Expect
 
-PILATES loads one YAML settings file, resolves the runtime flags from that file, and then starts the workflow from the launcher in `run.py`. The practical path is to copy an active scenario template, edit the file paths for your machine, and run `python run.py -c <your-settings>.yaml`.
+PILATES loads one YAML settings file, initializes the runtime flags from that file, restores or creates `WorkflowState`, and then builds the enabled workflow surface that the launcher uses to decide which stages and step contracts are active. The practical path is to copy an active scenario template, edit the file paths for your machine, and run `python run.py -c <your-settings>.yaml`.
 
 ## Start Points
 

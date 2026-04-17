@@ -5,6 +5,10 @@ summary: Short map of the main workflow-facing artifact handoffs in PILATES.
 
 # Artifact Flow
 
+This page is the artifact-key view of the workflow. It is intentionally about coupler-visible handoffs, not the full “what does each model require and produce?” explanation.
+
+If you need the per-model boundary story first, read [Model Boundaries](../reference/model_boundaries.md) before this page.
+
 ## The Main Flow
 
 The flow below is about what PILATES publishes across step boundaries through the coupler and tracked outputs. It is not a full inventory of every temporary file created inside a model run directory.
@@ -99,6 +103,7 @@ The coupler schema is the public list of keys the workflow declares. The lineage
 
 ## Adjacent Pages
 
+- Read [Model Boundaries](../reference/model_boundaries.md) for the per-model requirements and consumers.
 - Read [Artifact Semantics](artifact_semantics.md) for key meanings.
 - Use [Lineage Map](lineage_map.md) for the detailed per-step reference.
 - Use [Step Contracts](step_contracts.md) for the semantic contract layer.

@@ -25,7 +25,11 @@ Use [Opening Archives](../analysis/opening_archives.md) for the archive and trac
 
 ### Where do I look when I am changing a model integration?
 
-Start with [Step Contracts](../workflow/step_contracts.md), then read [Model Integration Guide](../extend/model_integration_guide.md) and [Testing New Integrations](../extend/testing_new_integrations.md). Those pages describe the tracked step shell and the current contract surface.
+Start with [Model Boundaries](model_boundaries.md) so you know the current public handoff, then read [Step Contracts](../workflow/step_contracts.md), [Model Integration Guide](../extend/model_integration_guide.md), and [Testing New Integrations](../extend/testing_new_integrations.md).
+
+### Where do I look to understand what one model hands to the next?
+
+Start with [Model Boundaries](model_boundaries.md). Then use [Simulation Logic by Stage](../workflow/simulation_logic_by_stage.md) for the stage-order meaning and [Artifact Flow](../workflow/artifact_flow.md) for the coupler-key view.
 
 ### Where do I look for path questions?
 

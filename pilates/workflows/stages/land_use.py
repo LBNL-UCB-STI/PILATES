@@ -6,6 +6,10 @@ from pathlib import Path
 from typing import Dict, Optional, Union, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
+from pilates.runtime.context import (
+    WorkflowRuntimeContext,
+    ensure_workflow_runtime_context,
+)
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -52,12 +56,13 @@ def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
 def run_land_use_stage(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     year: int,
     outputs_holder_year: StepOutputsHolder,
+    context: Optional[WorkflowRuntimeContext] = None,
+    state: Optional[WorkflowState] = None,
+    settings: Optional[PilatesConfig] = None,
+    workspace: Optional[Workspace] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Union[str, os.PathLike]]:
     """
@@ -100,6 +105,18 @@ def run_land_use_stage(
     Dict[str, Union[str, PathLike]]
         Updated UrbanSim input mapping, including the latest datastore path.
     """
+    runtime_context = ensure_workflow_runtime_context(
+        context=context,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    settings = runtime_context.settings
+    state = runtime_context.state
+    workspace = runtime_context.workspace
+    surface = runtime_context.surface
+
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
 
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(

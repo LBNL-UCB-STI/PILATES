@@ -36,11 +36,26 @@ summary: Short contributor checklist for new tracked workflow integrations.
 - Keep model-local logging and recovery callbacks in the model module.
 - Make sure the step returns the expected typed outputs class.
 
+### Stage wiring
+
+- Use `WorkflowRuntimeContext` at the stage/orchestration boundary when the stage needs `settings`, `state`, `surface`, and `workspace` together.
+- Let `StageRunner` own step execution plumbing.
+- Use `build_binding_plan(...)` when the step needs resolved runtime inputs or fallback behavior.
+- Keep enablement decisions on the enabled workflow surface, not in stage-local boolean checks copied from raw settings.
+
+### Architecture rules
+
+- Do not import or rebuild `WorkflowProfile` in production model integration code.
+- Do not call `build_enabled_workflow_surface(...).profile` as a shortcut for booleans.
+- Keep runtime flag initialization in the approved workflow/runtime entry points only.
+- Treat architecture guardrail tests as part of the integration contract, not optional lint.
+
 ### Registry and tests
 
 - Register the model component classes in `ModelFactory`.
 - Add or update contract tests that pin the output keys, holder publication, and coupler keys.
 - Run the workflow contract validator tests before treating the integration as complete.
+- If the integration introduces a new allowed seam, update the architecture guardrail tests explicitly.
 
 ## Adjacent Pages
 

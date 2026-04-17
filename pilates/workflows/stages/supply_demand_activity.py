@@ -7,6 +7,10 @@ from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Union
 
 from pilates.config.models import PilatesConfig
+from pilates.runtime.context import (
+    WorkflowRuntimeContext,
+    ensure_workflow_runtime_context,
+)
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import (
@@ -134,19 +138,6 @@ def _seed_exact_rewind_activitysim_preprocess_outputs(
     return preprocess_outputs
 
 
-def _resolve_activitysim_surface(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    surface: Optional["EnabledWorkflowSurface"] = None,
-) -> Optional["EnabledWorkflowSurface"]:
-    if surface is not None:
-        return surface
-    from pilates.workflows.surface import build_enabled_workflow_surface
-
-    return build_enabled_workflow_surface(settings, state=state)
-
-
 def _surface_restart_missing_explicit_roles(
     *,
     coupler: CouplerProtocol,
@@ -212,13 +203,14 @@ def _seed_postprocess_role_fallbacks_from_coupler(
 def _run_activity_demand_phase(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     inputs: ActivityDemandPhaseInputs,
     outputs_holder: StepOutputsHolder,
     manifest_config: ManifestConfig,
+    context: Optional[WorkflowRuntimeContext] = None,
+    state: Optional[WorkflowState] = None,
+    settings: Optional[PilatesConfig] = None,
+    workspace: Optional[Workspace] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> ActivityDemandPhaseOutputs:
     """
@@ -229,6 +221,17 @@ def _run_activity_demand_phase(
     from UrbanSim outputs or fallbacks and ensures skims are available
     when resuming after compilation.
     """
+    runtime_context = ensure_workflow_runtime_context(
+        context=context,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    settings = runtime_context.settings
+    state = runtime_context.state
+    workspace = runtime_context.workspace
+
     formatted_print("ACTIVITY DEMAND MODEL")
     stage_runner = StageRunner(
         stage_name="activity_demand",
@@ -260,11 +263,7 @@ def _run_activity_demand_phase(
         year=inputs.year,
         iteration=inputs.iteration,
     )
-    runtime_surface = _resolve_activitysim_surface(
-        settings=settings,
-        state=state,
-        surface=surface,
-    )
+    runtime_surface = runtime_context.surface
     profile = runtime_surface.profile
     resolved_usim_inputs = dict(inputs.usim_inputs)
     missing_restart_roles = _surface_restart_missing_explicit_roles(

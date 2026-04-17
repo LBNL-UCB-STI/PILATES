@@ -16,7 +16,7 @@ For most users, the practical meaning is simple: restart is no longer “rebuild
 
 ## Preflight Checks
 
-- The runtime checks for required local artifacts before and after restart bootstrap.
+- The runtime checks for required local artifacts before and after restart bootstrap against the current enabled workflow surface.
 - Some missing artifacts are treated as blocking; others are deferred until bootstrap hydration.
 - If `restart_strict` is enabled and required artifacts are still missing after bootstrap, the launcher raises.
 - The current code logs these conditions explicitly so operators can see whether a missing path is a restart blocker or a deferred bootstrap-owned artifact.

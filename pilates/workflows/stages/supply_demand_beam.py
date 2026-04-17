@@ -5,6 +5,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
+from pilates.runtime.context import (
+    WorkflowRuntimeContext,
+    ensure_workflow_runtime_context,
+)
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.formatting import formatted_print
@@ -14,7 +18,6 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
-from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.orchestration import StageRunner
 from pilates.workflows.outputs_base import step_output_handoff_mapping
@@ -259,22 +262,20 @@ def _finalize_beam_run_input_keys(
 def _make_beam_stage_runner(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
     runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
+    context: WorkflowRuntimeContext,
 ) -> StageRunner:
     """Build the execution context shared by BEAM stage slices."""
     return StageRunner(
         stage_name="beam",
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
+        state=context.state,
+        settings=context.settings,
+        workspace=context.workspace,
         coupler=coupler,
         outputs_holder=outputs_holder,
         name_suffix=f"{year}_iter{iteration}",
@@ -291,9 +292,6 @@ def _run_beam_preprocess_step(
     outputs_holder: StepOutputsHolder,
     year: int,
     beam_preprocess_binding: BindingPlan,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
 ) -> None:
     """
     Execute BEAM preprocess with explicit resolved inputs.
@@ -314,9 +312,6 @@ def _run_beam_preprocess_step(
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     year: int,
@@ -325,21 +320,21 @@ def _run_beam_steps(
     beam_run_input_keys: Optional[list[str]],
     include_zarr_skims: bool,
     runtime_kwargs_extra: Mapping[str, Any],
+    context: WorkflowRuntimeContext,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Optional[Dict[str, Any]]:
     """
     Execute BEAM preprocess/run/postprocess and return combined outputs.
     """
+    surface = surface or context.surface
     stage_runner = _make_beam_stage_runner(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         outputs_holder=outputs_holder,
         year=year,
         iteration=iteration,
         runtime_kwargs_extra=runtime_kwargs_extra,
+        context=context,
     )
     _run_beam_preprocess_step(
         stage_runner=stage_runner,
@@ -347,9 +342,6 @@ def _run_beam_steps(
         outputs_holder=outputs_holder,
         year=year,
         beam_preprocess_binding=beam_preprocess_binding,
-        settings=settings,
-        state=state,
-        workspace=workspace,
     )
     beam_run_input_keys = _finalize_beam_run_input_keys(
         beam_run_input_keys=beam_run_input_keys,
@@ -368,9 +360,9 @@ def _run_beam_steps(
                 input_keys=beam_run_input_keys,
                 optional_input_keys=[LINKSTATS_WARMSTART],
                 coupler=coupler,
-                settings=settings,
-                state=state,
-                workspace=workspace,
+                settings=context.settings,
+                state=context.state,
+                workspace=context.workspace,
                 year=year,
             ),
             year=year,
@@ -400,9 +392,9 @@ def _run_beam_steps(
             explicit_inputs=step_output_handoff_mapping(upstream_run, coupler=coupler),
             required_keys=required_keys,
             optional_keys=optional_keys,
-            settings=settings,
-            state=state,
-            workspace=workspace,
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
             year=year,
             surface=surface,
         )
@@ -440,15 +432,13 @@ def _run_beam_steps(
 def _run_beam_full_skim_step(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
     previous_beam_outputs: Optional[Dict[str, Any]],
     runtime_kwargs_extra: Mapping[str, Any],
+    context: WorkflowRuntimeContext,
 ) -> Optional[Dict[str, Any]]:
     """
     Execute dedicated BEAM full-skim step and return its outputs.
@@ -457,14 +447,12 @@ def _run_beam_full_skim_step(
     runtime_kwargs["previous_beam_outputs"] = previous_beam_outputs
     stage_runner = _make_beam_stage_runner(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         outputs_holder=outputs_holder,
         year=year,
         iteration=iteration,
         runtime_kwargs_extra=runtime_kwargs,
+        context=context,
     )
     stage_runner.run_step(
         step=StepRef(
@@ -474,7 +462,7 @@ def _run_beam_full_skim_step(
                 outputs_holder=outputs_holder,
             ),
             binding=BindingPlan(),
-            year=state.forecast_year,
+            year=context.state.forecast_year,
         )
     )
 
@@ -486,12 +474,13 @@ def _run_beam_full_skim_step(
 def _run_traffic_assignment_phase(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     inputs: TrafficAssignmentPhaseInputs,
     outputs_holder: StepOutputsHolder,
+    context: Optional[WorkflowRuntimeContext] = None,
+    state: Optional[WorkflowState] = None,
+    settings: Optional[PilatesConfig] = None,
+    workspace: Optional[Workspace] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> TrafficAssignmentPhaseOutputs:
     """
@@ -523,9 +512,19 @@ def _run_traffic_assignment_phase(
     TrafficAssignmentPhaseOutputs
         Combined BEAM outputs for warm-starting the next iteration.
     """
+    runtime_context = ensure_workflow_runtime_context(
+        context=context,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    settings = runtime_context.settings
+    state = runtime_context.state
+    workspace = runtime_context.workspace
+    surface = runtime_context.surface
+
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
-    if surface is None:
-        surface = build_enabled_workflow_surface(settings, state=state)
 
     previous_beam_outputs = _collect_previous_beam_outputs(
         coupler=coupler,
@@ -559,14 +558,12 @@ def _run_traffic_assignment_phase(
     if schedule == "standalone":
         standalone_runner = _make_beam_stage_runner(
             scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
             coupler=coupler,
             outputs_holder=outputs_holder,
             year=inputs.year,
             iteration=inputs.iteration,
             runtime_kwargs_extra=traffic_runtime_kwargs,
+            context=runtime_context,
         )
         _run_beam_preprocess_step(
             stage_runner=standalone_runner,
@@ -574,28 +571,20 @@ def _run_traffic_assignment_phase(
             outputs_holder=outputs_holder,
             year=inputs.year,
             beam_preprocess_binding=beam_preprocess_binding,
-            settings=settings,
-            state=state,
-            workspace=workspace,
         )
         combined_beam_outputs = _run_beam_full_skim_step(
             scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
             coupler=coupler,
             outputs_holder=outputs_holder,
             year=inputs.year,
             iteration=inputs.iteration,
             previous_beam_outputs=previous_beam_outputs,
             runtime_kwargs_extra=traffic_runtime_kwargs,
+            context=runtime_context,
         )
     else:
         combined_beam_outputs = _run_beam_steps(
             scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
             coupler=coupler,
             outputs_holder=outputs_holder,
             year=inputs.year,
@@ -604,20 +593,19 @@ def _run_traffic_assignment_phase(
             beam_run_input_keys=beam_run_input_keys,
             include_zarr_skims=bool(inputs.activity_demand_outputs),
             runtime_kwargs_extra=traffic_runtime_kwargs,
+            context=runtime_context,
             surface=surface,
         )
         if _should_run_full_skim(settings, inputs.iteration):
             full_skim_outputs = _run_beam_full_skim_step(
                 scenario=scenario,
-                state=state,
-                settings=settings,
-                workspace=workspace,
                 coupler=coupler,
                 outputs_holder=outputs_holder,
                 year=inputs.year,
                 iteration=inputs.iteration,
                 previous_beam_outputs=combined_beam_outputs,
                 runtime_kwargs_extra=traffic_runtime_kwargs,
+                context=runtime_context,
             )
             if full_skim_outputs is not None:
                 if combined_beam_outputs is None:

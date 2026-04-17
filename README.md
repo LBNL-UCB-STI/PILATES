@@ -3,7 +3,9 @@
 PILATES is a workflow runtime for coupled regional simulation. It coordinates
 UrbanSim, ATLAS, ActivitySim, and BEAM across a shared scenario lifecycle with
 explicit handoffs, Consist-backed replay and provenance, and post-run analysis
-over archived artifacts.
+over archived artifacts. The launcher initializes runtime flags once, builds a
+single enabled workflow surface for the active run shape, and then drives
+planning, binding, restart, and stage execution from that shared projection.
 
 The full documentation now lives in the static docs site:
 
@@ -25,6 +27,7 @@ Use the site for the real paths through the project:
 - First local run: [docs/start-here/getting_started.md](docs/start-here/getting_started.md)
 - Runtime CLI and config: [docs/run/cli.md](docs/run/cli.md) and [docs/run/configuration_reference.md](docs/run/configuration_reference.md)
 - Workflow semantics: [docs/workflow/workflow_primer.md](docs/workflow/workflow_primer.md)
+- Model requirements and handoffs: [docs/reference/model_boundaries.md](docs/reference/model_boundaries.md)
 - Adding a model: [docs/extend/adding_a_model.md](docs/extend/adding_a_model.md)
 - Archived-run analysis: [docs/analysis/overview.md](docs/analysis/overview.md)
 - Lawrencium: [docs/run/lawrencium.md](docs/run/lawrencium.md)

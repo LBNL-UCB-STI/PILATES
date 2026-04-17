@@ -9,6 +9,7 @@ summary: Science-facing description of what each stage is logically doing in the
 
 - This page explains what PILATES is doing with the staged workflow state.
 - It is intentionally lighter on model-internal science and heavier on why the workflow is ordered the way it is.
+- For exact model requirements and handoff outputs, use [Model Boundaries](../reference/model_boundaries.md).
 - For exact published keys and step boundaries, use [Artifact Flow](artifact_flow.md) and [Lineage Map](lineage_map.md).
 
 ## Stage Logic
@@ -25,11 +26,15 @@ The land-use stage advances the UrbanSim-side representation of the region for t
 
 This is the first major scientific handoff in the run because later stages do not consume raw bootstrap inputs directly. They consume the updated land-use-side state that this stage publishes.
 
+Concrete boundary: [UrbanSim](../reference/model_boundaries.md#urbansim).
+
 ### Vehicle Ownership
 
 The vehicle-ownership stage refines the regional state with ATLAS outputs tied to the current year. PILATES uses this stage to derive year-scoped vehicle ownership artifacts and to decide which UrbanSim datastore should become the population source for the next demand-model boundary.
 
 Logically, this stage sits between land use and activity demand because it updates the traveler and vehicle context that downstream demand generation will read. The important workflow fact is not the internal ATLAS science; it is that PILATES turns the current land-use-side datastore into a population-source handoff plus year-specific ATLAS outputs.
+
+Concrete boundary: [ATLAS](../reference/model_boundaries.md#atlas).
 
 ### Activity Demand
 
@@ -37,11 +42,15 @@ The activity-demand stage converts the current regional state into staged Activi
 
 Logically, this is where the workflow turns regional population and land-use context into explicit travel-demand inputs and outputs. It also republishes shared skim products and archive-relevant inputs so the next traffic-assignment stage and later archive analysis can resolve the demand-side state that was actually used.
 
+Concrete boundary: [ActivitySim](../reference/model_boundaries.md#activitysim).
+
 ### Traffic Assignment
 
 The traffic-assignment stage takes the demand-side outputs and pushes them through BEAM. PILATES stages the inputs BEAM needs, executes the traffic-assignment path, and then republishes network-performance and skim artifacts that later iterations or later years may consume.
 
 This stage closes the main supply-demand loop. Linkstats, plans outputs, warm-start materials, and skim products are the workflow-visible record of how the network side responded to the demand-side state produced earlier in the year or iteration.
+
+Concrete boundary: [BEAM](../reference/model_boundaries.md#beam).
 
 ### Postprocessing
 
@@ -60,5 +69,6 @@ That distinction matters for reading the workflow: most of the substantive cross
 ## Adjacent Pages
 
 - Read [Stages and Steps](stages_and_steps.md) for the runtime execution model.
+- Use [Model Boundaries](../reference/model_boundaries.md) for per-model requirements and handoffs.
 - Use [Artifact Flow](artifact_flow.md) for the concrete handoffs.
 - Use [Model Stack](../reference/model_stack.md) for the role of each model family.

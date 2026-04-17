@@ -7,6 +7,9 @@ summary: High-level shape of a PILATES run from bootstrap through archive and re
 
 ## What Happens At Startup
 
+- The launcher initializes runtime flags from the validated settings file.
+- It creates or restores `WorkflowState`.
+- It builds the enabled workflow surface for the active run shape.
 - The launcher resolves a run-specific archive run directory and a mutable local run directory.
 - It initializes the Consist tracker against the archive-side run directory while mounting the project inputs and mutable workspace separately.
 - It creates the `Workspace` inside the local run directory and records the archive state path there.
@@ -28,7 +31,7 @@ In practice, this is the first important distinction to keep in mind:
 
 - PILATES enters a Consist scenario context after bootstrap.
 - The launcher declares the coupler outputs up front and then seeds bootstrap artifacts into the coupler.
-- From there, the workflow runs inside the year loop, and each stage is executed in order based on the current `WorkflowState`.
+- From there, the workflow runs inside the year loop, and each stage is executed in order based on the current `WorkflowState` plus the enabled workflow surface for that state.
 
 ## Year Loop
 

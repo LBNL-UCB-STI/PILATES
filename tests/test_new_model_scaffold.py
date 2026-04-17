@@ -39,8 +39,22 @@ def _seed_minimal_repo(repo_root: Path) -> None:
     (repo_root / "pilates/workflows/steps/__init__.py").write_text(
         dedent(
             """
+            from typing import Any, Callable, Dict
+
             from .postprocessing import make_postprocessing_step  # noqa: F401
+            from .existing_step import (  # noqa: F401
+                make_existing_preprocess_step,
+            )
             from . import postprocessing, shared  # noqa: F401,E402
+
+
+            SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
+                "existing_preprocess": make_existing_preprocess_step,
+            }
+
+
+            def schema_step_builder_registry() -> Dict[str, Callable[..., Any]]:
+                return dict(SCHEMA_STEP_BUILDERS)
             """
         ).strip()
         + "\n",
@@ -120,27 +134,8 @@ def _seed_minimal_repo(repo_root: Path) -> None:
     (repo_root / "run.py").write_text(
         dedent(
             """
-            from typing import Any, Callable, Dict, List
-
-            from pilates.workflows.catalog import schema_step_names
-            from pilates.workflows.steps import (
-                StepOutputsHolder,
-                make_existing_preprocess_step,
-                validate_workflow_step_contracts,
-            )
-
-
-            def _build_schema_steps() -> List[Callable[..., Any]]:
-                coupler = object()
-                outputs_holder = StepOutputsHolder()
-                step_factories: Dict[str, Callable[..., Any]] = {
-                    "existing_preprocess": make_existing_preprocess_step,
-                }
-                ordered_steps = schema_step_names()
-                return [
-                    step_factories[step_name](coupler=coupler, outputs_holder=outputs_holder)
-                    for step_name in ordered_steps
-                ]
+            def main() -> None:
+                return None
             """
         ).strip()
         + "\n",
@@ -185,6 +180,13 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     assert "freight_preprocess: Optional[FreightPreprocessOutputs] = None" in shared_text
     assert '"freight_preprocess": FreightPreprocessOutputs' not in shared_text
 
+    step_module_text = (
+        tmp_path / "pilates/workflows/steps/freight.py"
+    ).read_text(encoding="utf-8")
+    assert "StandardStepSpec" in step_module_text
+    assert "build_standard_step" in step_module_text
+    assert "component_executor=_execute_freight_preprocess" in step_module_text
+
     catalog_text = (tmp_path / "pilates/workflows/catalog.py").read_text(encoding="utf-8")
     ast.parse(catalog_text)
     assert (
@@ -202,9 +204,11 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     assert 'depends_on=("freight_preprocess",)' in catalog_text
     assert 'holder_inputs=("freight_run",)' in catalog_text
 
-    run_text = (tmp_path / "run.py").read_text(encoding="utf-8")
-    assert "make_freight_preprocess_step" in run_text
-    assert '"freight_preprocess": make_freight_preprocess_step' in run_text
+    steps_init_text = (
+        tmp_path / "pilates/workflows/steps/__init__.py"
+    ).read_text(encoding="utf-8")
+    assert "make_freight_preprocess_step" in steps_init_text
+    assert '"freight_preprocess": make_freight_preprocess_step' in steps_init_text
 
 
 @pytest.mark.parametrize(
@@ -351,6 +355,8 @@ def test_scaffold_generates_stage_patch_plan_artifact(tmp_path: Path) -> None:
     assert "`freight_run`" in stage_patch_text
     assert "`freight_postprocess`" in stage_patch_text
     assert "### `iterative` `StepRef` block" in stage_patch_text
+    assert "WorkflowRuntimeContext.from_parts" in stage_patch_text
+    assert "build_binding_plan(" in stage_patch_text
     assert "make_freight_preprocess_step" in stage_patch_text
     assert "outputs_holder=outputs_holder_iteration" in stage_patch_text
     assert "Suggested insertion anchor in function body:" in stage_patch_text
@@ -361,6 +367,9 @@ def test_scaffold_generates_stage_patch_plan_artifact(tmp_path: Path) -> None:
         encoding="utf-8"
     )
     assert "docs/checklists/stage_templates/add_model_freight.stage_patch.md" in checklist_text
+    assert "WorkflowRuntimeContext" in checklist_text
+    assert "StandardStepSpec" in checklist_text
+    assert "SCHEMA_STEP_BUILDERS" in checklist_text
 
 
 def test_stage_patch_plan_detects_multiline_import_and_custom_linear_anchor(
@@ -430,6 +439,7 @@ def test_stage_patch_plan_detects_multiline_import_and_custom_linear_anchor(
     assert "Import anchor: `from pilates.workflows.steps import (`" in stage_patch_text
     assert "Stage function anchor: `def run_custom_supply_stage" in stage_patch_text
     assert "Suggested insertion anchor in function body: `workflow_plan = [`" in stage_patch_text
+    assert "build_binding_plan(" in stage_patch_text
 
 
 def test_stage_patch_plan_detects_iterative_loop_variant_anchor(tmp_path: Path) -> None:
@@ -482,3 +492,4 @@ def test_stage_patch_plan_detects_iterative_loop_variant_anchor(tmp_path: Path) 
         "Suggested insertion anchor in function body: "
         "`for iteration_index in scenario.iteration_sequence:`"
     ) in stage_patch_text
+    assert "WorkflowRuntimeContext.from_parts" in stage_patch_text
