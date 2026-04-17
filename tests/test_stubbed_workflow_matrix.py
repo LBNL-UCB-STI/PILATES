@@ -30,6 +30,7 @@ from pilates.beam.outputs import (
 )
 from pilates.beam.runner import BeamRunner
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -39,9 +40,9 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     USIM_DATASTORE_H5,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_golden_stub_workflow import (
     DummyPostprocessor,
@@ -52,6 +53,40 @@ from tests.test_golden_stub_workflow import (
     golden_stub_env,
 )
 from workflow_state import WorkflowState
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
+
+
+def run_supply_demand_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_supply_demand_stage(context=context, **kwargs)
 
 
 def _reconfigure_models(

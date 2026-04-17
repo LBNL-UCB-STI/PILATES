@@ -273,7 +273,7 @@ def _build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
-    surface: Optional[EnabledWorkflowSurface] = None,
+    surface: EnabledWorkflowSurface,
 ) -> Dict[str, Any]:
     return scenario_runtime.build_scenario_runtime_contract(
         settings=settings,
@@ -583,12 +583,6 @@ def main(
     if state is None:
         state = WorkflowState.from_settings(settings)
     surface = build_enabled_workflow_surface(settings, state=state)
-    runtime_context = WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
     _set_run_failure_context(settings=settings, state=state)
 
     _log_local_storage_info()
@@ -739,6 +733,12 @@ def main(
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:
         state.set_run_info_path(archive_state_path)
+    runtime_context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
 
     emit_consist_audit_event(
         workspace=workspace,

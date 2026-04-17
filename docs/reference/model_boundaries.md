@@ -37,10 +37,10 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 ### Required inputs
 
 - `USIM_DATASTORE_BASE_H5`
-- `USIM_DATASTORE_CURRENT_H5`
 
 ### Optional inputs
 
+- `USIM_DATASTORE_CURRENT_H5`
 - final skims or other carried-forward travel artifacts when the land-use path uses them
 
 ### Main published outputs
@@ -88,11 +88,11 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 
 ### Required inputs
 
+- `USIM_DATASTORE_BASE_H5`
 - `USIM_DATASTORE_CURRENT_H5`
 
 ### Optional inputs
 
-- `USIM_DATASTORE_BASE_H5`
 - travel skims from earlier years when the scenario uses them
 
 ### Main published outputs
@@ -216,6 +216,7 @@ BEAM turns demand-side plans and traveler inputs into traffic-assignment outputs
 
 ### Required inputs
 
+- `BEAM_CONFIG_FILE`
 - `BEAM_PLANS_IN`
 - `BEAM_HOUSEHOLDS_IN`
 - `BEAM_PERSONS_IN`
@@ -257,6 +258,11 @@ BEAM turns demand-side plans and traveler inputs into traffic-assignment outputs
 ### Operational step variant: `beam_full_skim`
 
 - Purpose: publish a dedicated full-skim output separate from the main BEAM run/postprocess pair
+- Required inputs:
+  - `BEAM_PLANS_IN`
+  - `BEAM_HOUSEHOLDS_IN`
+  - `BEAM_PERSONS_IN`
+  - `LINKSTATS_WARMSTART`
 - Main output:
   - `BEAM_FULL_SKIMS`
 - Why it matters operationally: this step is separately scheduled and can be enabled for runs that need full skims without changing the main traffic-assignment boundary

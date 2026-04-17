@@ -4,10 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from pilates.config.models import PilatesConfig
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
@@ -26,10 +23,7 @@ def run_postprocessing_stage(
     scenario: ScenarioWithCoupler,
     coupler: CouplerProtocol,
     year: int,
-    context: Optional[WorkflowRuntimeContext] = None,
-    state: Optional[WorkflowState] = None,
-    settings: Optional[PilatesConfig] = None,
-    workspace: Optional[Workspace] = None,
+    context: WorkflowRuntimeContext,
 ) -> None:
     """
     Run the postprocessing stage.
@@ -54,15 +48,9 @@ def run_postprocessing_stage(
     year : int
         Forecast year being postprocessed.
     """
-    runtime_context = ensure_workflow_runtime_context(
-        context=context,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    settings = runtime_context.settings
-    state = runtime_context.state
-    workspace = runtime_context.workspace
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
 
     outputs_holder = StepOutputsHolder()
     manifest_config = ManifestConfig(

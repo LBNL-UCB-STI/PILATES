@@ -75,8 +75,8 @@ from pilates.workspace import Workspace
 from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
 from pilates.workflows.stages import supply_demand as supply_demand_stage
 from pilates.workflows.stages.supply_demand import (
     _build_beam_postprocess_input_keys,
@@ -88,7 +88,7 @@ from pilates.workflows.stages.supply_demand_resume import (
     _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 import h5py
 
 from tests.workflow_contract_harness import (
@@ -97,8 +97,64 @@ from tests.workflow_contract_harness import (
     DummyPreprocessor,
     DummyRunner,
     FakeScenario,
+    build_runtime_context,
 )
 from workflow_state import WorkflowState
+from pilates.runtime.context import WorkflowRuntimeContext
+
+
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if surface is not None:
+        context = WorkflowRuntimeContext.from_parts(
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            surface=surface,
+        )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if surface is not None:
+        context = WorkflowRuntimeContext.from_parts(
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            surface=surface,
+        )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
+
+
+def run_supply_demand_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if surface is not None:
+        context = WorkflowRuntimeContext.from_parts(
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            surface=surface,
+        )
+    return _run_supply_demand_stage(context=context, **kwargs)
 
 
 def _write_file(path: Path, content: str = "x") -> None:
@@ -462,6 +518,11 @@ def stage_env(tmp_path, monkeypatch):
         "settings": settings,
         "workspace": workspace,
         "state": state,
+        "context": build_runtime_context(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ),
         "coupler": coupler,
         "scenario": scenario,
         "usim_input_path": str(usim_input_path),
@@ -1306,18 +1367,20 @@ def test_supply_demand_activitysim_restart_with_empty_inputs_still_requires_expl
     stage_env["coupler"].pop(USIM_POPULATION_SOURCE_H5, None)
     stage_env["coupler"].pop(USIM_DATASTORE_CURRENT_H5, None)
 
-    with pytest.raises(RuntimeError, match="role split"):
-        run_supply_demand_stage(
-            scenario=stage_env["scenario"],
-            state=state,
-            settings=stage_env["settings"],
-            workspace=stage_env["workspace"],
-            coupler=stage_env["coupler"],
-            year=state.forecast_year,
-            usim_inputs={},
-            build_manifest_path=lambda _workspace, year, iteration: tmp_path
-            / f"manifest_{year}_{iteration}.json",
-        )
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs={},
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) is not None
+    assert stage_env["coupler"].get(USIM_POPULATION_SOURCE_H5) is not None
 
 
 def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_input(

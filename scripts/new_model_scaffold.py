@@ -642,34 +642,6 @@ def _upsert_workflow_catalog(
     return path, changed
 
 
-def _upsert_run_schema_scaffolding(
-    repo_root: Path,
-    spec: ScaffoldSpec,
-    *,
-    dry_run: bool,
-) -> Tuple[Path, bool]:
-    path = repo_root / "pilates/workflows/steps/__init__.py"
-    text = _read_text(path)
-    original = text
-
-    registry_comment = dedent(
-        f"""
-        # Schema-step registration for scaffolded model `{spec.model}`.
-        """
-    )
-    text = _insert_once(
-        text,
-        anchor="SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {\n",
-        snippet=registry_comment,
-        dedupe_token=f"schema-step registration for scaffolded model `{spec.model}`",
-    )
-
-    changed = text != original
-    if changed:
-        _write_text(path, text, dry_run=dry_run)
-    return path, changed
-
-
 def _render_preprocessor(spec: ScaffoldSpec) -> str:
     return dedent(
         f'''
@@ -1853,12 +1825,6 @@ def main() -> int:
         )
         actions.append(("update", path, changed))
 
-        path, changed = _upsert_run_schema_scaffolding(
-            repo_root,
-            spec,
-            dry_run=args.dry_run,
-        )
-        actions.append(("update", path, changed))
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

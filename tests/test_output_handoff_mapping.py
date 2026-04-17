@@ -7,6 +7,7 @@ import consist
 import pytest
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -214,7 +215,7 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
     monkeypatch.setattr(
         land_use_stage,
         "build_urbansim_inputs",
-        lambda settings, state, workspace, year: (
+        lambda settings, state, workspace, year, **_kwargs: (
             {
                 USIM_DATASTORE_BASE_H5: str(usim_base),
                 USIM_DATASTORE_CURRENT_H5: str(usim_current),
@@ -276,15 +277,22 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
     )
     state = SimpleNamespace(forecast_year=2035)
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
 
     land_use_stage.run_land_use_stage(
         scenario=object(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=2035,
         outputs_holder_year=outputs_holder,
+        context=context,
     )
 
     run_binding_call = next(
@@ -347,7 +355,7 @@ def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs
     monkeypatch.setattr(
         land_use_stage,
         "build_urbansim_inputs",
-        lambda settings, state, workspace, year: (
+        lambda settings, state, workspace, year, **_kwargs: (
             {
                 USIM_DATASTORE_BASE_H5: str(usim_base),
                 USIM_DATASTORE_CURRENT_H5: str(usim_current),
@@ -399,19 +407,26 @@ def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs
             return _View()
 
     with caplog.at_level("DEBUG"):
-        land_use_stage.run_land_use_stage(
-            scenario=object(),
-            state=SimpleNamespace(forecast_year=2035),
+        context = WorkflowRuntimeContext.from_parts(
             settings=SimpleNamespace(
                 urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
             ),
+            state=SimpleNamespace(forecast_year=2035),
             workspace=SimpleNamespace(
                 full_path=str(tmp_path),
                 get_usim_mutable_data_dir=lambda: str(tmp_path),
             ),
+            surface=SimpleNamespace(
+                profile=SimpleNamespace(),
+                step_surface=lambda *_args, **_kwargs: None,
+            ),
+        )
+        land_use_stage.run_land_use_stage(
+            scenario=object(),
             coupler=_Coupler(),
             year=2035,
             outputs_holder_year=StepOutputsHolder(),
+            context=context,
         )
 
     run_binding_call = next(

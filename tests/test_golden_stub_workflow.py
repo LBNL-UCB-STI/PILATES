@@ -80,6 +80,7 @@ from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
+from tests.workflow_contract_harness import build_runtime_context
 from workflow_state import WorkflowState
 
 
@@ -907,6 +908,11 @@ def golden_stub_env(tmp_path, monkeypatch):
                     "settings": settings,
                     "workspace": workspace,
                     "state": state,
+                    "context": build_runtime_context(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    ),
                     "scenario": scenario,
                     "coupler": scenario.coupler,
                     "tracker": tracker,
@@ -964,12 +970,10 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         outputs_holder_year=outputs_holder_year,
+        context=golden_stub_env["context"],
     )
     assert USIM_DATASTORE_BASE_H5 in usim_inputs
     assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
@@ -990,12 +994,10 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     # produces Atlas outputs plus ActivitySim-ready tables.
     run_vehicle_ownership_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=golden_stub_env["context"],
     )
     assert (Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv").exists()
     assert (Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv").exists()
@@ -1043,13 +1045,11 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     asim_archive_iteration = state.current_inner_iter
     run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         usim_inputs=usim_inputs,
         build_manifest_path=_build_manifest_path,
+        context=golden_stub_env["context"],
     )
 
     zarr_from_coupler = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)

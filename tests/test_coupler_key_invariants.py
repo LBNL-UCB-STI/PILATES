@@ -35,18 +35,39 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import ManifestConfig
-from pilates.workflows.stages.land_use import run_land_use_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import (
     ActivityDemandPhaseInputs,
     TrafficAssignmentPhaseInputs,
     _run_activity_demand_phase,
     _run_traffic_assignment_phase,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_stage_contracts import _write_file
+from tests.workflow_contract_harness import build_runtime_context
 
 pytest_plugins = ("tests.test_stage_contracts",)
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
 
 
 def _coupler_keys(coupler) -> set[str]:
@@ -64,12 +85,10 @@ def test_land_use_boundary_publishes_urbansim_datastore_family(stage_env):
 
     run_land_use_stage(
         scenario=stage_env["scenario"],
-        state=stage_env["state"],
-        settings=stage_env["settings"],
-        workspace=stage_env["workspace"],
         coupler=stage_env["coupler"],
         year=stage_env["state"].forecast_year,
         outputs_holder_year=outputs_holder,
+        context=stage_env["context"],
     )
 
     _assert_coupler_contains(
@@ -84,12 +103,10 @@ def test_vehicle_ownership_boundary_preserves_urbansim_datastore_family(stage_en
 
     run_vehicle_ownership_stage(
         scenario=stage_env["scenario"],
-        state=stage_env["state"],
-        settings=stage_env["settings"],
-        workspace=stage_env["workspace"],
         coupler=stage_env["coupler"],
         year=stage_env["state"].forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=stage_env["context"],
     )
 
     _assert_coupler_contains(

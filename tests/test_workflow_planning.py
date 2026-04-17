@@ -12,6 +12,15 @@ from pilates.workflows.planning import (
     build_static_execution_plan,
     build_static_execution_plan_from_file,
 )
+from pilates.workflows.surface import build_enabled_workflow_surface
+
+
+def _build_plan(settings, *, include_postprocessing=False):
+    return build_static_execution_plan(
+        settings,
+        include_postprocessing=include_postprocessing,
+        surface=build_enabled_workflow_surface(settings),
+    )
 
 
 def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file():
@@ -52,7 +61,7 @@ def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     step_names = [step.step_name for step in plan.step_runs]
     assert any(name.startswith("activitysim_") for name in step_names)
@@ -68,7 +77,7 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     first_year_steps = [step for step in plan.step_runs if step.year == 2017]
     assert [step.step_name for step in first_year_steps[:3]] == [
@@ -97,7 +106,7 @@ def test_static_execution_plan_uses_settings_aware_atlas_scenario_contracts():
     settings.atlas.scenario = "zev_mandate"
     settings.atlas.adscen = "zev_mandate"
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     atlas_static_artifacts = {
         artifact.canonical_key
@@ -119,7 +128,7 @@ def test_static_execution_plan_filters_future_atlas_adopt_snapshots_by_subyear()
     settings.atlas.scenario = "baseline"
     settings.atlas.adscen = "baseline"
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     atlas_preprocess_2021 = next(
         step
@@ -170,7 +179,7 @@ def test_static_execution_plan_threads_atlas_vehicles2_from_atlas_postprocess():
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     vehicles2_artifacts = [
         artifact for artifact in plan.artifacts if artifact.canonical_key == "atlas_vehicles2_output"
@@ -187,7 +196,7 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     final_skims_artifacts = [
         artifact
@@ -218,7 +227,7 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = False
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
     steps_by_id = {step.id: step for step in plan.step_runs}
 
     base_artifact = next(
@@ -261,7 +270,7 @@ def test_static_execution_plan_renders_mermaid_without_contract_gaps():
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     assert plan.contract_gaps == []
 
@@ -336,7 +345,7 @@ def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule()
     settings.run.supply_demand_iters = 3
     settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="after_final_iteration")
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     assert [step.step_name for step in plan.step_runs].count("beam_full_skim") == 1
     last_step_names = [step.step_name for step in plan.step_runs[-3:]]
@@ -358,7 +367,7 @@ def test_static_execution_plan_supports_beam_only_run():
     settings.run.models.travel = "beam"
     settings.traffic_assignment_enabled = True
 
-    plan = build_static_execution_plan(settings, include_postprocessing=False)
+    plan = _build_plan(settings, include_postprocessing=False)
 
     step_names = [step.step_name for step in plan.step_runs]
     assert any(name.startswith("beam_") for name in step_names)

@@ -9,6 +9,7 @@ import pytest
 import h5py
 import yaml
 
+from pilates.runtime.context import WorkflowRuntimeContext
 if "openmatrix" not in sys.modules:
     openmatrix_stub = types.ModuleType("openmatrix")
     openmatrix_stub.File = object
@@ -355,14 +356,21 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=context,
     )
 
     preprocess_calls = [
@@ -444,17 +452,24 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
             "psid_names": str(fallback_psid),
             "modeaccessibility": str(fallback_static),
         },
+        context=context,
     )
 
     atlas_run_inputs = captured_run_inputs[2020]
@@ -527,17 +542,24 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
             "psid_names": str(fallback_psid),
             "modeaccessibility": str(fallback_mode),
         },
+        context=context,
     )
 
     atlas_run_inputs = captured_run_inputs[2020]

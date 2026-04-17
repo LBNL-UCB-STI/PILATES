@@ -37,6 +37,7 @@ from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -56,9 +57,9 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from tests.workflow_contract_harness import (
     CouplerStub,
     DummyPostprocessor,
@@ -67,6 +68,40 @@ from tests.workflow_contract_harness import (
     FakeScenario,
 )
 from workflow_state import WorkflowState
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
+
+
+def run_supply_demand_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_supply_demand_stage(context=context, **kwargs)
 
 
 def _write_file(path: Path, content: str = "x") -> Path:

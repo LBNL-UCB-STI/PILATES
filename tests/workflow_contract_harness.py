@@ -5,6 +5,8 @@ from __future__ import annotations
 import inspect
 from typing import Any, Callable
 
+from pilates.runtime.context import WorkflowRuntimeContext
+
 
 class CouplerStub:
     """Minimal in-memory coupler for workflow contract tests."""
@@ -99,6 +101,15 @@ class FakeScenario:
 
         fn(**fn_kwargs)
         return {"status": "ok"}
+
+
+def build_runtime_context(*, settings: Any, state: Any, workspace: Any) -> WorkflowRuntimeContext:
+    """Build the explicit runtime context expected by stage entrypoints."""
+    return WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
 
 
 class DummyPreprocessor:

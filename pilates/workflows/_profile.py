@@ -65,8 +65,3 @@ def ensure_runtime_flags_initialized(settings: Any) -> Dict[str, bool]:
     enabled_flags = compute_model_enabled_flags(settings)
     apply_runtime_flags(settings, enabled_flags)
     return enabled_flags
-
-
-def build_workflow_profile(settings: Any) -> WorkflowProfile:
-    """Build the compatibility profile from initialized runtime flags."""
-    return workflow_profile_from_flags(ensure_runtime_flags_initialized(settings))

@@ -461,5 +461,6 @@ def test_runtime_step_kwargs_use_required_outputs_not_declared_outputs():
             default_iteration=0,
         )
 
-        assert tuple(run_kwargs["outputs"]) == required
-        assert set(declared) - set(run_kwargs["outputs"]) == set(declared) - set(required)
+        resolved_outputs = tuple(run_kwargs.get("outputs", ()))
+        assert resolved_outputs == required
+        assert set(declared) - set(resolved_outputs) == set(declared) - set(required)

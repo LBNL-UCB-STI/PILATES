@@ -9,14 +9,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 PILATES_ROOT = REPO_ROOT / "pilates"
 WORKFLOW_STATE_PATH = REPO_ROOT / "workflow_state.py"
 
-ALLOWED_PROFILE_IMPORT_FILES = {
-    Path("pilates/workflows/profile.py"),
-}
+ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
     Path("workflow_state.py"),
     Path("pilates/generic/initialization.py"),
     Path("pilates/runtime/launcher.py"),
-    Path("pilates/workflows/_profile.py"),
     Path("pilates/workflows/surface.py"),
 }
 

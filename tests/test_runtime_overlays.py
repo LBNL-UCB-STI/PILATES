@@ -5,7 +5,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.profile import WorkflowProfile
+from pilates.workflows._profile import WorkflowProfile
 from pilates.workflows.runtime_overlays import (
     StepRuntimeOverlayRule,
     resolve_runtime_input_output_overrides,

@@ -178,10 +178,11 @@ def _beam_run_expected_inputs(settings, state, workspace):
         candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         if os.path.exists(candidate):
             zarr_path = candidate
-    return {
+    expected = {
         "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
         "zarr_skims": zarr_path,
     }
+    return {key: value for key, value in expected.items() if value is not None}
 
 
 def _beam_run_expected_outputs(settings, state, workspace):

@@ -7,10 +7,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
@@ -47,11 +44,7 @@ def run_supply_demand_stage(
     usim_inputs: Mapping[str, Union[str, os.PathLike]],
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
-    context: Optional[WorkflowRuntimeContext] = None,
-    state: Optional[WorkflowState] = None,
-    settings: Optional[PilatesConfig] = None,
-    workspace: Optional[Workspace] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    context: WorkflowRuntimeContext,
 ) -> None:
     """
     Run the supply-demand loop (ActivitySim + BEAM) for the year.
@@ -116,17 +109,10 @@ def run_supply_demand_stage(
     - Do not mutate coupler keys between iterations; they carry warm-start
       state to the next iteration.
     """
-    runtime_context = ensure_workflow_runtime_context(
-        context=context,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    settings = runtime_context.settings
-    state = runtime_context.state
-    workspace = runtime_context.workspace
-    surface = runtime_context.surface
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
+    surface = context.surface
 
     total_iters = settings.run.supply_demand_iters
     if settings.run.models.activity_demand is None and total_iters > 1:
@@ -142,11 +128,11 @@ def run_supply_demand_stage(
         total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, Any]] = None
     resumed_usim_inputs = dict(usim_inputs)
-    if (
-        bool(getattr(state, "is_restart_run", False))
-        and not resumed_usim_inputs
-        and not state.is_enabled(WorkflowState.Stage.land_use)
-    ):
+    if bool(getattr(state, "is_restart_run", False)) and not resumed_usim_inputs:
+        # On resumed runs, land use may be enabled globally but already complete
+        # for the current year. In that case the skipped land-use stage will not
+        # republish the year-scoped UrbanSim H5 roles that ActivitySim expects,
+        # so rebuild them from deterministic workspace/archive paths here.
         resumed_usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
             coupler=coupler,
             workspace=workspace,
@@ -179,7 +165,7 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 outputs_holder=outputs_holder,
                 manifest_config=manifest_config,
-                context=runtime_context,
+                context=context,
                 surface=surface,
             ).activity_demand_outputs
         elif (
@@ -219,7 +205,7 @@ def run_supply_demand_stage(
                 coupler=coupler,
                 inputs=traffic_inputs,
                 outputs_holder=outputs_holder,
-                context=runtime_context,
+                context=context,
                 surface=surface,
             ).previous_beam_outputs
 

@@ -20,6 +20,7 @@ from consist import Tracker
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import launcher as launcher_runtime
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.consist_audit import emit_consist_audit_event, reset_consist_audit_state
 from pilates.runtime.scenario_runtime import (
     ScenarioParentLinkProxy,
@@ -29,6 +30,7 @@ from pilates.runtime.scenario_runtime import (
 )
 from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
+from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
@@ -36,12 +38,13 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
 from pilates.workflows.stages.supply_demand_resume import (
+    _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from workflow_state import WorkflowState
 
@@ -55,6 +58,40 @@ from tests.test_golden_stub_workflow import (
     _write_parquet,
     _write_usim_toy_h5,
 )
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
+
+
+def run_supply_demand_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
+    context = context or WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=surface,
+    )
+    return _run_supply_demand_stage(context=context, **kwargs)
 
 
 pytestmark = pytest.mark.skipif(
@@ -282,11 +319,22 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 usim_dir = Path(workspace.get_usim_mutable_data_dir())
                 region_id = settings.urbansim.region_mappings["region_to_region_id"][settings.run.region]
                 input_path = usim_dir / settings.urbansim.input_file_template.format(region_id=region_id)
+                preprocess_paths = {
+                    "geoid_to_zone": usim_dir / "geoid_to_zone.csv",
+                    "hh_size": usim_dir / "hh_size.csv",
+                    "income_rates": usim_dir / "income_rates.csv",
+                    "relmap": usim_dir / "relmap.csv",
+                    "school_districts": usim_dir / "school_districts.csv",
+                    "schools": usim_dir / "schools.csv",
+                }
+                for path in preprocess_paths.values():
+                    _write_file(path, "stub")
                 return UrbanSimPreprocessOutputs(
                     usim_mutable_data_dir=usim_dir,
                     prepared_inputs={
                         USIM_DATASTORE_BASE_H5: input_path,
                         USIM_DATASTORE_CURRENT_H5: input_path,
+                        **preprocess_paths,
                     },
                 )
             if model_name == "activitysim":
@@ -581,6 +629,13 @@ def _stage_runner(
     *,
     interruption: Optional[Callable[[str, WorkflowState], None]] = None,
 ) -> None:
+    surface = build_enabled_workflow_surface(runtime.settings, state=runtime.state)
+    context = WorkflowRuntimeContext.from_parts(
+        settings=runtime.settings,
+        state=runtime.state,
+        workspace=runtime.workspace,
+        surface=surface,
+    )
     contract = launcher_runtime._build_scenario_runtime_contract(
         settings=runtime.settings,
         state=runtime.state,
@@ -588,6 +643,7 @@ def _stage_runner(
         scenario_id=runtime.scenario_id,
         seed=runtime.seed,
         cache_epoch=resolve_cache_epoch(runtime.settings),
+        surface=surface,
     )
     scenario_kwargs = dict(contract["scenario_kwargs"])
     coupler_schema = contract["coupler_schema"]
@@ -611,12 +667,14 @@ def _stage_runner(
 
     def _wrapped_activity_phase(*args, **kwargs):
         result = original_activity_phase(*args, **kwargs)
-        _maybe_interrupt("after_activitysim_postprocess", kwargs["state"])
+        phase_state = getattr(kwargs.get("context"), "state", None) or kwargs["state"]
+        _maybe_interrupt("after_activitysim_postprocess", phase_state)
         return result
 
     def _wrapped_traffic_phase(*args, **kwargs):
         result = original_traffic_phase(*args, **kwargs)
-        _maybe_interrupt("after_beam_postprocess", kwargs["state"])
+        phase_state = getattr(kwargs.get("context"), "state", None) or kwargs["state"]
+        _maybe_interrupt("after_beam_postprocess", phase_state)
         return result
 
     atlas_flush_count = {"count": 0}
@@ -670,24 +728,20 @@ def _stage_runner(
                         _debug(f"run_land_use year={year}")
                         usim_inputs = run_land_use_stage(
                             scenario=tagged,
-                            state=runtime.state,
-                            settings=runtime.settings,
-                            workspace=runtime.workspace,
                             coupler=coupler,
                             year=year,
                             outputs_holder_year=outputs_holder_year,
+                            context=context,
                         )
                         runtime.state.complete_step(WorkflowState.Stage.land_use)
                     if runtime.state.should_run(WorkflowState.Stage.vehicle_ownership_model):
                         _debug(f"run_vehicle_ownership year={year} forecast={runtime.state.forecast_year}")
                         run_vehicle_ownership_stage(
                             scenario=tagged,
-                            state=runtime.state,
-                            settings=runtime.settings,
-                            workspace=runtime.workspace,
                             coupler=coupler,
                             year=year,
                             build_atlas_static_inputs_fallback=launcher_runtime.build_atlas_static_inputs_fallback,
+                            context=context,
                         )
                         runtime.state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
                     if runtime.state.should_run(WorkflowState.Stage.supply_demand_loop):
@@ -698,13 +752,11 @@ def _stage_runner(
                         )
                         run_supply_demand_stage(
                             scenario=tagged,
-                            state=runtime.state,
-                            settings=runtime.settings,
-                            workspace=runtime.workspace,
                             coupler=coupler,
                             year=year,
                             usim_inputs=usim_inputs,
                             build_manifest_path=launcher_runtime.build_manifest_path,
+                            context=context,
                         )
                     _maybe_interrupt("after_year_complete", runtime.state)
                 _debug(f"stage_runner:complete name={runtime.settings.run.output_run_name}")
@@ -1088,6 +1140,16 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     )
     _resume_runtime(archive_runtime, resumed_runtime)
 
+    surface = build_enabled_workflow_surface(
+        resumed_runtime.settings,
+        state=resumed_runtime.state,
+    )
+    context = WorkflowRuntimeContext.from_parts(
+        settings=resumed_runtime.settings,
+        state=resumed_runtime.state,
+        workspace=resumed_runtime.workspace,
+        surface=surface,
+    )
     contract = launcher_runtime._build_scenario_runtime_contract(
         settings=resumed_runtime.settings,
         state=resumed_runtime.state,
@@ -1095,6 +1157,7 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         scenario_id=resumed_runtime.scenario_id,
         seed=resumed_runtime.seed,
         cache_epoch=resolve_cache_epoch(resumed_runtime.settings),
+        surface=surface,
     )
     scenario_kwargs = dict(contract["scenario_kwargs"])
     coupler_schema = contract["coupler_schema"]
@@ -1141,35 +1204,39 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     if resumed_runtime.state.should_run(WorkflowState.Stage.land_use):
                         usim_inputs = run_land_use_stage(
                             scenario=tagged,
-                            state=resumed_runtime.state,
-                            settings=resumed_runtime.settings,
-                            workspace=resumed_runtime.workspace,
                             coupler=coupler,
                             year=year,
                             outputs_holder_year=outputs_holder_year,
+                            context=context,
                         )
                         resumed_runtime.state.complete_step(WorkflowState.Stage.land_use)
                     if resumed_runtime.state.should_run(WorkflowState.Stage.vehicle_ownership_model):
                         run_vehicle_ownership_stage(
                             scenario=tagged,
-                            state=resumed_runtime.state,
-                            settings=resumed_runtime.settings,
-                            workspace=resumed_runtime.workspace,
                             coupler=coupler,
                             year=year,
                             build_atlas_static_inputs_fallback=launcher_runtime.build_atlas_static_inputs_fallback,
+                            context=context,
                         )
                         resumed_runtime.state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+                    if (
+                        not usim_inputs
+                        and not resumed_runtime.state.should_run(WorkflowState.Stage.land_use)
+                    ):
+                        usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
+                            coupler=coupler,
+                            workspace=resumed_runtime.workspace,
+                            state=resumed_runtime.state,
+                            settings=resumed_runtime.settings,
+                        )
                     if resumed_runtime.state.should_run(WorkflowState.Stage.supply_demand_loop):
                         run_supply_demand_stage(
                             scenario=tagged,
-                            state=resumed_runtime.state,
-                            settings=resumed_runtime.settings,
-                            workspace=resumed_runtime.workspace,
                             coupler=coupler,
                             year=year,
                             usim_inputs=usim_inputs,
                             build_manifest_path=launcher_runtime.build_manifest_path,
+                            context=context,
                         )
         elapsed = perf_counter() - started
     finally:

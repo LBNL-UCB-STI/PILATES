@@ -413,7 +413,7 @@ def build_scenario_runtime_contract(
     scenario_id: str,
     seed: Optional[int],
     cache_epoch: int,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    surface: "EnabledWorkflowSurface",
     build_scenario_consist_kwargs_fn: Callable[[Any], Dict[str, Any]],
     build_coupler_schema_fn: Callable[..., Dict[str, str]],
     validate_workflow_step_contracts_fn: Callable[..., None],
@@ -422,10 +422,6 @@ def build_scenario_runtime_contract(
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
     scenario_name_template: str,
 ) -> Dict[str, Any]:
-    if surface is None:
-        from pilates.workflows.surface import build_enabled_workflow_surface
-
-        surface = build_enabled_workflow_surface(settings, state=state)
     scenario_kwargs = build_scenario_consist_kwargs_fn(settings)
     scenario_step_tags = [f"scenario_id:{scenario_id}"]
     if seed is not None:

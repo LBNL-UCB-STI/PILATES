@@ -25,9 +25,9 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
+from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_golden_stub_workflow import (
     EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS,
@@ -36,6 +36,38 @@ from tests.test_golden_stub_workflow import (
     _write_file,
     golden_stub_env,
 )
+from tests.workflow_contract_harness import build_runtime_context
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
+
+
+def run_vehicle_ownership_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_vehicle_ownership_stage(context=context, **kwargs)
+
+
+def run_supply_demand_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_supply_demand_stage(context=context, **kwargs)
 
 
 def _initialize(env) -> None:
@@ -72,12 +104,10 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         outputs_holder_year=outputs_holder_year,
+        context=golden_stub_env["context"],
     )
     land_use_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert land_use_datastore is not None
@@ -87,12 +117,10 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     run_vehicle_ownership_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=golden_stub_env["context"],
     )
     after_vehicle_ownership = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert after_vehicle_ownership is not None
@@ -111,13 +139,11 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         usim_inputs=usim_inputs,
         build_manifest_path=_build_manifest_path,
+        context=golden_stub_env["context"],
     )
 
     runs = tracker.find_runs(tags=["golden_stub_workflow"])

@@ -34,7 +34,7 @@ Main published boundary roles:
 
 ### Vehicle Ownership
 
-- `atlas_preprocess` reads the current/base UrbanSim datastore handles and, when available, skims produced by earlier travel steps.
+- `atlas_preprocess` reads both required UrbanSim datastore handles (`USIM_DATASTORE_CURRENT_H5` and `USIM_DATASTORE_BASE_H5`) and, when available, skims produced by earlier travel steps.
 - `atlas_run` publishes year-specific vehicle ownership outputs such as `householdv_{year}` and `vehicles_{year}`.
 - `atlas_postprocess` republishes the UrbanSim datastore that PILATES wants ActivitySim to use as the population-source datastore and also publishes `ATLAS_VEHICLES2_OUTPUT`.
 
@@ -63,7 +63,7 @@ Main published boundary roles:
 
 ### Traffic Assignment
 
-- `beam_preprocess` reads the staged travel-demand outputs, BEAM config, and any warm-start artifacts that have been selected for the run.
+- `beam_preprocess` reads the staged travel-demand outputs, the selected `BEAM_CONFIG_FILE`, and any warm-start artifacts that have been selected for the run.
 - `beam_run` publishes `LINKSTATS`, `BEAM_PLANS_OUT`, and the BEAM plan/XML outputs that can also serve as restart sources.
 - `beam_postprocess` republishes skim products for later travel stages or archive analysis and may publish `FINAL_SKIMS_OMX`.
 - `beam_full_skim` is a separate tracked step that publishes `BEAM_FULL_SKIMS`.
@@ -73,6 +73,7 @@ Main published boundary roles:
 - `BEAM_PLANS_IN`
 - `BEAM_HOUSEHOLDS_IN`
 - `BEAM_PERSONS_IN`
+- `BEAM_CONFIG_FILE`
 - `LINKSTATS`
 - `LINKSTATS_WARMSTART`
 - `BEAM_PLANS_OUT`

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 import pilates.generic.model as generic_model
@@ -198,7 +199,7 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     monkeypatch.setattr(
         land_use_stage,
         "build_urbansim_inputs",
-        lambda settings, state, workspace, year: (
+        lambda settings, state, workspace, year, **_kwargs: (
             {
                 USIM_DATASTORE_BASE_H5: str(usim_base),
                 USIM_DATASTORE_CURRENT_H5: str(usim_current),
@@ -237,15 +238,22 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
         urbansim=SimpleNamespace(output_file_template="forecast_{year}.h5")
     )
     state = SimpleNamespace(forecast_year=2035)
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
 
     result = land_use_stage.run_land_use_stage(
         scenario=object(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=object(),
         year=2035,
         outputs_holder_year=outputs_holder,
+        context=context,
     )
 
     assert upstream.iter_record_item_calls == 1

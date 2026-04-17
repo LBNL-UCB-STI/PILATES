@@ -7,10 +7,7 @@ from pathlib import Path
 from typing import Callable, Dict, Mapping, Union, Optional, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.atlas.inputs import (
@@ -221,11 +218,7 @@ def run_vehicle_ownership_stage(
     build_atlas_static_inputs_fallback: Callable[
         [Workspace], Mapping[str, Union[str, os.PathLike]]
     ],
-    context: Optional[WorkflowRuntimeContext] = None,
-    state: Optional[WorkflowState] = None,
-    settings: Optional[PilatesConfig] = None,
-    workspace: Optional[Workspace] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    context: WorkflowRuntimeContext,
 ) -> None:
     """
     Run the ATLAS vehicle ownership stage for the current forecast year.
@@ -253,17 +246,10 @@ def run_vehicle_ownership_stage(
         Fallback builder for static ATLAS inputs when not already present in
         the workspace input registry.
     """
-    runtime_context = ensure_workflow_runtime_context(
-        context=context,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    settings = runtime_context.settings
-    state = runtime_context.state
-    workspace = runtime_context.workspace
-    surface = runtime_context.surface
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
+    surface = context.surface
 
     logger.info("[Main] Running ATLAS vehicle ownership model.")
 

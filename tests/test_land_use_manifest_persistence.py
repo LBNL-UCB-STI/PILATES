@@ -10,11 +10,20 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
 )
-from pilates.workflows.stages.land_use import run_land_use_stage
+from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
-from tests.workflow_contract_harness import CouplerStub
+from tests.workflow_contract_harness import CouplerStub, build_runtime_context
 
 pytest_plugins = ("tests.test_stage_contracts",)
+
+
+def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+    context = context or build_runtime_context(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    return _run_land_use_stage(context=context, **kwargs)
 
 
 def _land_use_manifest_path(*, workspace, year: int) -> Path:
@@ -49,23 +58,19 @@ def test_land_use_stage_persists_year_scoped_run_ids_and_restores_from_manifest(
     first_outputs = StepOutputsHolder()
     first_usim_inputs = run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=stage_env["coupler"],
         year=year_a,
         outputs_holder_year=first_outputs,
+        context=stage_env["context"],
     )
 
     second_outputs = StepOutputsHolder()
     run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=stage_env["coupler"],
         year=year_b,
         outputs_holder_year=second_outputs,
+        context=stage_env["context"],
     )
 
     manifest_path_a = _land_use_manifest_path(workspace=workspace, year=year_a)
@@ -93,12 +98,10 @@ def test_land_use_stage_persists_year_scoped_run_ids_and_restores_from_manifest(
     restored_outputs = StepOutputsHolder()
     restored_usim_inputs = run_land_use_stage(
         scenario=_FailOnRunScenario(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=restored_coupler,
         year=year_a,
         outputs_holder_year=restored_outputs,
+        context=stage_env["context"],
     )
 
     assert restored_outputs.urbansim_preprocess is not None

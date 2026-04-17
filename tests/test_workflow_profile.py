@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from pilates.workflows.profile import (
+from pilates.workflows._profile import (
     WorkflowProfile,
-    build_workflow_profile,
+    ensure_runtime_flags_initialized,
+    workflow_profile_from_flags,
 )
 from pilates.workflows.surface import build_enabled_workflow_surface
 
@@ -35,8 +36,12 @@ def _settings(
     )
 
 
-def test_build_workflow_profile_derives_expected_flags():
-    profile = build_workflow_profile(_settings(replan_iters=2))
+def _profile_from_settings(settings: SimpleNamespace) -> WorkflowProfile:
+    return workflow_profile_from_flags(ensure_runtime_flags_initialized(settings))
+
+
+def test_workflow_profile_derives_expected_flags():
+    profile = _profile_from_settings(_settings(replan_iters=2))
 
     assert profile == WorkflowProfile(
         land_use_enabled=True,
@@ -49,20 +54,20 @@ def test_build_workflow_profile_derives_expected_flags():
     )
 
 
-def test_build_workflow_profile_warm_start_disables_land_use():
-    profile = build_workflow_profile(_settings(warm_start_skims=True))
+def test_workflow_profile_warm_start_disables_land_use():
+    profile = _profile_from_settings(_settings(warm_start_skims=True))
 
     assert profile.land_use_enabled is False
 
 
-def test_build_workflow_profile_static_skims_disables_traffic_assignment():
-    profile = build_workflow_profile(_settings(static_skims=True))
+def test_workflow_profile_static_skims_disables_traffic_assignment():
+    profile = _profile_from_settings(_settings(static_skims=True))
 
     assert profile.traffic_assignment_enabled is False
 
 
-def test_build_workflow_profile_polaris_disables_replanning():
-    profile = build_workflow_profile(
+def test_workflow_profile_polaris_disables_replanning():
+    profile = _profile_from_settings(
         _settings(activity_demand="polaris", replan_iters=3)
     )
 
@@ -70,8 +75,8 @@ def test_build_workflow_profile_polaris_disables_replanning():
     assert profile.replanning_enabled is False
 
 
-def test_build_workflow_profile_computes_direct_land_use_handoff_mode():
-    profile = build_workflow_profile(
+def test_workflow_profile_computes_direct_land_use_handoff_mode():
+    profile = _profile_from_settings(
         _settings(activity_demand=None, traffic_assignment=None)
     )
 
@@ -81,7 +86,7 @@ def test_build_workflow_profile_computes_direct_land_use_handoff_mode():
     assert profile.supply_demand_loop_enabled is False
 
 
-def test_build_workflow_profile_respects_initialized_runtime_flags():
+def test_workflow_profile_respects_initialized_runtime_flags():
     settings = _settings()
     settings.runtime = SimpleNamespace(
         flags_initialized=True,
@@ -94,7 +99,7 @@ def test_build_workflow_profile_respects_initialized_runtime_flags():
         ),
     )
 
-    profile = build_workflow_profile(settings)
+    profile = _profile_from_settings(settings)
 
     assert profile.land_use_enabled is False
     assert profile.vehicle_ownership_model_enabled is False

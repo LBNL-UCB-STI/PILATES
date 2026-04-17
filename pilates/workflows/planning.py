@@ -1072,13 +1072,8 @@ def build_static_execution_plan(
     *,
     config_path: Optional[str] = None,
     include_postprocessing: Optional[bool] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    surface: "EnabledWorkflowSurface",
 ) -> StaticExecutionPlan:
-    if surface is None:
-        from pilates.workflows.surface import build_enabled_workflow_surface
-
-        surface = build_enabled_workflow_surface(settings)
-
     include_post = (
         bool(getattr(settings, "postprocessing", None))
         if include_postprocessing is None
@@ -1099,8 +1094,12 @@ def build_static_execution_plan_from_file(
     include_postprocessing: Optional[bool] = None,
 ) -> StaticExecutionPlan:
     settings = load_settings_for_planning(config_path)
+    from pilates.workflows.surface import build_enabled_workflow_surface
+
+    surface = build_enabled_workflow_surface(settings)
     return build_static_execution_plan(
         settings,
         config_path=str(Path(config_path).resolve()),
         include_postprocessing=include_postprocessing,
+        surface=surface,
     )
