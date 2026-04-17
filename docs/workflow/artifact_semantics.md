@@ -18,13 +18,14 @@ summary: Meaning of major workflow artifacts and why semantic names matter even 
 | `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) | Year-suffixed archived UrbanSim datastore snapshot family. |
 | `householdv_{year}`, `vehicles_{year}` | Year-scoped ATLAS output families published at the vehicle-ownership boundary. |
 | `ATLAS_VEHICLES2_OUTPUT` | Postprocessed ATLAS vehicle output handed to downstream workflow consumers. |
+| `OMX_SKIMS` / `omx_skims` | Default/bootstrap OMX skim source used by UrbanSim, ATLAS, and ActivitySim-compatible staging when no newer BEAM-produced OMX handoff is selected. |
 | `ASIM_LAND_USE_IN`, `ASIM_HOUSEHOLDS_IN`, `ASIM_PERSONS_IN` | Staged ActivitySim table inputs derived from the selected population-source datastore. |
 | `ASIM_OMX_SKIMS` | ActivitySim OMX skims input staged for the run boundary. |
 | `ASIM_SHARROW_CACHE_DIR` | Optional persisted ActivitySim compile cache directory. |
 | `ZARR_SKIMS` | Shared skims handoff used by ActivitySim and BEAM. |
 | `BEAM_PLANS_IN`, `BEAM_HOUSEHOLDS_IN`, `BEAM_PERSONS_IN` | Staged BEAM inputs derived from the demand-side workflow state. |
 | `LINKSTATS` | Canonical BEAM linkstats output publication. |
-| `FINAL_SKIMS_OMX` | Final BEAM OMX skims output. |
+| `FINAL_SKIMS_OMX` | Final BEAM OMX skims output and the preferred updated OMX handoff for later UrbanSim/ATLAS/ActivitySim preprocessing when available. |
 | `BEAM_FULL_SKIMS` | Separate full-skim tracked output family. |
 | `LINKSTATS_WARMSTART` | Warm-start linkstats input for BEAM. |
 | `BEAM_PLANS_OUT` | Published BEAM plans output from the run boundary. |

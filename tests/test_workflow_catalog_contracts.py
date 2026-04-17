@@ -43,6 +43,7 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
@@ -63,6 +64,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_input_keys": (
                 USIM_DATASTORE_CURRENT_H5,
                 FINAL_SKIMS_OMX,
+                OMX_SKIMS,
             ),
             "optional_output_keys": ("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
             "dynamic_input_families": (),
@@ -117,7 +119,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 USIM_DATASTORE_CURRENT_H5,
                 USIM_DATASTORE_BASE_H5,
             ),
-            "optional_input_keys": (FINAL_SKIMS_OMX,),
+            "optional_input_keys": (FINAL_SKIMS_OMX, OMX_SKIMS),
             "optional_output_keys": (
                 *catalog._ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
                 *catalog._ATLAS_STATIC_INPUT_KEYS,

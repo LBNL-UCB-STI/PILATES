@@ -39,6 +39,7 @@ from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    OMX_SKIMS,
     ZARR_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -854,6 +855,14 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
 
 def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
     return {
+        "urbansim_preprocess": (
+            ArtifactBindingRule(
+                semantic_key=OMX_SKIMS,
+                required=False,
+                allow_fallback=True,
+                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
+            ),
+        ),
         "activitysim_preprocess": (
             *activitysim_population_source_selection_rules(),
             ArtifactBindingRule(
@@ -903,6 +912,12 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                     USIM_DATASTORE_CURRENT_H5,
                     USIM_H5_UPDATED,
                 ),
+            ),
+            ArtifactBindingRule(
+                semantic_key=OMX_SKIMS,
+                required=False,
+                allow_fallback=True,
+                preferred_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
             ),
         ),
         "beam_preprocess": (

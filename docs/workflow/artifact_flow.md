@@ -21,7 +21,7 @@ The flow below is about what PILATES publishes across step boundaries through th
 
 ### Land Use
 
-- `urbansim_preprocess` reads the base datastore handle and prepares mutable workspace inputs for the UrbanSim run boundary.
+- `urbansim_preprocess` reads the base datastore handle plus the current OMX skim source (`OMX_SKIMS` by default or `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX handoff) and prepares mutable workspace inputs for the UrbanSim run boundary.
 - `urbansim_run` publishes the forecast datastore handle produced by the runner.
 - `urbansim_postprocess` republishes the datastore as the current mutable UrbanSim handoff for downstream stages and can also publish year-scoped archive and merged snapshot families.
 
@@ -34,7 +34,7 @@ Main published boundary roles:
 
 ### Vehicle Ownership
 
-- `atlas_preprocess` reads both required UrbanSim datastore handles (`USIM_DATASTORE_CURRENT_H5` and `USIM_DATASTORE_BASE_H5`) and, when available, skims produced by earlier travel steps.
+- `atlas_preprocess` reads both required UrbanSim datastore handles (`USIM_DATASTORE_CURRENT_H5` and `USIM_DATASTORE_BASE_H5`) plus the current OMX skim source (`OMX_SKIMS` by default or `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX handoff).
 - `atlas_run` publishes year-specific vehicle ownership outputs such as `householdv_{year}` and `vehicles_{year}`.
 - `atlas_postprocess` republishes the UrbanSim datastore that PILATES wants ActivitySim to use as the population-source datastore and also publishes `ATLAS_VEHICLES2_OUTPUT`.
 

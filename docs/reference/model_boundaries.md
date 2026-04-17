@@ -41,7 +41,9 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 ### Optional inputs
 
 - `USIM_DATASTORE_CURRENT_H5`
-- final skims or other carried-forward travel artifacts when the land-use path uses them
+- `OMX_SKIMS` for the default/bootstrap OMX skims fallback
+- `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX skim handoff
+- other carried-forward travel artifacts when the land-use path uses them
 
 ### Main published outputs
 
@@ -65,6 +67,9 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 
 - If ATLAS is disabled, the ActivitySim boundary falls back to UrbanSim-owned datastore handles.
 - If land use is disabled entirely, downstream stages must start from previously staged or configured datastore inputs instead of a fresh UrbanSim handoff.
+- Skim selection is semantic rather than stage-local:
+  - first use normally falls back to the default `OMX_SKIMS` source
+  - later iterations or later years can prefer `FINAL_SKIMS_OMX` from BEAM postprocess
 
 ### Boundary owners
 
@@ -93,6 +98,8 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 
 ### Optional inputs
 
+- `OMX_SKIMS` for the default/bootstrap OMX skims fallback
+- `FINAL_SKIMS_OMX` when BEAM has already published an updated OMX skim handoff
 - travel skims from earlier years when the scenario uses them
 
 ### Main published outputs
@@ -116,6 +123,9 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 
 - If land use is disabled, ATLAS must start from already available UrbanSim datastore handles.
 - If ActivitySim is disabled, the population-source handoff may not be consumed immediately, but it remains the public vehicle-ownership boundary for downstream inspection and replay.
+- The ATLAS skim boundary also has two sources:
+  - default `OMX_SKIMS` for the initial/bootstrap case
+  - `FINAL_SKIMS_OMX` when a later BEAM iteration has already produced an updated OMX skim file
 
 ### Boundary owners
 

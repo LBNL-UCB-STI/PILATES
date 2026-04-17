@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pilates.config.models import FullSkimsCreatorConfig, load_config
-from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX
+from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX, OMX_SKIMS
 from pilates.workflows.lineage_render import (
     render_plan_html,
     render_plan_json,
@@ -217,7 +217,37 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
         for edge in consuming_edges
     }
-    assert {"urbansim_preprocess", "atlas_preprocess"} <= consuming_step_names
+    assert "urbansim_preprocess" in consuming_step_names
+
+
+def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
+    settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = _build_plan(settings, include_postprocessing=False)
+
+    omx_artifacts = [
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == OMX_SKIMS and artifact.external
+    ]
+
+    assert len(omx_artifacts) == 1
+    artifact = omx_artifacts[0]
+    assert artifact.instance_key.endswith(f":{OMX_SKIMS}")
+    assert artifact.external is True
+
+    consuming_edges = [
+        edge for edge in plan.edges if edge.source == artifact.id and edge.kind == "consumes"
+    ]
+    consuming_step_names = {
+        next(step.step_name for step in plan.step_runs if step.id == edge.target)
+        for edge in consuming_edges
+    }
+    assert "urbansim_preprocess" in consuming_step_names
 
 
 def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints():

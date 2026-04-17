@@ -39,6 +39,10 @@ ASIM_LAND_USE_IN = "land_use_asim_in"
 ASIM_HOUSEHOLDS_IN = "households_asim_in"
 ASIM_PERSONS_IN = "persons_asim_in"
 ASIM_OMX_SKIMS = "omx_skims"
+# ``omx_skims`` is a cross-model semantic role used by UrbanSim, ATLAS, and
+# ActivitySim. ``ASIM_OMX_SKIMS`` remains for compatibility with the existing
+# ActivitySim-oriented name, while ``OMX_SKIMS`` is the preferred generic alias.
+OMX_SKIMS = ASIM_OMX_SKIMS
 ASIM_SHARROW_CACHE_DIR = "asim_sharrow_cache_dir"
 
 # BEAM
@@ -97,6 +101,7 @@ ARTIFACT_KEYS: Dict[str, str] = {
     "ASIM_HOUSEHOLDS_IN": ASIM_HOUSEHOLDS_IN,
     "ASIM_PERSONS_IN": ASIM_PERSONS_IN,
     "ASIM_OMX_SKIMS": ASIM_OMX_SKIMS,
+    "OMX_SKIMS": OMX_SKIMS,
     "ASIM_SHARROW_CACHE_DIR": ASIM_SHARROW_CACHE_DIR,
     "BEAM_OUTPUT_DIR": BEAM_OUTPUT_DIR,
     "BEAM_MUTABLE_DATA_DIR": BEAM_MUTABLE_DATA_DIR,
@@ -153,6 +158,7 @@ class ArtifactKeys:
     ASIM_HOUSEHOLDS_IN = ASIM_HOUSEHOLDS_IN
     ASIM_PERSONS_IN = ASIM_PERSONS_IN
     ASIM_OMX_SKIMS = ASIM_OMX_SKIMS
+    OMX_SKIMS = OMX_SKIMS
     ASIM_SHARROW_CACHE_DIR = ASIM_SHARROW_CACHE_DIR
     BEAM_OUTPUT_DIR = BEAM_OUTPUT_DIR
     BEAM_MUTABLE_DATA_DIR = BEAM_MUTABLE_DATA_DIR

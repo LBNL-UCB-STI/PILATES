@@ -62,6 +62,8 @@ def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     filtered = dict(kwargs)
     filtered.pop("coupler", None)
     filtered.pop("context", None)
+    if "omx_skims" in filtered and "final_skims_omx" not in filtered:
+        filtered["final_skims_omx"] = filtered.pop("omx_skims")
     return filtered
 
 

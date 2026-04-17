@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
@@ -6,6 +7,7 @@ from pilates.workflows.binding import (
     urbansim_datastore_selection_rules,
 )
 from pilates.workflows.artifact_keys import (
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
@@ -100,5 +102,21 @@ def build_urbansim_inputs(
             descriptions[semantic_key] = (
                 f"UrbanSim current datastore for year {year}{suffix}"
             )
+
+    region = getattr(getattr(settings, "run", None), "region", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if region is not None and urbansim_cfg is not None:
+        region_id = (
+            getattr(urbansim_cfg, "region_mappings", {})
+            .get("region_to_region_id", {})
+            .get(region)
+        )
+        if region_id:
+            omx_path = Path(workspace.get_usim_mutable_data_dir()) / f"skims_mpo_{region_id}.omx"
+            if omx_path.exists():
+                inputs[OMX_SKIMS] = str(omx_path)
+                descriptions[OMX_SKIMS] = (
+                    f"UrbanSim OMX skims fallback for year {year}"
+                )
 
     return inputs, descriptions

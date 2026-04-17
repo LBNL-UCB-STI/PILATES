@@ -60,6 +60,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
@@ -271,7 +272,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=10,
         outputs_class=UrbanSimPreprocessOutputs,
         input_keys=(USIM_DATASTORE_BASE_H5,),
-        optional_input_keys=(USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX),
+        optional_input_keys=(USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX, OMX_SKIMS),
         output_keys=(
             *_URBANSIM_PREPROCESS_PREPARED_KEYS,
         ),
@@ -327,7 +328,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=40,
         outputs_class=AtlasPreprocessOutputs,
         input_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
-        optional_input_keys=(FINAL_SKIMS_OMX,),
+        optional_input_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
         output_keys=_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS,
         optional_output_keys=_ordered_unique(
             _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,

@@ -1,3 +1,4 @@
+import os
 import re
 from typing import Any, Dict, Optional, Set, Tuple, TYPE_CHECKING
 
@@ -5,6 +6,7 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.artifact_keys import (
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
@@ -111,6 +113,15 @@ def build_atlas_inputs(
     descriptions[USIM_DATASTORE_BASE_H5] = (
         f"UrbanSim base datastore for ATLAS year {year}"
     )
+
+    if getattr(getattr(settings, "atlas", None), "beamac", 0) > 0:
+        beam_skims_path = os.path.join(
+            workspace.get_beam_output_dir(),
+            settings.shared.skims.fname,
+        )
+        if os.path.exists(beam_skims_path):
+            inputs[OMX_SKIMS] = beam_skims_path
+            descriptions[OMX_SKIMS] = f"ATLAS OMX skims fallback for year {year}"
 
     return inputs, descriptions
 

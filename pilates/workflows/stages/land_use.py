@@ -33,6 +33,7 @@ from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.artifact_keys import (
     FINAL_SKIMS_OMX,
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
@@ -137,6 +138,8 @@ def run_land_use_stage(
     preprocess_keys = list(preprocess_inputs.keys())
     if FINAL_SKIMS_OMX not in preprocess_keys:
         preprocess_keys.append(FINAL_SKIMS_OMX)
+    if OMX_SKIMS not in preprocess_keys:
+        preprocess_keys.append(OMX_SKIMS)
     preprocess_binding = build_binding_plan(
         step_name="urbansim_preprocess",
         coupler=coupler,
