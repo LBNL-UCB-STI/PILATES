@@ -215,11 +215,11 @@ infrastructure:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
     activitysim: docker://zaneedell/activitysim:0.2.7
-    beam: docker://haitamlaarabi/beam:1.1-beta-v260413
+    beam: docker://haitamlaarabi/beam:1.1-beta-v260418
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
-    beam: haitamlaarabi/beam:1.1-beta-v260413
+    beam: haitamlaarabi/beam:1.1-beta-v260418
     activitysim: zaneedell/activitysim:0.1.4
     polaris: tbd
   docker_config:
