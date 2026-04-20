@@ -588,6 +588,41 @@ def test_land_use_stage_prefers_explicit_beam_skims_artifact(stage_env):
     assert FINAL_SKIMS_OMX not in (preprocess_binding.inputs or {})
 
 
+def test_land_use_stage_keeps_urbansim_preprocess_inputs_file_scoped(stage_env, caplog):
+    """UrbanSim preprocess should not inherit model-wide scratch/runtime inputs."""
+    from pilates.workflows.steps import StepOutputsHolder
+
+    outputs_holder = StepOutputsHolder()
+    with caplog.at_level("WARNING"):
+        run_land_use_stage(
+            scenario=stage_env["scenario"],
+            state=stage_env["state"],
+            settings=stage_env["settings"],
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+            year=stage_env["state"].forecast_year,
+            outputs_holder_year=outputs_holder,
+        )
+
+    preprocess_call = next(
+        call
+        for call in stage_env["scenario"].calls
+        if call["model"] == "urbansim_preprocess"
+    )
+    preprocess_binding = preprocess_call["binding"]
+    assert isinstance(preprocess_binding, BindingResult)
+    preprocess_inputs = dict(preprocess_binding.inputs or {})
+
+    assert "usim_mutable_data_dir" not in preprocess_inputs
+    assert "usim_source_data_dir" not in preprocess_inputs
+    assert "usim_output_h5" not in preprocess_inputs
+    assert USIM_POPULATION_SOURCE_H5 not in preprocess_inputs
+    assert not any(
+        "undeclared input key 'usim_output_h5'" in record.message
+        for record in caplog.records
+    )
+
+
 def test_land_use_stage_flushes_archive_queue_at_boundary(stage_env, monkeypatch):
     """Land use boundary should enqueue restart H5s and flush archive queue."""
     from pilates.workflows.stages import land_use as land_use_stage

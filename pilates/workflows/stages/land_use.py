@@ -15,7 +15,6 @@ from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.input_logging import log_inputs
 from pilates.workflows.binding import build_binding_plan
-from pilates.workflows.step_io import merge_model_expected_inputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_urbansim_postprocess_step,
@@ -110,9 +109,6 @@ def run_land_use_stage(
         settings, state, workspace, year, surface=surface
     )
     log_inputs(usim_inputs, cast(Dict[str, Optional[str]], usim_input_descriptions))
-    usim_inputs = merge_model_expected_inputs(
-        "urbansim", usim_inputs, settings, state, workspace
-    )
     manifest_config = ManifestConfig(
         path=_build_land_use_manifest_path(workspace=workspace, year=year)
     )

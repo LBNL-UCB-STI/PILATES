@@ -536,6 +536,45 @@ def test_normalize_asim_output_key_maps_plans_alias() -> None:
     assert normalize_asim_output_key("plans") == "beam_plans_asim_out"
 
 
+def test_copy_data_to_mutable_location_does_not_try_legacy_skim_zone_config_update(
+    monkeypatch, tmp_path, mock_settings
+):
+    state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        forecast_year=2020,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=state)
+
+    calls = []
+    monkeypatch.setattr(
+        preprocessor,
+        "_find_beam_production_path",
+        lambda *_args, **_kwargs: str(tmp_path / "beam-production" / "seattle"),
+    )
+    monkeypatch.setattr(
+        "pilates.beam.preprocessor.shutil.copytree",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_update_beam_config",
+        lambda param, **kwargs: calls.append((param, kwargs)),
+    )
+
+    production_region = tmp_path / "beam-production" / "seattle"
+    production_region.mkdir(parents=True, exist_ok=True)
+
+    preprocessor.copy_data_to_mutable_location(
+        settings=mock_settings,
+        output_dir=str(tmp_path / "beam" / "input"),
+    )
+
+    assert all(param != "skim_zone_geoid_col" for param, _kwargs in calls)
+
+
 def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
     monkeypatch, mock_settings, mock_workspace, tmp_path
 ):

@@ -540,28 +540,9 @@ class BeamPreprocessor(GenericPreprocessor):
             # Note: BEAM common directory is not tracked as a separate artifact.
 
         if hasattr(settings.beam, "skims_shapefile"):
-            logger.info(
-                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}"
-            )
-
-            # FIX: Calculate base path from output_dir if state.workspace is not guaranteed
-            # Original code used triple split logic; here we approximate assuming output_dir is in the workspace
-            # or fallback to self.state.workspace if available.
-            # A safe fallback for initialization time:
-            base_path = None
-            if hasattr(self.state, "workspace"):
-                base_path = self.state.workspace.full_path
-            else:
-                # Replicate logic: output_dir is usually "{root}/beam/data"
-                # os.path.dirname(os.path.dirname(output_dir)) approx "{root}"
-                base_path = os.path.dirname(
-                    os.path.dirname(os.path.abspath(output_dir))
-                )
-
-            self._update_beam_config(
-                "skim_zone_geoid_col",
-                value_override=settings.beam.skim_zone_geoid_col,
-                base_path=base_path,
+            logger.debug(
+                "[BEAM Preprocessor] Deferring zone-id config updates until the "
+                "sorted zone shapefile is prepared."
             )
 
         return RecordStore(recordList=input_records), RecordStore(

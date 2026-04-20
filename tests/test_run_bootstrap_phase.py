@@ -92,25 +92,6 @@ class DummyTracker:
                 target.write_text("hydrated", encoding="utf-8")
             else:
                 target.mkdir(parents=True, exist_ok=True)
-                if target.parts[-2:] == ("activitysim", "configs"):
-                    for dirname in (
-                        "configs",
-                        "configs_extended",
-                        "configs_mp",
-                        "configs_sh_compile",
-                    ):
-                        (target / dirname).mkdir(parents=True, exist_ok=True)
-                        (target / dirname / "settings.yaml").write_text(
-                            "settings",
-                            encoding="utf-8",
-                        )
-                if target.parts[-2:] == ("beam", "input"):
-                    region_dir = target / "test"
-                    region_dir.mkdir(parents=True, exist_ok=True)
-                    (region_dir / "beam.conf").write_text(
-                        "beam",
-                        encoding="utf-8",
-                    )
                 if target.parts[-2:] == ("urbansim", "data"):
                     (target / "usim_000.h5").write_text(
                         "usim",
@@ -410,6 +391,68 @@ def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatc
     assert result["fallback_rerun_triggered"] is False
     assert result["staged_artifact_summary"]["copied_records_total"] == 0
     assert result["run_reference"] == {"probe_run_id": "bootstrap_probe"}
+
+
+def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
+    monkeypatch,
+    tmp_path,
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+
+    tracker = DummyTracker(
+        responses=[
+            {
+                "cache_hit": True,
+                "execute_fn": False,
+                "run_id": "bootstrap_probe",
+                "hydrate_output_paths": True,
+            },
+        ]
+    )
+    workspace = DummyWorkspace(str(tmp_path / "bootstrap-run"))
+    state = SimpleNamespace(
+        start_year=2017,
+        current_major_stage=WorkflowState.Stage.supply_demand_loop,
+    )
+    surface = SimpleNamespace(
+        is_bootstrap_owned_artifact_key=lambda key: (
+            key.startswith("activitysim_config_settings_yaml_")
+            or key in {
+                "beam_mutable_data_dir",
+                "beam_region_input_dir",
+                "beam_primary_config_file",
+                "usim_datastore_base_h5",
+            }
+        )
+    )
+
+    result = run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_restart_settings(),
+        state=state,
+        workspace=workspace,
+        scenario_id="seattle-baseline",
+        seed=12345,
+        surface=surface,
+    )
+
+    assert result["bootstrap_cache_hit"] is True
+    assert result["replay_hydration_complete"] is True
+    output_paths = tracker.calls[0]["output_paths"]
+    assert output_paths["activitysim_config_settings_yaml_configs"].endswith(
+        "activitysim/configs/configs/settings.yaml"
+    )
+    assert output_paths["activitysim_config_settings_yaml_configs_extended"].endswith(
+        "activitysim/configs/configs_extended/settings.yaml"
+    )
+    assert output_paths["activitysim_config_settings_yaml_configs_mp"].endswith(
+        "activitysim/configs/configs_mp/settings.yaml"
+    )
+    assert output_paths["activitysim_config_settings_yaml_configs_sh_compile"].endswith(
+        "activitysim/configs/configs_sh_compile/settings.yaml"
+    )
+    assert output_paths["beam_primary_config_file"].endswith("beam/input/test/beam.conf")
 
 
 def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fallback_rerun(

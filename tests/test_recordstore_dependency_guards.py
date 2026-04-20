@@ -209,9 +209,6 @@ def test_land_use_stage_builds_run_inputs_from_upstream_record_store_mapping(
     )
     monkeypatch.setattr(land_use_stage, "log_inputs", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        land_use_stage, "merge_model_expected_inputs", lambda *args: args[1]
-    )
-    monkeypatch.setattr(
         land_use_stage, "build_binding_plan", _capturing_build_binding_plan
     )
     monkeypatch.setattr(land_use_stage, "run_workflow", _fake_run_workflow)

@@ -84,6 +84,7 @@ def _bootstrap_output_paths(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
+    surface: Any = None,
 ) -> Dict[str, str]:
     output_paths: Dict[str, str] = {}
     run_models = getattr(getattr(settings, "run", None), "models", None)
@@ -113,6 +114,21 @@ def _bootstrap_output_paths(
         get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
         if callable(get_beam_input_dir):
             output_paths["beam_mutable_data_dir"] = get_beam_input_dir()
+
+    # Cache-hit bootstrap replay materializes only the explicitly requested
+    # output paths. The workspace-invariant check is stricter than the coarse
+    # mutable-root set above: later startup code expects specific staged files
+    # like ActivitySim settings.yaml overlays and the BEAM primary config to
+    # exist. Include those exact invariants here so a bootstrap cache hit can
+    # restore them directly instead of replaying only root directories and then
+    # falling back to a full rerun.
+    output_paths.update(
+        _bootstrap_required_workspace_artifacts(
+            settings=settings,
+            workspace=workspace,
+            surface=surface,
+        )
+    )
 
     return output_paths
 
@@ -353,6 +369,7 @@ def run_bootstrap_phase(
     bootstrap_output_paths = _bootstrap_output_paths(
         settings=settings,
         workspace=workspace,
+        surface=surface,
     )
     if bootstrap_output_paths:
         run_kwargs["output_paths"] = bootstrap_output_paths
