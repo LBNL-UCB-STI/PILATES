@@ -58,8 +58,9 @@ def build_urbansim_inputs(
           active workflow steps for this year (H5). On later-year runs this
           usually points at the latest handoff datastore, while on start-year
           or fallback paths it may coincide with ``usim_datastore_base_h5``.
-        - ``usim_mutable_data_dir``: UrbanSim mutable data directory used as
-          the container input/output mount.
+        - ``omx_skims``: Default/bootstrap OMX skims staged for UrbanSim
+          preprocessing when an updated BEAM-produced ``final_skims_omx`` handoff
+          is not yet present for the year.
     Related outputs
         - UrbanSim runner/postprocessor update ``usim_datastore_h5`` for
           downstream ActivitySim/ATLAS runs.
