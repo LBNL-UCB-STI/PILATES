@@ -11,6 +11,12 @@ if TYPE_CHECKING:
 
 from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
+from pilates.beam.config_hocon import (
+    BeamConfigHoconError,
+    beam_config_env_overrides,
+    beam_primary_config_path,
+    update_staged_beam_config_value,
+)
 from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
@@ -19,7 +25,6 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
-from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -765,7 +770,28 @@ class BeamPreprocessor(GenericPreprocessor):
                     f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
                 )
                 return
-            config_value = get_setting(self.settings, pydantic_path)
+            beam_settings = self.settings.beam
+            if beam_settings is None:
+                logger.warning(
+                    "BEAM config is missing; cannot resolve parameter '%s'.",
+                    param,
+                )
+                return
+            if pydantic_path == "beam.sample":
+                config_value = beam_settings.sample
+            elif pydantic_path == "beam.replanning_portion":
+                config_value = beam_settings.replanning_portion
+            elif pydantic_path == "beam.max_plans_memory":
+                config_value = beam_settings.max_plans_memory
+            elif pydantic_path == "beam.skim_zone_geoid_col":
+                config_value = beam_settings.skim_zone_geoid_col
+            else:
+                logger.warning(
+                    "Unsupported BEAM Pydantic path '%s' for parameter '%s'.",
+                    pydantic_path,
+                    param,
+                )
+                return
 
         if config_value is None:
             logger.debug(
@@ -784,41 +810,35 @@ class BeamPreprocessor(GenericPreprocessor):
             )
             return
 
-        beam_config_path = os.path.join(
-            root,
-            self.settings.beam.local_mutable_data_folder,
-            self.settings.run.region,
-            self.settings.beam.config,
+        beam_config_path = beam_primary_config_path(
+            self.settings,
+            workspace_path=root,
         )
 
-        if not os.path.exists(beam_config_path):
+        if not beam_config_path.exists():
             logger.warning(
                 f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
             )
             return
 
-        with open(beam_config_path, "r") as file:
-            lines = file.readlines()
-
-        modified = False
-        changed = False
-        replacement = f"{config_header} = {config_value}\n"
-        rewritten_lines: List[str] = []
-        for line in lines:
-            if line.strip().startswith(config_header):
-                if not modified:  # Keep only the first occurrence.
-                    rewritten_lines.append(replacement)
-                    modified = True
-                    if line != replacement:
-                        changed = True
-                else:
-                    # Drop duplicate definitions for the same key.
-                    changed = True
-                continue
-            rewritten_lines.append(line)
-        if not modified:
-            rewritten_lines.append(f"\n{replacement}")
-            changed = True
+        try:
+            changed = update_staged_beam_config_value(
+                beam_config_path,
+                key=config_header,
+                value=config_value,
+                env_overrides=beam_config_env_overrides(
+                    self.settings,
+                    workspace_path=root,
+                ),
+            )
+        except BeamConfigHoconError:
+            logger.error(
+                "[BEAM Preprocessor] Failed to update staged BEAM config key %s in %s",
+                config_header,
+                beam_config_path,
+                exc_info=True,
+            )
+            raise
 
         if not changed:
             logger.info(
@@ -827,9 +847,6 @@ class BeamPreprocessor(GenericPreprocessor):
                 beam_config_path,
             )
             return
-
-        with open(beam_config_path, "w") as file:
-            file.writelines(rewritten_lines)
 
         logger.info(
             f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"

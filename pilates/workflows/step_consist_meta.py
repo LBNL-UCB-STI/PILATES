@@ -58,6 +58,7 @@ from typing import Any, Dict, Optional
 
 from consist.core.step_context import StepContext
 
+from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.utils.consist_config import build_step_consist_kwargs
 
 
@@ -174,16 +175,16 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_beam_mutable_data_dir"
         ):
-            config_root = (
-                Path(workspace_obj.get_beam_mutable_data_dir()) / run_settings.region
+            config_root = beam_config_root(
+                settings,
+                workspace=workspace_obj,
             )
         else:
             ws_path = _workspace_path(ctx)
             if ws_path:
-                config_root = (
-                    Path(ws_path)
-                    / beam_settings.local_mutable_data_folder
-                    / run_settings.region
+                config_root = beam_config_root(
+                    settings,
+                    workspace_path=ws_path,
                 )
         if config_root is None:
             return None
@@ -192,28 +193,13 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if not primary_config.exists():
             return None
 
-        beam_input_root = config_root.resolve()
-        pwd_candidates = [
-            beam_input_root.parent,
-            beam_input_root,
-            beam_input_root.parent.parent,
-        ]
-        expected_suffix = Path("input") / run_settings.region
-        pwd_root = next(
-            (root for root in pwd_candidates if (root / expected_suffix).exists()),
-            beam_input_root.parent,
-        )
-        # BEAM configs in the wild may resolve paths via either `PWD` or a
-        # bare `inputDirectory` key. Seed both so staged configs canonicalize
-        # the same way they run inside the container.
-        env_overrides = {
-            "PWD": str(pwd_root),
-            "inputDirectory": str(config_root),
-        }
         return BeamConfigAdapter(
             root_dirs=[config_root],
             primary_config=primary_config,
-            env_overrides=env_overrides,
+            env_overrides=beam_config_env_overrides(
+                settings,
+                config_root=config_root,
+            ),
         )
 
     def _adapter(ctx: StepContext) -> Any:

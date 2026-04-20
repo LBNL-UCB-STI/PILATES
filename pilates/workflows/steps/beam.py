@@ -1,13 +1,20 @@
 from __future__ import annotations
 
-import inspect
 import json
+import inspect
 import logging
 from pathlib import Path
 import re
 import shutil
 from typing import Any, Callable, Dict, Mapping, Optional
 
+from pilates.beam.config_hocon import (
+    BeamConfigHoconError,
+    beam_config_env_overrides,
+    beam_config_root,
+    beam_primary_config_path,
+    load_resolved_beam_config_tree,
+)
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
@@ -74,11 +81,7 @@ def _primary_beam_config_path(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> Path:
-    return (
-        Path(workspace.get_beam_mutable_data_dir())
-        / settings.run.region
-        / settings.beam.config
-    )
+    return beam_primary_config_path(settings, workspace=workspace)
 
 
 def _require_primary_beam_config(
@@ -204,25 +207,6 @@ def _beam_input_archive_meta(
         "facet_index": True,
     }
 
-
-def _beam_config_root(settings: PilatesConfig, workspace: Workspace) -> Path:
-    return Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-
-
-def _beam_config_pwd_root(settings: PilatesConfig, workspace: Workspace) -> Path:
-    beam_input_root = _beam_config_root(settings, workspace).resolve()
-    pwd_candidates = [
-        beam_input_root.parent,
-        beam_input_root,
-        beam_input_root.parent.parent,
-    ]
-    expected_suffix = Path("input") / settings.run.region
-    return next(
-        (root for root in pwd_candidates if (root / expected_suffix).exists()),
-        beam_input_root.parent,
-    )
-
-
 def _scan_beam_config_includes(root: Path) -> list[Path]:
     seen: set[Path] = set()
     ordered: list[Path] = []
@@ -246,59 +230,6 @@ def _scan_beam_config_includes(root: Path) -> list[Path]:
                 continue
             queue.append((current.parent / rel).resolve())
     return ordered
-
-
-def _load_beam_config_tree(
-    config_path: Path,
-    *,
-    env_overrides: Mapping[str, str],
-) -> Optional[Dict[str, Any]]:
-    try:
-        from pyhocon import ConfigFactory, HOCONConverter
-        from pyhocon.config_parser import ConfigParser
-        from pyhocon.config_tree import NonExistentKey
-    except Exception:
-        return None
-
-    config = ConfigFactory.parse_file(str(config_path), resolve=False)
-    inserted_keys: list[str] = []
-    for key, value in env_overrides.items():
-        if not key:
-            continue
-        if config.get(key, NonExistentKey) is not NonExistentKey:
-            continue
-        config.put(key, value)
-        inserted_keys.append(key)
-    ConfigParser.resolve_substitutions(config, accept_unresolved=False)
-    for key in inserted_keys:
-        _remove_beam_config_key(config, key)
-    return json.loads(HOCONConverter.to_json(config))
-
-
-def _remove_beam_config_key(config: Any, key: str) -> None:
-    parts = [part for part in str(key).split(".") if part]
-    if not parts:
-        return
-    cursor = config
-    parents: list[tuple[dict[str, Any], str]] = []
-    for part in parts[:-1]:
-        if not isinstance(cursor, dict):
-            return
-        child = cursor.get(part)
-        if not isinstance(child, dict):
-            return
-        parents.append((cursor, part))
-        cursor = child
-    if not isinstance(cursor, dict):
-        return
-    cursor.pop(parts[-1], None)
-    for parent, part in reversed(parents):
-        child = parent.get(part)
-        if isinstance(child, dict) and not child:
-            parent.pop(part, None)
-        else:
-            break
-
 
 def _collect_beam_config_path_references(config_tree: Mapping[str, Any]) -> set[str]:
     refs: set[str] = set()
@@ -388,7 +319,7 @@ def _archive_beam_config_references(
     snapshot_dir: Path,
 ) -> Optional[Path]:
     config_path = _require_primary_beam_config(settings, workspace).resolve()
-    config_root = _beam_config_root(settings, workspace).resolve()
+    config_root = beam_config_root(settings, workspace=workspace).resolve()
     archive_root = snapshot_dir / BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
     sources_by_target: Dict[Path, Path] = {}
     config_files = _scan_beam_config_includes(config_path)
@@ -400,18 +331,15 @@ def _archive_beam_config_references(
             _beam_config_reference_relative_path(include_path, config_root)
         ] = include_path
 
-    # Seed both `PWD` and `inputDirectory` so canonicalization can resolve the
-    # staged BEAM config tree even when a legacy config uses bare references.
-    env_overrides = {
-        "PWD": str(_beam_config_pwd_root(settings, workspace)),
-        "inputDirectory": str(config_root),
-    }
     try:
-        config_tree = _load_beam_config_tree(
+        config_tree = load_resolved_beam_config_tree(
             config_path,
-            env_overrides=env_overrides,
+            env_overrides=beam_config_env_overrides(
+                settings,
+                config_root=config_root,
+            ),
         )
-    except Exception as exc:
+    except BeamConfigHoconError as exc:
         logger.warning(
             "Failed to resolve BEAM config references for archival from %s: %s",
             config_path,

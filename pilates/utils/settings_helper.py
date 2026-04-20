@@ -1,8 +1,9 @@
 """
-A helper utility for accessing settings from dicts, Pydantic models, or simple
-attribute-based objects.
-This provides a compatibility layer while migrating from the legacy flat
-dictionary config to the new hierarchical Pydantic models.
+Compatibility helper for legacy dotted settings access.
+
+Prefer direct ``PilatesConfig`` attribute access in runtime code. This module
+remains for migration-era helpers, tests, and older utility code that still
+needs tolerant dotted lookups across dicts and object-like settings surfaces.
 """
 
 from pydantic import BaseModel

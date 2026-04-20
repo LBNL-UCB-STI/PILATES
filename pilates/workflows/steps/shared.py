@@ -578,8 +578,7 @@ def _log_beam_r5_osm_input(
         logger.debug("SQLModel/Consist beam models unavailable; skipping OSM logging.")
         return
 
-    current_run = cr.current_run()
-    run_id = getattr(current_run, "id", None) if current_run else None
+    run_id = cr.current_run_id()
     if not run_id or tracker.db is None:
         return
     beam_settings = settings.beam

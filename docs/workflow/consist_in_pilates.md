@@ -29,6 +29,17 @@ summary: What Consist owns in PILATES and how replay, caching, staging, and anal
 - `facet` carries queryable run metadata.
 - `identity_inputs` are only added for steps that need file or directory digests.
 
+If you want one file that demonstrates the intended Consist integration
+pattern, start there. `pilates/utils/consist_config.py` is the reference for:
+
+- which config fields become cache identity
+- which fields become queryable run facets
+- which boundaries need `identity_inputs` instead of broad config hashing
+
+For runtime-local code that needs to report the active run, use
+`pilates.current_run_id()` or `pilates.utils.consist_runtime.current_run_id()`
+instead of probing `consist.current_run()` directly.
+
 The launcher also records run context metadata such as `scenario_id`, `seed`, `archive_run_dir`, `local_run_dir`, and `restart_run`.
 
 The key ownership boundary is:
@@ -60,6 +71,8 @@ Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.m
 ## Analysis Surface
 
 PILATES keeps the archive-side Consist database and run outputs available for post-run analysis. The analysis helpers read the archived run metadata, run outputs, and artifact facets rather than rebuilding workflow state from scratch.
+
+For a concrete walkthrough, use [Consist in Action](../analysis/consist_in_action.md).
 
 ## Adjacent Pages
 

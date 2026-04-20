@@ -8,6 +8,7 @@ from typing import Callable, Dict, Mapping, Union, Optional, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.atlas.inputs import (
@@ -251,7 +252,12 @@ def run_vehicle_ownership_stage(
     workspace = context.workspace
     surface = context.surface
 
-    logger.info("[Main] Running ATLAS vehicle ownership model.")
+    logger.info(
+        "[vehicle_ownership] year=%s forecast_year=%s run_id=%s",
+        year,
+        state.forecast_year,
+        cr.current_run_id(),
+    )
 
     urbansim_datastore_dir = workspace.get_usim_mutable_data_dir()
 

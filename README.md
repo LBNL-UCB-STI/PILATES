@@ -1,11 +1,20 @@
 # PILATES
 
-PILATES is a workflow runtime for coupled regional simulation. It coordinates
-UrbanSim, ATLAS, ActivitySim, and BEAM across a shared scenario lifecycle with
-explicit handoffs, Consist-backed replay and provenance, and post-run analysis
-over archived artifacts. The launcher initializes runtime flags once, builds a
-single enabled workflow surface for the active run shape, and then drives
-planning, binding, restart, and stage execution from that shared projection.
+PILATES is a workflow runtime for coupled regional simulation. It coordinates UrbanSim, ATLAS,
+ActivitySim, and BEAM across a shared scenario lifecycle, preserves explicit
+handoffs at the workflow boundaries, and uses [Consist](https://github.com/LBNL-UCB-STI/consist) 
+to keep data lineage and archived outputs queryable for run comparison and replay-aware analysis.
+
+Minimal path:
+
+```bash
+python run.py -c <settings.yaml>
+python examples/consist/restart_replay_inspection.py <archive-run-dir>
+```
+
+For a deeper Consist-facing walkthrough, start with
+[docs/workflow/consist_in_pilates.md](docs/workflow/consist_in_pilates.md) and
+[docs/analysis/consist_in_action.md](docs/analysis/consist_in_action.md).
 
 The full documentation now lives in the static docs site:
 
@@ -30,6 +39,7 @@ Use the site for the real paths through the project:
 - Model requirements and handoffs: [docs/reference/model_boundaries.md](docs/reference/model_boundaries.md)
 - Adding a model: [docs/extend/adding_a_model.md](docs/extend/adding_a_model.md)
 - Archived-run analysis: [docs/analysis/overview.md](docs/analysis/overview.md)
+- Consist showcase scripts: [docs/analysis/consist_in_action.md](docs/analysis/consist_in_action.md)
 - Lawrencium: [docs/run/lawrencium.md](docs/run/lawrencium.md)
 
 ## Citation

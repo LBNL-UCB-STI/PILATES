@@ -813,8 +813,16 @@ class StageRunner:
         if runtime_kwargs_extra:
             merged_runtime_kwargs.update(runtime_kwargs_extra)
         runner = self.run_workflow_fn or run_workflow
+        resolved_stage_name = stage_name or self.stage_name
+        logger.info(
+            "[stage:%s] starting name_suffix=%s iteration=%s run_id=%s",
+            resolved_stage_name,
+            self.name_suffix,
+            self.iteration,
+            cr.current_run_id(),
+        )
         runner(
-            stage_name=stage_name or self.stage_name,
+            stage_name=resolved_stage_name,
             steps=steps,
             scenario=self.scenario,
             state=self.state,

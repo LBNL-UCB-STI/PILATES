@@ -72,6 +72,49 @@ def test_resolve_beam_exchange_scenario_folder_reads_config_folder(tmp_path):
     assert resolved == str(base_input_dir / "urbansim" / "2018")
 
 
+def test_resolve_beam_exchange_scenario_folder_supports_bare_inputdirectory(tmp_path):
+    preprocessor = _make_preprocessor()
+    workspace = _make_workspace(tmp_path)
+
+    base_input_dir = tmp_path / "beam" / "input" / "sfbay"
+    base_input_dir.mkdir(parents=True, exist_ok=True)
+    config_path = base_input_dir / "sfbay-pilates-base-omx.conf"
+    config_path.write_text(
+        'beam.exchange.scenario {\n'
+        '  folder = ${inputDirectory}"/urbansim/2018"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    resolved = preprocessor._resolve_beam_exchange_scenario_folder(workspace)
+
+    assert resolved == str(base_input_dir / "urbansim" / "2018")
+
+
+def test_resolve_beam_exchange_scenario_folder_reads_included_config_folder(tmp_path):
+    preprocessor = _make_preprocessor()
+    workspace = _make_workspace(tmp_path)
+
+    base_input_dir = tmp_path / "beam" / "input" / "sfbay"
+    base_input_dir.mkdir(parents=True, exist_ok=True)
+    config_path = base_input_dir / "sfbay-pilates-base-omx.conf"
+    include_path = base_input_dir / "scenario-override.conf"
+    config_path.write_text(
+        'include "scenario-override.conf"\n',
+        encoding="utf-8",
+    )
+    include_path.write_text(
+        'beam.exchange.scenario {\n'
+        '  folder = ${beam.inputDirectory}"/urbansim/2018"\n'
+        '}\n',
+        encoding="utf-8",
+    )
+
+    resolved = preprocessor._resolve_beam_exchange_scenario_folder(workspace)
+
+    assert resolved == str(base_input_dir / "urbansim" / "2018")
+
+
 def test_resolve_beam_exchange_scenario_folder_falls_back_on_unparseable_folder(tmp_path):
     preprocessor = _make_preprocessor(scenario_folder="urbansim")
     workspace = _make_workspace(tmp_path)

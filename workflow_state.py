@@ -1,5 +1,6 @@
+from bisect import bisect_left
 from enum import Enum
-from typing import Optional
+from typing import Dict, Optional, Tuple
 import os
 import yaml
 import logging
@@ -78,6 +79,9 @@ class WorkflowState:
             "traffic_assignment_enabled": traffic_assignment_enabled,
         }
         self.full_settings = full_settings or {}
+        self._year_schedule: Tuple[int, ...] = ()
+        self._year_schedule_positions: Dict[int, int] = {}
+        self._schedule_index: Optional[int] = None
 
         # Determine what stages are enabled
         self.enabled_stages = set()
@@ -115,6 +119,8 @@ class WorkflowState:
             )
         if traffic_assignment_enabled:
             self.loop_substages.append(self.Stage.traffic_assignment)
+
+        self._set_year_schedule(self._compute_year_schedule())
 
     @property
     def asim_compiled(self):
@@ -372,32 +378,69 @@ class WorkflowState:
             logger.info("No enabled stages found. Workflow is complete.")
             self._advance_to_next_year()  # This will set current_major_stage to None and handle state file removal
 
-    def _interval_step_for_year(self, year: int) -> int:
-        # Keep 2010 as a one-time bridge into regular interval boundaries.
-        return 7 if year == 2010 else self.travel_model_freq
+    def _compute_year_schedule(self) -> Tuple[int, ...]:
+        years = [self.start_year]
+        if not self._settings.get("land_use_enabled"):
+            return tuple(years)
 
-    def _compute_forecast_year(self) -> int:
+        current_year = self.start_year
+        while current_year < self.end_year:
+            # Keep 2010 as a one-time bridge into regular interval boundaries.
+            step = 7 if current_year == 2010 else self.travel_model_freq
+            if step <= 0:
+                break
+            next_year = min(current_year + step, self.end_year)
+            if next_year <= current_year:
+                break
+            years.append(next_year)
+            current_year = next_year
+        return tuple(years)
+
+    def _set_year_schedule(self, schedule: Tuple[int, ...]) -> None:
+        normalized = list(schedule) if schedule else [self.start_year]
+        if (
+            self.current_year is not None
+            and self.current_year <= self.end_year
+            and self.current_year not in normalized
+        ):
+            normalized.append(self.current_year)
+            normalized = sorted(set(normalized))
+        self._year_schedule = tuple(normalized)
+        self._year_schedule_positions = {
+            year: index for index, year in enumerate(self._year_schedule)
+        }
+        if self.current_year is None:
+            self._schedule_index = 0
+        elif self.current_year > self.end_year:
+            self._schedule_index = len(self._year_schedule)
+        else:
+            self._schedule_index = self._year_schedule_positions.get(self.current_year)
+
+    def _advance_schedule_to_current_year(self) -> None:
+        if self.current_year is None:
+            self._schedule_index = 0
+            return
+        if self.current_year > self.end_year:
+            self._schedule_index = len(self._year_schedule)
+            return
+        if self.current_year in self._year_schedule_positions:
+            self._schedule_index = self._year_schedule_positions[self.current_year]
+            return
+        self._set_year_schedule(self._year_schedule)
+
+    def _forecast_year_for_current_schedule_position(self) -> int:
         if not self._settings.get("land_use_enabled"):
             return self.current_year
-        next_year_candidate = self.current_year + self._interval_step_for_year(
-            self.current_year
-        )
-        return min(next_year_candidate, self.end_year)
+        self._advance_schedule_to_current_year()
+        if self._schedule_index is None:
+            return self.current_year
+        next_index = self._schedule_index + 1
+        if next_index >= len(self._year_schedule):
+            return self.end_year
+        return self._year_schedule[next_index]
 
-    def _next_current_year(self) -> int:
-        if not self._settings.get("land_use_enabled"):
-            return self.end_year + 1
-
-        next_year = (
-            self.forecast_year
-            if self.forecast_year is not None
-            else self._compute_forecast_year()
-        )
-        # Guard against stale or capped forecast years that would cause
-        # backward moves or no-op loops.
-        if next_year <= self.current_year:
-            return self.end_year + 1
-        return next_year
+    def _compute_forecast_year(self) -> int:
+        return self._forecast_year_for_current_schedule_position()
 
     def write_state(self):
         """Save the current state to file"""
@@ -659,7 +702,17 @@ class WorkflowState:
 
     def _advance_to_next_year(self):
         """Move to the next interval boundary year and reset to first stage"""
-        self.current_year = self._next_current_year()
+        self._advance_schedule_to_current_year()
+        if self._schedule_index is None:
+            current_year = self.current_year if self.current_year is not None else self.start_year
+            self._schedule_index = bisect_left(self._year_schedule, current_year)
+        next_index = self._schedule_index + 1
+        if next_index < len(self._year_schedule):
+            self.current_year = self._year_schedule[next_index]
+            self._schedule_index = next_index
+        else:
+            self.current_year = self.end_year + 1
+            self._schedule_index = len(self._year_schedule)
 
         if self.current_year <= self.end_year:
             logger.info(f"Starting year {self.current_year}")

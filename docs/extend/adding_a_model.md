@@ -22,6 +22,16 @@ For most contributors, the least confusing order is:
 5. connect the stage that will call the step
 6. add validation, guardrail coverage, and docs before calling the integration done
 
+That order is intentional: the scaffold and the workflow catalog own the
+contract surface, while model-local modules own implementation details.
+If you are wondering "where do I add X?", use this split:
+
+- model-local behavior lives under `pilates/<model>/`
+- public workflow keys and typed outputs live in `pilates/<model>/outputs.py`
+- execution metadata lives in `pilates/workflows/catalog.py`
+- stage sequencing stays in `pilates/workflows/stages/`
+- step shells stay in `pilates/workflows/steps/`
+
 ## Preferred Starting Point
 
 Use `scripts/new_model_scaffold.py` first unless you are touching an existing model.
@@ -50,6 +60,7 @@ That path is intentionally more declarative than wiring a model by hand across m
 For a new model, the normal set of files to touch is:
 
 - `pilates/<model>/outputs.py`
+- `pilates/<model>/preprocessor.py`, `runner.py`, and/or `postprocessor.py`
 - `pilates/generic/model_factory.py`
 - `pilates/workflows/catalog.py`
 - `pilates/workflows/steps/<model>.py`
@@ -58,3 +69,15 @@ For a new model, the normal set of files to touch is:
 - focused tests under `tests/`
 
 If your change needs more than that, pause and check whether workflow policy is leaking into the model package.
+
+## One-Hop Checklist
+
+Use this quick checklist after the scaffold is in place:
+
+1. Define the typed outputs and confirm the public artifact keys are explicit.
+2. Register the model classes in `pilates/generic/model_factory.py`.
+3. Add or update the `WorkflowStepSpec` entry in `pilates/workflows/catalog.py`.
+4. Build the step shell in `pilates/workflows/steps/<model>.py` and export it from `pilates/workflows/steps/__init__.py`.
+5. Wire exactly one stage boundary that calls the step.
+6. Add focused contract tests for the stage boundary and any restart-sensitive outputs.
+7. Update the relevant docs page so the new boundary is discoverable without code spelunking.

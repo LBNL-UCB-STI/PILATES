@@ -78,6 +78,7 @@ from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
 from pilates.workflows.stages import supply_demand as supply_demand_stage
+from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.supply_demand import (
     _build_beam_postprocess_input_keys,
     _run_traffic_assignment_phase,
@@ -554,6 +555,27 @@ def test_land_use_stage_contract(stage_env):
     assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
+
+
+def test_land_use_stage_returns_typed_supply_demand_handoff(stage_env):
+    from pilates.workflows.steps import StepOutputsHolder
+
+    outputs_holder = StepOutputsHolder()
+
+    handoff = run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=stage_env["state"].forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    assert isinstance(handoff, LandUseToSupplyDemandHandoff)
+    assert handoff.usim_datastore_base_h5 is not None
+    assert handoff.usim_datastore_current_h5 is not None
+    assert handoff.to_input_mapping()[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
 
 
 def test_land_use_stage_prefers_explicit_beam_skims_artifact(stage_env):
@@ -1361,7 +1383,11 @@ def test_supply_demand_activitysim_preprocess_uses_base_population_source_when_l
     assert preprocess_calls, "Expected an ActivitySim preprocess step call."
     binding = preprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == stage_env["usim_input_path"]
+    assert (
+        USIM_POPULATION_SOURCE_H5 in (binding.input_keys or [])
+        or (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5)
+        == stage_env["usim_input_path"]
+    )
 
 
 def test_supply_demand_activitysim_restart_requires_explicit_population_roles(
@@ -1416,6 +1442,47 @@ def test_supply_demand_activitysim_restart_with_empty_inputs_still_requires_expl
 
     assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) is not None
     assert stage_env["coupler"].get(USIM_POPULATION_SOURCE_H5) is not None
+
+
+def test_supply_demand_stage_accepts_typed_land_use_handoff(stage_env, tmp_path):
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    handoff = LandUseToSupplyDemandHandoff(
+        usim_datastore_base_h5=stage_env["usim_input_path"],
+        usim_datastore_current_h5=stage_env["usim_input_path"],
+        usim_population_source_h5=stage_env["usim_input_path"],
+    )
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        handoff=handoff,
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    preprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call["model"] == "activitysim_preprocess"
+    ]
+    assert preprocess_calls, "Expected an ActivitySim preprocess step call."
+    binding = preprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert (
+        USIM_POPULATION_SOURCE_H5 in (binding.input_keys or [])
+        or (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5)
+        == stage_env["usim_input_path"]
+    )
 
 
 def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_input(

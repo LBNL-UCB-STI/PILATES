@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Optional
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
@@ -12,6 +14,8 @@ from workflow_state import WorkflowState
 
 from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder, make_postprocessing_step
+
+logger = logging.getLogger(__name__)
 
 
 def _build_postprocessing_manifest_path(workspace: Workspace, year: int) -> Path:
@@ -51,6 +55,7 @@ def run_postprocessing_stage(
     settings = context.settings
     state = context.state
     workspace = context.workspace
+    logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
 
     outputs_holder = StepOutputsHolder()
     manifest_config = ManifestConfig(

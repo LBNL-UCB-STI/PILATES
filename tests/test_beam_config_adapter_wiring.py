@@ -10,6 +10,7 @@ from consist.core.step_context import StepContext
 
 pytest.importorskip("openmatrix")
 
+from pilates.beam.config_hocon import beam_config_env_overrides
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.beam.runner import BeamFullSkimRunner
@@ -223,12 +224,10 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
     assert adapter.primary_config == (
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config
     )
-    assert adapter.env_overrides == {
-        "PWD": str(Path(workspace.full_path) / "beam"),
-        "inputDirectory": str(
-            Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-        ),
-    }
+    assert adapter.env_overrides == beam_config_env_overrides(
+        settings,
+        workspace=workspace,
+    )
     assert resolved_config["model"] == "beam_run"
     assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 

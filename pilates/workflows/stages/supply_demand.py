@@ -8,6 +8,7 @@ from typing import Any, Callable, Dict, Mapping, Optional, Union
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
@@ -15,6 +16,7 @@ from pilates.workflows.orchestration import ManifestConfig
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
+from .handoffs import LandUseToSupplyDemandHandoff
 
 from .supply_demand_activity import (
     ActivityDemandPhaseInputs,
@@ -41,7 +43,8 @@ def run_supply_demand_stage(
     scenario: ScenarioWithCoupler,
     coupler: CouplerProtocol,
     year: int,
-    usim_inputs: Mapping[str, Union[str, os.PathLike]],
+    handoff: Optional[LandUseToSupplyDemandHandoff] = None,
+    usim_inputs: Optional[Mapping[str, Union[str, os.PathLike]]] = None,
     build_manifest_path: Callable[[Workspace, int, int], os.PathLike],
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
     context: WorkflowRuntimeContext,
@@ -71,9 +74,11 @@ def run_supply_demand_stage(
         Coupler used to read/write artifacts across steps.
     year : int
         Forecast year being simulated.
-    usim_inputs : Mapping[str, Union[str, os.PathLike]]
-        Input mapping (including any UrbanSim datastore paths) used to seed
-        ActivitySim preprocessing when land use was not run.
+    handoff : Optional[LandUseToSupplyDemandHandoff]
+        Typed UrbanSim datastore handoff used to seed ActivitySim preprocessing
+        when land use ran earlier in the year.
+    usim_inputs : Optional[Mapping[str, Union[str, os.PathLike]]]
+        Compatibility alias for older callers still passing a raw mapping.
     build_manifest_path : Callable[[Workspace, int, int], os.PathLike]
         Factory for per-year/per-iteration manifest file locations.
     on_iteration_boundary : Optional[Callable[[int], None]], optional
@@ -113,6 +118,14 @@ def run_supply_demand_stage(
     state = context.state
     workspace = context.workspace
     surface = context.surface
+    if handoff is None:
+        handoff = LandUseToSupplyDemandHandoff.from_mapping(usim_inputs)
+    logger.info(
+        "[supply_demand] year=%s run_id=%s handoff_keys=%s",
+        year,
+        cr.current_run_id(),
+        sorted(handoff.to_input_mapping().keys()),
+    )
 
     total_iters = settings.run.supply_demand_iters
     if settings.run.models.activity_demand is None and total_iters > 1:
@@ -127,7 +140,7 @@ def run_supply_demand_stage(
         )
         total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, Any]] = None
-    resumed_usim_inputs = dict(usim_inputs)
+    resumed_usim_inputs = handoff.to_input_mapping()
     if bool(getattr(state, "is_restart_run", False)) and not resumed_usim_inputs:
         # On resumed runs, land use may be enabled globally but already complete
         # for the current year. In that case the skipped land-use stage will not

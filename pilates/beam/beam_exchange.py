@@ -4,6 +4,12 @@ import logging
 import os
 from typing import Dict, List, Optional, Tuple, Any
 
+from pilates.beam.config_hocon import (
+    BeamConfigHoconError,
+    beam_config_env_overrides,
+    beam_primary_config_path,
+    resolve_beam_config_value,
+)
 from pilates.config import PilatesConfig
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.io import locate_beam_file
@@ -32,44 +38,54 @@ def config_beam_exchange_scenario_folder(
     """
     Parse the generated BEAM config for an exchange.scenario.folder override.
     """
-    base_input_dir = os.path.join(
-        workspace.get_beam_mutable_data_dir(),
-        settings.run.region,
-    )
     default_folder = default_beam_exchange_scenario_folder(settings, workspace)
-    config_path = os.path.join(base_input_dir, settings.beam.config)
-    if not os.path.exists(config_path):
+    staged_root = os.path.normpath(
+        os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            settings.run.region,
+        )
+    )
+    config_path = beam_primary_config_path(settings, workspace=workspace)
+    if not config_path.exists():
         return None
 
+    env_overrides = beam_config_env_overrides(settings, workspace=workspace)
     try:
-        with open(config_path, "r") as config_file:
-            for raw_line in config_file:
-                line = raw_line.split("#", 1)[0].strip()
-                if not line or "=" not in line:
-                    continue
-                key, value = [part.strip() for part in line.split("=", 1)]
-                # In BEAM HOCON this is typically nested under beam.exchange.scenario:
-                #   folder = ${beam.inputDirectory}"/urbansim/2018"
-                if key != "folder":
-                    continue
-                if "${beam.inputDirectory}" not in value:
-                    continue
-
-                resolved = value.replace("${beam.inputDirectory}", base_input_dir)
-                resolved = resolved.replace('"', "")
-                resolved = os.path.normpath(resolved)
-                if resolved and os.path.normpath(resolved) != os.path.normpath(
-                    default_folder
-                ):
-                    return resolved
-    except Exception as exc:
+        resolved = None
+        for candidate_key in ("beam.exchange.scenario.folder", "folder"):
+            resolved = resolve_beam_config_value(
+                config_path,
+                key=candidate_key,
+                env_overrides=env_overrides,
+            )
+            if resolved is not None:
+                break
+    except BeamConfigHoconError as exc:
         logger.warning(
             "[BEAM Preprocessor] Could not parse exchange.scenario.folder from %s: %s. "
             "Falling back to settings.beam.scenario_folder.",
             config_path,
             exc,
         )
+        return None
 
+    if resolved is not None:
+        normalized = os.path.normpath(os.fspath(resolved))
+        try:
+            inside_staged_root = (
+                os.path.commonpath([normalized, staged_root]) == staged_root
+            )
+        except ValueError:
+            inside_staged_root = False
+        if normalized and not inside_staged_root:
+            logger.warning(
+                "[BEAM Preprocessor] Ignoring exchange.scenario.folder override outside "
+                "the staged BEAM input tree: %s",
+                normalized,
+            )
+            return None
+        if normalized and normalized != os.path.normpath(default_folder):
+            return normalized
     return None
 
 

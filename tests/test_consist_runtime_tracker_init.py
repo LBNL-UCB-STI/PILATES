@@ -110,3 +110,34 @@ def test_log_input_raises_when_enabled_outside_active_run(monkeypatch):
     assert key == "input_key"
     assert meta == {}
     assert str(path).endswith("/tmp/in.txt")
+
+
+def test_current_run_id_returns_none_when_runtime_disabled(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: SimpleNamespace(id="run-123"))
+    monkeypatch.setattr(cr, "consist", fake_consist)
+    cr.set_enabled(False)
+
+    try:
+        assert cr.current_run_id() is None
+    finally:
+        cr.set_enabled(None)
+
+
+def test_current_run_id_returns_none_when_consist_has_no_active_run(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: None)
+    monkeypatch.setattr(cr, "consist", fake_consist)
+
+    try:
+        assert cr.current_run_id() is None
+    finally:
+        cr.set_enabled(None)
+
+
+def test_current_run_id_returns_stringified_run_id(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: SimpleNamespace(id=12345))
+    monkeypatch.setattr(cr, "consist", fake_consist)
+
+    try:
+        assert cr.current_run_id() == "12345"
+    finally:
+        cr.set_enabled(None)

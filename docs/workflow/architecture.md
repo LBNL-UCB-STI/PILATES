@@ -19,6 +19,22 @@ The runtime keeps two handoff channels separate:
 - `StepOutputsHolder` stores typed in-memory outputs between adjacent steps in the same process.
 - The coupler stores published artifact values and is the runtime surface that survives step boundaries, cache recovery, and archive-aware replay.
 
+## Data Flow
+
+```mermaid
+flowchart LR
+    bootstrap["Bootstrap"] --> usim["UrbanSim"]
+    usim -->|`USIM_DATASTORE_*`, `USIM_FORECAST_OUTPUT`, `USIM_POPULATION_SOURCE_H5`| atlas["ATLAS"]
+    usim -->|typed land-use handoff| asim["ActivitySim"]
+    atlas -->|vehicle ownership inputs| asim
+    asim -->|`ASIM_*`, households/persons/plans handoff| beam["BEAM"]
+    beam -->|`ZARR_SKIMS`, `FINAL_SKIMS_OMX`, `BEAM_FULL_SKIMS`| usim
+    beam -->|linkstats and skim artifacts| asim
+```
+
+The outer year loop now advances through one computed schedule, then re-enters
+this staged handoff chain for each forecast boundary.
+
 ## Core Layers
 
 ### Runtime assembly

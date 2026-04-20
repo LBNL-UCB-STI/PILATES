@@ -360,6 +360,17 @@ def current_run() -> Optional[Any]:
         return None
 
 
+def current_run_id() -> Optional[str]:
+    run = current_run()
+    if run is None:
+        return None
+    run_id = getattr(run, "id", None)
+    if run_id is None:
+        return None
+    run_id_text = str(run_id).strip()
+    return run_id_text or None
+
+
 def set_tracker(tracker: Optional[TrackerLike]) -> None:
     """Set a global tracker for Consist API entrypoints."""
     if hasattr(consist, "set_current_tracker"):

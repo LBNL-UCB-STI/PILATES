@@ -98,6 +98,7 @@ It helps you:
 === "Analyzing archived runs"
 
     - [Analysis Overview](analysis/overview.md)
+    - [Consist in Action](analysis/consist_in_action.md)
     - [Opening Archives](analysis/opening_archives.md)
     - [Consist Analysis CLI](analysis/consist_analysis_cli.md)
     - [Run Discovery and Runsets](analysis/run_discovery_and_runsets.md)

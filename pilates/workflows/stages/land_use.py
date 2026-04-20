@@ -8,6 +8,7 @@ from typing import Dict, Optional, Union, cast, TYPE_CHECKING
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -39,6 +40,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
+from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 logger = logging.getLogger(__name__)
 
@@ -57,7 +59,7 @@ def run_land_use_stage(
     year: int,
     outputs_holder_year: StepOutputsHolder,
     context: WorkflowRuntimeContext,
-) -> Dict[str, Union[str, os.PathLike]]:
+) -> LandUseToSupplyDemandHandoff:
     """
     Run the UrbanSim land-use stage and return updated UrbanSim inputs.
 
@@ -95,8 +97,8 @@ def run_land_use_stage(
 
     Returns
     -------
-    Dict[str, Union[str, PathLike]]
-        Updated UrbanSim input mapping, including the latest datastore path.
+    LandUseToSupplyDemandHandoff
+        Updated UrbanSim datastore handoff for downstream supply-demand stages.
     """
     settings = context.settings
     state = context.state
@@ -104,6 +106,7 @@ def run_land_use_stage(
     surface = context.surface
 
     formatted_print(f"LAND USE MODEL FOR YEAR {year}")
+    logger.info("[land_use] year=%s run_id=%s", year, cr.current_run_id())
 
     usim_inputs, usim_input_descriptions = build_urbansim_inputs(
         settings, state, workspace, year, surface=surface
@@ -280,4 +283,4 @@ def run_land_use_stage(
     )
     flush_archive_queue(timeout=300, fail_on_timeout=False)
 
-    return dict(usim_inputs)
+    return LandUseToSupplyDemandHandoff.from_mapping(usim_inputs)

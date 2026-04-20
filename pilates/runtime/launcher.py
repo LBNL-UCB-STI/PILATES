@@ -70,6 +70,7 @@ from pilates.workflows.stages import (
 from pilates.workflows.stages.supply_demand_resume import (
     seed_supply_demand_parent_run_ids_for_resume,
 )
+from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState
@@ -980,11 +981,16 @@ def main(
             #
             for year in state:
                 formatted_print(f"STARTING YEAR {year}")
-                usim_inputs: Dict[str, Any] = {}
+                logger.info(
+                    "[launcher] starting year=%s run_id=%s",
+                    year,
+                    cr.current_run_id(),
+                )
+                land_use_handoff = LandUseToSupplyDemandHandoff()
                 outputs_holder_year = StepOutputsHolder()
 
                 if state.should_run(WorkflowState.Stage.land_use):
-                    usim_inputs = run_land_use_stage(
+                    land_use_handoff = run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         coupler=coupler,
                         year=year,
@@ -1017,7 +1023,7 @@ def main(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         coupler=coupler,
                         year=year,
-                        usim_inputs=usim_inputs,
+                        handoff=land_use_handoff,
                         build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
                             lambda iteration, y=year: (
