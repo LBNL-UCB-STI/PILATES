@@ -590,6 +590,10 @@ class BeamPreprocessor(GenericPreprocessor):
             state=self.state,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
             source_path=source_path,
+            preferred_format=(
+                getattr(getattr(self.settings, "activitysim", None), "file_format", None)
+                or "csv"
+            ),
         )
 
     def _copy_plans_from_asim(

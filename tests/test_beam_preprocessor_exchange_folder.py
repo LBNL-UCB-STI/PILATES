@@ -274,10 +274,10 @@ def test_beam_preprocess_warns_when_vehicle_households_are_missing_from_staged_h
     def _fake_copy_vehicles(_workspace, source_path=None):
         _ = source_path
         pd.DataFrame(
-            {"vehicle_id": [100], "household_id": [999], "vehicleTypeId": ["sedan_gas_2015"]}
-        ).to_csv(scenario_dir / "vehicles.csv.gz", index=False, compression="gzip")
+            {"vehicleId": [100], "householdId": [999], "vehicleTypeId": ["sedan_gas_2015"]}
+        ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
         return FileRecord(
-            file_path=str(scenario_dir / "vehicles.csv.gz"),
+            file_path=str(scenario_dir / "vehicles.parquet"),
             short_name="vehicles_beam_in",
         )
 
@@ -286,7 +286,7 @@ def test_beam_preprocess_warns_when_vehicle_households_are_missing_from_staged_h
 
     outputs = preprocessor.preprocess(workspace)
 
-    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.csv.gz"
+    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
     assert (
         "BEAM staged vehicles reference households that are absent from staged households. "
         "Continuing because BEAM can filter vehicles against the staged household set."
@@ -351,10 +351,10 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     def _fake_copy_vehicles(_workspace, source_path=None):
         captured["source_path"] = source_path
         pd.DataFrame(
-            {"vehicle_id": [100], "household_id": [1], "vehicleTypeId": ["sedan_gas_2015"]}
-        ).to_csv(scenario_dir / "vehicles.csv.gz", index=False, compression="gzip")
+            {"vehicleId": [100], "householdId": [1], "vehicleTypeId": ["sedan_gas_2015"]}
+        ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
         return FileRecord(
-            file_path=str(scenario_dir / "vehicles.csv.gz"),
+            file_path=str(scenario_dir / "vehicles.parquet"),
             short_name="vehicles_beam_in",
         )
 
@@ -367,4 +367,4 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     )
 
     assert captured["source_path"] == str(explicit_vehicles)
-    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.csv.gz"
+    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"

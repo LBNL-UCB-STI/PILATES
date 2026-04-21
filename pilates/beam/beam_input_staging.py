@@ -115,10 +115,15 @@ def copy_vehicles_from_atlas(
     state: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     source_path: Optional[str] = None,
+    preferred_format: Optional[str] = None,
 ) -> Optional[FileRecord]:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     os.makedirs(beam_scenario_folder, exist_ok=True)
-    beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
+    beam_vehicles_format = _beam_vehicle_file_format(preferred_format)
+    beam_vehicles_path = _beam_vehicle_path(
+        beam_scenario_folder,
+        file_format=beam_vehicles_format,
+    )
 
     atlas_candidates = [source_path] if source_path else []
     if not atlas_candidates:
@@ -156,8 +161,13 @@ def copy_vehicles_from_atlas(
         beam_vehicles_path,
     )
 
-    df = pd.read_csv(atlas_vehicle_file_loc)
-    df.to_csv(beam_vehicles_path, compression="gzip", index=False)
+    df = _read_vehicle_table(atlas_vehicle_file_loc)
+    df = _normalize_beam_vehicle_columns(df)
+    _write_vehicle_table(
+        df,
+        beam_vehicles_path,
+        file_format=beam_vehicles_format,
+    )
     return FileRecord(
         file_path=beam_vehicles_path,
         description="BEAM vehicles input derived from ATLAS vehicles2",
@@ -176,26 +186,34 @@ def validate_population_consistency(
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     file_format = settings.activitysim.file_format if settings.activitysim else "csv"
     households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
-    vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
+    vehicles_path = _find_existing_vehicle_path(
+        beam_scenario_folder,
+        preferred_format=file_format,
+    )
 
-    if not os.path.exists(households_path) or not os.path.exists(vehicles_path):
+    if (
+        households_path is None
+        or not os.path.exists(households_path)
+        or vehicles_path is None
+        or not os.path.exists(vehicles_path)
+    ):
         return
 
     households = BeamDataHelper.read_and_clean(households_path, "households", file_format)
-    vehicles = pd.read_csv(vehicles_path, compression="gzip")
+    vehicles = _read_vehicle_table(vehicles_path)
 
     household_ids = pd.Index(households.index).dropna()
     household_ids = pd.Index(pd.to_numeric(household_ids, errors="coerce")).dropna().astype(int)
 
     vehicle_household_col = None
-    for candidate in ("household_id", "householdId"):
+    for candidate in ("householdId", "household_id"):
         if candidate in vehicles.columns:
             vehicle_household_col = candidate
             break
     if vehicle_household_col is None:
         raise ValueError(
-            "BEAM staged vehicles.csv.gz is missing a household reference column. "
-            f"Expected one of ['household_id', 'householdId'], found {vehicles.columns.tolist()}"
+            "BEAM staged vehicles input is missing a household reference column. "
+            f"Expected one of ['householdId', 'household_id'], found {vehicles.columns.tolist()}"
         )
 
     vehicle_household_ids = pd.to_numeric(
@@ -223,6 +241,80 @@ def validate_population_consistency(
             households_path,
             vehicles_path,
         )
+
+
+def _beam_vehicle_file_format(preferred_format: Optional[str]) -> str:
+    return "parquet" if preferred_format == "parquet" else "csv.gz"
+
+
+def _beam_vehicle_path(beam_scenario_folder: str, *, file_format: str) -> str:
+    extension = "parquet" if file_format == "parquet" else "csv.gz"
+    return os.path.join(beam_scenario_folder, f"vehicles.{extension}")
+
+
+def _find_existing_vehicle_path(
+    beam_scenario_folder: str,
+    *,
+    preferred_format: Optional[str],
+) -> Optional[str]:
+    candidate_formats = []
+    normalized_preferred = _beam_vehicle_file_format(preferred_format)
+    candidate_formats.append(normalized_preferred)
+    for fallback in ("parquet", "csv.gz"):
+        if fallback not in candidate_formats:
+            candidate_formats.append(fallback)
+    for candidate_format in candidate_formats:
+        candidate_path = _beam_vehicle_path(
+            beam_scenario_folder,
+            file_format=candidate_format,
+        )
+        if os.path.exists(candidate_path):
+            return candidate_path
+    return None
+
+
+def _read_vehicle_table(path: str) -> pd.DataFrame:
+    if path.endswith(".parquet"):
+        return pd.read_parquet(path)
+    compression = "gzip" if path.endswith(".gz") else None
+    return pd.read_csv(path, compression=compression)
+
+
+def _write_vehicle_table(df: pd.DataFrame, path: str, *, file_format: str) -> None:
+    if file_format == "parquet":
+        df.to_parquet(path, index=False)
+        return
+    df.to_csv(path, compression="gzip", index=False)
+
+
+def _normalize_beam_vehicle_columns(df: pd.DataFrame) -> pd.DataFrame:
+    normalized = df.copy()
+    rename_map = {}
+    if "vehicleId" not in normalized.columns and "vehicle_id" in normalized.columns:
+        rename_map["vehicle_id"] = "vehicleId"
+    if "householdId" not in normalized.columns and "household_id" in normalized.columns:
+        rename_map["household_id"] = "householdId"
+    if rename_map:
+        normalized = normalized.rename(columns=rename_map)
+
+    required_columns = ("vehicleId", "vehicleTypeId", "householdId")
+    missing_columns = [col for col in required_columns if col not in normalized.columns]
+    if missing_columns:
+        raise ValueError(
+            "ATLAS vehicles2 input is missing required columns for BEAM staging: "
+            f"{missing_columns}; available columns: {normalized.columns.tolist()}"
+        )
+
+    for int_col in ("vehicleId", "householdId"):
+        numeric = pd.to_numeric(normalized[int_col], errors="coerce")
+        if numeric.isna().any() or ((numeric % 1) != 0).any():
+            raise ValueError(
+                f"ATLAS vehicles2 column '{int_col}' must be integer-valued for BEAM staging."
+            )
+        normalized[int_col] = numeric.astype("int64")
+
+    normalized["vehicleTypeId"] = normalized["vehicleTypeId"].astype(str)
+    return normalized
 
 
 def format_specific_output_records(
