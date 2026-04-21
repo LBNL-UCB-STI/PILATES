@@ -2,6 +2,7 @@ import gzip
 from pathlib import Path
 from types import SimpleNamespace
 import yaml
+import pandas as pd
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs
@@ -1049,7 +1050,10 @@ def test_copy_vehicles_from_atlas_materializes_archive_fallback(
 
     archived_source = archive_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
     archived_source.parent.mkdir(parents=True, exist_ok=True)
-    archived_source.write_text("household_id,vehicleTypeId\n1,7\n", encoding="utf-8")
+    archived_source.write_text(
+        "vehicle_id,household_id,vehicleTypeId\n101,1,7\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root / "run"))
     monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root / "run"))
@@ -1061,18 +1065,21 @@ def test_copy_vehicles_from_atlas_materializes_archive_fallback(
         workspace=workspace,
         state=state,
         resolve_beam_exchange_scenario_folder_fn=_resolve_beam_exchange_scenario_folder_fn,
+        preferred_format="parquet",
     )
 
     assert record is not None
     assert record.short_name == "vehicles_beam_in"
     local_source = local_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
     beam_vehicles = (
-        local_root / "run" / "beam" / "input" / "test" / "scenario" / "vehicles.csv.gz"
+        local_root / "run" / "beam" / "input" / "test" / "scenario" / "vehicles.parquet"
     )
     assert local_source.exists()
     assert beam_vehicles.exists()
-    with gzip.open(beam_vehicles, "rt", encoding="utf-8") as fh:
-        assert "vehicleTypeId" in fh.read()
+    vehicles = pd.read_parquet(beam_vehicles)
+    assert list(vehicles.columns[:3]) == ["vehicleId", "householdId", "vehicleTypeId"]
+    assert str(vehicles["householdId"].dtype) == "int64"
+    assert str(vehicles["vehicleId"].dtype) == "int64"
 
 
 def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):

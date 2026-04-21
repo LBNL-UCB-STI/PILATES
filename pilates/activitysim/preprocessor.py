@@ -3279,13 +3279,26 @@ def _update_persons_table(
         sampled_ids = rng.choice(eligible_ids.to_numpy(), size=sample_size, replace=False)
         persons.loc[sampled_ids, target_col] = True
 
+    valid_asim_zone_ids = pd.Index(
+        pd.to_numeric(blocks[asim_zone_id_col], errors="coerce").dropna().astype(int).unique()
+    )
+
+    def _invalid_location_mask(location_ids: pd.Series) -> pd.Series:
+        numeric_location_ids = pd.to_numeric(location_ids, errors="coerce")
+        return (
+            numeric_location_ids.isna()
+            | (numeric_location_ids <= 0)
+            | ~numeric_location_ids.isin(valid_asim_zone_ids)
+        )
+
     workplace_share = get_setting(settings, "activitysim.workplace_reassignment_share", 0.0)
     school_share = get_setting(settings, "activitysim.school_reassignment_share", 0.0)
 
     if "workplace_zone_id" in persons.columns:
-        missing_work_mask = (persons["worker"] == 1) & (persons["workplace_zone_id"] < 0)
-        valid_work_mask = (persons["worker"] == 1) & (persons["workplace_zone_id"] >= 0)
-        persons.loc[missing_work_mask, "needs_workplace_reassignment"] = True
+        workplace_location_invalid = _invalid_location_mask(persons["workplace_zone_id"])
+        invalid_work_mask = (persons["worker"] == 1) & workplace_location_invalid
+        valid_work_mask = (persons["worker"] == 1) & ~workplace_location_invalid
+        persons.loc[invalid_work_mask, "needs_workplace_reassignment"] = True
         _mark_sampled_reassignments(
             "needs_workplace_reassignment",
             valid_work_mask,
@@ -3293,8 +3306,8 @@ def _update_persons_table(
             _rng_for(11),
         )
         logger.info(
-            "Marked %s workers with missing workplaces and %s valid workers for reassignment",
-            int(missing_work_mask.sum()),
+            "Marked %s workers with invalid workplaces and %s valid workers for reassignment",
+            int(invalid_work_mask.sum()),
             int((persons.loc[valid_work_mask, "needs_workplace_reassignment"]).sum()),
         )
 
@@ -3303,9 +3316,10 @@ def _update_persons_table(
         # semantics, which are derived from pstudent/is_student rather than the
         # raw upstream student flag alone.
         effective_student_mask = persons["pstudent"].isin([1, 2])
-        missing_school_mask = effective_student_mask & (persons["school_zone_id"] < 0)
-        valid_school_mask = effective_student_mask & (persons["school_zone_id"] >= 0)
-        persons.loc[missing_school_mask, "needs_school_reassignment"] = True
+        school_location_invalid = _invalid_location_mask(persons["school_zone_id"])
+        invalid_school_mask = effective_student_mask & school_location_invalid
+        valid_school_mask = effective_student_mask & ~school_location_invalid
+        persons.loc[invalid_school_mask, "needs_school_reassignment"] = True
         _mark_sampled_reassignments(
             "needs_school_reassignment",
             valid_school_mask,
@@ -3313,8 +3327,8 @@ def _update_persons_table(
             _rng_for(23),
         )
         logger.info(
-            "Marked %s students with missing schools and %s valid students for reassignment",
-            int(missing_school_mask.sum()),
+            "Marked %s students with invalid schools and %s valid students for reassignment",
+            int(invalid_school_mask.sum()),
             int((persons.loc[valid_school_mask, "needs_school_reassignment"]).sum()),
         )
 
