@@ -8,6 +8,8 @@ import pandas as pd
 from pilates.beam.beam_input_staging import (
     _normalize_beam_vehicle_columns,
     summarize_population_consistency,
+    summarize_vehicle_category_consistency,
+    validate_population_consistency,
 )
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
@@ -378,9 +380,14 @@ def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_loc
     )
 
     assert list(normalized.columns[:3]) == ["vehicleId", "householdId", "vehicleTypeId"]
-    assert normalized["vehicleId"].tolist() == [101, 102, 201]
+    assert normalized["vehicleId"].tolist() == [
+        "hh-10-veh-1",
+        "hh-10-veh-2",
+        "hh-20-veh-1",
+    ]
+    assert normalized["sourceVehicleId"].tolist() == [1, 2, 1]
     assert not normalized["vehicleId"].duplicated().any()
-    assert str(normalized["vehicleId"].dtype) == "int64"
+    assert str(normalized["sourceVehicleId"].dtype) == "int64"
     assert str(normalized["householdId"].dtype) == "int64"
 
 
@@ -408,3 +415,99 @@ def test_summarize_population_consistency_reports_shortfalls_and_duplicates():
     assert report["sample_household_shortfalls"] == [
         {"household_id": 1, "cars": 2, "vehicle_row_count": 1}
     ]
+
+
+def test_summarize_vehicle_category_consistency_warns_on_non_car_rows(tmp_path):
+    workspace = _make_workspace(tmp_path)
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(config="sfbay-pilates-base-omx.conf"),
+    )
+
+    base_input_dir = tmp_path / "beam" / "input" / "sfbay"
+    scenario_dir = base_input_dir / "urbansim"
+    atlas_vehicle_types = base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    atlas_vehicle_types.parent.mkdir(parents=True, exist_ok=True)
+    atlas_vehicle_types.write_text(
+        "vehicleTypeId,vehicleCategory\nsedan_gas_2015,Car\nebike_1,Bike\n",
+        encoding="utf-8",
+    )
+    (base_input_dir / "sfbay-pilates-base-omx.conf").write_text(
+        'beam.agentsim.agents.vehicles.vehicleTypesFilePath = ${beam.inputDirectory}"/atlas-vehicles/vehicleTypes_baseline.csv"\n',
+        encoding="utf-8",
+    )
+
+    households = pd.DataFrame({"cars": [2]}, index=pd.Index([1], name="household_id"))
+    vehicles = pd.DataFrame(
+        {
+            "vehicleId": ["hh-1-veh-1", "hh-1-veh-2"],
+            "householdId": [1, 1],
+            "vehicleTypeId": ["sedan_gas_2015", "ebike_1"],
+        }
+    )
+
+    report = summarize_vehicle_category_consistency(
+        households=households,
+        vehicles=vehicles,
+        settings=settings,
+        workspace=workspace,
+    )
+
+    assert report["status"] == "ok"
+    assert report["households_with_car_category_shortfall"] == 1
+    assert report["unmatched_vehicle_types"] == 0
+    assert report["non_car_vehicle_rows"] == 1
+    assert report["sample_household_car_shortfalls"] == [
+        {"household_id": 1, "cars": 2, "car_vehicle_row_count": 1}
+    ]
+    assert report["vehicle_types_path"] == str(atlas_vehicle_types)
+
+
+def test_validate_population_consistency_logs_advisory_car_category_shortfall(
+    tmp_path, caplog
+):
+    caplog.set_level("INFO")
+    workspace = _make_workspace(tmp_path)
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(config="sfbay-pilates-base-omx.conf"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+
+    base_input_dir = tmp_path / "beam" / "input" / "sfbay"
+    scenario_dir = base_input_dir / "urbansim"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"household_id": [1], "cars": [2]}).to_parquet(
+        scenario_dir / "households.parquet",
+        index=False,
+    )
+    pd.DataFrame(
+        {
+            "vehicleId": ["hh-1-veh-1", "hh-1-veh-2"],
+            "householdId": [1, 1],
+            "vehicleTypeId": ["sedan_gas_2015", "ebike_1"],
+        }
+    ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
+    atlas_vehicle_types = base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    atlas_vehicle_types.parent.mkdir(parents=True, exist_ok=True)
+    atlas_vehicle_types.write_text(
+        "vehicleTypeId,vehicleCategory\nsedan_gas_2015,Car\nebike_1,Bike\n",
+        encoding="utf-8",
+    )
+    (base_input_dir / "sfbay-pilates-base-omx.conf").write_text(
+        'beam.agentsim.agents.vehicles.vehicleTypesFilePath = ${beam.inputDirectory}"/atlas-vehicles/vehicleTypes_baseline.csv"\n',
+        encoding="utf-8",
+    )
+
+    validate_population_consistency(
+        workspace=workspace,
+        settings=settings,
+        resolve_beam_exchange_scenario_folder_fn=lambda _workspace: str(scenario_dir),
+    )
+
+    assert "Validated BEAM staged household vehicles" in caplog.text
+    assert (
+        "BEAM staged households have fewer staged Car-category vehicles than required by households.cars."
+        in caplog.text
+    )
+    assert "households_with_car_category_shortfall=1" in caplog.text

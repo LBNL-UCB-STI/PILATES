@@ -1079,7 +1079,8 @@ def test_copy_vehicles_from_atlas_materializes_archive_fallback(
     vehicles = pd.read_parquet(beam_vehicles)
     assert list(vehicles.columns[:3]) == ["vehicleId", "householdId", "vehicleTypeId"]
     assert str(vehicles["householdId"].dtype) == "int64"
-    assert str(vehicles["vehicleId"].dtype) == "int64"
+    assert vehicles["vehicleId"].tolist() == ["hh-1-veh-101"]
+    assert str(vehicles["sourceVehicleId"].dtype) == "int64"
 
 
 def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):

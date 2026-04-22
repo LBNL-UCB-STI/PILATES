@@ -44,6 +44,14 @@ def test_vehicles_beam_in_bridges_to_vehicles_atlas_out() -> None:
     assert "VehiclesAtlasOut.household_id" in targets
     assert "VehiclesAtlasOut.vehicle_id" in targets
     assert "VehiclesAtlasOut.year" in targets
+    assert _column_fk_targets(VehiclesBeamIn, "source_vehicle_id") == set()
+
+
+def test_vehicles_beam_in_uses_string_vehicle_id_and_int_source_vehicle_id() -> None:
+    vehicle_id_col = VehiclesBeamIn.model_fields["vehicle_id"].sa_column
+    source_vehicle_id_col = VehiclesBeamIn.model_fields["source_vehicle_id"].sa_column
+    assert vehicle_id_col.type.__class__.__name__ == "String"
+    assert source_vehicle_id_col.type.__class__.__name__ == "BigInteger"
 
 
 def test_plans_beam_in_trip_id_points_to_trips_asim_out() -> None:

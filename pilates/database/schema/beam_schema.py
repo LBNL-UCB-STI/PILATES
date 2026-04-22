@@ -329,7 +329,7 @@ class VehiclesBeamIn(SQLModel, table=True):
     __tablename__ = "VehiclesBeamIn"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["household_id", "vehicle_id", "year"],
+            ["household_id", "source_vehicle_id", "year"],
             [
                 "VehiclesAtlasOut.household_id",
                 "VehiclesAtlasOut.vehicle_id",
@@ -352,12 +352,17 @@ class VehiclesBeamIn(SQLModel, table=True):
             index=True,
         ),
     )
-    vehicle_id: Optional[int] = Field(
+    vehicle_id: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier within the household.",
+        description="BEAM-facing vehicle identifier.",
         sa_column=Column(
-            "vehicle_id", BigInteger, primary_key=True, nullable=True, index=True
+            "vehicle_id", String, primary_key=True, nullable=True, index=True
         ),
+    )
+    source_vehicle_id: Optional[int] = Field(
+        default=None,
+        description="Original ATLAS vehicle identifier preserved for lineage and foreign-key joins.",
+        sa_column=Column("sourceVehicleId", BigInteger, nullable=True, index=True),
     )
     bodytype: Optional[str] = Field(
         default=None,
