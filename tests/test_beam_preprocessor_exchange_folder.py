@@ -5,6 +5,10 @@ from unittest.mock import MagicMock
 import pytest
 import pandas as pd
 
+from pilates.beam.beam_input_staging import (
+    _normalize_beam_vehicle_columns,
+    summarize_population_consistency,
+)
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
@@ -224,10 +228,9 @@ def test_beam_preprocess_does_not_fallback_to_defaults_when_activitysim_enabled(
         preprocessor.preprocess(workspace)
 
 
-def test_beam_preprocess_warns_when_vehicle_households_are_missing_from_staged_households(
-    monkeypatch, tmp_path, caplog
+def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_households(
+    monkeypatch, tmp_path
 ):
-    caplog.set_level("WARNING")
     preprocessor = _make_preprocessor(
         scenario_folder="urbansim",
         activity_demand_enabled=True,
@@ -284,15 +287,8 @@ def test_beam_preprocess_warns_when_vehicle_households_are_missing_from_staged_h
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
     monkeypatch.setattr(preprocessor, "_copy_vehicles_from_atlas", _fake_copy_vehicles)
 
-    outputs = preprocessor.preprocess(workspace)
-
-    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
-    assert (
-        "BEAM staged vehicles reference households that are absent from staged households. "
-        "Continuing because BEAM can filter vehicles against the staged household set."
-        in caplog.text
-    )
-    assert "missing_households=1" in caplog.text
+    with pytest.raises(ValueError, match="reference households that are absent"):
+        preprocessor.preprocess(workspace)
 
 
 def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fallback(
@@ -368,3 +364,47 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
 
     assert captured["source_path"] == str(explicit_vehicles)
     assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
+
+
+def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_local_ids():
+    normalized = _normalize_beam_vehicle_columns(
+        pd.DataFrame(
+            {
+                "vehicle_id": [1, 2, 1],
+                "household_id": [10, 10, 20],
+                "vehicleTypeId": ["sedan_gas_2015", "suv_gas_2015", "sedan_gas_2015"],
+            }
+        )
+    )
+
+    assert list(normalized.columns[:3]) == ["vehicleId", "householdId", "vehicleTypeId"]
+    assert normalized["vehicleId"].tolist() == [101, 102, 201]
+    assert not normalized["vehicleId"].duplicated().any()
+    assert str(normalized["vehicleId"].dtype) == "int64"
+    assert str(normalized["householdId"].dtype) == "int64"
+
+
+def test_summarize_population_consistency_reports_shortfalls_and_duplicates():
+    households = (
+        pd.DataFrame({"household_id": [1, 2, 3], "cars": [2, 1, 0]})
+        .set_index("household_id")
+    )
+    vehicles = pd.DataFrame(
+        {
+            "vehicleId": [1001, 1001, 2001],
+            "householdId": [1, 2, 99],
+            "vehicleTypeId": ["sedan_gas_2015", "sedan_gas_2015", "sedan_gas_2015"],
+        }
+    )
+
+    report = summarize_population_consistency(households=households, vehicles=vehicles)
+
+    assert report["total_households"] == 3
+    assert report["total_vehicle_rows"] == 3
+    assert report["duplicate_vehicle_ids"] == 2
+    assert report["households_with_vehicle_count_mismatch"] == 1
+    assert report["households_with_car_shortfall"] == 1
+    assert report["missing_vehicle_households"] == 1
+    assert report["sample_household_shortfalls"] == [
+        {"household_id": 1, "cars": 2, "vehicle_row_count": 1}
+    ]

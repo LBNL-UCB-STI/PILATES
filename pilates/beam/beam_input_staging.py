@@ -201,46 +201,44 @@ def validate_population_consistency(
 
     households = BeamDataHelper.read_and_clean(households_path, "households", file_format)
     vehicles = _read_vehicle_table(vehicles_path)
+    report = summarize_population_consistency(households=households, vehicles=vehicles)
 
-    household_ids = pd.Index(households.index).dropna()
-    household_ids = pd.Index(pd.to_numeric(household_ids, errors="coerce")).dropna().astype(int)
-
-    vehicle_household_col = None
-    for candidate in ("householdId", "household_id"):
-        if candidate in vehicles.columns:
-            vehicle_household_col = candidate
-            break
-    if vehicle_household_col is None:
+    if report["missing_vehicle_households"]:
         raise ValueError(
-            "BEAM staged vehicles input is missing a household reference column. "
-            f"Expected one of ['householdId', 'household_id'], found {vehicles.columns.tolist()}"
+            "BEAM staged vehicles reference households that are absent from staged "
+            "households. This can cause deterministic household vehicle assignment to "
+            "misbehave. "
+            f"missing_households={report['missing_vehicle_households']} "
+            f"sample_missing_households={report['sample_missing_vehicle_households']} "
+            f"households_path={households_path} vehicles_path={vehicles_path}"
         )
 
-    vehicle_household_ids = pd.to_numeric(
-        vehicles[vehicle_household_col],
-        errors="coerce",
-    ).dropna().astype(int)
-    missing_households = pd.Index(vehicle_household_ids.unique()).difference(household_ids)
-    if len(missing_households):
-        unique_vehicle_households = pd.Index(vehicle_household_ids.unique())
-        missing_share = (
-            float(len(missing_households)) / float(len(unique_vehicle_households))
-            if len(unique_vehicle_households)
-            else 0.0
+    if report["households_with_car_shortfall"]:
+        raise ValueError(
+            "BEAM staged households require more cars than are present in the staged "
+            "vehicles file. This causes BEAM to fall back to sampled vehicles. "
+            f"households_with_car_shortfall={report['households_with_car_shortfall']} "
+            f"sample_household_shortfalls={report['sample_household_shortfalls']} "
+            f"households_path={households_path} vehicles_path={vehicles_path}"
         )
+
+    if report["households_with_vehicle_count_mismatch"]:
         logger.warning(
-            "BEAM staged vehicles reference households that are absent from staged "
-            "households. Continuing because BEAM can filter vehicles against the "
-            "staged household set. "
-            "missing_households=%s vehicle_households=%s missing_share=%.6f "
-            "sample_missing_households=%s households_path=%s vehicles_path=%s",
-            len(missing_households),
-            len(unique_vehicle_households),
-            missing_share,
-            missing_households.tolist()[:10],
+            "BEAM staged household/vehicle counts differ even though no shortfall was "
+            "detected. sample_household_mismatches=%s households_path=%s vehicles_path=%s",
+            report["sample_household_mismatches"],
             households_path,
             vehicles_path,
         )
+
+    logger.info(
+        "Validated BEAM staged household vehicles: households=%s vehicle_rows=%s "
+        "duplicate_vehicle_ids=%s households_with_vehicle_count_mismatch=%s",
+        report["total_households"],
+        report["total_vehicle_rows"],
+        report["duplicate_vehicle_ids"],
+        report["households_with_vehicle_count_mismatch"],
+    )
 
 
 def _beam_vehicle_file_format(preferred_format: Optional[str]) -> str:
@@ -305,16 +303,193 @@ def _normalize_beam_vehicle_columns(df: pd.DataFrame) -> pd.DataFrame:
             f"{missing_columns}; available columns: {normalized.columns.tolist()}"
         )
 
+    numeric_ids: Dict[str, pd.Series] = {}
     for int_col in ("vehicleId", "householdId"):
-        numeric = pd.to_numeric(normalized[int_col], errors="coerce")
-        if numeric.isna().any() or ((numeric % 1) != 0).any():
+        numeric_ids[int_col] = _coerce_beam_vehicle_integer_column(
+            normalized[int_col],
+            column_name=int_col,
+        )
+
+    vehicle_ids = numeric_ids["vehicleId"]
+    household_ids = numeric_ids["householdId"]
+    duplicate_vehicle_mask = vehicle_ids.duplicated(keep=False)
+    if duplicate_vehicle_mask.any():
+        original_duplicate_rows = int(duplicate_vehicle_mask.sum())
+        original_duplicate_ids = int(vehicle_ids[duplicate_vehicle_mask].nunique())
+        vehicle_ids = _synthesize_global_vehicle_ids(
+            household_ids=household_ids,
+            source_vehicle_ids=vehicle_ids,
+        )
+        if vehicle_ids.duplicated().any():
             raise ValueError(
-                f"ATLAS vehicles2 column '{int_col}' must be integer-valued for BEAM staging."
+                "Failed to synthesize globally unique BEAM vehicle IDs from ATLAS "
+                "vehicle_id and household_id."
             )
-        normalized[int_col] = numeric.astype("int64")
+        logger.warning(
+            "ATLAS vehicles2 input used non-global vehicle_id values. PILATES "
+            "synthesized stable globally unique BEAM vehicleId values from "
+            "householdId + source vehicleId. duplicate_rows=%s duplicate_ids=%s",
+            original_duplicate_rows,
+            original_duplicate_ids,
+        )
+
+    normalized["vehicleId"] = vehicle_ids
+    normalized["householdId"] = household_ids
 
     normalized["vehicleTypeId"] = normalized["vehicleTypeId"].astype(str)
     return normalized
+
+
+def summarize_population_consistency(
+    *,
+    households: pd.DataFrame,
+    vehicles: pd.DataFrame,
+) -> Dict[str, Any]:
+    household_ids = _coerce_index_to_int64(
+        households.index,
+        context="staged households index",
+    )
+
+    household_cars = (
+        _coerce_beam_vehicle_integer_column(
+            households["cars"] if "cars" in households.columns else pd.Series(0, index=households.index),
+            column_name="cars",
+        )
+        .reindex(households.index, fill_value=0)
+    )
+    household_cars.index = household_ids.index
+
+    vehicle_household_col = None
+    for candidate in ("householdId", "household_id"):
+        if candidate in vehicles.columns:
+            vehicle_household_col = candidate
+            break
+    if vehicle_household_col is None:
+        raise ValueError(
+            "BEAM staged vehicles input is missing a household reference column. "
+            f"Expected one of ['householdId', 'household_id'], found {vehicles.columns.tolist()}"
+        )
+
+    vehicle_household_ids = _coerce_beam_vehicle_integer_column(
+        vehicles[vehicle_household_col],
+        column_name=vehicle_household_col,
+    )
+    vehicle_counts = (
+        pd.DataFrame(
+            {
+                "household_id": vehicle_household_ids,
+                "vehicle_row_count": 1,
+            }
+        )
+        .groupby("household_id", sort=False)["vehicle_row_count"]
+        .sum()
+        .astype("int64")
+    )
+    household_counts = (
+        pd.DataFrame(
+            {
+                "household_id": household_ids.values,
+                "cars": household_cars.values,
+            }
+        )
+        .set_index("household_id")
+        .join(vehicle_counts, how="left")
+        .fillna({"vehicle_row_count": 0})
+    )
+    household_counts["vehicle_row_count"] = household_counts["vehicle_row_count"].astype(
+        "int64"
+    )
+
+    mismatch_mask = household_counts["cars"] != household_counts["vehicle_row_count"]
+    shortfall_mask = household_counts["cars"] > household_counts["vehicle_row_count"]
+    missing_vehicle_households = pd.Index(vehicle_counts.index).difference(
+        pd.Index(household_counts.index)
+    )
+
+    duplicate_vehicle_ids = 0
+    if "vehicleId" in vehicles.columns:
+        duplicate_vehicle_ids = int(
+            pd.to_numeric(vehicles["vehicleId"], errors="coerce")
+            .duplicated(keep=False)
+            .sum()
+        )
+    elif "vehicle_id" in vehicles.columns:
+        duplicate_vehicle_ids = int(
+            pd.to_numeric(vehicles["vehicle_id"], errors="coerce")
+            .duplicated(keep=False)
+            .sum()
+        )
+
+    mismatch_examples = (
+        household_counts.loc[mismatch_mask, ["cars", "vehicle_row_count"]]
+        .head(10)
+        .reset_index()
+        .rename(columns={"index": "household_id"})
+        .to_dict(orient="records")
+    )
+    shortfall_examples = (
+        household_counts.loc[shortfall_mask, ["cars", "vehicle_row_count"]]
+        .head(10)
+        .reset_index()
+        .rename(columns={"index": "household_id"})
+        .to_dict(orient="records")
+    )
+
+    return {
+        "total_households": int(len(household_counts)),
+        "total_vehicle_rows": int(len(vehicles)),
+        "duplicate_vehicle_ids": duplicate_vehicle_ids,
+        "households_with_vehicle_count_mismatch": int(mismatch_mask.sum()),
+        "households_with_car_shortfall": int(shortfall_mask.sum()),
+        "missing_vehicle_households": int(len(missing_vehicle_households)),
+        "sample_household_mismatches": mismatch_examples,
+        "sample_household_shortfalls": shortfall_examples,
+        "sample_missing_vehicle_households": missing_vehicle_households.tolist()[:10],
+    }
+
+
+def _coerce_beam_vehicle_integer_column(
+    values: pd.Series,
+    *,
+    column_name: str,
+) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    if numeric.isna().any() or ((numeric % 1) != 0).any():
+        raise ValueError(
+            f"BEAM staging column '{column_name}' must be integer-valued."
+        )
+    return numeric.astype("int64")
+
+
+def _coerce_index_to_int64(index: pd.Index, *, context: str) -> pd.Series:
+    numeric = pd.to_numeric(pd.Series(index, index=index), errors="coerce")
+    invalid_mask = numeric.isna() | ((numeric % 1) != 0)
+    if invalid_mask.any():
+        raise ValueError(
+            f"{context} must contain integer-valued household ids for BEAM validation."
+        )
+    return numeric.astype("int64")
+
+
+def _synthesize_global_vehicle_ids(
+    *,
+    household_ids: pd.Series,
+    source_vehicle_ids: pd.Series,
+) -> pd.Series:
+    max_local_id = int(source_vehicle_ids.abs().max()) if len(source_vehicle_ids) else 0
+    local_width = max(1, len(str(max_local_id)))
+    multiplier = 10 ** local_width
+    max_household_id = int(household_ids.abs().max()) if len(household_ids) else 0
+    max_int64 = 2**63 - 1
+    if max_household_id > (max_int64 // multiplier):
+        raise ValueError(
+            "Cannot synthesize globally unique BEAM vehicle IDs without overflowing int64. "
+            f"max_household_id={max_household_id} multiplier={multiplier}"
+        )
+    synthesized = household_ids.astype("int64") * multiplier + source_vehicle_ids.astype(
+        "int64"
+    )
+    return synthesized.astype("int64")
 
 
 def format_specific_output_records(
