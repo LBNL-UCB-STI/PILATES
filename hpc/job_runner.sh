@@ -89,7 +89,7 @@ case "$partition_arg" in
         NUM_CPUS=56
         if [ "$high_mem" = true ]; then
             MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-480}"
-            BEAM_MEMORY="${BEAM_MEMORY:-400g}"
+            BEAM_MEMORY="${BEAM_MEMORY:-350g}"
         else
             MEMORY_LIMIT_GB="${MEMORY_LIMIT_GB:-240}"
             BEAM_MEMORY="${BEAM_MEMORY:-180g}"
