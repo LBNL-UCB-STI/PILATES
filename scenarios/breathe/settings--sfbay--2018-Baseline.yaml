@@ -281,6 +281,7 @@ beam:
   sample: 1.0
   replanning_portion: 0.4
   memory: "${BEAM_MEMORY}"
+  extra_jvm_args: "${BEAM_EXTRA_JVM_ARGS}"
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/

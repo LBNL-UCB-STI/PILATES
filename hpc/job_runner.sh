@@ -30,6 +30,7 @@ stage_file=""
 partition_arg="lr7"
 account_arg=""
 high_mem=false
+beam_profile=false
 hours_arg=""
 
 while [ $# -gt 0 ]; do
@@ -54,23 +55,32 @@ while [ $# -gt 0 ]; do
         high_mem=true
         shift
         ;;
+    --beam-profile)
+        beam_profile=true
+        shift
+        ;;
     -t|--hours)
         hours_arg="${2:-}"
         shift 2
         ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [-t hours]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [-t hours]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  --beam-profile: enable BEAM Java Flight Recorder output in /app/output."
         echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [-t hours]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [-t hours]\n" "$0"
         exit 2
         ;;
     esac
 done
+
+if [ "$beam_profile" = true ] && [ -z "${BEAM_EXTRA_JVM_ARGS:-}" ]; then
+    BEAM_EXTRA_JVM_ARGS="-XX:StartFlightRecording=delay=5s,duration=30m,filename=/app/output/recording_${JOB_NAME}.jfr,dumponexit=true,settings=default"
+fi
 
 case "$partition_arg" in
     lr8)
@@ -143,9 +153,15 @@ fi
 mkdir -p "/global/scratch/users/$USER/pilates_logs"
 
 if command -v envsubst >/dev/null 2>&1; then
-    BEAM_MEMORY="$BEAM_MEMORY" envsubst '$BEAM_MEMORY' < "$settings_template_path" > "$generated_settings_path"
+    BEAM_MEMORY="$BEAM_MEMORY" BEAM_EXTRA_JVM_ARGS="${BEAM_EXTRA_JVM_ARGS:-}" \
+        envsubst '$BEAM_MEMORY $BEAM_EXTRA_JVM_ARGS' < "$settings_template_path" > "$generated_settings_path"
 else
     sed "s|\${BEAM_MEMORY}|$BEAM_MEMORY|g" "$settings_template_path" > "$generated_settings_path"
+    if [ -n "${BEAM_EXTRA_JVM_ARGS:-}" ]; then
+        sed -i "s|\${BEAM_EXTRA_JVM_ARGS}|$BEAM_EXTRA_JVM_ARGS|g" "$generated_settings_path"
+    else
+        sed -i "s|\${BEAM_EXTRA_JVM_ARGS}||g" "$generated_settings_path"
+    fi
 fi
 
 export BEAM_MEMORY

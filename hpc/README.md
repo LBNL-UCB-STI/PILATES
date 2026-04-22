@@ -47,6 +47,12 @@ Use high-memory `lr7` mode (`480G`):
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --high-mem
 ```
 
+Enable BEAM Java Flight Recorder profiling:
+
+```bash
+./hpc/job_runner.sh -c scenarios/breathe/settings--sfbay--2018-Baseline.yaml -a <slurm_account> -p lr7 --high-mem --beam-profile
+```
+
 Use `lr8`:
 
 ```bash
@@ -61,17 +67,37 @@ Restart from an existing stage file:
 
 ## BEAM Memory Templating
 
-`job_runner.sh` supports settings files that contain `${BEAM_MEMORY}`.
+`job_runner.sh` supports settings files that contain `${BEAM_MEMORY}` and `${BEAM_EXTRA_JVM_ARGS}`.
 
-- For `lr7 --high-mem`, default is `400g`.
+- For `lr7 --high-mem`, default is `300g`.
 - For default `lr7` (240G job memory), default is `180g`.
 - For `lr8`, default is `600g`.
+
+`BEAM_EXTRA_JVM_ARGS` defaults to empty. Use it to append extra JVM flags for
+profiling or debugging without editing the runner code.
 
 Override explicitly:
 
 ```bash
 BEAM_MEMORY=450g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr7
 ```
+
+Example with Java Flight Recorder override:
+
+```bash
+BEAM_MEMORY=300g \
+BEAM_EXTRA_JVM_ARGS='-XX:StartFlightRecording=delay=5s,duration=30m,filename=/app/output/recording.jfr,dumponexit=true,settings=default' \
+./hpc/job_runner.sh -c scenarios/breathe/settings--sfbay--2018-Baseline.yaml -a <slurm_account> -p lr7 --high-mem
+```
+
+`--beam-profile` uses a default JFR output filename under `/app/output`:
+
+```text
+/app/output/recording_<job-name>.jfr
+```
+
+Since `/app/output` is bind-mounted to the host BEAM output root, the `.jfr`
+file will appear in the run's `beam/beam_output/` directory.
 
 `job_runner.sh` writes a per-job generated settings file (`settings_<jobid>.yaml`) and submits that file to `job.sh`.
 

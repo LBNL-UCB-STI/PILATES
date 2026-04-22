@@ -454,6 +454,7 @@ class BeamRunner(GenericRunner):
         settings = self.state.full_settings
         region = settings.run.region
         beam_memory = settings.beam.memory
+        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
 
         client = None  # Handled by Consist
 
@@ -511,6 +512,8 @@ class BeamRunner(GenericRunner):
             "-Djava.io.tmpdir=/app/output/tmp "
             "-Djna.tmpdir=/app/output/tmp"
         )
+        if extra_jvm_args:
+            java_opts = f"{java_opts} {extra_jvm_args}"
 
         # RecordStore may include non-file records (e.g., RepoRecord) when Consist-backed.
         # Consist container input lineage expects filesystem paths, so filter to FileRecord instances.
@@ -637,6 +640,7 @@ class BeamFullSkimRunner(GenericRunner):
         settings = self.state.full_settings
         region = settings.run.region
         beam_memory = settings.beam.memory
+        extra_jvm_args = (getattr(settings.beam, "extra_jvm_args", None) or "").strip()
 
         beam_cfg = getattr(settings, "beam", None)
         skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
@@ -688,6 +692,8 @@ class BeamFullSkimRunner(GenericRunner):
             "-Djava.io.tmpdir=/app/output/tmp "
             "-Djna.tmpdir=/app/output/tmp"
         )
+        if extra_jvm_args:
+            java_opts = f"{java_opts} {extra_jvm_args}"
 
         cpu_ratio = (
             skim_cfg.parallelism_thread_ratio

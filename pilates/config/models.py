@@ -560,6 +560,13 @@ class BeamConfig(BaseModel):
         0.4, description="Replanning portion", ge=0.0, le=1.0
     )
     memory: str = Field("180g", description="JVM memory allocation")
+    extra_jvm_args: Optional[str] = Field(
+        None,
+        description=(
+            "Optional extra JVM arguments appended to JAVA_OPTS for BEAM runs, "
+            "for example Java Flight Recorder flags."
+        ),
+    )
     local_input_folder: str
     local_mutable_data_folder: str
     local_output_folder: str
