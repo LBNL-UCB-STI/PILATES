@@ -457,6 +457,60 @@ def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_curre
     assert runtime_inputs["current_input_h5_path"] == str(h5_path)
 
 
+def test_activitysim_postprocess_runtime_inputs_split_population_and_current_years(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    population_h5 = tmp_path / "model_data_2025.h5"
+    current_h5 = tmp_path / "model_data_2023.h5"
+    population_h5.write_text("population")
+    current_h5.write_text("current")
+
+    captured_years = []
+
+    def _fake_build_binding_plan(**kwargs):
+        year = kwargs["year"]
+        captured_years.append(year)
+        if year == 2025:
+            return BindingPlan(
+                inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
+                source_by_key={USIM_POPULATION_SOURCE_H5: "fake"},
+            )
+        if year == 2023:
+            return BindingPlan(
+                inputs={USIM_DATASTORE_CURRENT_H5: str(current_h5)},
+                source_by_key={USIM_DATASTORE_CURRENT_H5: "fake"},
+            )
+        raise AssertionError(f"Unexpected binding year: {year}")
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        _fake_build_binding_plan,
+    )
+    monkeypatch.setattr(
+        steps_activitysim,
+        "resolved_value_for_key",
+        lambda *, resolved, key, coupler: (resolved.inputs or {}).get(key),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=2023,
+            forecast_year=2025,
+            Stage=SimpleNamespace(land_use="land_use"),
+            is_enabled=lambda _stage: True,
+        ),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        coupler=_dummy_coupler(),
+    )
+
+    assert captured_years == [2025, 2023]
+    assert runtime_inputs["population_source_h5_path"] == str(population_h5)
+    assert runtime_inputs["current_input_h5_path"] == str(current_h5)
+
+
 def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),

@@ -431,27 +431,33 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     if not state.is_enabled(WorkflowState.Stage.land_use):
         return runtime_inputs
 
-    required_step_keys = (
-        USIM_POPULATION_SOURCE_H5,
-        USIM_DATASTORE_CURRENT_H5,
-    )
-    resolution = None
-    if not step_inputs or any(key not in step_inputs for key in required_step_keys):
-        step_year = getattr(state, "year", getattr(state, "forecast_year", None))
-        resolution = build_binding_plan(
+    population_resolution = None
+    current_resolution = None
+    if not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs:
+        population_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
             settings=settings,
             state=state,
             workspace=workspace,
-            year=step_year,
+            year=state.forecast_year,
+            surface=surface,
+        )
+    if not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs:
+        current_resolution = build_binding_plan(
+            step_name="activitysim_postprocess",
+            coupler=coupler,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=state.year,
             surface=surface,
         )
     population_source_value = (
         step_inputs.get(USIM_POPULATION_SOURCE_H5)
         if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=resolution,
+            resolved=population_resolution,
             key=USIM_POPULATION_SOURCE_H5,
             coupler=coupler,
         )
@@ -460,7 +466,7 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         step_inputs.get(USIM_DATASTORE_CURRENT_H5)
         if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=resolution,
+            resolved=current_resolution,
             key=USIM_DATASTORE_CURRENT_H5,
             coupler=coupler,
         )
