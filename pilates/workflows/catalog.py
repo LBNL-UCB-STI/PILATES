@@ -1,19 +1,34 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Optional, Sequence, Set, Tuple, Type
+from fnmatch import fnmatchcase
+from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple, Type
 
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 
 from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.activitysim.outputs import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+)
+from pilates.atlas.inputs import atlas_static_input_keys
 from pilates.atlas.outputs import (
     AtlasPostprocessOutputs,
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
+)
+from pilates.atlas.static_inputs import (
+    ATLAS_STATIC_INPUTS_BY_SCENARIO,
+    ATLAS_STATIC_INPUTS_COMMON,
 )
 from pilates.beam.outputs import (
     BeamFullSkimOutputs,
@@ -31,6 +46,39 @@ from pilates.urbansim.outputs import (
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
 )
+from pilates.workflows.artifact_keys import (
+    ASIM_MUTABLE_DATA_DIR,
+    ASIM_OUTPUT_DIR,
+    ASIM_SHARROW_CACHE_DIR,
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_INPUT,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_FULL_SKIMS,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_OUTPUT_DIR,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    FINAL_SKIMS_OMX,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+    OMX_SKIMS,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
+    USIM_H5_UPDATED,
+    USIM_INPUT_NEXT,
+    USIM_MUTABLE_DATA_DIR,
+    USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
+)
+from pilates.generic.records import sanitize_artifact_key
 
 
 @dataclass(frozen=True)
@@ -89,11 +137,109 @@ class RestartProducerCandidate:
     phase: Optional[str]
 
 
+@dataclass(frozen=True)
+class RestartProducerOverride:
+    key: str
+    producer_step: str
+    frontier_stages: FrozenSet[str] = frozenset()
+    required_models: FrozenSet[str] = frozenset()
+    priority: int = 0
+
+
 _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
 _ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
 _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
 _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
 _IMPACTS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="impacts")
+
+
+def _ordered_unique(*groups: Sequence[str]) -> Tuple[str, ...]:
+    return tuple(dict.fromkeys(key for group in groups for key in group))
+
+
+_ACTIVITYSIM_RUN_OUTPUT_KEYS = ActivitySimRunOutputs.declared_output_keys()
+_BEAM_RUN_OUTPUT_KEYS = BeamRunOutputs.declared_output_keys()
+_URBANSIM_PREPROCESS_PREPARED_KEYS = (
+    USIM_DATASTORE_H5,
+    "omx_skims",
+    "hh_size",
+    "income_rates",
+    "relmap",
+    "geoid_to_zone",
+    "schools",
+    "school_districts",
+)
+_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS = (
+    "atlas_households_csv",
+    "atlas_blocks_csv",
+    "atlas_persons_csv",
+    "atlas_residential_csv",
+    "atlas_jobs_csv",
+)
+_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS = (
+    "atlas_grave_csv",
+    "beam_skims_input",
+    "atlas_rdata_accessibility",
+    "atlas_accessibility_csv",
+)
+
+
+def _atlas_static_input_catalog_keys() -> Tuple[str, ...]:
+    relpaths = [
+        *ATLAS_STATIC_INPUTS_COMMON,
+        *(
+            relpath
+            for relpaths in ATLAS_STATIC_INPUTS_BY_SCENARIO.values()
+            for relpath in relpaths
+        ),
+    ]
+    keys = []
+    for relpath in relpaths:
+        rel_no_ext = relpath.rsplit(".", 1)[0]
+        raw_key = sanitize_artifact_key(rel_no_ext.replace("\\", "/")) or rel_no_ext
+        key = canonical_artifact_key_from_raw_key(raw_key)
+        keys.append(key)
+    return tuple(dict.fromkeys(keys))
+
+
+_ATLAS_STATIC_INPUT_KEYS = _atlas_static_input_catalog_keys()
+_ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS = tuple(
+    key
+    for key in _ACTIVITYSIM_RUN_OUTPUT_KEYS
+    if key in {"beam_plans_asim_out", "households_asim_out", "persons_asim_out"}
+)
+_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    (USIM_DATASTORE_H5,),
+)
+_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS = (
+    "asim_input_households_csv_archived",
+    "asim_input_persons_csv_archived",
+    "asim_input_land_use_csv_archived",
+    "asim_input_skims_omx_archived",
+    "asim_input_skims_zarr_archived",
+)
+_BEAM_RUN_ARCHIVE_OUTPUT_KEYS = (
+    "beam_input_plans_archived",
+    "beam_input_households_archived",
+    "beam_input_persons_archived",
+    "beam_input_config_archived",
+    "beam_input_config_references_archived",
+    "beam_input_vehicles_archived",
+    "beam_input_linkstats_warmstart_archived",
+    "beam_input_plans_warmstart_archived",
+    "beam_input_experienced_plans_warmstart_archived",
+)
+_BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
+    _BEAM_RUN_OUTPUT_KEYS,
+    (
+        BEAM_OUTPUT_PLANS_XML,
+        BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        BEAM_EXPERIENCED_PLANS_XML,
+        ZARR_SKIMS,
+        FINAL_SKIMS_OMX,
+    ),
+)
 
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
@@ -348,6 +494,31 @@ def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepS
     return _STEP_SPECS_BY_MODEL_NAME.get(model_name)
 
 
+def _specialize_contract_for_settings(
+    spec: WorkflowStepSpec,
+    contract: Dict[str, Any],
+    *,
+    settings: Optional[Any],
+) -> Dict[str, Any]:
+    if settings is None:
+        return contract
+
+    if spec.step_name not in {"atlas_preprocess", "atlas_run"}:
+        return contract
+
+    static_keys = list(atlas_static_input_keys(settings))
+    if spec.step_name == "atlas_preprocess":
+        contract["optional_output_keys"] = list(
+            _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
+        )
+        return contract
+
+    contract["optional_input_keys"] = list(
+        _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
+    )
+    return contract
+
+
 def workflow_step_key_match(
     step_name: str,
     key: str,
@@ -366,47 +537,90 @@ def workflow_step_key_match(
             used_alias=(canonical_key != key),
         )
 
+    used_alias = canonical_key != key
     if direction == "input":
-        declared_keys = set(spec.input_keys) | set(spec.optional_input_keys)
-        dynamic_families = spec.dynamic_input_families
-    elif direction == "output":
-        declared_keys = set(spec.output_keys) | set(spec.optional_output_keys)
-        dynamic_families = spec.dynamic_output_families
-    else:
-        raise ValueError(f"Unsupported direction {direction!r}")
-
-    if canonical_key in declared_keys:
-        return WorkflowStepKeyMatch(
-            step_name=step_name,
-            direction=direction,
-            raw_key=key,
-            canonical_key=canonical_key,
-            declared=True,
-            matched_via="declared",
-            used_alias=(canonical_key != key),
-        )
-
-    for family in dynamic_families:
-        if family and "{" not in family and canonical_key.startswith(family):
+        if canonical_key in spec.input_keys:
             return WorkflowStepKeyMatch(
                 step_name=step_name,
                 direction=direction,
                 raw_key=key,
                 canonical_key=canonical_key,
                 declared=True,
-                matched_via="dynamic_family",
-                matched_family=family,
-                used_alias=(canonical_key != key),
+                matched_via="input_keys",
+                used_alias=used_alias,
             )
-
-    return WorkflowStepKeyMatch(
-        step_name=step_name,
-        direction=direction,
-        raw_key=key,
-        canonical_key=canonical_key,
-        declared=False,
-        used_alias=(canonical_key != key),
-    )
+        if canonical_key in spec.optional_input_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="optional_input_keys",
+                used_alias=used_alias,
+            )
+        for family in spec.dynamic_input_families:
+            if _family_pattern_matches_key(family, canonical_key):
+                return WorkflowStepKeyMatch(
+                    step_name=step_name,
+                    direction=direction,
+                    raw_key=key,
+                    canonical_key=canonical_key,
+                    declared=True,
+                    matched_via="dynamic_input_families",
+                    matched_family=family,
+                    used_alias=used_alias,
+                )
+        return WorkflowStepKeyMatch(
+            step_name=step_name,
+            direction=direction,
+            raw_key=key,
+            canonical_key=canonical_key,
+            declared=False,
+            used_alias=used_alias,
+        )
+    if direction == "output":
+        if canonical_key in spec.output_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="output_keys",
+                used_alias=used_alias,
+            )
+        if canonical_key in spec.optional_output_keys:
+            return WorkflowStepKeyMatch(
+                step_name=step_name,
+                direction=direction,
+                raw_key=key,
+                canonical_key=canonical_key,
+                declared=True,
+                matched_via="optional_output_keys",
+                used_alias=used_alias,
+            )
+        for family in spec.dynamic_output_families:
+            if _family_pattern_matches_key(family, canonical_key):
+                return WorkflowStepKeyMatch(
+                    step_name=step_name,
+                    direction=direction,
+                    raw_key=key,
+                    canonical_key=canonical_key,
+                    declared=True,
+                    matched_via="dynamic_output_families",
+                    matched_family=family,
+                    used_alias=used_alias,
+                )
+        return WorkflowStepKeyMatch(
+            step_name=step_name,
+            direction=direction,
+            raw_key=key,
+            canonical_key=canonical_key,
+            declared=False,
+            used_alias=used_alias,
+        )
+    raise ValueError("direction must be 'input' or 'output'")
 
 
 def workflow_step_key_is_declared(
@@ -435,10 +649,9 @@ def workflow_step_declared_output_keys(step_name: str) -> Tuple[str, ...]:
 def workflow_step_contracts_by_name(
     settings: Optional[Any] = None,
 ) -> Dict[str, Dict[str, Any]]:
-    del settings
     contracts: Dict[str, Dict[str, Any]] = {}
     for spec in WORKFLOW_STEP_SPECS:
-        contracts[spec.step_name] = {
+        contract = {
             "step_name": spec.step_name,
             "stage_name": spec.stage_name,
             "phase": spec.phase,
@@ -452,6 +665,11 @@ def workflow_step_contracts_by_name(
             "dynamic_output_families": list(spec.dynamic_output_families),
             "optional": spec.optional,
         }
+        contracts[spec.step_name] = _specialize_contract_for_settings(
+            spec,
+            contract,
+            settings=settings,
+        )
     return contracts
 
 
@@ -481,11 +699,60 @@ def restart_artifact_producers(
     frontier_stage: Optional[str] = None,
     enabled_models: Optional[Sequence[str]] = None,
 ) -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
-    del frontier_stage, enabled_models
-    producers: Dict[str, list[RestartProducerCandidate]] = {}
+    enabled_model_set = frozenset(
+        str(model)
+        for model in (enabled_models or ())
+        if model is not None and str(model).strip()
+    )
+    producers = _restart_producer_candidates_by_key()
+    ordered: Dict[str, Tuple[RestartProducerCandidate, ...]] = {}
+
+    for key, candidates in producers.items():
+        priorities = {candidate.step_name: 0 for candidate in candidates}
+        for override in _RESTART_PRODUCER_OVERRIDES:
+            if override.key != key:
+                continue
+            if (
+                override.frontier_stages
+                and frontier_stage not in override.frontier_stages
+            ):
+                continue
+            if override.required_models and not override.required_models.issubset(
+                enabled_model_set
+            ):
+                continue
+            if override.producer_step not in priorities:
+                continue
+            priorities[override.producer_step] = max(
+                priorities[override.producer_step],
+                override.priority,
+            )
+
+        ordered[key] = tuple(
+            sorted(
+                candidates,
+                key=lambda candidate: (
+                    -priorities.get(candidate.step_name, 0),
+                    next(
+                        (
+                            spec.order
+                            for spec in WORKFLOW_STEP_SPECS
+                            if spec.step_name == candidate.step_name
+                        ),
+                        0,
+                    ),
+                    candidate.step_name,
+                ),
+            )
+        )
+    return ordered
+
+
+def _restart_producer_candidates_by_key() -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
+    candidates_by_key: Dict[str, List[RestartProducerCandidate]] = {}
     for spec in sorted(WORKFLOW_STEP_SPECS, key=lambda item: item.order):
         for key in workflow_step_declared_output_keys(spec.step_name):
-            producers.setdefault(key, []).append(
+            candidates_by_key.setdefault(key, []).append(
                 RestartProducerCandidate(
                     key=key,
                     step_name=spec.step_name,
@@ -493,7 +760,47 @@ def restart_artifact_producers(
                     phase=spec.phase,
                 )
             )
-    return {key: tuple(candidates) for key, candidates in producers.items()}
+    return {
+        key: tuple(candidates)
+        for key, candidates in candidates_by_key.items()
+    }
+
+
+_RESTART_PRODUCER_OVERRIDES: Tuple[RestartProducerOverride, ...] = (
+    RestartProducerOverride(
+        key=ZARR_SKIMS,
+        producer_step="activitysim_compile",
+        frontier_stages=frozenset({"traffic_assignment"}),
+        required_models=frozenset({"activitysim", "beam"}),
+        priority=100,
+    ),
+    RestartProducerOverride(
+        key="beam_plans_asim_out",
+        producer_step="activitysim_postprocess",
+        frontier_stages=frozenset({"traffic_assignment"}),
+        required_models=frozenset({"activitysim", "beam"}),
+        priority=100,
+    ),
+    RestartProducerOverride(
+        key="households_asim_out",
+        producer_step="activitysim_postprocess",
+        frontier_stages=frozenset({"traffic_assignment"}),
+        required_models=frozenset({"activitysim", "beam"}),
+        priority=100,
+    ),
+    RestartProducerOverride(
+        key="persons_asim_out",
+        producer_step="activitysim_postprocess",
+        frontier_stages=frozenset({"traffic_assignment"}),
+        required_models=frozenset({"activitysim", "beam"}),
+        priority=100,
+    ),
+)
+
+
+def _family_pattern_matches_key(family: str, key: str) -> bool:
+    pattern = re.sub(r"\{[^{}]+\}", "*", family)
+    return bool(pattern) and fnmatchcase(key, pattern)
 
 
 def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:

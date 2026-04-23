@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
@@ -14,6 +17,12 @@ from pilates.workflows.steps import (
     make_impacts_run_step,
     make_postprocessing_step,
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _build_postprocessing_manifest_path(workspace: Workspace, year: int) -> Path:
+    return Path(workspace.full_path) / ".workflow" / f"postprocessing_year_{year}.yaml"
 
 
 def run_postprocessing_stage(
