@@ -6,39 +6,68 @@ from typing import Any, Callable, Dict, Optional
 
 from consist.types import CacheOptions
 
+from pilates.urbansim.postprocessor import get_usim_datastore_fname
+from pilates.config import PilatesConfig
+from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
-from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
-from pilates.urbansim.postprocessor import get_usim_datastore_fname
-from pilates.utils.coupler_helpers import (
-    enqueue_archive_copy,
-    flush_archive_queue,
-    log_and_set_input,
+from pilates.runtime.cache_recovery import (
+    cache_miss_audit_fields,
+    log_cache_miss_explanation,
 )
-from pilates.utils.io import get_traffic_assignment_model
-from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
-    BEAM_HOUSEHOLDS_IN,
-    BEAM_PERSONS_IN,
-    BEAM_PLANS_IN,
-    LINKSTATS_WARMSTART,
-    ZARR_SKIMS,
-)
+from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
+from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
 from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
 
 
-def is_bootstrap_cache_enabled(settings: Any) -> bool:
+def is_bootstrap_cache_enabled(settings: PilatesConfig) -> bool:
     run_cfg = getattr(settings, "run", None)
     return bool(getattr(run_cfg, "bootstrap_cache_enabled", True))
 
 
-def build_bootstrap_manifest_reference(
+def _bootstrap_cache_options(
+    settings: PilatesConfig,
+    *,
+    cache_options_cls: type[CacheOptions],
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+) -> Optional[CacheOptions]:
+    run_cfg = getattr(settings, "run", None)
+    code_identity = getattr(run_cfg, "consist_code_identity", None)
+    if cache_mode is None and code_identity is None and cache_hydration is None:
+        return None
+    return cache_options_cls(
+        cache_mode=cache_mode,
+        code_identity=code_identity,
+        cache_hydration=cache_hydration,
+    )
+
+
+def _warn_on_bootstrap_fast_hashing(settings: PilatesConfig) -> None:
+    run_cfg = getattr(settings, "run", None)
+    if not bool(getattr(run_cfg, "bootstrap_cache_enabled", True)):
+        return
+    hashing_strategy = str(
+        getattr(run_cfg, "consist_hashing_strategy", "fast")
+    ).lower()
+    if hashing_strategy != "fast":
+        return
+    logger.warning(
+        "Bootstrap cache is enabled with fast hashing. Initialization stages copied "
+        "files whose identity may change on restage due to mtime-sensitive hashing, "
+        "which can force downstream cache misses. Prefer "
+        "run.consist_hashing_strategy: full."
+    )
+
+
+def build_bootstrap_run_reference(
     *,
     probe_run_id: Optional[str] = None,
     materialization_run_id: Optional[str] = None,
@@ -51,70 +80,165 @@ def build_bootstrap_manifest_reference(
     return reference
 
 
-def archive_bootstrap_restart_artifacts(
+def _bootstrap_output_paths(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     workspace: Workspace,
-    enqueue_archive_copy_fn: Callable[..., Any] = enqueue_archive_copy,
-    flush_archive_queue_fn: Callable[..., Any] = flush_archive_queue,
-    get_usim_datastore_fname_fn: Callable[..., str] = get_usim_datastore_fname,
-) -> None:
-    """
-    Durably archive bootstrap-created local runtime state needed for restart.
-    """
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    if (
-        run_cfg is not None
-        and getattr(run_cfg, "region", None)
-        and urbansim_cfg is not None
+    surface: Any = None,
+) -> Dict[str, str]:
+    output_paths: Dict[str, str] = {}
+    run_models = getattr(getattr(settings, "run", None), "models", None)
+
+    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    if callable(get_usim_data_dir) and (
+        getattr(run_models, "land_use", None) == "urbansim"
+        or getattr(run_models, "activity_demand", None) == "activitysim"
+        or getattr(run_models, "vehicle_ownership", None) == "atlas"
     ):
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        if os.path.isdir(usim_data_dir):
-            enqueue_archive_copy_fn(
-                key="urbansim_bootstrap_data_root",
-                path=usim_data_dir,
-            )
-        usim_base_path = os.path.join(
-            usim_data_dir,
-            get_usim_datastore_fname_fn(settings, io="input"),
-        )
-        if os.path.exists(usim_base_path):
-            enqueue_archive_copy_fn(
-                key="bootstrap_usim_datastore_base_h5",
-                path=usim_base_path,
-            )
+        output_paths["urbansim_mutable_data_dir"] = get_usim_data_dir()
 
-    if getattr(model_cfg, "activity_demand", None) == "activitysim":
-        asim_data_dir = workspace.get_asim_mutable_data_dir()
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
+    if get_activity_demand_model(settings) == "activitysim":
+        get_asim_data_dir = getattr(workspace, "get_asim_mutable_data_dir", None)
+        if callable(get_asim_data_dir):
+            output_paths["activitysim_mutable_data_dir"] = get_asim_data_dir()
+        get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+        if callable(get_asim_configs_dir):
+            output_paths["activitysim_mutable_configs_dir"] = get_asim_configs_dir()
 
-        if os.path.isdir(asim_data_dir):
-            enqueue_archive_copy_fn(
-                key="activitysim_bootstrap_data_root",
-                path=asim_data_dir,
-            )
-        if os.path.isdir(asim_configs_dir):
-            enqueue_archive_copy_fn(
-                key="activitysim_bootstrap_configs_root",
-                path=asim_configs_dir,
-            )
+    if getattr(run_models, "vehicle_ownership", None) == "atlas":
+        get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+        if callable(get_atlas_input_dir):
+            output_paths["atlas_mutable_input_dir"] = get_atlas_input_dir()
 
     if get_traffic_assignment_model(settings) == "beam":
-        beam_data_dir = workspace.get_beam_mutable_data_dir()
-        if os.path.isdir(beam_data_dir):
-            enqueue_archive_copy_fn(
-                key="beam_mutable_data_dir",
-                path=beam_data_dir,
+        get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+        if callable(get_beam_input_dir):
+            output_paths["beam_mutable_data_dir"] = get_beam_input_dir()
+
+    # Cache-hit bootstrap replay materializes only the explicitly requested
+    # output paths. The workspace-invariant check is stricter than the coarse
+    # mutable-root set above: later startup code expects specific staged files
+    # like ActivitySim settings.yaml overlays and the BEAM primary config to
+    # exist. Include those exact invariants here so a bootstrap cache hit can
+    # restore them directly instead of replaying only root directories and then
+    # falling back to a full rerun.
+    output_paths.update(
+        _bootstrap_required_workspace_artifacts(
+            settings=settings,
+            workspace=workspace,
+            surface=surface,
+        )
+    )
+
+    return output_paths
+
+
+def _bootstrap_required_workspace_artifacts(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    surface: Any = None,
+) -> Dict[str, str]:
+    required: Dict[str, str] = {}
+
+    if get_activity_demand_model(settings) == "activitysim":
+        get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+        if callable(get_asim_configs_dir):
+            asim_configs_dir = get_asim_configs_dir()
+            main_configs_dir = (
+                getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
+                or "configs"
+            )
+            for dirname in required_asim_config_dirs(main_configs_dir):
+                required[f"activitysim_config_settings_yaml_{dirname}"] = os.path.join(
+                    asim_configs_dir,
+                    dirname,
+                    "settings.yaml",
+                )
+
+    if get_traffic_assignment_model(settings) == "beam":
+        get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
+        region = getattr(getattr(settings, "run", None), "region", None)
+        if callable(get_beam_input_dir) and region:
+            beam_input_dir = get_beam_input_dir()
+            required["beam_mutable_data_dir"] = beam_input_dir
+            required["beam_region_input_dir"] = os.path.join(beam_input_dir, region)
+            beam_config_name = getattr(getattr(settings, "beam", None), "config", None)
+            if beam_config_name:
+                required["beam_primary_config_file"] = os.path.join(
+                    beam_input_dir,
+                    region,
+                    beam_config_name,
+                )
+
+    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    run_models = getattr(getattr(settings, "run", None), "models", None)
+    if callable(get_usim_data_dir) and run_models is not None:
+        if (
+            getattr(run_models, "land_use", None) == "urbansim"
+            or getattr(run_models, "activity_demand", None) == "activitysim"
+            or getattr(run_models, "vehicle_ownership", None) == "atlas"
+        ):
+            usim_data_dir = get_usim_data_dir()
+            required["usim_datastore_base_h5"] = os.path.join(
+                usim_data_dir,
+                get_usim_datastore_fname(settings, io="input"),
             )
 
-    flush_archive_queue_fn(timeout=300, fail_on_timeout=True)
+    if surface is not None:
+        required = {
+            key: path
+            for key, path in required.items()
+            if surface.is_bootstrap_owned_artifact_key(key)
+        }
+
+    return required
+
+
+def _find_missing_bootstrap_workspace_artifacts(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    surface: Any = None,
+) -> list[Dict[str, str]]:
+    missing: list[Dict[str, str]] = []
+    for key, path in _bootstrap_required_workspace_artifacts(
+        settings=settings,
+        workspace=workspace,
+        surface=surface,
+    ).items():
+        if not path:
+            continue
+        normalized_path = os.path.realpath(path)
+        if os.path.exists(normalized_path):
+            continue
+        missing.append(
+            {
+                "key": key,
+                "path": normalized_path,
+                "reason": (
+                    "Bootstrap cache-hit validation requires this workspace "
+                    "artifact to exist locally after replay hydration."
+                ),
+            }
+        )
+    return missing
+
+
+def _format_missing_bootstrap_workspace_artifacts(
+    artifacts: list[Dict[str, str]],
+) -> str:
+    if not artifacts:
+        return "none"
+    return ", ".join(
+        f"{item.get('key')}:{item.get('path')}"
+        for item in artifacts
+    )
 
 
 def seed_bootstrap_artifacts_to_coupler(
     *,
-    settings: Any,
+    settings: PilatesConfig,
     state: Any,
     workspace: Workspace,
     coupler: CouplerProtocol,
@@ -123,119 +247,49 @@ def seed_bootstrap_artifacts_to_coupler(
     """
     Seed coupler keys for bootstrap-staged artifacts needed by later steps.
 
-    In BEAM-only runs, the mutable BEAM repo already contains the canonical
-    plans/households/persons inputs after bootstrap. Publish those staged files
-    into the scenario coupler so downstream steps can depend on explicit
-    coupler-backed artifacts instead of speculative filesystem paths.
+    The stage-boundary durability policy lives in the binding layer so runtime
+    bootstrap can publish bootstrap-safe files without reconstructing the
+    artifact inventory locally.
     """
     get_value = getattr(coupler, "get", None)
 
-    activity_demand_model = getattr(getattr(settings.run, "models", None), "activity_demand", None)
-    if activity_demand_model == "activitysim":
-        zarr_candidate = os.path.join(
-            workspace.get_asim_output_dir(),
-            "cache",
-            "skims.zarr",
+    for rule in bootstrap_stage_boundary_durability_policy():
+        resolved_artifacts = rule.resolve(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            model_factory_cls=model_factory_cls,
         )
-        if os.path.exists(zarr_candidate) and (
-            not callable(get_value) or get_value(ZARR_SKIMS) is None
-        ):
-            log_and_set_input(
-                key=ZARR_SKIMS,
-                path=zarr_candidate,
-                description="Bootstrap-staged ActivitySim zarr skims cache",
-                coupler=coupler,
-            )
-
-        sharrow_cache_dir = os.path.join(workspace.full_path, "shared_cache", "numba")
-        has_cache_files = False
-        if os.path.isdir(sharrow_cache_dir):
-            for _root, _dirs, files in os.walk(sharrow_cache_dir):
-                if files:
-                    has_cache_files = True
-                    break
-        if has_cache_files and (
-            not callable(get_value) or get_value(ASIM_SHARROW_CACHE_DIR) is None
-        ):
-            log_and_set_input(
-                key=ASIM_SHARROW_CACHE_DIR,
-                path=sharrow_cache_dir,
-                description="Bootstrap-staged ActivitySim sharrow cache directory",
-                coupler=coupler,
-            )
-
-    if get_traffic_assignment_model(settings) != "beam":
-        return
-    if activity_demand_model is not None:
-        return
-
-    model_factory = model_factory_cls()
-    beam_preprocessor = model_factory.get_preprocessor("beam", state)
-    existing_inputs = getattr(beam_preprocessor, "existing_beam_exchange_inputs", None)
-    if not callable(existing_inputs):
-        logger.debug(
-            "BEAM preprocessor does not expose existing_beam_exchange_inputs(); "
-            "skipping bootstrap coupler seeding."
-        )
-        return
-
-    try:
-        record_store = existing_inputs(workspace)
-    except FileNotFoundError as exc:
-        logger.warning(
-            "Bootstrap could not seed default BEAM inputs into coupler: %s",
-            exc,
-        )
-        record_store = None
-
-    allowed_keys = {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}
-    if record_store is not None:
-        for record in record_store.all_records():
-            key = getattr(record, "short_name", None)
-            if key not in allowed_keys:
-                continue
+        if not resolved_artifacts:
+            continue
+        for key, path in resolved_artifacts.items():
             if callable(get_value) and get_value(key) is not None:
                 continue
-            path = record.get_absolute_path(base_path=workspace.full_path)
             if not path or not os.path.exists(path):
                 continue
-            log_and_set_input(
-                key=key,
-                path=path,
-                description=f"Bootstrap-staged default BEAM input: {key}",
-                coupler=coupler,
-            )
-
-    if not callable(get_value) or get_value(LINKSTATS_WARMSTART) is None:
-        warmstart_path = resolve_initial_linkstats_path(settings, workspace)
-        if warmstart_path:
-            log_and_set_input(
-                key=LINKSTATS_WARMSTART,
-                path=warmstart_path,
-                description="Bootstrap-staged BEAM warmstart linkstats",
-                coupler=coupler,
-            )
+            coupler.set(key, path)
 
 
 def run_bootstrap_phase(
     *,
     tracker: Any,
-    settings: Any,
+    settings: PilatesConfig,
     state: Any,
     workspace: Workspace,
     scenario_id: str,
     seed: Optional[int],
+    surface: Any = None,
     initialization_cls: type[Initialization] = Initialization,
     build_bootstrap_artifact_summary_fn: Callable[..., Dict[str, Any]] = build_bootstrap_artifact_summary,
     build_step_consist_kwargs_fn: Callable[..., Dict[str, Any]],
     merge_tag_list_fn: Callable[..., list[str]],
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
-    archive_bootstrap_restart_artifacts_fn: Callable[..., None] = archive_bootstrap_restart_artifacts,
     cache_options_cls: type[CacheOptions] = CacheOptions,
 ) -> Dict[str, Any]:
     """
     Execute initialization in a dedicated pre-scenario bootstrap phase.
     """
+    _warn_on_bootstrap_fast_hashing(settings)
     staged_artifact_summary: Dict[str, Any] = {}
 
     def _execute_initialization() -> None:
@@ -251,23 +305,52 @@ def run_bootstrap_phase(
         *,
         cache_hit: bool,
         probe_run_id: Optional[str],
-        materialization_run_id: Optional[str] = None,
+        fallback_run_id: Optional[str] = None,
+        fallback_rerun: bool = False,
+        replay_hydration_complete: Optional[bool] = None,
+        resolution_mode: str,
+        cache_miss_explanation: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         nonlocal staged_artifact_summary
         if not staged_artifact_summary:
             staged_artifact_summary = build_bootstrap_artifact_summary_fn(workspace)
-        archive_bootstrap_restart_artifacts_fn(
-            settings=settings,
-            workspace=workspace,
-        )
-        return {
+        cache_probe_hit = bool(cache_hit)
+        fallback_rerun_triggered = bool(fallback_rerun)
+        if replay_hydration_complete is None:
+            replay_hydration_complete = not fallback_rerun_triggered if cache_probe_hit else False
+        result = {
             "bootstrap_cache_hit": cache_hit,
+            "cache_probe_hit": cache_probe_hit,
+            "replay_hydration_complete": bool(replay_hydration_complete),
             "staged_artifact_summary": staged_artifact_summary,
-            "manifest_reference": build_bootstrap_manifest_reference(
+            "run_reference": build_bootstrap_run_reference(
                 probe_run_id=probe_run_id,
-                materialization_run_id=materialization_run_id,
+                materialization_run_id=fallback_run_id,
             ),
+            "fallback_rerun": fallback_rerun,
+            "fallback_rerun_triggered": fallback_rerun_triggered,
+            "cache_miss_explanation": cache_miss_explanation,
         }
+        emit_consist_audit_event(
+            workspace=workspace,
+            event_type="bootstrap_resolution",
+            scenario_id=scenario_id,
+            seed=seed,
+            year=state.start_year,
+            iteration=0,
+            resolution_mode=resolution_mode,
+            bootstrap_cache_enabled=is_bootstrap_cache_enabled(settings),
+            bootstrap_cache_hit=cache_hit,
+            cache_probe_hit=cache_probe_hit,
+            replay_hydration_complete=bool(replay_hydration_complete),
+            fallback_rerun=fallback_rerun,
+            fallback_rerun_triggered=fallback_rerun_triggered,
+            probe_run_id=probe_run_id,
+            materialization_run_id=fallback_run_id,
+            staged_artifact_summary=staged_artifact_summary,
+            **cache_miss_audit_fields(cache_miss_explanation),
+        )
+        return result
 
     run_kwargs: Dict[str, Any] = {
         "fn": _execute_initialization,
@@ -283,6 +366,13 @@ def run_bootstrap_phase(
             workspace_path=workspace.full_path,
         ),
     }
+    bootstrap_output_paths = _bootstrap_output_paths(
+        settings=settings,
+        workspace=workspace,
+        surface=surface,
+    )
+    if bootstrap_output_paths:
+        run_kwargs["output_paths"] = bootstrap_output_paths
     run_kwargs["tags"] = merge_tag_list_fn(
         run_kwargs.get("tags"),
         [
@@ -308,37 +398,98 @@ def run_bootstrap_phase(
         logger.info("Bootstrap cache disabled; running initialization once.")
         run_result = tracker.run(
             **run_kwargs,
-            cache_options=cache_options_cls(cache_mode="off"),
+            cache_options=_bootstrap_cache_options(
+                settings,
+                cache_options_cls=cache_options_cls,
+                cache_mode="off",
+            ),
         )
         return _finalize_bootstrap_result(
             cache_hit=False,
             probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
+            resolution_mode="cache_disabled_execute",
         )
 
-    probe_result = tracker.run(**run_kwargs)
+    cache_options = _bootstrap_cache_options(
+        settings,
+        cache_options_cls=cache_options_cls,
+        cache_hydration="outputs-requested" if bootstrap_output_paths else None,
+    )
+    if cache_options is not None:
+        probe_result = tracker.run(**run_kwargs, cache_options=cache_options)
+    else:
+        probe_result = tracker.run(**run_kwargs)
     probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
     cache_hit = bool(getattr(probe_result, "cache_hit", False))
 
     if cache_hit:
         logger.info(
-            "BOOTSTRAP CACHE HIT. Running Phase 1 materialization pass to keep workspace safe."
+            "BOOTSTRAP CACHE HIT. Replaying declared bootstrap output paths into "
+            "workspace root=%s run_id=%s",
+            workspace.full_path,
+            probe_run_id,
         )
-        materialized_result = tracker.run(
+        missing_workspace_artifacts = _find_missing_bootstrap_workspace_artifacts(
+            settings=settings,
+            workspace=workspace,
+            surface=surface,
+        )
+        if not missing_workspace_artifacts:
+            logger.info(
+                "BOOTSTRAP CACHE HIT replay hydration restored required workspace artifacts."
+            )
+            return _finalize_bootstrap_result(
+                cache_hit=True,
+                probe_run_id=probe_run_id,
+                replay_hydration_complete=True,
+                resolution_mode="cache_hit_replay_hydrated",
+            )
+
+        fallback_cache_options = _bootstrap_cache_options(
+            settings,
+            cache_options_cls=cache_options_cls,
+            cache_mode="off",
+        )
+        logger.warning(
+            "BOOTSTRAP CACHE HIT replay hydration left required workspace "
+            "artifacts missing: %s",
+            _format_missing_bootstrap_workspace_artifacts(
+                missing_workspace_artifacts
+            ),
+        )
+        logger.warning(
+            "BOOTSTRAP fallback rerun triggered because replay hydration did not "
+            "restore required workspace invariants."
+        )
+        fallback_result = tracker.run(
             **run_kwargs,
-            cache_options=cache_options_cls(cache_mode="overwrite"),
+            cache_options=fallback_cache_options,
         )
         return _finalize_bootstrap_result(
             cache_hit=True,
             probe_run_id=probe_run_id,
-            materialization_run_id=getattr(
-                getattr(materialized_result, "run", None), "id", None
-            ),
+            fallback_run_id=getattr(getattr(fallback_result, "run", None), "id", None),
+            fallback_rerun=True,
+            replay_hydration_complete=False,
+            resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
         )
 
-    logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
+    cache_miss_explanation = log_cache_miss_explanation(
+        logger=logger,
+        result=probe_result,
+        info_message=(
+            "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
+            "reason=%s candidate_run_id=%s"
+        ),
+        debug_message="BOOTSTRAP cache miss details: %s",
+    )
+    if cache_miss_explanation is None:
+        logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
     return _finalize_bootstrap_result(
         cache_hit=False,
         probe_run_id=probe_run_id,
+        resolution_mode="cache_miss_execute",
+        cache_miss_explanation=cache_miss_explanation,
     )
 
 
@@ -371,8 +522,8 @@ def assert_bootstrap_output_invariant(
             if isinstance(bootstrap_result, dict)
             else None
         ),
-        "manifest_reference": (
-            bootstrap_result.get("manifest_reference")
+        "run_reference": (
+            bootstrap_result.get("run_reference")
             if isinstance(bootstrap_result, dict)
             else None
         ),

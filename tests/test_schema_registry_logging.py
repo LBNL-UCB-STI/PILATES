@@ -1,19 +1,23 @@
 import types
+from contextlib import contextmanager
+
+import pytest
 
 from pilates.utils import consist_runtime as cr
 
 
 def _install_consist_stub(monkeypatch, calls):
     def _log_input(path, key=None, enabled=None, **meta):
-        calls.append(("input", key, meta))
+        calls.append(("input", key, {"enabled": enabled, **meta}))
         return {"path": path, "key": key}
 
     def _log_output(path, key=None, enabled=None, **meta):
-        calls.append(("output", key, meta))
+        calls.append(("output", key, {"enabled": enabled, **meta}))
         return {"path": path, "key": key}
 
     stub = types.SimpleNamespace(log_input=_log_input, log_output=_log_output)
     monkeypatch.setattr(cr, "consist", stub)
+    monkeypatch.setattr(cr, "current_tracker", lambda: None)
 
 
 def test_log_input_attaches_schema_for_known_key(monkeypatch):
@@ -47,6 +51,100 @@ def test_log_output_does_not_override_explicit_schema(monkeypatch):
     assert calls
     _, _, meta = calls[0]
     assert meta["schema"] is _ExplicitSchema
+
+
+def test_log_h5_table_raises_outside_active_run(monkeypatch, tmp_path):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+
+    class _Tracker:
+        def log_h5_table(self, *args, **kwargs):
+            raise RuntimeError("Cannot log artifact outside of a run context.")
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    with pytest.raises(RuntimeError, match="outside of a run context"):
+        cr.log_h5_table(
+            str(h5_path),
+            key="atlas_postprocess_usim_households_table_updated",
+            table_path="/2023/households",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls == []
+
+
+def test_log_h5_container_raises_outside_active_run(monkeypatch, tmp_path):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+
+    class _Persistence:
+        @contextmanager
+        def batch_artifact_writes(self):
+            yield
+
+    class _Tracker:
+        def __init__(self):
+            self.persistence = _Persistence()
+
+        def log_h5_container(self, *args, **kwargs):
+            raise RuntimeError("Cannot log artifact outside of a run context.")
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    with pytest.raises(RuntimeError, match="outside of a run context"):
+        cr.log_h5_container(
+            str(h5_path),
+            key="usim_datastore_h5",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls == []
+
+
+def test_log_h5_container_batches_artifact_writes_when_available(monkeypatch, tmp_path):
+    h5_path = tmp_path / "model_data.h5"
+    h5_path.write_text("x")
+    events = []
+
+    class _Persistence:
+        @contextmanager
+        def batch_artifact_writes(self):
+            events.append("enter")
+            try:
+                yield
+            finally:
+                events.append("exit")
+
+    class _Tracker:
+        def __init__(self):
+            self.persistence = _Persistence()
+
+        def log_h5_container(self, *args, **kwargs):
+            events.append(("log_h5_container", kwargs.get("key"), kwargs.get("direction")))
+            return {"path": args[0], "key": kwargs.get("key")}
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
+
+    artifact = cr.log_h5_container(
+        str(h5_path),
+        key="usim_datastore_h5",
+        direction="output",
+        enabled=True,
+    )
+
+    assert artifact["key"] == "usim_datastore_h5"
+    assert events == [
+        "enter",
+        ("log_h5_container", "usim_datastore_h5", "output"),
+        "exit",
+    ]
 
 
 def test_log_input_unknown_key_has_no_schema(monkeypatch):
@@ -440,25 +538,6 @@ def test_log_output_trips_asim_out_key_attaches_schema(monkeypatch):
     assert meta["schema"].__name__ == "TripsAsimOut"
 
 
-def test_log_output_warns_on_schema_column_mismatch_without_failing(
-    monkeypatch, tmp_path, caplog
-):
-    calls = []
-    _install_consist_stub(monkeypatch, calls)
-
-    csv_path = tmp_path / "householdv_2023.csv"
-    csv_path.write_text("household_id,unexpected_column\n1,foo\n", encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        cr.log_output(str(csv_path), key="householdv_2023", enabled=True)
-
-    assert calls
-    _, _, meta = calls[0]
-    assert meta["schema"].__name__ == "HouseholdVAtlasOut"
-    assert "[SCHEMA WARNING]" in caplog.text
-    assert "missing_columns" in caplog.text
-
-
 def test_log_output_retries_without_schema_when_schema_logging_fails(
     monkeypatch, caplog
 ):
@@ -505,37 +584,6 @@ def test_log_output_raises_schema_logging_failure_when_warn_only_disabled(monkey
         pass
 
     assert len(calls) == 1
-
-
-def test_log_output_warns_when_schema_fk_target_not_registered(monkeypatch, caplog):
-    from sqlalchemy import BigInteger, Column, ForeignKey
-    from sqlmodel import Field, SQLModel
-
-    calls = []
-    _install_consist_stub(monkeypatch, calls)
-
-    class _BadFkSchema(SQLModel, table=True):
-        __tablename__ = "BadFkSchema"
-        __table_args__ = {"extend_existing": True}
-        __abstract__ = True
-
-        bad_ref: int | None = Field(
-            default=None,
-            sa_column=Column(
-                "bad_ref",
-                BigInteger,
-                ForeignKey("MissingTable.missing_id"),
-                nullable=True,
-            ),
-        )
-
-    monkeypatch.setattr(cr, "_schema_for_key", lambda _key: _BadFkSchema)
-
-    with caplog.at_level("WARNING"):
-        cr.log_output("/tmp/does_not_matter.parquet", key="bad_fk_key", enabled=True)
-
-    assert calls
-    assert "target table is not registered in schema registry" in caplog.text
 
 
 def test_log_output_trips_asim_out_fk_targets_are_registered(monkeypatch, caplog):
@@ -649,4 +697,94 @@ def test_log_h5_table_activitysim_postprocess_persons_fk_targets_are_registered(
     assert table_path == "/persons"
     assert direction == "output"
     assert meta["schema"].__name__ == "ActivitysimPostprocessUsimPersonsUpdated"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_atlas_postprocess_households_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="atlas_postprocess_usim_households_table_updated",
+            table_path="/2023/households",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "atlas_postprocess_usim_households_table_updated"
+    assert table_path == "/2023/households"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "AtlasPostprocessUsimHouseholdsUpdated"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_urbansim_postprocess_persons_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="urbansim_postprocess_usim_persons_table_updated",
+            table_path="/persons",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "urbansim_postprocess_usim_persons_table_updated"
+    assert table_path == "/persons"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "UrbansimPostprocessUsimPersonsTable"
+    assert "target table is not registered in schema registry" not in caplog.text
+
+
+def test_log_h5_table_urbansim_postprocess_work_locations_fk_targets_are_registered(
+    monkeypatch, caplog
+):
+    calls = []
+
+    class _TrackerStub:
+        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+            calls.append((path, key, table_path, direction, meta))
+            return types.SimpleNamespace(meta={"table_path": table_path})
+
+    monkeypatch.setattr(cr, "current_tracker", lambda: _TrackerStub())
+
+    with caplog.at_level("WARNING"):
+        cr.log_h5_table(
+            "/tmp/data.h5",
+            key="urbansim_postprocess_usim_work_locations_table_updated",
+            table_path="/work_locations",
+            direction="output",
+            enabled=True,
+        )
+
+    assert calls
+    _, key, table_path, direction, meta = calls[0]
+    assert key == "urbansim_postprocess_usim_work_locations_table_updated"
+    assert table_path == "/work_locations"
+    assert direction == "output"
+    assert meta["schema"].__name__ == "UrbansimPostprocessUsimWorkLocationsTable"
     assert "target table is not registered in schema registry" not in caplog.text

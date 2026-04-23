@@ -2,19 +2,245 @@ from typing import Optional, Dict, Any
 import logging
 import os
 from pathlib import Path
+import re
+import zlib
 
 import numpy as np
 import pandas as pd
 
+from pilates.atlas.inputs import atlas_selected_scenario
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
+from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import enqueue_archive_copy
+from pilates.utils.coupler_helpers import artifact_to_existing_path, enqueue_archive_copy
+from pilates.utils.state_access import uses_input_datastore
+from pilates.workflows.artifact_keys import (
+    ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
+)
 from workflow_state import WorkflowState
 from pilates.generic.postprocessor import GenericPostprocessor
-from pilates.workflows.artifact_keys import USIM_H5_UPDATED
 
 logger = logging.getLogger(__name__)
+
+
+_ATLAS_VEHICLE_TYPE_MAPPING_BY_SCENARIO = {
+    "baseline": "vehicle_type_mapping_baseline.csv",
+    "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
+    "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
+}
+
+_ATLAS_SCENARIO_ALIASES = {
+    "baseline": "baseline",
+    "ess_cons": "ess_cons",
+    "ess_const_220_price": "ess_cons",
+    "zev_mandate": "zev_mandate",
+    "evmandforced2": "zev_mandate",
+}
+
+_ATLAS_BODYTYPE_ALIASES = {
+    "car": "car",
+    "sedan": "car",
+    "coupe": "car",
+    "wagon": "car",
+    "hatchback": "car",
+    "convertible": "car",
+    "sports_car": "car",
+    "sportscar": "car",
+    "minivan": "minvan",
+    "mini_van": "minvan",
+    "minvan": "minvan",
+    "suv": "suv",
+    "cuv": "suv",
+    "truck": "truck",
+    "pickup": "truck",
+    "pickup_truck": "truck",
+    "van": "van",
+    "cargo_van": "van",
+    "passenger_van": "van",
+}
+
+_ATLAS_FUEL_ALIASES = {
+    "conv": "conv",
+    "conventional": "conv",
+    "gas": "conv",
+    "gasoline": "conv",
+    "ice": "conv",
+    "diesel": "conv",
+    "ev": "ev",
+    "electric": "ev",
+    "electricity": "ev",
+    "bev": "ev",
+    "hybrid": "hybrid",
+    "phev": "phev",
+    "plugin_hybrid": "phev",
+    "plug_in_hybrid": "phev",
+    "fuelcell": "fuelcell",
+    "fuel_cell": "fuelcell",
+    "hydrogen": "fuelcell",
+    "cng": "cng",
+}
+
+
+def _normalize_lookup_key(value: Any) -> Optional[str]:
+    if pd.isna(value):
+        return None
+    text = str(value).strip().lower()
+    if not text:
+        return None
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def _settings_value(settings: Any, field_name: str) -> Optional[Any]:
+    if isinstance(settings, dict):
+        return settings.get(field_name)
+    return getattr(settings, field_name, None)
+
+
+def _normalized_atlas_scenario(settings: Any) -> str:
+    scenario = atlas_selected_scenario(settings)
+    if scenario is None:
+        for field_name in ("atlas_vehicles_scenario", "atlas_scenario"):
+            raw_value = _settings_value(settings, field_name)
+            normalized = _ATLAS_SCENARIO_ALIASES.get(_normalize_lookup_key(raw_value))
+            if normalized is not None:
+                scenario = normalized
+                break
+    if scenario is None:
+        logger.warning(
+            "[AtlasPostprocessor] No ATLAS scenario configured for vehicle type mapping; defaulting to baseline."
+        )
+        return "baseline"
+    return scenario
+
+
+def resolve_atlas_vehicle_type_mapping_path(
+    settings: Any, workspace: Optional[Workspace] = None
+) -> Path:
+    scenario = _normalized_atlas_scenario(settings)
+    mapping_name = _ATLAS_VEHICLE_TYPE_MAPPING_BY_SCENARIO.get(scenario)
+    if mapping_name is None:
+        raise RuntimeError(
+            f"Unsupported ATLAS scenario for vehicle type mapping: {scenario}"
+        )
+
+    candidates = []
+    if workspace is not None:
+        candidates.append(Path(workspace.get_atlas_mutable_input_dir()) / mapping_name)
+    candidates.append(Path(__file__).resolve().parent / "atlas_input" / mapping_name)
+
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    raise RuntimeError(
+        "ATLAS vehicle type mapping file not found. Looked for: "
+        + ", ".join(str(candidate) for candidate in candidates)
+    )
+
+
+def _normalize_bodytype_for_mapping(value: Any) -> Optional[str]:
+    normalized = _normalize_lookup_key(value)
+    if normalized is None:
+        return None
+    return _ATLAS_BODYTYPE_ALIASES.get(normalized, normalized)
+
+
+def _normalize_fuel_for_mapping(value: Any) -> Optional[str]:
+    normalized = _normalize_lookup_key(value)
+    if normalized is None:
+        return None
+    return _ATLAS_FUEL_ALIASES.get(normalized, normalized)
+
+
+def _prepare_vehicle_type_mapping(mapping_csv_path: str) -> pd.DataFrame:
+    mapping = pd.read_csv(mapping_csv_path)
+    mapping = mapping.copy()
+    mapping["modelyear"] = mapping["modelyear"].astype(int)
+    mapping["bodytype_key"] = mapping["bodytype"].map(_normalize_bodytype_for_mapping)
+    mapping["fuel_key"] = mapping["adopt_fuel"].map(_normalize_fuel_for_mapping)
+    mapping["sampleProbabilityWithinCategory"] = pd.to_numeric(
+        mapping["sampleProbabilityWithinCategory"], errors="coerce"
+    ).fillna(0.0)
+    mapping = mapping.dropna(subset=["vehicleTypeId", "modelyear"])
+    mapping = mapping.drop_duplicates(
+        subset=["fuel_key", "bodytype_key", "modelyear", "vehicleTypeId"],
+        keep="first",
+    )
+    return mapping
+
+
+def _nearest_modelyear_subset(mapping: pd.DataFrame, modelyear: int) -> pd.DataFrame:
+    nearest_year = (
+        (mapping["modelyear"] - modelyear).abs().sort_values().index[0]
+    )
+    target_year = int(mapping.loc[nearest_year, "modelyear"])
+    return mapping.loc[mapping["modelyear"] == target_year]
+
+
+def _select_vehicle_type_candidates(
+    mapping: pd.DataFrame,
+    fuel_key: Optional[str],
+    bodytype_key: Optional[str],
+    modelyear: int,
+) -> pd.DataFrame:
+    attempts = (
+        (fuel_key, bodytype_key, False),
+        (fuel_key, bodytype_key, True),
+        (fuel_key, None, False),
+        (fuel_key, None, True),
+        (None, bodytype_key, True),
+        (None, None, True),
+    )
+
+    for candidate_fuel, candidate_bodytype, nearest_year in attempts:
+        matched = mapping
+        if candidate_fuel is not None:
+            matched = matched.loc[matched["fuel_key"] == candidate_fuel]
+        if candidate_bodytype is not None:
+            matched = matched.loc[matched["bodytype_key"] == candidate_bodytype]
+        if matched.empty:
+            continue
+        if nearest_year:
+            matched = _nearest_modelyear_subset(matched, modelyear)
+        else:
+            matched = matched.loc[matched["modelyear"] == modelyear]
+            if matched.empty:
+                continue
+        return matched.sort_values("vehicleTypeId").reset_index(drop=True)
+
+    raise RuntimeError(
+        "Unable to map ATLAS vehicle row to a BEAM vehicle type. "
+        f"fuel={fuel_key} bodytype={bodytype_key} modelyear={modelyear}"
+    )
+
+
+def _sample_vehicle_type_ids(
+    candidates: pd.DataFrame,
+    sample_size: int,
+    *,
+    output_year: int,
+    fuel_key: Optional[str],
+    bodytype_key: Optional[str],
+    modelyear: int,
+) -> pd.Series:
+    weights = candidates["sampleProbabilityWithinCategory"]
+    if float(weights.sum()) <= 0:
+        weights = None
+    seed_value = zlib.crc32(
+        f"{output_year}|{fuel_key}|{bodytype_key}|{modelyear}|{sample_size}".encode(
+            "utf-8"
+        )
+    )
+    return candidates.sample(
+        n=sample_size,
+        replace=True,
+        weights=weights,
+        random_state=seed_value,
+    )["vehicleTypeId"].reset_index(drop=True)
 
 
 def atlas_add_vehileTypeId(
@@ -22,11 +248,13 @@ def atlas_add_vehileTypeId(
     output_year: int,
     vehicles_csv_path: str,
     output_vehicles2_csv_path: str,
+    mapping_csv_path: Optional[str] = None,
 ):
     """Add a 'vehicleTypeId' column to the ATLAS vehicles CSV.
 
-    Reads the main ATLAS vehicles output, creates a composite 'vehicleTypeId'
-    column for BEAM, and writes the result to a new 'vehicles2_{year}.csv' file.
+    Reads the main ATLAS vehicles output, samples a BEAM-compatible
+    ``vehicleTypeId`` from the scenario-specific mapping table, and writes the
+    result to a new ``vehicles2_{year}.csv`` file.
 
     Args:
         settings (dict): The simulation settings.
@@ -40,26 +268,57 @@ def atlas_add_vehileTypeId(
         )
         return
 
-    # Read original ATLAS output "vehicles_*.csv" as dataframe
     df = pd.read_csv(vehicles_csv_path)
-
-    # ATLAS:v1.0.6 can generate continuous modelyear
     df["modelyear"] = df["modelyear"].astype(int)
-
-    # Add "vehicleTypeId" column in dataframe for BEAM
-    # For prior-2015-model vehicles, vehicleTypeId is *_*_2015
-    df["vehicleTypeId"] = (
-        df[["bodytype", "pred_power", "modelyear"]].astype(str).agg("_".join, axis=1)
+    mapping_path = (
+        Path(mapping_csv_path)
+        if mapping_csv_path is not None
+        else resolve_atlas_vehicle_type_mapping_path(settings)
     )
-    df.loc[df["modelyear"] < 2015, "vehicleTypeId"] = (
-        df.loc[df["modelyear"] < 2015, ["bodytype", "pred_power"]]
-        .astype(str)
-        .agg("_".join, axis=1)
-        + "_2015"
-    )
+    mapping = _prepare_vehicle_type_mapping(str(mapping_path))
 
-    # Write to a new file vehicles2_*.csv
+    fuel_source = None
+    if "adopt_fuel" in df.columns:
+        fuel_source = df["adopt_fuel"]
+    if "pred_power" in df.columns:
+        fuel_source = (
+            fuel_source.combine_first(df["pred_power"])
+            if fuel_source is not None
+            else df["pred_power"]
+        )
+    df["_fuel_key"] = (
+        fuel_source.map(_normalize_fuel_for_mapping) if fuel_source is not None else None
+    )
+    df["_bodytype_key"] = (
+        df["bodytype"].map(_normalize_bodytype_for_mapping)
+        if "bodytype" in df.columns
+        else None
+    )
+    df["vehicleTypeId"] = pd.Series(index=df.index, dtype="object")
+
+    grouped = df.groupby(["_fuel_key", "_bodytype_key", "modelyear"], sort=False, dropna=False)
+    for (fuel_key, bodytype_key, modelyear), vehicle_subset in grouped:
+        candidates = _select_vehicle_type_candidates(
+            mapping,
+            fuel_key=fuel_key,
+            bodytype_key=bodytype_key,
+            modelyear=int(modelyear),
+        )
+        sampled_ids = _sample_vehicle_type_ids(
+            candidates,
+            sample_size=len(vehicle_subset),
+            output_year=output_year,
+            fuel_key=fuel_key,
+            bodytype_key=bodytype_key,
+            modelyear=int(modelyear),
+        )
+        df.loc[vehicle_subset.index, "vehicleTypeId"] = sampled_ids.values
+
+    df.drop(columns=["_fuel_key", "_bodytype_key"], inplace=True)
     df.to_csv(output_vehicles2_csv_path, index=False)
+
+
+atlas_add_vehicleTypeId = atlas_add_vehileTypeId
 
 
 def get_usim_datastore_fname(settings: PilatesConfig, io, year=None):
@@ -92,23 +351,15 @@ def resolve_atlas_usim_datastore_path(
     settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
 ) -> Path:
     """Resolve the UrbanSim datastore ATLAS should read/update for this subrun."""
-    explicit_path = getattr(state, "atlas_usim_datastore_h5", None)
-    if explicit_path:
-        return Path(explicit_path)
+    explicit_value = getattr(state, "atlas_usim_datastore_h5", None)
+    resolved_explicit = artifact_to_existing_path(explicit_value, workspace=workspace)
+    if resolved_explicit:
+        return Path(resolved_explicit)
+    if isinstance(explicit_value, (str, os.PathLike)):
+        return Path(os.fspath(explicit_value))
 
     usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
-    is_start_year = getattr(state, "is_start_year", None)
-    if callable(is_start_year):
-        start_year = bool(is_start_year())
-    else:
-        start_year_value = getattr(state, "start_year", None)
-        forecast_year = getattr(state, "forecast_year", None)
-        year_value = getattr(state, "year", forecast_year)
-        start_year = (
-            start_year_value is not None and year_value is not None and year_value == start_year_value
-        )
-
-    if start_year:
+    if uses_input_datastore(state):
         usim_datastore_fname = get_usim_datastore_fname(settings, io="input")
     else:
         usim_datastore_fname = get_usim_datastore_fname(
@@ -136,10 +387,10 @@ class AtlasPostprocessor(GenericPostprocessor):
         )
         atlas_output_dir = workspace.get_atlas_output_dir()
         return {
-            "atlas_output_dir": (
+            ATLAS_OUTPUT_DIR: (
                 atlas_output_dir if os.path.exists(atlas_output_dir) else None
             ),
-            "usim_datastore_h5": (
+            USIM_DATASTORE_CURRENT_H5: (
                 usim_output_path if usim_output_path.exists() else None
             ),
         }
@@ -155,8 +406,9 @@ class AtlasPostprocessor(GenericPostprocessor):
         -----
         Output keys
             - ``atlas_output_dir``: ATLAS output directory after postprocessing.
-            - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) emitted
-              for subsequent model stages.
+            - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
+              selected as the downstream population source.
+            - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
         Related docs
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
@@ -164,9 +416,20 @@ class AtlasPostprocessor(GenericPostprocessor):
         usim_output_path = resolve_atlas_usim_datastore_path(
             settings, state, workspace
         )
+        output_year = getattr(state, "year", getattr(state, "forecast_year", None))
+        vehicles2_path = (
+            os.path.join(workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv")
+            if output_year is not None
+            else None
+        )
         return {
-            "atlas_output_dir": workspace.get_atlas_output_dir(),
-            "usim_datastore_h5": usim_output_path,
+            ATLAS_OUTPUT_DIR: workspace.get_atlas_output_dir(),
+            USIM_POPULATION_SOURCE_H5: usim_output_path,
+            **(
+                {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
+                if vehicles2_path is not None
+                else {}
+            ),
         }
 
     def __init__(
@@ -237,7 +500,6 @@ class AtlasPostprocessor(GenericPostprocessor):
             "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
         )
         updated_usim_h5 = Path(usim_h5_file)
-        output_paths[USIM_H5_UPDATED] = updated_usim_h5
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh2_file = os.path.join(
@@ -255,7 +517,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 "ATLAS postprocess did not produce vehicles2 output for year "
                 f"{output_year}"
             )
-        output_paths["atlas_vehicles2_output"] = Path(atlas_veh2_file)
+        output_paths[ATLAS_VEHICLES2_OUTPUT] = Path(atlas_veh2_file)
 
         # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
         atlas_input_root = workspace.get_atlas_mutable_input_dir()
@@ -335,11 +597,13 @@ class AtlasPostprocessor(GenericPostprocessor):
 
         # Read original h5 files and update
         with pd.HDFStore(h5_file_path, mode="r+") as h5:
-            # The sub-state's `is_start_year` method correctly determines if this is a warm start context
-            key = (
-                "households"
-                if self.state.is_start_year()
-                else f"/{output_year}/households"
+            # Keep write target resolution aligned with ATLAS preprocess so
+            # subyear runs can update the nearest available year-scoped table.
+            key = _resolve_atlas_h5_table_key(
+                h5,
+                year=output_year,
+                table="households",
+                is_start_year=self.state.is_start_year(),
             )
 
             try:
@@ -349,20 +613,30 @@ class AtlasPostprocessor(GenericPostprocessor):
                 return False
 
             olddf.index = olddf.index.astype(int)
-            olddf = olddf.reindex(df.index.astype(int))
+            atlas_ids = pd.Index(df.index.astype(int))
+            h5_ids = pd.Index(olddf.index.astype(int))
+            missing_in_h5 = atlas_ids.difference(h5_ids)
+            missing_in_atlas = h5_ids.difference(atlas_ids)
 
-            if olddf.shape[0] != df.shape[0]:
+            if len(missing_in_h5) or len(missing_in_atlas):
                 logger.error(
-                    "ATLAS household_id mismatch found - NOT updating h5 datastore"
+                    "ATLAS household_id mismatch found - NOT updating h5 datastore. "
+                    "missing_in_h5=%s missing_in_atlas=%s sample_missing_in_h5=%s "
+                    "sample_missing_in_atlas=%s",
+                    len(missing_in_h5),
+                    len(missing_in_atlas),
+                    missing_in_h5.tolist()[:10],
+                    missing_in_atlas.tolist()[:10],
                 )
                 return False
-            else:
-                olddf["cars"] = df["cars"].values
-                olddf["hh_cars"] = df["hh_cars"].values
-                for col in olddf.columns:
-                    if olddf[col].dtype.name == "category":
-                        logger.info(f"Converting column {col} from category to str")
-                        olddf[col] = olddf[col].astype(str)
-                h5[key] = olddf
-                logger.info(f"ATLAS update h5 datastore table {key} - done")
-                return True
+
+            olddf = olddf.reindex(atlas_ids)
+            olddf["cars"] = df["cars"].values
+            olddf["hh_cars"] = df["hh_cars"].values
+            for col in olddf.columns:
+                if olddf[col].dtype.name == "category":
+                    logger.info(f"Converting column {col} from category to str")
+                    olddf[col] = olddf[col].astype(str)
+            h5[key] = olddf
+            logger.info(f"ATLAS update h5 datastore table {key} - done")
+            return True

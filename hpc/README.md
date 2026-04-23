@@ -11,7 +11,8 @@ Why:
 - Faster startup in queued jobs.
 - More predictable installs for shared clusters.
 - Easy support for local editable `consist` today, and PyPI install later.
-- Explicit version gating in one place (`hpc/requirements-hpc.txt`), including `zarr==3.0.6`.
+- Explicit HPC dependency management in `hpc/requirements-hpc.txt` so cluster
+  installs stay stable even if local/dev requirements evolve.
 
 ## Files
 
@@ -142,8 +143,8 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 
 `job.sh` installs `consist` as follows:
 
-1. If local source exists at `CONSIST_SRC_DIR` (default `$PILATES_DIR/consist`), install editable (`pip install -e`).
-2. Otherwise, install from PyPI package name in `CONSIST_PYPI_PACKAGE` (default `consist`) if not already importable.
+1. If local source exists at `CONSIST_SRC_DIR` (default `$PILATES_DIR/../consist`), install editable (`pip install -e`).
+2. Otherwise, install from PyPI package name in `CONSIST_PYPI_PACKAGE` or fall back to `consist==0.1.2`.
 3. Validate with `from consist import create_tracker`.
 
 Override examples:
@@ -153,7 +154,7 @@ CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh 
 ```
 
 ```bash
-CONSIST_PYPI_PACKAGE=consist==0.5.2 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+CONSIST_PYPI_PACKAGE=consist==0.1.2 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
 ```
 
 ## Dependency Gates
@@ -163,7 +164,7 @@ Version-sensitive dependencies should be managed in `hpc/requirements-hpc.txt`.
 Current important gates include:
 
 - `numpy<2.0`
-- `zarr==3.0.6`
+- `zarr==3.1.5`
 - `tables>=3.9.0,<4.0`
 
 When changing these, keep compatibility with the active Python module version and rerun a small smoke job before broad rollout.

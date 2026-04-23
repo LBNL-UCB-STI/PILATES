@@ -13,13 +13,72 @@ from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivityS
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     normalize_asim_output_key,
     has_asim_run_marker,
 )
+from pilates.activitysim.runner import (
+    asim_required_run_output_paths,
+    asim_runtime_zarr_path,
+    asim_staged_input_paths,
+)
+from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+
+def _postprocess_output_stem(output_key: str) -> str:
+    return re.sub(r"_asim_out$", "", output_key)
+
+
+def _activitysim_iteration_output_paths(
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    year = getattr(state, "year", getattr(state, "current_year", None))
+    if year is None:
+        return {}
+    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
+    iteration_dir = (
+        Path(workspace.get_asim_output_dir()) / f"year-{year}-iteration-{iteration}"
+    )
+    return {
+        output_key: str(iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet")
+        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    }
+
+
+def _activitysim_archived_input_paths(
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    year = getattr(state, "year", getattr(state, "current_year", None))
+    if year is None:
+        return {}
+    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
+    archived_inputs_dir = (
+        Path(workspace.get_asim_output_dir()) / f"inputs-year-{year}-iteration-{iteration}"
+    )
+    return {
+        "asim_input_households_csv_archived": str(archived_inputs_dir / "households.csv"),
+        "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
+        "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
+        "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
+        "asim_input_skims_zarr_archived": str(archived_inputs_dir / "skims.zarr"),
+    }
+
+
+def _default_usim_datastore_output_path(
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Optional[str]:
+    try:
+        datastore_name = get_usim_datastore_fname(settings, io="input")
+    except Exception:
+        return None
+    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
 def _load_asim_outputs(
@@ -160,78 +219,35 @@ def _detect_h5_prefix(
     return None
 
 
-def _resolve_usim_store_path_and_prefix(
-    settings,
-    state: WorkflowState,
-    workspace: Workspace,
-    required_tables,
-    preferred_prefix=None,
-):
-    data_dir = workspace.get_usim_mutable_data_dir()
-    forecast_store_path = os.path.join(
-        data_dir,
-        get_usim_datastore_fname(
-            settings, io="output", year=state.forecast_year
-        ),
-    )
-    current_store_path = os.path.join(
-        data_dir,
-        get_usim_datastore_fname(settings, io="input"),
-    )
-
-    for candidate_path, label in (
-        (forecast_store_path, "forecast output"),
-        (current_store_path, "current input"),
-    ):
-        if not os.path.exists(candidate_path):
-            continue
-        with pd.HDFStore(candidate_path, mode="r") as store:
-            resolved_prefix = _detect_h5_prefix(
-                store,
-                required_tables=required_tables,
-                preferred_prefix=preferred_prefix,
-            )
-        if resolved_prefix is not None:
-            return candidate_path, resolved_prefix
-        logger.warning(
-            "UrbanSim %s datastore exists but is missing required tables %s: %s",
-            label,
-            list(required_tables),
-            candidate_path,
-        )
-
-    return None, None
-
-
 def _prepare_updated_tables(
     settings,
     state: WorkflowState,
-    workspace: Workspace,
     asim_output_dict,
     tables_updated_by_asim,
+    population_source_store_path: str,
     prefix=None,
 ):
     """
     Combines ActivitySim and UrbanSim outputs for tables updated by
     ActivitySim (e.g. households and persons)
     """
-
-    data_dir = workspace.get_usim_mutable_data_dir()
-
-    usim_output_store_path, resolved_prefix = _resolve_usim_store_path_and_prefix(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        required_tables=tables_updated_by_asim,
-        preferred_prefix=prefix,
-    )
-    if not usim_output_store_path:
-        forecast_path = os.path.join(
-            data_dir,
-            get_usim_datastore_fname(settings, io="output", year=state.forecast_year),
-        )
+    usim_output_store_path = population_source_store_path
+    if not os.path.exists(usim_output_store_path):
         raise ValueError(
-            "No output data store found at {0}".format(forecast_path)
+            "ActivitySim postprocess requires the bound UrbanSim population-source datastore, "
+            f"but it does not exist: {usim_output_store_path}"
+        )
+    with pd.HDFStore(usim_output_store_path, mode="r") as prefix_store:
+        resolved_prefix = _detect_h5_prefix(
+            prefix_store,
+            required_tables=tables_updated_by_asim,
+            preferred_prefix=prefix,
+        )
+    if resolved_prefix is None:
+        raise ValueError(
+            "ActivitySim postprocess could not resolve required UrbanSim tables "
+            f"{list(tables_updated_by_asim)} from bound population-source datastore "
+            f"{usim_output_store_path}"
         )
     if resolved_prefix != prefix:
         logger.info(
@@ -265,44 +281,18 @@ def _prepare_updated_tables(
     required_cols = {}
     usim_tables = {}
 
+    vehicle_ownership_model = (
+        getattr(getattr(settings, "run", None), "models", None)
+        and getattr(settings.run.models, "vehicle_ownership", None)
+    )
+    use_asim_auto_ownership = vehicle_ownership_model != "atlas"
+
     def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
         if df.index.name == index_col:
             return df
         if index_col in df.columns:
             return df.set_index(index_col)
         return df
-
-    def _align_persons_for_join(
-        persons: pd.DataFrame, usim_persons: pd.DataFrame
-    ) -> pd.DataFrame:
-        if persons.index.name == "person_id" or "person_id" in persons.columns:
-            persons = _ensure_index(persons, "person_id")
-            return persons
-
-        if "member_id" not in persons.columns and "PNUM" in persons.columns:
-            persons = persons.copy()
-            persons["member_id"] = persons["PNUM"]
-
-        if "household_id" in persons.columns and "member_id" in persons.columns:
-            persons = persons.copy()
-            persons["household_id"] = pd.to_numeric(
-                persons["household_id"], errors="coerce"
-            ).astype("Int64")
-            persons["member_id"] = pd.to_numeric(
-                persons["member_id"], errors="coerce"
-            ).astype("Int64")
-            usim_persons = usim_persons.copy()
-            if "person_id" in usim_persons.columns:
-                usim_persons = usim_persons.set_index("person_id", drop=False)
-            usim_persons["household_id"] = pd.to_numeric(
-                usim_persons["household_id"], errors="coerce"
-            ).astype("Int64")
-            usim_persons["member_id"] = pd.to_numeric(
-                usim_persons["member_id"], errors="coerce"
-            ).astype("Int64")
-            return persons, usim_persons, ["household_id", "member_id"]
-
-        return persons
 
     def _get_usim_table(table_name: str) -> pd.DataFrame:
         if table_name not in usim_tables:
@@ -356,109 +346,129 @@ def _prepare_updated_tables(
                 return True
         return False
 
-    p_names_dict = {"PNUM": "member_id"}
+    def _prepare_asim_persons_overlay(
+        persons: pd.DataFrame, usim_persons: pd.DataFrame
+    ) -> pd.DataFrame:
+        if persons.index.name == "person_id" or "person_id" in persons.columns:
+            return _ensure_index(persons, "person_id")
+
+        persons = persons.copy()
+        if "member_id" not in persons.columns and "PNUM" in persons.columns:
+            persons["member_id"] = persons["PNUM"]
+
+        if not {"household_id", "member_id"} <= set(persons.columns):
+            logger.warning(
+                "ASim persons output lacks person_id and household/member identifiers; "
+                "skipping ASim persons writeback overlays."
+            )
+            return pd.DataFrame(index=pd.Index([], name="person_id"))
+
+        key_cols = ["household_id", "member_id"]
+        persons[key_cols] = persons[key_cols].apply(
+            pd.to_numeric, errors="coerce"
+        ).astype("Int64")
+
+        logger.warning(
+            "ASim persons output is missing person_id; falling back to household_id/member_id "
+            "alignment for work/school zone overlays. This alignment is weaker because "
+            "member_id can change when preprocess filters or reorders household members."
+        )
+
+        usim_lookup = usim_persons.reset_index()[["person_id"] + key_cols].copy()
+        usim_lookup[key_cols] = usim_lookup[key_cols].apply(
+            pd.to_numeric, errors="coerce"
+        ).astype("Int64")
+        duplicate_mask = usim_lookup.duplicated(key_cols, keep=False)
+        if duplicate_mask.any():
+            logger.warning(
+                "UrbanSim persons table has %s duplicate household/member pairs; "
+                "dropping duplicates before ASim overlay alignment.",
+                int(duplicate_mask.sum()),
+            )
+            usim_lookup = usim_lookup.loc[~duplicate_mask].copy()
+
+        merged = persons.merge(usim_lookup, on=key_cols, how="left")
+        missing_person_id = merged["person_id"].isna()
+        if missing_person_id.any():
+            logger.warning(
+                "Dropping %s ASim persons rows that could not be aligned back to UrbanSim person_id "
+                "via household_id/member_id.",
+                int(missing_person_id.sum()),
+            )
+            merged = merged.loc[~missing_person_id].copy()
+
+        merged["person_id"] = pd.to_numeric(
+            merged["person_id"], errors="coerce"
+        ).astype("Int64")
+        merged = merged.loc[merged["person_id"].notna()].copy()
+        merged["person_id"] = merged["person_id"].astype(int)
+        return merged.set_index("person_id")
+
     if "persons" in asim_output_dict.keys():
         logger.info("Preparing persons table!")
-        persons = asim_output_dict["persons"]
-        usim_persons = _get_usim_table("persons")
-        aligned = _align_persons_for_join(persons, usim_persons)
-        join_keys = None
-        if isinstance(aligned, tuple):
-            persons, usim_persons, join_keys = aligned
-        else:
-            persons = aligned
-            usim_persons = _ensure_index(usim_persons, "person_id")
-        for fromCol, toCol in p_names_dict.items():
-            if (toCol in p_cols_to_include) & (
-                fromCol in persons.columns
+        usim_persons = _ensure_index(_get_usim_table("persons"), "person_id")
+        persons_overlay = _prepare_asim_persons_overlay(
+            asim_output_dict["persons"], usim_persons
+        )
+
+        if not persons_overlay.empty:
+            # Phase 1 migration keeps these aliases equivalent. Phase 2 should
+            # switch this overlay logic to the canonical ActivitySim names
+            # (`workplace_zone_id` / `school_zone_id`) and remove the fallbacks.
+            work_zone_source = None
+            if _set_from_source(
+                persons_overlay, "work_zone_id", ["workplace_zone_id", "workplace_taz"]
             ):
-                persons.loc[:, toCol] = persons.loc[:, fromCol].copy()
-        # Prefer ASim zone IDs where available.
-        work_zone_source = None
-        if _set_from_source(
-            persons, "work_zone_id", ["workplace_zone_id", "workplace_taz"]
-        ):
-            work_zone_source = "workplace_zone_id"
-            if "workplace_zone_id" not in persons.columns:
-                work_zone_source = "workplace_taz"
-        school_zone_source = None
-        if "school_zone_id" in persons.columns:
-            school_zone_source = "school_zone_id"
-        elif _set_from_source(persons, "school_zone_id", ["school_taz"]):
-            school_zone_source = "school_taz"
-        if work_zone_source or school_zone_source:
-            logger.debug(
-                "ASim persons zone mapping: work_zone_id <- %s, school_zone_id <- %s",
-                work_zone_source,
-                school_zone_source,
-            )
-        if "workplace_taz" not in persons.columns and "work_zone_id" in persons.columns:
-            persons["workplace_taz"] = persons["work_zone_id"]
-        if "school_taz" not in persons.columns and "school_zone_id" in persons.columns:
-            persons["school_taz"] = persons["school_zone_id"]
-        missing_person_cols = [
-            col
-            for col in p_cols_to_include
-            if col not in persons.columns
-        ]
-        if missing_person_cols:
-            logger.warning(
-                "ASim persons missing columns; backfilling from UrbanSim: %s",
-                missing_person_cols,
-            )
-            if join_keys:
-                persons = persons.merge(
-                    usim_persons[join_keys + missing_person_cols],
-                    on=join_keys,
-                    how="left",
+                work_zone_source = "workplace_zone_id"
+                if "workplace_zone_id" not in persons_overlay.columns:
+                    work_zone_source = "workplace_taz"
+            school_zone_source = None
+            if "school_zone_id" in persons_overlay.columns:
+                school_zone_source = "school_zone_id"
+            elif _set_from_source(persons_overlay, "school_zone_id", ["school_taz"]):
+                school_zone_source = "school_taz"
+            if work_zone_source or school_zone_source:
+                logger.debug(
+                    "ASim persons zone mapping: work_zone_id <- %s, school_zone_id <- %s",
+                    work_zone_source,
+                    school_zone_source,
                 )
-            else:
-                persons = aligned.join(usim_persons[missing_person_cols], how="left")
+
+        persons = usim_persons.copy()
+        overlay_cols = [
+            col
+            for col in ("work_zone_id", "school_zone_id")
+            if col in p_cols_to_include and col in persons_overlay.columns
+        ]
+        if overlay_cols:
+            common_idx = persons.index.intersection(persons_overlay.index)
+            for col in overlay_cols:
+                persons.loc[common_idx, col] = persons_overlay.loc[common_idx, col]
+
         persons = _normalize_person_household_ids(
             persons, usim_persons["household_id"].dtype
         )
         asim_output_dict["persons"] = persons[p_cols_to_include]
 
     logger.info("Preparing households table!")
-    # This is the inverse process of asim_pre._update_households_table()
-    # no new columns to persist, just convert column names
-    hh_names_dict = {
-        "hhsize": "persons",
-        "num_workers": "workers",
-        "auto_ownership": "cars",
-    }
-    hh_cols_to_replace = ["cars"]
     hh_cols_to_include = required_cols["households"]
     if "households" in asim_output_dict.keys():
-        asim_output_dict["households"] = _ensure_index(
+        usim_households = _ensure_index(_get_usim_table("households"), "household_id")
+        households_overlay = _ensure_index(
             asim_output_dict["households"], "household_id"
         )
-        for col in hh_cols_to_replace:
-            if col not in required_cols["households"]:
-                hh_cols_to_include.append(col)
-            if col in asim_output_dict["households"].columns:
-                del asim_output_dict["households"][col]
-        asim_output_dict["households"].rename(columns=hh_names_dict, inplace=True)
-        missing_household_cols = [
-            col
-            for col in required_cols["households"]
-            if col not in asim_output_dict["households"].columns
-        ]
-        if missing_household_cols:
-            logger.warning(
-                "ASim households missing columns; backfilling from UrbanSim: %s",
-                missing_household_cols,
-            )
-            usim_households = _ensure_index(
-                _get_usim_table("households"), "household_id"
-            )
-            asim_output_dict["households"] = asim_output_dict["households"].join(
-                usim_households[missing_household_cols], how="left"
-            )
-        # only preserve original usim columns
-        asim_output_dict["households"] = asim_output_dict["households"][
-            required_cols["households"]
-        ]
+        households = usim_households.copy()
+        if use_asim_auto_ownership and "cars" in required_cols["households"]:
+            if "auto_ownership" in households_overlay.columns:
+                common_idx = households.index.intersection(households_overlay.index)
+                households.loc[common_idx, "cars"] = households_overlay.loc[
+                    common_idx, "auto_ownership"
+                ]
+            else:
+                logger.warning(
+                    "ASim households output missing auto_ownership; preserving UrbanSim cars."
+                )
+        asim_output_dict["households"] = households[required_cols["households"]]
     else:
         logger.warning("Household table not found in ASim outputs!")
     for table_name in tables_updated_by_asim:
@@ -536,10 +546,11 @@ def create_beam_input_data(
 def create_usim_input_data(
     settings,
     state: WorkflowState,
-    workspace: Workspace,
     asim_output_dict,
     tables_updated_by_asim,
     asim_source_paths: list,
+    current_input_store_path: str,
+    population_source_store_path: Optional[str],
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -553,29 +564,21 @@ def create_usim_input_data(
     on to the next iteration if they were not found in the UrbanSim *outputs*.
     """
     forecast_year = state.forecast_year
-    # parse settings
-    data_dir = workspace.get_usim_mutable_data_dir()
-
-    # Move UrbanSim input store (e.g. custom_mpo_193482435_model_data.h5)
-    # to archive (e.g. input_data_for_2015_outputs.h5) because otherwise
-    # it will be overwritten in the next step.
-    input_datastore_name = get_usim_datastore_fname(settings, io="input")
-    input_store_path = os.path.join(data_dir, input_datastore_name)
+    input_store_path = current_input_store_path
+    input_datastore_name = os.path.basename(input_store_path)
     archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
-    archive_path = input_store_path.replace(input_datastore_name, archive_fname)
+    archive_path = os.path.join(os.path.dirname(input_store_path), archive_fname)
 
-    forecast_output_store_path = os.path.join(
-        data_dir,
-        get_usim_datastore_fname(settings, "output", forecast_year),
+    fallback_to_current_input = not (
+        population_source_store_path and os.path.exists(population_source_store_path)
     )
-    fallback_to_current_input = not os.path.exists(forecast_output_store_path)
     source_store_path = (
-        input_store_path if fallback_to_current_input else forecast_output_store_path
+        input_store_path if fallback_to_current_input else population_source_store_path
     )
     source_store_label = (
         "current UrbanSim input datastore"
         if fallback_to_current_input
-        else "UrbanSim forecast output datastore"
+        else "UrbanSim population-source datastore"
     )
 
     if os.path.exists(input_store_path):
@@ -585,7 +588,10 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
-        if fallback_to_current_input:
+        if fallback_to_current_input or (
+            source_store_path
+            and os.path.abspath(source_store_path) == os.path.abspath(input_store_path)
+        ):
             source_store_path = archive_path
     elif not os.path.exists(archive_path):
         logger.warning(
@@ -723,7 +729,7 @@ def create_usim_input_data(
         file_path=input_store_path,
         year=forecast_year,
         description="New UrbanSim input data for next iteration",
-        short_name=f"usim_input_{forecast_year}",
+        short_name=USIM_DATASTORE_H5,
     )
 
     return input_store_path, output_record
@@ -793,19 +799,49 @@ class ActivitysimPostprocessor(GenericPostprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this postprocessor expects from the workflow.
+        Declare the input paths/artifacts this postprocessor expects without
+        disk checks.
         """
-        asim_output_dir = workspace.get_asim_output_dir()
-        return {
-            "asim_output_dir": (
-                asim_output_dir if os.path.exists(asim_output_dir) else None
-            ),
-            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+        del settings
+        inputs: Dict[str, Any] = {
+            "asim_output_dir": workspace.get_asim_output_dir(),
+            **asim_staged_input_paths(workspace),
+            **asim_required_run_output_paths(workspace),
         }
+        inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
+        return inputs
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimPostprocessor.declared_expected_inputs(
+            settings, state, workspace
+        )
+        asim_output_dir = inputs.get("asim_output_dir")
+        inputs["asim_output_dir"] = (
+            asim_output_dir if asim_output_dir and os.path.exists(asim_output_dir) else None
+        )
+        zarr_path = inputs.get(ZARR_SKIMS)
+        inputs[ZARR_SKIMS] = (
+            zarr_path if zarr_path and os.path.exists(zarr_path) else None
+        )
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return ActivitysimPostprocessor.runtime_expected_inputs(
+            settings, state, workspace
+        )
 
     @staticmethod
     def expected_outputs(
@@ -818,21 +854,26 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         -----
         Output keys
             - ``asim_output_dir``: ActivitySim output directory retained after
-              postprocessing.
+              postprocessing. This coarse directory contract remains because
+              archived inputs and per-iteration outputs share stable topology
+              underneath it.
             - ``usim_datastore_h5``: Updated UrbanSim datastore (H5) written
-              for downstream UrbanSim/ATLAS steps.
+              for downstream UrbanSim/ATLAS steps when land use writeback is enabled.
+            - required ``*_asim_out`` keys: Canonical postprocessed parquet
+              outputs archived under the year/iteration directory.
+            - ``asim_input_*_archived``: Archived source inputs retained for
+              provenance-aware recovery.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        usim_input_fname = get_usim_datastore_fname(settings, io="input")
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
-        return {
+        outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            "usim_datastore_h5": usim_input_path,
+            USIM_DATASTORE_H5: _default_usim_datastore_output_path(settings, workspace),
         }
+        outputs.update(_activitysim_iteration_output_paths(state, workspace))
+        outputs.update(_activitysim_archived_input_paths(state, workspace))
+        return outputs
 
     def __init__(
         self,
@@ -846,19 +887,33 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        population_source_h5_path: Optional[str] = None,
+        current_input_h5_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         if not isinstance(raw_outputs, ActivitySimRunOutputs):
             raise TypeError(
                 "ActivitysimPostprocessor.postprocess expects ActivitySimRunOutputs"
             )
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, model_run_hash)
+        postprocess_kwargs: Dict[str, Any] = {}
+        if population_source_h5_path is not None:
+            postprocess_kwargs["population_source_h5_path"] = population_source_h5_path
+        if current_input_h5_path is not None:
+            postprocess_kwargs["current_input_h5_path"] = current_input_h5_path
+        return self._postprocess(
+            raw_outputs,
+            workspace,
+            model_run_hash,
+            **postprocess_kwargs,
+        )
 
     def _postprocess(
         self,
         raw_outputs: ActivitySimRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        population_source_h5_path: Optional[str] = None,
+        current_input_h5_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         """
         Consolidates all postprocessing steps for ActivitySim.
@@ -943,8 +998,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             "households.csv",
             "persons.csv",
             "land_use.csv",
-            "skims.omx",
         ]
+        zarr_used_as_input = bool(raw_outputs.source_input_paths.get(ZARR_SKIMS))
+        if not zarr_used_as_input:
+            input_files_to_archive.append("skims.omx")
 
         for input_file in input_files_to_archive:
             source_path = os.path.join(asim_data_dir, input_file)
@@ -962,9 +1019,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
 
         # Archive skims.zarr from activitysim/output/cache/
-        zarr_source_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        zarr_source_path = asim_runtime_zarr_path(workspace)
         if os.path.exists(zarr_source_path):
             zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
             if os.path.exists(zarr_target_path):
@@ -986,6 +1041,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
 
         if self.state.is_enabled(WorkflowState.Stage.land_use):
+            if not population_source_h5_path:
+                raise ValueError(
+                    "ActivitySim postprocess requires population_source_h5_path when land use is enabled."
+                )
+            if not current_input_h5_path:
+                raise ValueError(
+                    "ActivitySim postprocess requires current_input_h5_path when land use is enabled."
+                )
 
             # 1. Load raw ActivitySim outputs from files
             # The raw_outputs RecordStore contains the paths to these files.
@@ -1005,9 +1068,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             asim_output_dict = _prepare_updated_tables(
                 settings,
                 self.state,
-                workspace,
                 asim_output_dict,
                 tables_updated_by_asim,
+                population_source_store_path=population_source_h5_path,
                 prefix=forecast_year,
             )
 
@@ -1016,10 +1079,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             next_usim_input_path, usim_record = create_usim_input_data(
                 settings,
                 self.state,
-                workspace,
                 asim_output_dict,
                 tables_updated_by_asim,
                 source_file_paths,
+                current_input_store_path=current_input_h5_path,
+                population_source_store_path=population_source_h5_path,
             )
             if usim_record:
                 usim_datastore_h5 = next_usim_input_path

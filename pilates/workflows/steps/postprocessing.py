@@ -52,5 +52,7 @@ def make_postprocessing_step() -> Callable[..., None]:
         step_func=_run_postprocessing_step,
         step_model="postprocessing",
         description="postprocessing workflow step",
+        cache_mode="overwrite",
+        load_inputs=False,
         tags=["postprocessing"],
     )

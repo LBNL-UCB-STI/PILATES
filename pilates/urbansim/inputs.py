@@ -2,50 +2,31 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
-from pilates.urbansim import postprocessor as usim_post
+from pilates.workflows.binding import (
+    build_binding_plan,
+    urbansim_datastore_selection_rules,
+)
 from pilates.workflows.artifact_keys import (
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+)
+from pilates.workflows.input_resolution import (
+    resolved_value_for_key,
+    selected_candidate_key,
 )
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
+    from pilates.workflows.surface import EnabledWorkflowSurface
     from workflow_state import WorkflowState
-
-
-def _archive_fallback_path(
-    *,
-    state: "WorkflowState",
-    workspace: "Workspace",
-    local_path: Path,
-) -> Optional[Path]:
-    """
-    Map a local workspace path to its archive-run counterpart on restart.
-    """
-    run_info_path = getattr(state, "run_info_path", None)
-    if not run_info_path:
-        return None
-    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
-    local_root = Path(workspace.full_path).expanduser().resolve()
-    try:
-        rel = local_path.expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
-def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
-    for path in paths:
-        if path is not None and path.exists():
-            return path
-    return None
-
 
 def build_urbansim_inputs(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
     year: int,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Build UrbanSim input paths and per-key log descriptions for a run year.
@@ -70,11 +51,16 @@ def build_urbansim_inputs(
     -----
     Input keys
         - ``usim_datastore_base_h5``: UrbanSim datastore treated as static/
-          exogenous baseline input for the run year (H5).
+          exogenous baseline input for the run year (H5). This is a semantic
+          role used at workflow boundaries; in some runs it may resolve to the
+          same physical mutable-input H5 as the current datastore handle.
         - ``usim_datastore_h5``: UrbanSim current mutable datastore used by
-          active workflow steps for this year (H5).
-        - ``usim_mutable_data_dir``: UrbanSim mutable data directory used as
-          the container input/output mount.
+          active workflow steps for this year (H5). On later-year runs this
+          usually points at the latest handoff datastore, while on start-year
+          or fallback paths it may coincide with ``usim_datastore_base_h5``.
+        - ``omx_skims``: Default/bootstrap OMX skims staged for UrbanSim
+          preprocessing when an updated BEAM-produced ``final_skims_omx`` handoff
+          is not yet present for the year.
     Related outputs
         - UrbanSim runner/postprocessor update ``usim_datastore_h5`` for
           downstream ActivitySim/ATLAS runs.
@@ -84,62 +70,54 @@ def build_urbansim_inputs(
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}
 
-    usim_data_dir = Path(workspace.get_usim_mutable_data_dir())
-    usim_input_fname = usim_post.get_usim_datastore_fname(settings, io="input")
-    usim_input_path = usim_data_dir / usim_input_fname
-    usim_input_archive_path = _archive_fallback_path(
+    resolution = build_binding_plan(
+        step_name="urbansim_input_selection",
+        settings=settings,
         state=state,
         workspace=workspace,
-        local_path=usim_input_path,
+        year=year,
+        surface=surface,
+        artifact_rules=urbansim_datastore_selection_rules(),
+        required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )
 
-    base_path: Optional[Path] = _first_existing_path(usim_input_path, usim_input_archive_path)
+    # Keep both semantic handles explicit even when they resolve to the same
+    # physical file. The workflow uses ``base`` and ``current`` as distinct
+    # roles for restart-sensitive provenance and downstream handoffs.
+    for semantic_key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
+        value = resolved_value_for_key(
+            resolved=resolution,
+            key=semantic_key,
+            coupler=None,
+        )
+        if value is None:
+            continue
+        inputs[semantic_key] = str(value)
+        selected_key = selected_candidate_key(resolution, semantic_key)
+        suffix = " (fallback)" if selected_key != semantic_key else ""
+        if semantic_key == USIM_DATASTORE_BASE_H5:
+            descriptions[semantic_key] = (
+                f"UrbanSim base datastore for year {year}{suffix}"
+            )
+        else:
+            descriptions[semantic_key] = (
+                f"UrbanSim current datastore for year {year}{suffix}"
+            )
 
-    current_path: Optional[Path] = None
-    if state.is_start_year():
-        current_path = base_path
-    else:
-        usim_output_fname = usim_post.get_usim_datastore_fname(
-            settings, io="output", year=year
+    region = getattr(getattr(settings, "run", None), "region", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if region is not None and urbansim_cfg is not None:
+        region_id = (
+            getattr(urbansim_cfg, "region_mappings", {})
+            .get("region_to_region_id", {})
+            .get(region)
         )
-        usim_output_path = usim_data_dir / usim_output_fname
-        usim_output_archive_path = _archive_fallback_path(
-            state=state,
-            workspace=workspace,
-            local_path=usim_output_path,
-        )
-        preferred_current = _first_existing_path(
-            usim_output_path,
-            usim_output_archive_path,
-        )
-        if preferred_current is not None:
-            current_path = preferred_current
-        elif base_path is not None:
-            # Fallback for workflows that intentionally operate from base only.
-            current_path = base_path
-
-    if base_path is not None:
-        inputs[USIM_DATASTORE_BASE_H5] = str(base_path)
-        descriptions[USIM_DATASTORE_BASE_H5] = (
-            f"UrbanSim base datastore for year {year}"
-        )
-
-    if current_path is not None:
-        inputs[USIM_DATASTORE_CURRENT_H5] = str(current_path)
-        descriptions[USIM_DATASTORE_CURRENT_H5] = (
-            f"UrbanSim current datastore for year {year}"
-        )
-
-    # If only one path exists, keep both semantics available.
-    if USIM_DATASTORE_BASE_H5 not in inputs and USIM_DATASTORE_CURRENT_H5 in inputs:
-        inputs[USIM_DATASTORE_BASE_H5] = inputs[USIM_DATASTORE_CURRENT_H5]
-        descriptions[USIM_DATASTORE_BASE_H5] = (
-            f"UrbanSim base datastore for year {year} (fallback)"
-        )
-    if USIM_DATASTORE_CURRENT_H5 not in inputs and USIM_DATASTORE_BASE_H5 in inputs:
-        inputs[USIM_DATASTORE_CURRENT_H5] = inputs[USIM_DATASTORE_BASE_H5]
-        descriptions[USIM_DATASTORE_CURRENT_H5] = (
-            f"UrbanSim current datastore for year {year} (fallback)"
-        )
+        if region_id:
+            omx_path = Path(workspace.get_usim_mutable_data_dir()) / f"skims_mpo_{region_id}.omx"
+            if omx_path.exists():
+                inputs[OMX_SKIMS] = str(omx_path)
+                descriptions[OMX_SKIMS] = (
+                    f"UrbanSim OMX skims fallback for year {year}"
+                )
 
     return inputs, descriptions

@@ -15,14 +15,14 @@ def _write_h5_tables(path, tables):
 def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_urbansim_postprocess_step(
@@ -32,18 +32,16 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
 
     output_logger = captured["output_logger"]
     set_output_keys = []
-    h5_table_calls = []
+    publish_calls = []
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", lambda **_kwargs: None)
     monkeypatch.setattr(
         steps_urbansim_atlas,
         "log_and_set_output",
-        lambda *, key, path, description, coupler, **meta: set_output_keys.append(key),
-    )
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
+        lambda *, key, path, description, coupler, **meta: (
+            set_output_keys.append(key),
+            publish_calls.append(meta),
+        ),
     )
 
     merged_h5 = tmp_path / "model_data_2023.h5"
@@ -70,10 +68,11 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     )
 
     assert set_output_keys == ["usim_datastore_h5"]
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["direction"] == "output"
-    assert h5_table_calls[0]["path"] == str(merged_h5)
-    assert h5_table_calls[0]["table_keys"] == {
+    assert len(publish_calls) == 1
+    assert publish_calls[0]["child_selection"] == "include_only"
+    assert {
+        path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
+    } == {
         "/households": "urbansim_postprocess_usim_households_table_updated",
         "/land_use": "urbansim_postprocess_usim_land_use_table_updated",
         "/persons": "urbansim_postprocess_usim_persons_table_updated",
@@ -83,14 +82,14 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
 def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_urbansim_postprocess_step(
@@ -100,19 +99,17 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
 
     output_logger = captured["output_logger"]
     output_only_keys = []
-    h5_table_calls = []
+    output_only_meta = []
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
         "log_output_only",
-        lambda *, key, path, description, **meta: output_only_keys.append(key),
+        lambda *, key, path, description, **meta: (
+            output_only_keys.append(key),
+            output_only_meta.append(meta),
+        ),
     )
     monkeypatch.setattr(steps_urbansim_atlas, "log_and_set_output", lambda **_kwargs: None)
-    monkeypatch.setattr(
-        steps_urbansim_atlas,
-        "_log_named_h5_tables",
-        lambda **kwargs: h5_table_calls.append(kwargs),
-    )
 
     archive_h5 = tmp_path / "input_data_for_2023_outputs.h5"
     _write_h5_tables(
@@ -139,10 +136,11 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
     )
 
     assert output_only_keys == ["usim_input_archive_2023"]
-    assert len(h5_table_calls) == 1
-    assert h5_table_calls[0]["direction"] == "output"
-    assert h5_table_calls[0]["path"] == str(archive_h5)
-    assert h5_table_calls[0]["table_keys"] == {
+    assert len(output_only_meta) == 1
+    assert output_only_meta[0]["child_selection"] == "include_only"
+    assert {
+        path: spec.key for path, spec in output_only_meta[0]["child_specs"].items()
+    } == {
         "/households": "urbansim_postprocess_usim_households_table_archived",
         "/parcels": "urbansim_postprocess_usim_parcels_table_archived",
     }

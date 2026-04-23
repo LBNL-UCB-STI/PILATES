@@ -19,22 +19,20 @@ from pilates.beam.postprocessor import (
     find_iteration_file,
 )
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, BEAM_NETWORK_FINAL
+from pilates.workflows.artifact_keys import (
+    BEAM_CONFIG_FILE,
+    BEAM_FULL_SKIMS,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_NETWORK_FINAL,
+    BEAM_OUTPUT_DIR,
+)
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
+from pilates.activitysim.runner import asim_runtime_zarr_path
+from pilates.utils.consist_runtime import artifact_fingerprint
 
 logger = logging.getLogger(__name__)
-
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
 
 
 def _append_artifact_mapping_records(
@@ -56,7 +54,7 @@ def _append_artifact_mapping_records(
                 file_path=str(path),
                 short_name=key,
                 description=f"{description_prefix}: {key}",
-                content_hash=_artifact_content_hash(value),
+                content_hash=artifact_fingerprint(value),
             )
         )
 
@@ -229,23 +227,41 @@ class BeamRunner(GenericRunner):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this runner expects from the workflow.
+        Declare the input paths/artifacts this runner expects without disk checks.
         """
         zarr_path = None
         if getattr(settings, "activitysim", None) is not None:
-            candidate = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-            if os.path.exists(candidate):
-                zarr_path = candidate
+            zarr_path = asim_runtime_zarr_path(workspace)
         return {
             "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
             "zarr_skims": zarr_path,
         }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = {
+            "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
+        }
+        if getattr(settings, "activitysim", None) is not None:
+            candidate = asim_runtime_zarr_path(workspace)
+            if os.path.exists(candidate):
+                inputs["zarr_skims"] = candidate
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return BeamRunner.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -492,20 +508,14 @@ class BeamRunner(GenericRunner):
             "-XX:+AlwaysPreTouch "
             # Flexible young gen - WIDE range for adaptability
             "-XX:+UnlockExperimentalVMOptions "
-            "-XX:G1NewSizePercent=40 "  # Min 72 GB young gen
-            "-XX:G1MaxNewSizePercent=60 "  # Max 108 GB young gen
-            "-XX:MaxTenuringThreshold=6 "  # Objects die faster in young gen
-            "-XX:SurvivorRatio=6 "  # 12.5% survivors (helps transit burst)
-            "-XX:MaxGCPauseMillis=5000 "  # Accept 10s pauses for throughput
-            "-XX:G1MixedGCCountTarget=12 "  # Spread old gen work
+            "-XX:MaxGCPauseMillis=3000 "  # Accept 3s pauses for throughput
             # Conservative mixed GC - spread work over more cycles
-            "-XX:G1MixedGCLiveThresholdPercent=65 "  # More conservative (was 50)
             # Earlier concurrent marking to avoid surprises
-            "-XX:InitiatingHeapOccupancyPercent=30 "
+            "-XX:InitiatingHeapOccupancyPercent=20 "
             # More evacuation buffer for large populations
-            "-XX:G1ReservePercent=15 "  # I (27GB reserve)
+            "-XX:G1ReservePercent=20 "  # I (27GB reserve)
+            "-XX:+ParallelRefProcEnabled "
             # Less aggressive old gen collection
-            "-XX:G1OldCSetRegionThresholdPercent=10 "  # Reduce from 15
             # GC logging
             f"-Xlog:gc*:file=/app/output/gc_{timestamp}.log:time,uptime,level,tags "
             f"-Xlog:gc+heap=debug:file=/app/output/heap-detail_{timestamp}.log "
@@ -624,6 +634,47 @@ class BeamFullSkimRunner(GenericRunner):
     """
     Runner for BEAM FullSkimsCreatorApp as a dedicated workflow step.
     """
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the input paths/artifacts this runner expects without disk checks.
+        """
+        return {
+            BEAM_CONFIG_FILE: (
+                Path(workspace.get_beam_mutable_data_dir())
+                / settings.run.region
+                / settings.beam.config
+            ),
+            BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            BEAM_OUTPUT_DIR: workspace.get_beam_output_dir(),
+        }
+
+    @staticmethod
+    def expected_outputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare the output paths/artifacts this runner produces.
+        """
+        year = getattr(state, "current_year", None)
+        if year is None:
+            year = getattr(state, "year", None)
+        iteration = getattr(state, "current_inner_iter", None)
+        if iteration is None:
+            iteration = getattr(state, "iteration", 0)
+        if year is None:
+            return {}
+        return {
+            BEAM_FULL_SKIMS: (
+                Path(workspace.get_beam_output_dir())
+                / settings.run.region
+                / f"year-{int(year)}-iteration-{int(iteration)}"
+                / "skimsODFull.csv.gz"
+            )
+        }
 
     def __init__(
         self,

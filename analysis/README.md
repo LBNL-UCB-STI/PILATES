@@ -11,6 +11,64 @@ The goal is to provide a stable place for research and diagnostics that:
 Today it is intentionally a scaffold: useful enough to run real analyses, but
 still early in API hardening.
 
+## Notebook-First Entry Point
+
+The preferred notebook entry point is now `open_archive(...)`, which opens an
+archived PILATES run directory and exposes notebook-friendly discovery helpers.
+
+The intended first steps in a notebook are:
+
+1. open an archive,
+2. inspect scenarios and years,
+3. inspect canonical runs,
+4. resolve epochs,
+5. load common epoch-backed tables as DataFrames,
+6. compare scenarios with a notebook-facing comparison object,
+7. then move into deeper analysis or raw SQL when needed.
+
+Example:
+
+```python
+from pathlib import Path
+
+from pilates_consist_analysis import open_archive
+
+archive = open_archive(
+    Path("/path/to/archive/run"),
+    project_root=Path("/Users/zaneedell/git/PILATES"),
+)
+
+archive.summary()
+archive.scenarios()
+archive.years()
+archive.runs().head()
+
+baseline = archive.scenario("baseline")
+baseline.summary()
+baseline.years()
+baseline.epochs(converged=True)
+
+epoch = baseline.epoch(year=2030, converged=True)
+epoch
+
+display(epoch.summary())
+display(epoch.tables.trips(limit=10))
+
+# Scenario compare helper:
+# comparison = archive.compare("baseline", "policy", year=2030, converged=True)
+# display(comparison.summary())
+# display(comparison.mode_shares().head())
+# display(comparison.linkstats_summary().head())
+
+# Raw SQL escape hatch:
+# display(epoch.sql("SELECT * FROM {views.trips} LIMIT 10"))
+```
+
+Compatibility note:
+
+- `open_run(...)` still works and remains backward-compatible.
+- New notebook docs should prefer `open_archive(...)`.
+
 ## Why This Exists
 
 PILATES execution code and post-run research code have different change rates
@@ -67,19 +125,24 @@ Consolidated roadmap for this package (highest priority first):
 
 If you are an LLM extending this package, start here:
 
-1. Command entrypoint: `src/pilates_consist_analysis/cli.py`
-2. Tracker/bootstrap and path assumptions: `src/pilates_consist_analysis/runtime.py`
-3. Dataset assembly (current linkstats path): `src/pilates_consist_analysis/datasets.py`
-4. ActivitySim trips pipeline: `src/pilates_consist_analysis/activitysim_trips.py`
-5. Skim convergence pipeline: `src/pilates_consist_analysis/skim_analysis.py`
-6. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
+1. Notebook-first archive wrapper: `src/pilates_consist_analysis/archive.py`
+2. Canonical run catalog: `src/pilates_consist_analysis/run_index.py`
+3. Notebook epoch wrapper and table loaders: `src/pilates_consist_analysis/epoch_api.py`
+4. Notebook comparison wrapper: `src/pilates_consist_analysis/comparison_api.py`
+5. Notebook API/session layer: `src/pilates_consist_analysis/api.py`
+6. Tracker/bootstrap and path assumptions: `src/pilates_consist_analysis/runtime.py`
 7. Multi-run grouping/alignment abstraction: `src/pilates_consist_analysis/runset.py`
-8. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
-9. Handoff ingest/export helpers: `src/pilates_consist_analysis/handoff.py`
-10. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
-11. Manifest format: `src/pilates_consist_analysis/manifest.py`
-12. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
-13. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
+8. Epoch grouping primitives: `src/pilates_consist_analysis/epochs.py`
+9. Epoch-scoped views and artifact families: `src/pilates_consist_analysis/epoch_views.py`
+10. Scenario comparison layer: `src/pilates_consist_analysis/scenario_compare.py`
+11. Dataset assembly (current linkstats path): `src/pilates_consist_analysis/datasets.py`
+12. ActivitySim trips pipeline: `src/pilates_consist_analysis/activitysim_trips.py`
+13. Skim convergence pipeline: `src/pilates_consist_analysis/skim_analysis.py`
+14. Handoff ingest/export helpers: `src/pilates_consist_analysis/handoff.py`
+15. Key contract and schema expectations: `src/pilates_consist_analysis/keys.py`
+16. Manifest format: `src/pilates_consist_analysis/manifest.py`
+17. Equilibrium metrics baselines: `src/pilates_consist_analysis/metrics_equilibrium.py`, `src/pilates_consist_analysis/metrics_activitysim.py`
+18. Bundle export integration: `src/pilates_consist_analysis/packaging.py`
 
 When adding a new analysis family, mirror the linkstats pattern:
 - discover artifacts,
@@ -91,13 +154,21 @@ When adding a new analysis family, mirror the linkstats pattern:
 
 ```text
 analysis/
+  NOTEBOOK_FIRST_ANALYSIS_PLAN.md
   pyproject.toml
   README.md
+  notebooks/
+    archive_exploration_starter.ipynb
+    hpc_consist_handoff_starter.ipynb
   src/pilates_consist_analysis/
     activitysim_trips.py
     api.py
+    archive.py
     cli.py
+    comparison_api.py
+    epoch_api.py
     handoff.py
+    run_index.py
     runtime.py
     runset.py
     scenario_compare.py
@@ -115,10 +186,10 @@ analysis/
 
 End-to-end flow:
 
-1. Bootstrap a Consist tracker against an archived run directory and DB.
-2. Discover runs/artifacts through query surfaces.
-3. Build analysis datasets (currently linkstats artifacts/summary/deltas).
-4. Compute diagnostics from those datasets.
+1. Open an archived run directory and attach the Consist DB.
+2. Build a canonical run index for scenario/year/iteration/model discovery.
+3. Resolve scenarios, epochs, and artifact-backed views.
+4. Build analysis datasets or run notebook-level inspection/comparison.
 5. Optionally export a portable bundle with Consist maintenance APIs.
 
 Execution modes:
@@ -214,7 +285,37 @@ If editable install is not available in your environment, run with:
 PYTHONPATH=analysis/src python -m pilates_consist_analysis --help
 ```
 
-Example dataset build:
+Notebook-oriented quick start:
+
+```python
+from pathlib import Path
+
+from pilates_consist_analysis import open_archive
+
+archive = open_archive(
+    Path("/path/to/archive/run"),
+    project_root=Path("/Users/zaneedell/git/PILATES"),
+)
+
+archive.summary()
+archive.scenarios()
+archive.runs().head()
+archive.epochs(converged=True).head()
+
+baseline = archive.scenario("baseline")
+epoch = baseline.epoch(year=2030, converged=True)
+epoch.tables.trips(limit=10).head()
+
+comparison = archive.compare("baseline", "policy", year=2030, converged=True)
+comparison.summary()
+comparison.mode_shares().head()
+```
+
+Exploration notebook:
+
+- `analysis/notebooks/archive_exploration_starter.ipynb`
+
+CLI example dataset build:
 
 ```bash
 pilates-consist-analysis build-linkstats-dataset \

@@ -14,6 +14,7 @@ from typing import (
     Mapping,
     Optional,
     Protocol,
+    TYPE_CHECKING,
     Tuple,
     Type,
     TypeVar,
@@ -23,6 +24,14 @@ from typing import (
 )
 
 from pilates.generic.records import FileRecord, RecordStore, sanitize_artifact_key
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.workflows.coupler_namespace import resolve_coupler_value
+
+if TYPE_CHECKING:
+    from pilates.config import PilatesConfig
+    from pilates.workspace import Workspace
+    from pilates.workflows.atlas_state import AtlasSubState
+    from workflow_state import WorkflowState
 
 StepOutputsT = TypeVar("StepOutputsT")
 logger = logging.getLogger(__name__)
@@ -65,9 +74,9 @@ class ValidationContext:
         Snapshot view of upstream ``StepOutputsHolder`` entries.
     """
 
-    settings: Any = None
-    state: Any = None
-    workspace: Any = None
+    settings: Optional["PilatesConfig"] = None
+    state: Optional["WorkflowState | AtlasSubState"] = None
+    workspace: Optional["Workspace"] = None
     step_name: Optional[str] = None
     upstream_outputs: Mapping[str, Any] = field(default_factory=dict)
 
@@ -154,20 +163,39 @@ def iter_step_output_items(outputs: Any) -> Tuple[Tuple[str, Any, str], ...]:
     return tuple(iter_items())
 
 
-def step_output_mapping(outputs: Any) -> Dict[str, str]:
+def step_output_mapping(
+    outputs: Any,
+    *,
+    warn_lossy: bool = True,
+) -> Dict[str, str]:
     """
-    Build a key -> path mapping directly from typed outputs.
+    Build a lossy key -> path mapping directly from typed outputs.
+
+    Warning
+    -------
+    This helper intentionally strips artifact identity and content-hash-bearing
+    objects down to filesystem path strings. Use
+    ``step_output_handoff_mapping(...)`` for runtime handoffs between workflow
+    steps/stages/iterations where Consist lineage should be preserved.
 
     Parameters
     ----------
     outputs : Any
         Step outputs object exposing ``_iter_record_items()``.
+    warn_lossy : bool, optional
+        Emit a warning that this helper is lossy. Callers should set this to
+        ``False`` only for intentionally path-only serialization/replay flows.
 
     Returns
     -------
     dict[str, str]
         Mapping of output key to filesystem path string.
     """
+    if warn_lossy:
+        logger.warning(
+            "step_output_mapping(...) is lossy and should not be used for runtime "
+            "workflow handoffs; prefer step_output_handoff_mapping(...)."
+        )
     mapping: Dict[str, str] = {}
     for key, path, _ in iter_step_output_items(outputs):
         sanitized_key = sanitize_artifact_key(key)
@@ -190,6 +218,51 @@ def step_output_mapping(outputs: Any) -> Dict[str, str]:
             )
             continue
         mapping[sanitized_key] = str(path)
+    return mapping
+
+
+def step_output_handoff_mapping(
+    outputs: Any,
+    *,
+    coupler: Optional[CouplerProtocol] = None,
+) -> Dict[str, Any]:
+    """
+    Build a runtime handoff mapping, preserving coupler-published artifacts.
+
+    This is for step-to-step or iteration-to-iteration handoffs where artifact
+    identity matters. When the current step has already published a key into the
+    coupler, the coupler value is preferred over the raw filesystem path string.
+    """
+    mapping: Dict[str, Any] = {}
+    if coupler is None:
+        logger.warning(
+            "step_output_handoff_mapping(...) called without a readable coupler; "
+            "handoff values will fall back to raw paths."
+        )
+    for key, path, _ in iter_step_output_items(outputs):
+        sanitized_key = sanitize_artifact_key(key)
+        if sanitized_key is None:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' could not be sanitized; skipping.",
+                key,
+            )
+            continue
+        if sanitized_key != key:
+            logger.warning(
+                "Invalid typed-output artifact key '%s' sanitized to '%s' for Consist compatibility.",
+                key,
+                sanitized_key,
+            )
+        if sanitized_key in mapping:
+            logger.warning(
+                "Duplicate typed-output artifact key '%s' detected; keeping first path and skipping later duplicate.",
+                sanitized_key,
+            )
+            continue
+        resolved = resolve_coupler_value(coupler, sanitized_key)
+        mapping[sanitized_key] = (
+            resolved.value if resolved.value is not None else str(path)
+        )
     return mapping
 
 
@@ -309,12 +382,70 @@ def declared_outputs_for_step_outputs_class(
     return tuple(dict.fromkeys(inferred))
 
 
+def required_outputs_for_step_outputs_class(
+    outputs_class: Type[Any],
+    state: Any = None,
+) -> Tuple[str, ...]:
+    """
+    Resolve strict required output keys for a ``StepOutputs`` class.
+
+    Precedence:
+    1. Explicit ``required_outputs`` class attribute.
+    2. State-expanded ``required_output_families`` class attribute.
+    2. Fallback to all declared outputs for the class.
+    """
+    explicit = getattr(outputs_class, "required_outputs", None) or ()
+    explicit_keys = [key for key in explicit if isinstance(key, str)]
+    if explicit_keys:
+        return tuple(dict.fromkeys(explicit_keys))
+    families = getattr(outputs_class, "required_output_families", None) or ()
+    family_keys = [key for key in families if isinstance(key, str)]
+    if family_keys and state is not None:
+        year = getattr(state, "forecast_year", None)
+        if year is None:
+            year = getattr(state, "current_year", getattr(state, "year", None))
+        iteration = getattr(
+            state,
+            "current_inner_iter",
+            getattr(state, "iteration", None),
+        )
+        atlas_year = getattr(state, "atlas_year", None)
+        format_values = {
+            "year": year,
+            "forecast_year": getattr(state, "forecast_year", None),
+            "iteration": iteration,
+            "atlas_year": atlas_year,
+        }
+        expanded: list[str] = []
+        for family in family_keys:
+            try:
+                expanded.append(family.format(**format_values))
+            except Exception:
+                continue
+        if expanded:
+            return tuple(dict.fromkeys(expanded))
+    declared = declared_outputs_for_step_outputs_class(outputs_class)
+    optional = tuple(
+        dict.fromkeys(
+            key
+            for key in (getattr(outputs_class, "optional_outputs", None) or ())
+            if isinstance(key, str)
+        )
+    )
+    if not optional:
+        return declared
+    return tuple(key for key in declared if key not in set(optional))
+
+
 class StepOutputsBase:
     """
     Base class for typed step outputs with RecordStore conversion.
     """
 
     declared_outputs: ClassVar[Tuple[str, ...]] = ()
+    required_outputs: ClassVar[Tuple[str, ...]] = ()
+    required_output_families: ClassVar[Tuple[str, ...]] = ()
+    optional_outputs: ClassVar[Tuple[str, ...]] = ()
     record_keys: ClassVar[Dict[str, str]] = {}
     record_descriptions: ClassVar[Dict[str, str]] = {}
     default_description: ClassVar[str] = "Step output"
@@ -329,6 +460,21 @@ class StepOutputsBase:
         Return canonical declared output keys for this ``StepOutputs`` class.
         """
         return declared_outputs_for_step_outputs_class(cls)
+
+    @classmethod
+    def required_output_keys(cls, state: Any = None) -> Tuple[str, ...]:
+        """
+        Return strict required output keys for this ``StepOutputs`` class.
+        """
+        return required_outputs_for_step_outputs_class(cls, state=state)
+
+    @classmethod
+    def optional_output_keys(cls) -> Tuple[str, ...]:
+        """
+        Return optional output keys for this ``StepOutputs`` class.
+        """
+        explicit = getattr(cls, "optional_outputs", None) or ()
+        return tuple(dict.fromkeys(key for key in explicit if isinstance(key, str)))
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """

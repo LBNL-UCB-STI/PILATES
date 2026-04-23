@@ -161,3 +161,96 @@ def test_beam_postprocess_rejects_non_typed_run_outputs(tmp_path: Path) -> None:
 
     with pytest.raises(TypeError, match="BeamRunOutputs"):
         postprocessor.postprocess(object(), workspace)
+
+
+def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_missing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    settings = _build_settings(tmp_path)
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    state.current_inner_iter = 0
+
+    beam_output_dir = Path(workspace.get_beam_output_dir())
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    restored_zarr = tmp_path / "restored" / "skims.zarr"
+    _write_file(restored_zarr, b"restored-zarr")
+
+    events_sub0 = beam_output_dir / "events_sub0.parquet"
+    raw_skims = beam_output_dir / "raw_od_skims_iter0.zarr"
+    _write_file(events_sub0)
+    _write_file(raw_skims)
+
+    merge_calls = []
+
+    def _fake_split_events_parquet_by_type(
+        events_path,
+        event_types=None,
+        output_dir=None,
+        output_prefix=None,
+        create_path_traversal_links=False,
+    ):
+        output_root = Path(output_dir) if output_dir else Path(events_path).parent
+        path_traversal = output_root / "split.PathTraversal.parquet"
+        links = output_root / "split.PathTraversal.links.parquet"
+        _write_file(path_traversal)
+        _write_file(links)
+        return ({"PathTraversal": str(path_traversal)}, str(links))
+
+    def _fake_merge_beam_skims_to_zarr(
+        *,
+        all_skims_path,
+        iteration_skims_path,
+        beam_output_dir,
+        settings,
+        workspace,
+        override=None,
+    ):
+        merge_calls.append(
+            {
+                "all_skims_path": all_skims_path,
+                "iteration_skims_path": iteration_skims_path,
+            }
+        )
+        return all_skims_path
+
+    def _fake_get_setting(settings_obj, key, default=None):
+        if key == "write_skims_to_omx":
+            return False
+        if key == "run.models.land_use":
+            return "not_urbansim"
+        return real_get_setting(settings_obj, key, default)
+
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.split_events_parquet_by_type",
+        _fake_split_events_parquet_by_type,
+    )
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor._merge_beam_skims_to_zarr",
+        _fake_merge_beam_skims_to_zarr,
+    )
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.get_setting",
+        _fake_get_setting,
+    )
+
+    raw_outputs = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={
+            f"events_parquet_{state.forecast_year}_{state.iteration}_sub0": events_sub0,
+            f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}": raw_skims,
+        },
+    )
+
+    postprocessor = BeamPostprocessor("beam", state)
+    outputs = postprocessor.postprocess(
+        raw_outputs,
+        workspace,
+        zarr_skims=str(restored_zarr),
+    )
+
+    assert len(merge_calls) == 1
+    assert merge_calls[0]["all_skims_path"] == str(restored_zarr)
+    assert merge_calls[0]["iteration_skims_path"] == str(raw_skims)
+    assert outputs.zarr_skims == restored_zarr

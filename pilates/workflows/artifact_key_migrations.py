@@ -22,6 +22,10 @@ ARTIFACT_KEY_ALIASES: Dict[str, str] = {
     # UrbanSim key migration aliases.
     "usim_datastore_current_h5": K.USIM_DATASTORE_CURRENT_H5,
     "usim_datastore_h5": K.USIM_DATASTORE_CURRENT_H5,
+    "usim_forecast_output": K.USIM_FORECAST_OUTPUT,
+    "usim_population_source_h5": K.USIM_POPULATION_SOURCE_H5,
+    "usim_h5_updated": K.USIM_DATASTORE_CURRENT_H5,
+    "usim_input_next": K.USIM_DATASTORE_CURRENT_H5,
 }
 
 

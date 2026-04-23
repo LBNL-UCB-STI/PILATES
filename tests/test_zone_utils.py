@@ -3,121 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from pilates.activitysim import preprocessor as activitysim_preprocessor
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     resolve_canonical_zone_source,
-    resolve_canonical_zone_source_path,
 )
-
-
-class _WorkspaceStub:
-    def __init__(self, asim_dir: Path):
-        self._asim_dir = str(asim_dir)
-
-    def get_asim_mutable_data_dir(self):
-        return self._asim_dir
-
-
-def test_resolve_canonical_zone_source_uses_fallback_when_primary_missing(tmp_path):
-    fallback_path = tmp_path / "fallback.geojson"
-    fallback_path.write_text("{}", encoding="utf-8")
-    settings = SimpleNamespace(
-        shared=SimpleNamespace(
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file=str(tmp_path / "missing.geojson"),
-                    canonical_id_col="TAZ",
-                    activitysim_index_col="TAZ",
-                ),
-                alternative_zones=SimpleNamespace(
-                    zone_type="taz",
-                    source_file=str(fallback_path),
-                    canonical_id_col="objectid",
-                    activitysim_index_col="TAZ",
-                    source_crs="EPSG:26910",
-                ),
-            )
-        ),
-        activitysim=None,
-    )
-
-    resolved = resolve_canonical_zone_source_path(settings)
-
-    assert resolved == str(fallback_path)
-
-
-def test_resolve_canonical_zone_source_prefers_mutable_activitysim_copy(tmp_path):
-    source_path = tmp_path / "zones.geojson"
-    source_path.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
-    asim_dir = tmp_path / "asim"
-    asim_dir.mkdir()
-    mutable_copy = asim_dir / "zones.geojson"
-    mutable_copy.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
-    settings = SimpleNamespace(
-        shared=SimpleNamespace(
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    source_file=str(source_path),
-                    canonical_id_col="TAZ",
-                    activitysim_index_col="TAZ",
-                )
-            )
-        ),
-        activitysim=SimpleNamespace(),
-    )
-
-    resolved = resolve_canonical_zone_source_path(
-        settings, _WorkspaceStub(asim_dir)
-    )
-
-    assert resolved == str(mutable_copy)
-
-
-def test_resolve_canonical_zone_source_returns_alternative_metadata(tmp_path):
-    fallback_path = tmp_path / "fallback.geojson"
-    fallback_path.write_text("{}", encoding="utf-8")
-    settings = SimpleNamespace(
-        shared=SimpleNamespace(
-            geography=SimpleNamespace(
-                zones=SimpleNamespace(
-                    zone_type="taz",
-                    source_file=str(tmp_path / "missing.geojson"),
-                    canonical_id_col="primary_id",
-                    activitysim_index_col="PRIMARY",
-                    source_crs=None,
-                ),
-                alternative_zones=SimpleNamespace(
-                    zone_type="taz",
-                    source_file=str(fallback_path),
-                    canonical_id_col="alt_id",
-                    activitysim_index_col="ALT",
-                    source_crs="EPSG:26910",
-                ),
-            )
-        ),
-        activitysim=None,
-    )
-
-    resolved_path, source_config = resolve_canonical_zone_source(settings)
-
-    assert resolved_path == str(fallback_path)
-    assert source_config["canonical_id_col"] == "alt_id"
-    assert source_config["activitysim_index_col"] == "ALT"
-    assert source_config["source_crs"] == "EPSG:26910"
-
-
-def test_copy_canonical_zone_source_to_dir_copies_shapefile_sidecars(tmp_path):
-    shape_dir = tmp_path / "shape"
-    shape_dir.mkdir()
-    for suffix in (".shp", ".dbf", ".shx", ".prj", ".cpg"):
-        (shape_dir / f"zones{suffix}").write_text(suffix, encoding="utf-8")
-
-    dest_dir = tmp_path / "dest"
-    output = copy_canonical_zone_source_to_dir(str(shape_dir / "zones.shp"), str(dest_dir))
-
-    assert output == str(dest_dir / "zones.shp")
-    for suffix in (".shp", ".dbf", ".shx", ".prj", ".cpg"):
-        assert (dest_dir / f"zones{suffix}").exists()
 
 
 def test_copy_canonical_zone_source_to_dir_is_noop_for_same_geojson_file(
@@ -130,3 +22,120 @@ def test_copy_canonical_zone_source_to_dir_is_noop_for_same_geojson_file(
 
     assert copied == str(source)
     assert source.read_text(encoding="utf-8") == '{"type":"FeatureCollection","features":[]}'
+
+
+def test_resolve_canonical_zone_source_prefers_staged_copy_without_warning_when_primary_exists(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    primary = tmp_path / "sources" / "taz_sfbay.geojson"
+    staged_dir = tmp_path / "workspace" / "activitysim" / "data"
+    staged = staged_dir / primary.name
+    primary.parent.mkdir(parents=True, exist_ok=True)
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    primary.write_text("primary", encoding="utf-8")
+    staged.write_text("staged", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(primary),
+                    canonical_id_col="zone_id",
+                    activitysim_index_col="TAZ",
+                    zone_type="taz",
+                )
+            )
+        ),
+        activitysim=SimpleNamespace(),
+    )
+    workspace = SimpleNamespace(get_asim_mutable_data_dir=lambda: str(staged_dir))
+
+    with caplog.at_level("INFO"):
+        resolved, _source_config = resolve_canonical_zone_source(settings, workspace)
+
+    assert resolved == str(staged)
+    assert not any(
+        "Primary canonical zone source unavailable" in record.message
+        for record in caplog.records
+    )
+
+
+def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_when_staged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    asim_dir = tmp_path / "activitysim" / "data"
+    asim_dir.mkdir(parents=True, exist_ok=True)
+    staged_zone = asim_dir / "taz_sfbay.geojson"
+    staged_zone.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+
+    monkeypatch.setattr(
+        activitysim_preprocessor,
+        "find_project_root",
+        lambda start_path: str(tmp_path),
+    )
+    monkeypatch.setattr(
+        activitysim_preprocessor,
+        "_copytree_if_needed",
+        lambda source_dir, dest_dir: str(dest_dir),
+    )
+    monkeypatch.setattr(
+        activitysim_preprocessor,
+        "_ensure_required_asim_config_dirs",
+        lambda **kwargs: None,
+    )
+    monkeypatch.setattr(
+        activitysim_preprocessor,
+        "get_setting",
+        lambda settings, key, default=None: (
+            getattr(getattr(settings, key.split(".", 1)[0]), key.split(".", 1)[1], default)
+            if "." in key and hasattr(settings, key.split(".", 1)[0])
+            else getattr(settings, key, default)
+        ),
+    )
+
+    def _unexpected_copy(source_path: str, dest_dir: str) -> str:
+        raise AssertionError(
+            f"copy_canonical_zone_source_to_dir should not run for staged source {source_path} -> {dest_dir}"
+        )
+
+    monkeypatch.setattr(
+        activitysim_preprocessor,
+        "copy_canonical_zone_source_to_dir",
+        _unexpected_copy,
+    )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(staged_zone),
+                    canonical_id_col="zone_id",
+                    activitysim_index_col="TAZ",
+                    zone_type="taz",
+                )
+            )
+        ),
+        activitysim=SimpleNamespace(
+            local_configs_folder="asim-configs",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            clipped_geoms_path=None,
+        ),
+        beam=SimpleNamespace(local_input_folder="beam-input", router_directory="router"),
+    )
+    workspace = SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_dir))
+
+    with caplog.at_level("INFO"):
+        input_records, output_records = activitysim_preprocessor._copy_data_to_mutable_location(
+            settings,
+            str(asim_dir),
+            workspace,
+        )
+
+    assert input_records.all_records() == []
+    assert output_records.all_records() == []
+    assert any(
+        "Canonical zones already at destination" in record.message
+        for record in caplog.records
+    )

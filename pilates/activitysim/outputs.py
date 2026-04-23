@@ -5,16 +5,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING, Union
 import json
-import re
-
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.io import is_land_use_enabled
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    USIM_DATASTORE_H5,
 )
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.outputs_base import (
     OutputValidator,
     StepOutputsBase,
@@ -54,6 +55,27 @@ ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
     "workplace_shadow_prices": "workplace_shadow_prices_asim_out",
 }
 
+ASIM_OPTIONAL_RUN_OUTPUT_KEYS: Tuple[str, ...] = (
+    ASIM_OUTPUT_KEY_MAP["person_windows"],
+    ASIM_OUTPUT_KEY_MAP["proto_disaggregate_accessibility"],
+    ASIM_OUTPUT_KEY_MAP["proto_households"],
+    ASIM_OUTPUT_KEY_MAP["proto_persons"],
+    ASIM_OUTPUT_KEY_MAP["proto_persons_merged"],
+    ASIM_OUTPUT_KEY_MAP["proto_tours"],
+    ASIM_OUTPUT_KEY_MAP["school_modeled_size"],
+    ASIM_OUTPUT_KEY_MAP["school_destination_size"],
+    ASIM_OUTPUT_KEY_MAP["school_shadow_prices"],
+    ASIM_OUTPUT_KEY_MAP["workplace_destination_size"],
+    ASIM_OUTPUT_KEY_MAP["workplace_location_accessibility"],
+    ASIM_OUTPUT_KEY_MAP["workplace_modeled_size"],
+    ASIM_OUTPUT_KEY_MAP["workplace_shadow_prices"],
+)
+ASIM_REQUIRED_RUN_OUTPUT_KEYS: Tuple[str, ...] = tuple(
+    key
+    for key in dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
+    if key not in set(ASIM_OPTIONAL_RUN_OUTPUT_KEYS)
+)
+
 
 def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
@@ -75,6 +97,18 @@ def _record_path(record: Any, workspace: "Workspace") -> Optional[Path]:
     if path is None:
         return None
     return Path(path)
+
+
+def _normalize_activitysim_run_output_key(key: str) -> str:
+    """
+    Normalize raw ActivitySim runner keys into canonical workflow keys.
+
+    The runner emits ``*_asim_out_temp`` filenames; the stable contract uses
+    the normalized ``*_asim_out`` names.
+    """
+    if key.endswith("_asim_out_temp"):
+        key = key[: -len("_temp")]
+    return normalize_asim_output_key(key)
 
 
 def _asim_run_marker_filename(year: int, iteration: int) -> str:
@@ -292,6 +326,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
     ----------
     output_dir : Path
         ActivitySim output directory.
+    declared_outputs : tuple[str, ...]
+        Canonical workflow-facing outputs derived from ``ASIM_OUTPUT_KEY_MAP``.
     raw_outputs : dict
         Mapping of short_name to output path.
     raw_output_hashes : dict
@@ -299,8 +335,13 @@ class ActivitySimRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "output_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = tuple(
+        dict.fromkeys(ASIM_OUTPUT_KEY_MAP.values())
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ("output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
+    validators: ClassVar[Tuple[OutputValidator, ...]] = ()
     output_dir: Path
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
@@ -312,7 +353,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Yield run output records.
         """
         for key, path in self.raw_outputs.items():
-            yield key, path, f"ActivitySim raw output: {key}"
+            normalized_key = _normalize_activitysim_run_output_key(key)
+            yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
 
     @classmethod
     def from_record_store(
@@ -357,16 +399,114 @@ class ActivitySimRunOutputs(StepOutputsBase):
         Convert outputs to a RecordStore with optional content hashes.
         """
         records = []
-        for short_name, path, description in self._iter_record_items():
+        for raw_key, path in self.raw_outputs.items():
+            short_name = _normalize_activitysim_run_output_key(raw_key)
+            description = f"ActivitySim raw output: {short_name}"
             records.append(
                 FileRecord(
                     file_path=str(path),
                     short_name=short_name,
                     description=description,
-                    content_hash=self.raw_output_hashes.get(short_name),
+                    content_hash=(
+                        self.raw_output_hashes.get(raw_key)
+                        or self.raw_output_hashes.get(short_name)
+                    ),
                 )
             )
         return RecordStore(recordList=records)
+
+
+class _ActivitySimRunOutputsValidator:
+    """
+    Warn when raw outputs drift away from the canonical ActivitySim contract.
+
+    The validator is advisory only. It keeps legacy or exploratory outputs
+    visible without failing runs that already succeeded.
+    """
+
+    name = "activitysim_run_output_contract"
+    level = "warning"
+
+    def validate(
+        self,
+        outputs: "ActivitySimRunOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        declared = set(outputs.declared_output_keys())
+        results: list[ValidationResult] = []
+        for raw_key in outputs.raw_outputs:
+            normalized_key = _normalize_activitysim_run_output_key(raw_key)
+            if normalized_key in declared:
+                continue
+            results.append(
+                ValidationResult(
+                    message=(
+                        f"Unrecognized ActivitySim run output key '{raw_key}'. "
+                        "It will remain in raw_outputs, but it is not part of the "
+                        "stable canonical contract."
+                    ),
+                    metadata={
+                        "raw_key": raw_key,
+                        "normalized_key": normalized_key,
+                        "declared_outputs": tuple(sorted(declared)),
+                    },
+                )
+            )
+        return results
+
+
+ActivitySimRunOutputs.validators = (_ActivitySimRunOutputsValidator(),)
+
+
+def _activitysim_postprocess_requires_usim_output(context: ValidationContext) -> bool:
+    state = getattr(context, "state", None)
+    if state is not None:
+        stage_enum = getattr(state, "Stage", None)
+        land_use_stage = getattr(stage_enum, "land_use", "land_use")
+        is_enabled = getattr(state, "is_enabled", None)
+        if callable(is_enabled):
+            try:
+                return bool(is_enabled(land_use_stage))
+            except Exception:
+                return False
+
+    settings = getattr(context, "settings", None)
+    if settings is not None and is_land_use_enabled(settings):
+        return True
+
+    return False
+
+
+class _ActivitySimPostprocessOutputsValidator:
+    """
+    Require updated UrbanSim datastore outputs only when land use is active.
+    """
+
+    name = "activitysim_postprocess_expected_outputs"
+    level = "error"
+
+    def validate(
+        self,
+        outputs: "ActivitySimPostprocessOutputs",
+        context: ValidationContext,
+    ) -> list[ValidationResult]:
+        if not _activitysim_postprocess_requires_usim_output(context):
+            return []
+        if outputs.usim_datastore_h5 is not None:
+            return []
+        return [
+            ValidationResult(
+                message=(
+                    "usim_input_next/usim_datastore_h5 is required when land use is "
+                    "enabled because ActivitySim postprocess must update the "
+                    "UrbanSim datastore for downstream steps."
+                ),
+                metadata={
+                    "land_use_enabled": True,
+                    "step_name": context.step_name,
+                },
+            )
+        ]
 
 
 @dataclass
@@ -385,16 +525,32 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     processed_output_hashes : dict
         Mapping of short_name to known content hashes for copied outputs.
     usim_datastore_key : str, optional
-        Canonical coupler key for the next-iteration UrbanSim input datastore.
+        Canonical coupler key for the current UrbanSim datastore handoff.
+        Legacy manifests may record phase-specific aliases such as
+        ``usim_input_next``; this class normalizes those aliases back to the
+        stable ``usim_datastore_h5`` contract when re-publishing or
+        reconstructing typed outputs.
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (USIM_DATASTORE_H5,)
+    optional_outputs: ClassVar[Tuple[str, ...]] = (
+        "asim_input_households_csv_archived",
+        "asim_input_persons_csv_archived",
+        "asim_input_land_use_csv_archived",
+        "asim_input_skims_omx_archived",
+        "asim_input_skims_zarr_archived",
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = ASIM_REQUIRED_RUN_OUTPUT_KEYS
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
     optional_path_fields: ClassVar[Tuple[str, ...]] = (
         "usim_datastore_h5",
         "asim_output_dir",
     )
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
+    validators: ClassVar[Tuple[OutputValidator, ...]] = (
+        _ActivitySimPostprocessOutputsValidator(),
+    )
     usim_datastore_h5: Optional[Path]
     asim_output_dir: Optional[Path] = None
     processed_outputs: Dict[str, Path] = field(default_factory=dict)
@@ -402,14 +558,9 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
     usim_datastore_key: Optional[str] = None
 
     def _resolved_usim_datastore_key(self) -> Optional[str]:
-        if self.usim_datastore_key:
-            return self.usim_datastore_key
         if self.usim_datastore_h5 is None:
             return None
-        match = re.search(r"(\d{4})", self.usim_datastore_h5.name)
-        if match:
-            return f"usim_input_{match.group(1)}"
-        return None
+        return USIM_DATASTORE_H5
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -454,8 +605,12 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         if record_store is not None:
             for record in record_store.all_records():
                 short_name = getattr(record, "short_name", "") or ""
-                if short_name.startswith("usim_input_"):
-                    usim_key = short_name
+                canonical_short_name = resolve_artifact_key(short_name)
+                if (
+                    short_name.startswith("usim_input_")
+                    or canonical_short_name == USIM_DATASTORE_H5
+                ):
+                    usim_key = USIM_DATASTORE_H5
                     usim_path = record.get_absolute_path(base_path=workspace.full_path)
                     continue
                 normalized_name = normalize_asim_output_key(short_name)

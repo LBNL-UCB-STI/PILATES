@@ -10,10 +10,10 @@ def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
     """
     Resolve the initial BEAM warm-start linkstats path from settings.
 
-    Initial warmstart is opt-in: when `beam.warmstart_linkstats_path` is unset,
-    no initial linkstats file is probed. The configured path may use the
-    `{router_directory}` placeholder, which is expanded from `beam.router_directory`
-    before relative-path resolution against the BEAM mutable region input root.
+    Initial warmstart is opt-in. When ``beam.warmstart_linkstats_path`` is unset,
+    no router-directory probing occurs. Relative paths are resolved against the
+    mutable BEAM region input root, and ``{router_directory}`` is expanded from
+    ``beam.router_directory`` when present.
     """
     beam_settings = getattr(settings, "beam", None)
     run_settings = getattr(settings, "run", None)
@@ -24,37 +24,37 @@ def resolve_initial_linkstats_path(settings, workspace) -> Optional[str]:
     if not region:
         return None
 
+    configured_path = getattr(beam_settings, "warmstart_linkstats_path", None)
+    if not configured_path:
+        return None
+
     beam_region_root = os.path.join(
         workspace.get_beam_mutable_data_dir(),
         region,
     )
 
-    configured_path = getattr(beam_settings, "warmstart_linkstats_path", None)
-    if configured_path:
-        expanded = os.path.expanduser(os.fspath(configured_path))
-        router_directory = getattr(beam_settings, "router_directory", None)
-        if "{router_directory}" in expanded:
-            if not router_directory:
-                logger.warning(
-                    "[BEAM warmstart] warmstart_linkstats_path uses {router_directory} "
-                    "but beam.router_directory is not configured."
-                )
-                return None
-            expanded = expanded.replace("{router_directory}", router_directory)
-        candidate = (
-            expanded
-            if os.path.isabs(expanded)
-            else os.path.join(beam_region_root, expanded)
-        )
-        candidate = os.path.normpath(candidate)
-        if os.path.exists(candidate):
-            return candidate
-        logger.warning(
-            "[BEAM warmstart] Configured warmstart_linkstats_path not found: %s",
-            candidate,
-        )
-        return None
+    candidate = os.path.expanduser(os.fspath(configured_path))
+    router_directory = getattr(beam_settings, "router_directory", None)
+    if "{router_directory}" in candidate:
+        if not router_directory:
+            logger.warning(
+                "[BEAM warmstart] warmstart_linkstats_path uses {router_directory} "
+                "but beam.router_directory is not configured."
+            )
+            return None
+        candidate = candidate.replace("{router_directory}", router_directory)
 
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(beam_region_root, candidate)
+    candidate = os.path.normpath(candidate)
+
+    if os.path.exists(candidate):
+        return candidate
+
+    logger.warning(
+        "[BEAM warmstart] Configured warmstart_linkstats_path not found: %s",
+        candidate,
+    )
     return None
 
 

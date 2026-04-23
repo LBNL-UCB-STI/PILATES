@@ -17,13 +17,35 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.utils.usim_h5 import resolve_usim_h5_table_key
 
 logger = logging.getLogger(__name__)
+
+_ATLAS_RESTART_START_YEAR_CSVS: Tuple[str, ...] = (
+    "households.csv",
+    "blocks.csv",
+    "persons.csv",
+    "residential.csv",
+    "jobs.csv",
+)
+_ATLAS_RESTART_PRIOR_SUBYEAR_CSVS: Tuple[str, ...] = (
+    "households.csv",
+    "blocks.csv",
+    "persons.csv",
+    "grave.csv",
+    "residential.csv",
+    "jobs.csv",
+)
+_ATLAS_RESTART_PRIOR_SUBYEAR_RDATA: Tuple[str, ...] = (
+    "vehicles_output.RData",
+    "households_output.RData",
+)
 
 
 def _get_usim_datastore_fname(settings, io, year=None):
@@ -105,6 +127,159 @@ def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
     return None
 
 
+def _resolve_existing_artifact_path(
+    value: Any, *, workspace: "Workspace"
+) -> Optional[str]:
+    return artifact_to_existing_path(value, workspace=workspace)
+
+
+def _restart_required_atlas_input_years(
+    *,
+    start_year: int,
+    atlas_year: int,
+) -> List[int]:
+    """
+    Return the minimal ATLAS year-input directories required on restart.
+
+    Dynamic ATLAS subyear runs rely on the workflow start-year seed inputs and,
+    for later subyears, the immediately preceding ATLAS evolution-year inputs.
+    """
+    required_years = [start_year]
+    if atlas_year > start_year:
+        prior_subyear = atlas_year - 2
+        if prior_subyear >= start_year and prior_subyear not in required_years:
+            required_years.append(prior_subyear)
+    return required_years
+
+
+def restart_required_atlas_input_paths(
+    *,
+    atlas_input_root: str,
+    start_year: int,
+    atlas_year: int,
+) -> Dict[str, str]:
+    """
+    Return the restart-critical ATLAS files that should exist locally.
+
+    Native restart recovery should hydrate concrete files rather than treating
+    whole year directories as first-class artifacts.
+    """
+    atlas_input_root = os.path.realpath(atlas_input_root)
+    required: Dict[str, str] = {}
+
+    start_year_dir = os.path.join(atlas_input_root, f"year{start_year}")
+    for filename in _ATLAS_RESTART_START_YEAR_CSVS:
+        artifact_name = filename.rsplit(".", 1)[0]
+        required[f"atlas_restart_seed::{start_year}::{artifact_name}"] = os.path.join(
+            start_year_dir,
+            filename,
+        )
+
+    if atlas_year > start_year:
+        prior_subyear = atlas_year - 2
+        if prior_subyear >= start_year:
+            prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
+            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
+                artifact_name = filename.rsplit(".", 1)[0]
+                required[
+                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
+                ] = os.path.join(prior_year_dir, filename)
+            for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
+                artifact_name = filename.replace(".", "_")
+                required[
+                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
+                ] = os.path.join(prior_year_dir, filename)
+
+    return required
+
+
+def _restore_restart_atlas_year_inputs(
+    *,
+    previous_run_dir: str,
+    workspace: "Workspace",
+    start_year: int,
+    atlas_year: int,
+) -> None:
+    """
+    Rehydrate restart-critical ATLAS year directories from the previous run.
+
+    For reruns of later ATLAS subyears, restoring only the workflow start year
+    is insufficient. The dynamic container also expects the immediately
+    preceding ATLAS subyear input directory to exist.
+    """
+    required_paths = restart_required_atlas_input_paths(
+        atlas_input_root=workspace.get_atlas_mutable_input_dir(),
+        start_year=start_year,
+        atlas_year=atlas_year,
+    )
+    missing_paths = [
+        path for path in required_paths.values() if not os.path.exists(path)
+    ]
+    if not missing_paths:
+        return
+
+    for required_year in _restart_required_atlas_input_years(
+        start_year=start_year,
+        atlas_year=atlas_year,
+    ):
+        old_year_input_path = os.path.join(
+            previous_run_dir, "atlas", "atlas_input", f"year{required_year}"
+        )
+        new_year_input_path = os.path.join(
+            workspace.get_atlas_mutable_input_dir(), f"year{required_year}"
+        )
+        year_missing_paths = [
+            path
+            for key, path in required_paths.items()
+            if f"::{required_year}::" in key and not os.path.exists(path)
+        ]
+        if not year_missing_paths:
+            continue
+        if not os.path.exists(old_year_input_path):
+            logger.warning(
+                "[AtlasPreprocessor] Restart requires prior ATLAS input directory "
+                "year%s, but it was missing from previous run: %s",
+                required_year,
+                old_year_input_path,
+            )
+            continue
+        logger.info(
+            "[AtlasPreprocessor] Copying restart-required ATLAS inputs from previous run: %s",
+            old_year_input_path,
+        )
+        shutil.copytree(
+            old_year_input_path,
+            new_year_input_path,
+            dirs_exist_ok=True,
+            symlinks=True,
+        )
+
+
+def _record_restart_chained_rdata_inputs(
+    *,
+    prepared_inputs: Dict[str, Path],
+    atlas_input_root: str,
+    start_year: int,
+    atlas_year: int,
+) -> None:
+    if atlas_year <= start_year:
+        return
+
+    prior_subyear = atlas_year - 2
+    if prior_subyear < start_year:
+        return
+
+    prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
+    for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
+        path = os.path.join(prior_year_dir, filename)
+        if not os.path.exists(path):
+            continue
+        artifact_name = filename.replace(".", "_")
+        prepared_inputs[
+            f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
+        ] = Path(path)
+
+
 def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
     """
     Discover top-level static ATLAS global inputs that must be present in mutable input.
@@ -139,11 +314,8 @@ def _atlas_static_input_metadata(
 ) -> Dict[str, object]:
     normalized_relpath = relpath.replace("\\", "/")
     filename = os.path.basename(normalized_relpath)
-    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
-    scenario_value = str(scenario_name) if scenario_name is not None else None
-
     input_group = "global"
-    selected_scenario = scenario_value.lower() if scenario_value else None
+    selected_scenario = atlas_selected_scenario(settings)
     input_year = None
     compact_key = normalized_relpath.replace("/", "_")
     compact_stem = os.path.splitext(compact_key)[0]
@@ -185,62 +357,8 @@ def _atlas_static_input_metadata(
 def _resolve_atlas_h5_table_key(
     store: pd.HDFStore, *, year: int, table: str, is_start_year: bool
 ) -> str:
-    """
-    Resolve the HDF5 key for an ATLAS-required table.
-
-    For non-start years, prefer ``/{year}/{table}`` when present. Fall back to
-    root-level ``{table}`` to support merged/current datastores that do not keep
-    per-year table prefixes.
-    """
-    if is_start_year:
-        return table
-
-    year_key = f"/{year}/{table}"
-    if year_key in store:
-        return year_key
-
-    if table in store:
-        logger.warning(
-            "[AtlasPreprocessor] Year-specific table %s not found; falling back "
-            "to root table %s.",
-            year_key,
-            table,
-        )
-        return table
-
-    # Some UrbanSim outputs may carry only year-scoped tables (e.g. /2023/*)
-    # without root aliases. For ATLAS subyear runs, fall back to the nearest
-    # available year-scoped table for this table name.
-    suffix = f"/{table}"
-    year_scoped_candidates: list[tuple[int, str]] = []
-    for key in store.keys():
-        if not key.endswith(suffix):
-            continue
-        parts = key.strip("/").split("/")
-        if len(parts) != 2:
-            continue
-        year_token, table_token = parts
-        if table_token != table or not year_token.isdigit():
-            continue
-        year_scoped_candidates.append((int(year_token), key))
-
-    if year_scoped_candidates:
-        prior_or_equal = [entry for entry in year_scoped_candidates if entry[0] <= year]
-        if prior_or_equal:
-            selected_year, selected_key = max(prior_or_equal, key=lambda x: x[0])
-        else:
-            selected_year, selected_key = min(year_scoped_candidates, key=lambda x: x[0])
-        logger.warning(
-            "[AtlasPreprocessor] Year-specific table %s and root table %s were missing; "
-            "falling back to nearest available year-scoped table %s (year=%s).",
-            year_key,
-            table,
-            selected_key,
-            selected_year,
-        )
-        return selected_key
-
-    return year_key
+    _ = is_start_year
+    return resolve_usim_h5_table_key(store, year=year, table=table)
 
 
 def _resolve_atlas_static_sources(
@@ -280,7 +398,8 @@ def _stage_atlas_static_inputs(
 
     scenario = get_setting(settings, "atlas.scenario")
     adscen = get_setting(settings, "atlas.adscen")
-    scenario_key = str(scenario).lower() if scenario else ""
+    selected_scenario = atlas_selected_scenario(settings)
+    scenario_key = selected_scenario or (str(scenario).lower() if scenario else "")
     if scenario and scenario_key not in {"baseline", "ess_cons", "zev_mandate"}:
         logger.warning(
             "[AtlasPreprocessor] Unknown atlas.scenario=%s; using deterministic static input fallback.",
@@ -289,7 +408,7 @@ def _stage_atlas_static_inputs(
     if adscen and scenario and adscen != scenario:
         logger.warning(
             "[AtlasPreprocessor] atlas.adscen=%s differs from atlas.scenario=%s; "
-            "using scenario for input selection.",
+            "using atlas.adscen for input selection to match runner behavior.",
             adscen,
             scenario,
         )
@@ -332,7 +451,7 @@ def _stage_atlas_static_inputs(
 
         dest_path = os.path.realpath(os.path.join(output_dir, normalized_relpath))
         os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        shutil.copy(source_path, dest_path)
+        shutil.copy2(source_path, dest_path)
 
         rel_no_ext = os.path.splitext(normalized_relpath)[0]
         rel_key = rel_no_ext
@@ -378,11 +497,30 @@ class AtlasPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
+        """
+        usim_input_fname = _get_usim_datastore_fname(
+            settings,
+            io="input" if state.is_start_year() else "output",
+            year=state.forecast_year,
+        )
+        return {
+            "atlas_mutable_input_dir": workspace.get_atlas_mutable_input_dir(),
+            "usim_datastore_h5": os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            ),
+        }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
         """
         usim_input_fname = _get_usim_datastore_fname(
             settings,
@@ -398,6 +536,12 @@ class AtlasPreprocessor(GenericPreprocessor):
                 usim_input_path if os.path.exists(usim_input_path) else None
             ),
         }
+
+    @staticmethod
+    def expected_inputs(
+        settings: "PilatesConfig", state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        return AtlasPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -507,7 +651,7 @@ class AtlasPreprocessor(GenericPreprocessor):
                 os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
             )
             if not os.path.exists(dest_path):
-                shutil.copy(f, dest_path)
+                shutil.copy2(f, dest_path)
                 logger.info(
                     f"[AtlasPreprocessor] Copied global {label} file: {f} to {dest_path}"
                 )
@@ -519,32 +663,27 @@ class AtlasPreprocessor(GenericPreprocessor):
         # --- End Global File Handling ---
 
         # --- Restart Logic for year-specific data ---
-        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
+        is_restart_run = getattr(self.state, "is_restart_run", None)
+        if is_restart_run is None:
+            is_restart_run = bool(self.state.run_info_path)
+        if (
+            is_restart_run
+            and self.state.run_info_path
+            and os.path.exists(self.state.run_info_path)
+        ):
             # This is a restarted run
             previous_run_dir = os.path.dirname(self.state.run_info_path)
             logger.info(
                 f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}"
             )
 
-            # 1. Copy base year atlas inputs from previous run
-            old_base_year_input_path = os.path.join(
-                previous_run_dir, "atlas", "atlas_input", f"year{self.state.start_year}"
+            # 1. Copy restart-critical ATLAS year inputs from previous run.
+            _restore_restart_atlas_year_inputs(
+                previous_run_dir=previous_run_dir,
+                workspace=workspace,
+                start_year=self.state.start_year,
+                atlas_year=self.state.year,
             )
-            new_base_year_input_path = os.path.join(
-                workspace.get_atlas_mutable_input_dir(), f"year{self.state.start_year}"
-            )
-            if os.path.exists(old_base_year_input_path) and not os.path.exists(
-                new_base_year_input_path
-            ):
-                logger.info(
-                    f"[AtlasPreprocessor] Copying base year ATLAS inputs from previous run: {old_base_year_input_path}"
-                )
-                shutil.copytree(
-                    old_base_year_input_path,
-                    new_base_year_input_path,
-                    dirs_exist_ok=True,
-                    symlinks=True,
-                )
 
             # 2. Set path for UrbanSim output
             urbansim_output_path = os.path.join(previous_run_dir, "urbansim", "data")
@@ -554,9 +693,17 @@ class AtlasPreprocessor(GenericPreprocessor):
 
         artifact_current_h5 = getattr(self.state, "atlas_usim_datastore_h5", None)
         artifact_base_h5 = getattr(self.state, "atlas_usim_datastore_base_h5", None)
+        current_h5_path = _resolve_existing_artifact_path(
+            artifact_current_h5,
+            workspace=workspace,
+        )
+        base_h5_path = _resolve_existing_artifact_path(
+            artifact_base_h5,
+            workspace=workspace,
+        )
         preferred_h5 = _first_existing_path(
-            artifact_base_h5 if self.state.is_start_year() else artifact_current_h5,
-            artifact_current_h5 if self.state.is_start_year() else artifact_base_h5,
+            base_h5_path if self.state.is_start_year() else current_h5_path,
+            current_h5_path if self.state.is_start_year() else base_h5_path,
         )
 
         if preferred_h5 is not None:
@@ -580,6 +727,12 @@ class AtlasPreprocessor(GenericPreprocessor):
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
             "year{}".format(self.state.year),
+        )
+        _record_restart_chained_rdata_inputs(
+            prepared_inputs=prepared_inputs,
+            atlas_input_root=workspace.get_atlas_mutable_input_dir(),
+            start_year=self.state.start_year,
+            atlas_year=self.state.year,
         )
 
         # Record BEAM skims as input if needed
@@ -725,7 +878,10 @@ class AtlasPreprocessor(GenericPreprocessor):
                 "persons",
                 required=True,
             )
-            if not self.state.is_start_year():
+            # Dynamic ATLAS evolution years need grave.csv whenever the subyear
+            # is beyond the global simulation start year, including the first
+            # subyear in a later forecast interval (e.g. 2023 in a 2017->2029 run).
+            if int(self.state.year) > int(self.state.start_year):
                 process_table(
                     f"{year_prefix}/graveyard",
                     "grave",

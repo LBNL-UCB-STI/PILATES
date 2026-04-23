@@ -1,3 +1,4 @@
+import os
 import re
 from typing import Any, Dict, Optional, Set, Tuple, TYPE_CHECKING
 
@@ -5,16 +6,12 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.artifact_keys import (
+    OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    USIM_H5_UPDATED,
 )
-from pilates.workflows.input_resolution import (
-    first_resolved_key,
-    resolve_preferred_step_input,
-    resolve_step_inputs,
-    resolved_value_for_key,
-)
+from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.input_resolution import resolved_value_for_key
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_COMMON,
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
@@ -22,6 +19,7 @@ from pilates.atlas.static_inputs import (
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
+    from pilates.workflows.surface import EnabledWorkflowSurface
     from workflow_state import WorkflowState
 
 
@@ -32,6 +30,7 @@ def build_atlas_inputs(
     year: int,
     coupler: CouplerProtocol,
     usim_datastore_h5_path: Optional[str],
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Tuple[Dict[str, Any], Dict[str, str]]:
     """
     Build ATLAS input paths and per-key log descriptions for a sub-year.
@@ -73,40 +72,32 @@ def build_atlas_inputs(
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}
 
-    atlas_current_resolution = resolve_preferred_step_input(
-        preferred_keys=[USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
-        coupler=coupler,
-    )
-    selected_current_key = first_resolved_key(
-        atlas_current_resolution,
-        [USIM_DATASTORE_CURRENT_H5, USIM_H5_UPDATED],
-    )
-    if selected_current_key is None and usim_datastore_h5_path is not None:
-        atlas_current_resolution = resolve_step_inputs(
-            keys=[USIM_DATASTORE_CURRENT_H5],
-            fallback_inputs={USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path},
-        )
-        selected_current_key = USIM_DATASTORE_CURRENT_H5
-
-    atlas_usim_input = (
-        resolved_value_for_key(
-            resolved=atlas_current_resolution,
-            key=selected_current_key,
-            coupler=coupler,
-        )
-        if selected_current_key is not None
+    fallback_inputs = (
+        {
+            USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path,
+            USIM_DATASTORE_BASE_H5: usim_datastore_h5_path,
+        }
+        if usim_datastore_h5_path is not None
         else None
     )
-
-    atlas_base_resolution = resolve_step_inputs(
-        keys=[USIM_DATASTORE_BASE_H5],
+    atlas_resolution = build_binding_plan(
+        step_name="atlas_preprocess",
         coupler=coupler,
-        fallback_inputs={USIM_DATASTORE_BASE_H5: atlas_usim_input}
-        if atlas_usim_input is not None
-        else None,
+        fallback_inputs=fallback_inputs,
+        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+        surface=surface,
+    )
+    atlas_usim_input = resolved_value_for_key(
+        resolved=atlas_resolution,
+        key=USIM_DATASTORE_CURRENT_H5,
+        coupler=coupler,
     )
     atlas_base_input = resolved_value_for_key(
-        resolved=atlas_base_resolution,
+        resolved=atlas_resolution,
         key=USIM_DATASTORE_BASE_H5,
         coupler=coupler,
     )
@@ -123,10 +114,53 @@ def build_atlas_inputs(
         f"UrbanSim base datastore for ATLAS year {year}"
     )
 
+    if getattr(getattr(settings, "atlas", None), "beamac", 0) > 0:
+        beam_skims_path = os.path.join(
+            workspace.get_beam_output_dir(),
+            settings.shared.skims.fname,
+        )
+        if os.path.exists(beam_skims_path):
+            inputs[OMX_SKIMS] = beam_skims_path
+            descriptions[OMX_SKIMS] = f"ATLAS OMX skims fallback for year {year}"
+
     return inputs, descriptions
 
 
 _YEAR_SUFFIX = re.compile(r"_(\d{4})$")
+_ATLAS_SCENARIO_ALIASES = {
+    "baseline": "baseline",
+    "ess_cons": "ess_cons",
+    "ess_const_220_price": "ess_cons",
+    "zev_mandate": "zev_mandate",
+    "evmandforced2": "zev_mandate",
+}
+
+
+def _atlas_config_value(settings: Any, field_name: str) -> Optional[Any]:
+    atlas_cfg = getattr(settings, "atlas", None)
+    if atlas_cfg is None and isinstance(settings, dict):
+        atlas_cfg = settings.get("atlas")
+    if atlas_cfg is None:
+        return None
+    if isinstance(atlas_cfg, dict):
+        return atlas_cfg.get(field_name)
+    return getattr(atlas_cfg, field_name, None)
+
+
+def atlas_selected_scenario(settings: Any) -> Optional[str]:
+    """
+    Resolve the effective ATLAS scenario used for static input selection.
+
+    Prefer ``atlas.adscen`` because that is the scenario argument passed to the
+    ATLAS container. Fall back to ``atlas.scenario`` for configs that do not
+    populate ``adscen``.
+    """
+    adscen = _atlas_config_value(settings, "adscen")
+    scenario = _atlas_config_value(settings, "scenario")
+    raw_value = adscen if adscen not in (None, "") else scenario
+    if raw_value in (None, ""):
+        return None
+    return _ATLAS_SCENARIO_ALIASES.get(str(raw_value).strip().lower())
 
 
 def atlas_run_years(settings: PilatesConfig) -> Set[int]:
@@ -157,8 +191,7 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
     - unknown/no scenario falls back to all mapping files
     - year-stamped non-ADOPT files may be limited to configured ATLAS run years
     """
-    scenario_name = getattr(getattr(settings, "atlas", None), "scenario", None)
-    scenario_key = str(scenario_name).lower() if scenario_name else None
+    scenario_key = atlas_selected_scenario(settings)
 
     vehicle_type_mapping_by_scenario = {
         "baseline": "vehicle_type_mapping_baseline.csv",

@@ -1,3 +1,8 @@
+# =============================================================================
+# RUN CONFIGURATION
+# Core run parameters and model selection
+# =============================================================================
+
 run:
   region: seattle
   scenario: base
@@ -7,13 +12,46 @@ run:
   travel_model_freq: 1
   vehicle_ownership_freq: 1
   supply_demand_iters: 8
-  output_directory: /global/scratch/users/$USER/pilates-output
-  output_run_name: new-asim-consist
+  # Lawrencium storage posture:
+  # - output_directory: active durable archive root on Lustre scratch
+  # - local_workspace_root: mutable node-local workspace during execution
+  # - recovery_archive_roots: colder NFS destinations for post-run promotion
+  output_directory: /global/scratch/users/${USER}/pilates-outputs
+  output_run_name: consist-seattle-base
+  local_workspace_root: /local/job${SLURM_JOB_ID}/pilates-workspace
+  recovery_archive_roots:
+    - /clusterfs/beem-core-data-nfs/pilates-outputs
+  enable_archive_copy: true
+  consist_hashing_strategy: full
+  restart_strict: true
+  consist_code_identity: callable_module
+
+
+  # Keep active DB on node-local flash
+  consist_db_local_run: true
+  consist_db_filename: provenance.duckdb
+
+  # Startup order: restore from run snapshot first
+  consist_db_restore_on_start: true
+  consist_db_restore_strict: false
+
+  # If no snapshot exists, seed from shared DB
+  consist_db_seed_from_shared_on_start: true
+  consist_db_seed_strict: false
+
+  # Periodic + final snapshots
+  consist_db_snapshot_enabled: true
+  consist_db_snapshot_interval_seconds: 600
+  consist_db_snapshot_on_outer_iteration: true
+  consist_db_snapshot_keep_last: 3
+  use_stubs: false
   models:
-    land_use: null
+    land_use:
     travel: beam
     activity_demand: activitysim
-    vehicle_ownership: null
+    vehicle_ownership:
+
+
 shared:
   geography:
     FIPS:
@@ -206,9 +244,13 @@ shared:
   database:
     enabled: true
     type: duckdb
-    path: /clusterfs/beam-core-data-nfs/db/seattle/consist-seattle.duckdb
-    snapshot_path: /clusterfs/beam-core-data-nfs/db/seattle/snapshots
+    path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_seattle.duckdb
     use_consist: true
+
+# =============================================================================
+# INFRASTRUCTURE CONFIGURATION
+# Container management (Docker/Singularity) and execution environment
+# =============================================================================
 infrastructure:
   container_manager: singularity
   singularity_images:
@@ -225,6 +267,7 @@ infrastructure:
   docker_config:
     stdout: false
     pull_latest: false
+
 urbansim:
   region_id: '53199100'
   local_data_input_folder: pilates/urbansim/data/
@@ -240,6 +283,8 @@ urbansim:
       sfbay: 06197001
       austin: '48197301'
       seattle: '53199100'
+
+
 activitysim:
   household_sample_size: 250000
   chunk_size: 12000000000
@@ -254,6 +299,7 @@ activitysim:
   validation_folder: pilates/activitysim/validation
   subdir: configs
   main_configs_dir: configs_extended
+
   region_mappings:
     region_to_subdir:
       austin: austin

@@ -9,6 +9,7 @@ import pytest
 import h5py
 import yaml
 
+from pilates.runtime.context import WorkflowRuntimeContext
 if "openmatrix" not in sys.modules:
     openmatrix_stub = types.ModuleType("openmatrix")
     openmatrix_stub.File = object
@@ -21,6 +22,7 @@ if "geopandas" not in sys.modules:
 
 from pilates.activitysim.outputs import ActivitySimPostprocessOutputs
 from pilates.atlas.outputs import AtlasRunOutputs
+from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -195,8 +197,8 @@ def test_recover_activitysim_postprocess_outputs_from_cache_hit_artifacts(tmp_pa
         coupler=coupler, outputs_holder=holder
     )
     outputs = _recover_step_outputs(
+        step=StepRef(name="activitysim_postprocess", step_func=step_func),
         step_name="activitysim_postprocess",
-        step_func=step_func,
         outputs_holder=holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
@@ -217,9 +219,13 @@ def test_recover_activitysim_postprocess_outputs_from_cache_hit_artifacts(tmp_pa
         "beam_plans_asim_out"
     ] == iter_dir / "beam_plans.parquet"
     assert holder.activitysim_postprocess.usim_datastore_h5 == usim_input
-    assert coupler.get("households_asim_out") == str(iter_dir / "households.parquet")
-    assert coupler.get("beam_plans_asim_out") == str(iter_dir / "beam_plans.parquet")
-    assert coupler.get("usim_input_2018") == str(usim_input)
+    assert artifact_to_path(coupler.get("households_asim_out")) == str(
+        iter_dir / "households.parquet"
+    )
+    assert artifact_to_path(coupler.get("beam_plans_asim_out")) == str(
+        iter_dir / "beam_plans.parquet"
+    )
+    assert artifact_to_path(coupler.get("usim_datastore_h5")) == str(usim_input)
     holder.activitysim_postprocess.validate()
 
 
@@ -326,12 +332,7 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -355,27 +356,39 @@ def test_vehicle_ownership_stage_uses_current_for_start_year_and_forecast_for_su
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=context,
     )
 
     preprocess_calls = [
-        (year, next(step for step in steps if step.name == "atlas_preprocess"))
+        (
+            year,
+            next(step for step in steps if step.name == "atlas_preprocess").binding,
+        )
         for year, steps in captured_calls
         if any(step.name == "atlas_preprocess" for step in steps)
     ]
     assert [year for year, _ in preprocess_calls] == [2020, 2022, 2024]
+    assert preprocess_calls[0][1] is not None
     assert preprocess_calls[0][1].inputs[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
-    assert preprocess_calls[0][1].inputs[USIM_DATASTORE_BASE_H5] == str(current_h5)
+    assert preprocess_calls[0][1].inputs.get(USIM_DATASTORE_BASE_H5) is None
     for _, step in preprocess_calls[1:]:
+        assert step is not None
         assert step.inputs[USIM_DATASTORE_CURRENT_H5] == str(forecast_h5)
-        assert step.inputs[USIM_DATASTORE_BASE_H5] == str(forecast_h5)
+        assert step.inputs.get(USIM_DATASTORE_BASE_H5) is None
 
 
 def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
@@ -414,12 +427,7 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -432,8 +440,8 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
         atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
-        if atlas_run_step is not None:
-            captured_run_inputs[state.year] = dict(atlas_run_step.inputs or {})
+        if atlas_run_step is not None and atlas_run_step.binding is not None:
+            captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
                 Path(workspace.get_atlas_output_dir()) / f"households_{state.year}.csv"
             )
@@ -444,17 +452,24 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
             "psid_names": str(fallback_psid),
             "modeaccessibility": str(fallback_static),
         },
+        context=context,
     )
 
     atlas_run_inputs = captured_run_inputs[2020]
@@ -502,12 +517,7 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
     )
     monkeypatch.setattr(
         vehicle_ownership_stage,
-        "merge_model_expected_inputs",
-        lambda _model_name, inputs, *_args, **_kwargs: inputs,
-    )
-    monkeypatch.setattr(
-        vehicle_ownership_stage,
-        "enqueue_archive_copy",
+        "archive_copy_now",
         lambda **_kwargs: None,
     )
     monkeypatch.setattr(
@@ -520,8 +530,8 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
         atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
-        if atlas_run_step is not None:
-            captured_run_inputs[state.year] = dict(atlas_run_step.inputs or {})
+        if atlas_run_step is not None and atlas_run_step.binding is not None:
+            captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
                 Path(workspace.get_atlas_output_dir()) / f"households_{state.year}.csv"
             )
@@ -532,17 +542,24 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
 
     monkeypatch.setattr(vehicle_ownership_stage, "run_workflow", _fake_run_workflow)
 
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        surface=SimpleNamespace(
+            profile=SimpleNamespace(),
+            step_surface=lambda *_args, **_kwargs: None,
+        ),
+    )
     vehicle_ownership_stage.run_vehicle_ownership_stage(
         scenario=SimpleNamespace(),
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=_DictCoupler(),
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {
             "psid_names": str(fallback_psid),
             "modeaccessibility": str(fallback_mode),
         },
+        context=context,
     )
 
     atlas_run_inputs = captured_run_inputs[2020]

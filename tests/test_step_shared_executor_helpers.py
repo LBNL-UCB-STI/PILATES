@@ -4,13 +4,14 @@ from pathlib import Path
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
 from pilates.atlas.outputs import AtlasPreprocessOutputs
-from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.workflows.steps.activitysim import (
     _execute_activitysim_postprocess,
     _execute_activitysim_preprocess,
 )
 from pilates.workflows.steps.beam import (
+    _execute_beam_postprocess,
     _execute_beam_full_skim,
     _execute_beam_preprocess,
 )
@@ -55,12 +56,25 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
     )
 
     captured = {}
+    current_h5 = tmp_path / "current.h5"
+    forecast_h5 = tmp_path / "forecast.h5"
+    current_h5.write_text("current", encoding="utf-8")
+    forecast_h5.write_text("forecast", encoding="utf-8")
 
     class _Postprocessor:
-        def postprocess(self, raw_outputs, workspace, model_run_hash=None):
+        def postprocess(
+            self,
+            raw_outputs,
+            workspace,
+            model_run_hash=None,
+            usim_datastore_h5=None,
+            usim_forecast_output=None,
+        ):
             captured["postprocessor"] = self
             captured["raw_outputs"] = raw_outputs
             captured["workspace"] = workspace
+            captured["usim_datastore_h5"] = usim_datastore_h5
+            captured["usim_forecast_output"] = usim_forecast_output
             return raw_outputs
 
     workspace = type(
@@ -73,6 +87,8 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
         postprocessor=_Postprocessor(),
         workspace=workspace,
         outputs_holder=holder,
+        usim_datastore_h5=str(current_h5),
+        usim_forecast_output=str(forecast_h5),
     )
 
     assert result is holder.activitysim_run
@@ -88,16 +104,21 @@ def test_execute_activitysim_postprocess_forwards_typed_run_outputs_with_metadat
         "households_asim_in": tmp_path / "households.csv",
         "zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr",
     }
+    assert captured["usim_datastore_h5"] == str(current_h5)
+    assert captured["usim_forecast_output"] is None
 
 
 def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
     tmp_path: Path,
 ) -> None:
     captured = {}
+    current_h5 = tmp_path / "current.h5"
+    current_h5.write_text("current", encoding="utf-8")
 
     class _Preprocessor:
-        def preprocess(self, workspace):
+        def preprocess(self, workspace, usim_datastore_h5=None):
             captured["workspace"] = workspace
+            captured["usim_datastore_h5"] = usim_datastore_h5
             return ActivitySimPreprocessOutputs(
                 mutable_data_dir=tmp_path,
                 land_use_table=tmp_path / "land_use.csv",
@@ -112,9 +133,55 @@ def test_execute_activitysim_preprocess_strips_runtime_only_kwargs(
         outputs_holder=StepOutputsHolder(),
         coupler=object(),
         context="activitysim_preprocess",
+        usim_datastore_h5=str(current_h5),
     )
 
     assert result.mutable_data_dir == tmp_path
+    assert captured["usim_datastore_h5"] == str(current_h5)
+
+
+def test_execute_beam_postprocess_forwards_explicit_zarr_skims_when_supported(
+    tmp_path: Path,
+) -> None:
+    holder = StepOutputsHolder()
+    beam_output_dir = tmp_path / "beam-output"
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    run_output = beam_output_dir / "events.parquet"
+    run_output.write_text("events", encoding="utf-8")
+    holder.beam_run = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={"events_parquet_2018_0": run_output},
+    )
+
+    captured = {}
+
+    class _Postprocessor:
+        def postprocess(
+            self,
+            raw_outputs,
+            workspace,
+            model_run_hash=None,
+            zarr_skims=None,
+        ):
+            captured["raw_outputs"] = raw_outputs
+            captured["workspace"] = workspace
+            captured["zarr_skims"] = zarr_skims
+            return raw_outputs
+
+    workspace = type("Workspace", (), {"full_path": str(tmp_path)})()
+    resolved_zarr = str(tmp_path / "restored" / "skims.zarr")
+
+    result = _execute_beam_postprocess(
+        postprocessor=_Postprocessor(),
+        workspace=workspace,
+        outputs_holder=holder,
+        zarr_skims=resolved_zarr,
+    )
+
+    assert result is holder.beam_run
+    assert captured["raw_outputs"] is holder.beam_run
+    assert captured["workspace"] is workspace
+    assert captured["zarr_skims"] == resolved_zarr
     assert captured["workspace"] is workspace
 
 

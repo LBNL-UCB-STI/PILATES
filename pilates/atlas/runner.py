@@ -116,30 +116,13 @@ class AtlasRunner(GenericRunner):
         -----
         Output keys
             - ``atlas_output_dir``: ATLAS output directory for the run.
-            - ``usim_datastore_h5``: UrbanSim datastore updated for the
-              forecast year.
         Related docs
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
         """
         atlas_output_dir = workspace.get_atlas_output_dir()
-        usim_output_path = None
-        if state.is_start_year():
-            region = settings.run.region
-            region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-            usim_output_fname = settings.urbansim.input_file_template.format(
-                region_id=region_id
-            )
-        else:
-            usim_output_fname = settings.urbansim.output_file_template.format(
-                year=state.forecast_year
-            )
-        usim_output_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_output_fname
-        )
         return {
             "atlas_output_dir": atlas_output_dir,
-            "usim_datastore_h5": usim_output_path,
         }
 
     def __init__(
@@ -232,25 +215,38 @@ class AtlasRunner(GenericRunner):
             )
             max_retries = settings.atlas.max_retries
             success = False
+            last_error = None
 
             for i in range(max_retries):
-                success = self.run_container(
-                    client=client,
-                    settings=settings,
-                    image=atlas_image,
-                    volumes=atlas_docker_vols,
-                    command=atlas_cmd,
-                    model_name=self.model_name,
-                    working_dir="/",
-                    # PASS INPUTS HERE
-                    input_artifacts=input_paths,
-                    # Canonical ATLAS outputs are logged by workflow step records
-                    # using short names without file extensions. Avoid container-
-                    # level output logging to prevent duplicate artifacts like
-                    # householdv_2023 and householdv_2023.csv.
-                    output_paths=None,
-                    lineage_mode="none",
-                )
+                try:
+                    success = self.run_container(
+                        client=client,
+                        settings=settings,
+                        image=atlas_image,
+                        volumes=atlas_docker_vols,
+                        command=atlas_cmd,
+                        model_name=self.model_name,
+                        working_dir="/",
+                        # PASS INPUTS HERE
+                        input_artifacts=input_paths,
+                        # Canonical ATLAS outputs are logged by workflow step records
+                        # using short names without file extensions. Avoid container-
+                        # level output logging to prevent duplicate artifacts like
+                        # householdv_2023 and householdv_2023.csv.
+                        output_paths=None,
+                        lineage_mode="none",
+                    )
+                    last_error = None
+                except Exception as exc:
+                    last_error = exc
+                    success = False
+                    logger.error(
+                        "ATLAS container execution failed in attempt %s/%s: %s",
+                        i + 1,
+                        max_retries,
+                        exc,
+                    )
+                    continue
 
                 if not success:
                     logger.error(f"ATLAS container execution failed in attempt {i + 1}")
@@ -261,6 +257,10 @@ class AtlasRunner(GenericRunner):
                     break
 
             if not success:
+                if last_error is not None:
+                    raise RuntimeError(
+                        "ATLAS container execution failed after all retry attempts"
+                    ) from last_error
                 raise RuntimeError(
                     "ATLAS container execution failed after all retry attempts"
                 )

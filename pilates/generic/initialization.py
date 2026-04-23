@@ -12,6 +12,7 @@ from pilates.utils.zone_utils import (
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils import consist_runtime as cr
+from pilates.workflows._profile import ensure_runtime_flags_initialized
 
 import os
 import logging
@@ -294,12 +295,18 @@ class Initialization(Model):
         initialization_records_in = RecordStore()
         initialization_records_out = RecordStore()
         have_not_copied_usim_data = True
-        urbansim_enabled = settings.run.models.land_use == "urbansim"
+        enabled_flags = ensure_runtime_flags_initialized(settings)
+        urbansim_enabled = bool(enabled_flags["land_use_enabled"])
+        traffic_assignment_enabled = bool(enabled_flags["traffic_assignment_enabled"])
+        activity_demand_enabled = bool(enabled_flags["activity_demand_enabled"])
+        vehicle_ownership_enabled = bool(
+            enabled_flags["vehicle_ownership_model_enabled"]
+        )
         model_factory = ModelFactory()
 
         try:
             # BEAM model initialization
-            if get_traffic_assignment_model(settings) == "beam":
+            if traffic_assignment_enabled and get_traffic_assignment_model(settings) == "beam":
                 beam_preprocessor = model_factory.get_preprocessor("beam", self.state)
 
                 beam_input_dir = workspace.get_beam_mutable_data_dir()
@@ -313,11 +320,11 @@ class Initialization(Model):
                     initialization_records_out=initialization_records_out,
                 )
 
-            if get_traffic_assignment_model(settings) == "beam":
+            if traffic_assignment_enabled and get_traffic_assignment_model(settings) == "beam":
                 zones_config = settings.shared.geography.zones
                 if (
                     zones_config is not None
-                    and settings.run.models.activity_demand is not None
+                    and activity_demand_enabled
                 ):
                     project_root = find_project_root(start_path=os.path.dirname(__file__))
                     if not project_root:
@@ -390,9 +397,19 @@ class Initialization(Model):
 
             # Other models
             model_map = {
-                "activity_demand": settings.run.models.activity_demand,
-                "vehicle_ownership": settings.run.models.vehicle_ownership,
-                "land_use": settings.run.models.land_use,
+                "activity_demand": (
+                    settings.run.models.activity_demand
+                    if activity_demand_enabled
+                    else None
+                ),
+                "vehicle_ownership": (
+                    settings.run.models.vehicle_ownership
+                    if vehicle_ownership_enabled
+                    else None
+                ),
+                "land_use": (
+                    settings.run.models.land_use if urbansim_enabled else None
+                ),
             }
 
             for model_key, model_name in model_map.items():
@@ -449,9 +466,7 @@ class Initialization(Model):
                     asim_input_dir = workspace.get_asim_mutable_data_dir()
                     rec_in, rec_out = (
                         activitysim_preprocessor.copy_data_to_mutable_location(
-                            settings,
-                            asim_input_dir,
-                            workspace,
+                            settings, asim_input_dir, workspace
                         )
                     )
                     _accumulate_copy_result(

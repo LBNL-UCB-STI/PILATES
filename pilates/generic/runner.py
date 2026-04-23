@@ -5,10 +5,8 @@ import contextlib
 import logging
 import os
 import shlex
-import shutil
-import subprocess
-import time
-from typing import Optional, List, Union, Dict, Any, Generic, TypeVar, Callable
+from collections.abc import Mapping, Sequence
+from typing import Optional, List, Union, Dict, Any, Generic, TypeVar
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -41,7 +39,6 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
     ):
         super().__init__(model_name, state)
         self.required_input_files = []
-        self.required_output_files = []
 
     @staticmethod
     def get_model_and_image(settings: PilatesConfig, model_type: str):
@@ -135,15 +132,11 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         environment=None,
         args=None,
         input_artifacts: List[Union[str, Any]] = None,
-        output_paths: List[str] = None,
+        output_paths: Optional[Union[Sequence[str], Mapping[str, Any]]] = None,
         lineage_mode: str = None,
-        before_direct_fallback: Optional[Callable[[], None]] = None,
     ) -> bool:
         """
-        Execute container with Consist container integration.
-
-        Uses Consist integration for container execution and falls back to direct
-        execution only when the integration import/call path fails.
+        Execute container with the Consist container integration.
         """
         run_cfg = getattr(settings, "run", None)
         use_stubs = (
@@ -186,25 +179,21 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 "A Consist tracker must be active for container execution. "
                 "Ensure the call occurs within a Consist scenario/run context."
             )
-        tracker_supports_container_integration = hasattr(tracker, "mounts") and hasattr(
-            tracker, "start_run"
-        )
-        if not tracker_supports_container_integration:
-            logger.warning(
-                "[%s] Current tracker type %s is not container-lineage capable; "
-                "skipping Consist container delegation and using direct execution.",
-                model_name,
-                type(tracker).__name__,
-            )
 
         strict_mounts = True
         local_root = os.environ.get("PILATES_LOCAL_RUN_DIR")
         archive_root = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
-        if output_paths and local_root and archive_root:
+        output_values: Sequence[Any]
+        if isinstance(output_paths, Mapping):
+            output_values = list(output_paths.values())
+        else:
+            output_values = list(output_paths or [])
+
+        if output_values and local_root and archive_root:
             local_root = os.path.abspath(local_root)
             archive_root = os.path.abspath(archive_root)
             if local_root != archive_root:
-                for path in output_paths:
+                for path in output_values:
                     if not isinstance(path, str) or "://" in path:
                         continue
                     abs_path = os.path.abspath(path)
@@ -222,73 +211,37 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                         strict_mounts = False
                         break
 
-        if tracker_supports_container_integration:
-            try:
-                from consist.integrations.containers import (
-                    run_container as consist_run_container,
-                )
-            except ImportError as exc:
-                logger.error(
-                    "Consist container integration unavailable: %s. "
-                    "Falling back to direct execution.",
-                    exc,
-                )
-            else:
-                logger.info(
-                    "[%s] Delegating container execution to Consist", model_name
-                )
-                try:
-                    with GenericRunner._temporary_container_debug_stream(
-                        enabled=stream_container_logs
-                    ), GenericRunner._temporary_container_runtime_env(
-                        runtime_tmp_base,
-                        backend=backend_type,
-                    ):
-                        return consist_run_container(
-                            tracker=tracker,
-                            run_id=f"{model_name}_container",
-                            image=image,
-                            command=full_command_list,
-                            volumes=consist_volumes,
-                            inputs=input_artifacts or [],
-                            outputs=output_paths or [],
-                            environment=environment or {},
-                            working_dir=working_dir,
-                            backend_type=backend_type,
-                            pull_latest=pull_latest,
-                            lineage_mode=lineage_mode,
-                            strict_mounts=strict_mounts,
-                        )
-                except Exception as exc:
-                    logger.error(
-                        "Consist container execution failed: %s. "
-                        "Falling back to direct execution.",
-                        exc,
-                        exc_info=True,
-                    )
-                    if before_direct_fallback is not None:
-                        try:
-                            before_direct_fallback()
-                        except Exception:
-                            logger.exception(
-                                "[%s] Pre-fallback cleanup hook failed; "
-                                "continuing with direct container execution.",
-                                model_name,
-                            )
+        try:
+            from consist.integrations.containers import (
+                run_container as consist_run_container,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "Consist container integration is unavailable. "
+                "A Consist install with container support is required."
+            ) from exc
 
-        with GenericRunner._temporary_container_runtime_env(
+        logger.info("[%s] Delegating container execution to Consist", model_name)
+        with GenericRunner._temporary_container_debug_stream(
+            enabled=stream_container_logs
+        ), GenericRunner._temporary_container_runtime_env(
             runtime_tmp_base,
             backend=backend_type,
         ):
-            return GenericRunner._run_container_direct(
+            return consist_run_container(
+                tracker=tracker,
+                run_id=f"{model_name}_container",
                 image=image,
                 command=full_command_list,
-                mounts=mounts,
+                volumes=consist_volumes,
+                inputs=input_artifacts or [],
+                outputs=output_paths if output_paths is not None else [],
                 environment=environment or {},
-                backend=backend_type,
                 working_dir=working_dir,
+                backend_type=backend_type,
                 pull_latest=pull_latest,
-                docker_stdout=docker_stdout,
+                lineage_mode=lineage_mode,
+                strict_mounts=strict_mounts,
             )
 
     @staticmethod
@@ -384,202 +337,3 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
             abs_host_path = os.path.abspath(host_path)
             mounts.append((abs_host_path, container_path, mode))
         return mounts
-
-    @staticmethod
-    def _run_container_direct(
-        image: str,
-        command: List[str],
-        mounts: List[tuple],
-        environment: Dict[str, str],
-        backend: str,
-        working_dir: Optional[str],
-        pull_latest: bool,
-        docker_stdout: bool,
-    ) -> bool:
-        if backend == "docker":
-            return GenericRunner._run_docker_container(
-                image=image,
-                command=command,
-                mounts=mounts,
-                environment=environment,
-                working_dir=working_dir,
-                pull_latest=pull_latest,
-                docker_stdout=docker_stdout,
-            )
-        if backend == "singularity":
-            return GenericRunner._run_singularity_container(
-                image=image,
-                command=command,
-                mounts=mounts,
-                environment=environment,
-                working_dir=working_dir,
-            )
-
-        raise ValueError(f"Unknown container backend: {backend}")
-
-    @staticmethod
-    def _run_docker_container(
-        image: str,
-        command: List[str],
-        mounts: List[tuple],
-        environment: Dict[str, str],
-        working_dir: Optional[str],
-        pull_latest: bool,
-        docker_stdout: bool,
-    ) -> bool:
-        if pull_latest:
-            pull_cmd = ["docker", "pull", image]
-            logger.info(f"Pulling Docker image {image}")
-            subprocess.run(pull_cmd, check=True)
-
-        docker_cmd = ["docker", "run", "--rm"]
-        if working_dir:
-            docker_cmd.extend(["-w", working_dir])
-
-        for host_path, container_path, mode in mounts:
-            docker_cmd.extend(["-v", f"{host_path}:{container_path}:{mode}"])
-
-        for key, value in (environment or {}).items():
-            docker_cmd.extend(["-e", f"{key}={value}"])
-
-        docker_cmd.append(image)
-        docker_cmd.extend(command)
-
-        logger.info(f"Running Docker container: {' '.join(docker_cmd)}")
-        try:
-            subprocess.run(
-                docker_cmd,
-                check=True,
-                capture_output=not docker_stdout,
-                text=True,
-            )
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(f"Docker execution failed: {e}", exc_info=True)
-            return False
-
-    @staticmethod
-    def _run_singularity_container(
-        image: str,
-        command: List[str],
-        mounts: List[tuple],
-        environment: Dict[str, str],
-        working_dir: Optional[str],
-    ) -> bool:
-        runtime = (
-            "singularity"
-            if shutil.which("singularity")
-            else "apptainer" if shutil.which("apptainer") else "singularity"
-        )
-
-        bind_args = []
-        mount_diagnostics = []
-        for host_path, container_path, mode in mounts:
-            bind_args.extend(["-B", f"{host_path}:{container_path}:{mode}"])
-            try:
-                usage = shutil.disk_usage(host_path)
-                free_gb = usage.free / (1024**3)
-                mount_diagnostics.append(
-                    {
-                        "host": host_path,
-                        "container": container_path,
-                        "mode": mode,
-                        "free_gb": round(free_gb, 2),
-                    }
-                )
-            except Exception:
-                mount_diagnostics.append(
-                    {
-                        "host": host_path,
-                        "container": container_path,
-                        "mode": mode,
-                        "free_gb": "unknown",
-                    }
-                )
-
-        sing_cmd = [runtime, "run", "--cleanenv", "--writable-tmpfs"]
-        if working_dir:
-            sing_cmd.extend(["--pwd", working_dir])
-        sing_cmd.extend(bind_args)
-        sing_cmd.append(image)
-        sing_cmd.extend(command)
-
-        env = dict(os.environ)
-        for key, value in (environment or {}).items():
-            if runtime == "apptainer":
-                env[f"APPTAINERENV_{key}"] = value
-            else:
-                env[f"SINGULARITYENV_{key}"] = value
-
-        runtime_env_keys = [
-            "APPTAINER_CACHEDIR",
-            "APPTAINER_TMPDIR",
-            "SINGULARITY_CACHEDIR",
-            "SINGULARITY_TMPDIR",
-            "TMPDIR",
-        ]
-        runtime_env_summary = {
-            key: env.get(key) for key in runtime_env_keys if env.get(key) is not None
-        }
-        log_name = f"{runtime}_container_{int(time.time())}_{os.getpid()}.log"
-        singularity_log_paths = []
-        local_log_dir = os.path.join(env.get("TMPDIR") or os.getcwd(), "singularity_logs")
-        os.makedirs(local_log_dir, exist_ok=True)
-        singularity_log_paths.append(os.path.join(local_log_dir, log_name))
-        archive_run_dir = os.environ.get("PILATES_ARCHIVE_RUN_DIR")
-        if archive_run_dir:
-            archive_log_dir = os.path.join(
-                archive_run_dir, "logs", "singularity"
-            )
-            os.makedirs(archive_log_dir, exist_ok=True)
-            archive_log_path = os.path.join(archive_log_dir, log_name)
-            if archive_log_path not in singularity_log_paths:
-                singularity_log_paths.append(archive_log_path)
-        logger.info(
-            "Running Singularity container via runtime=%s writable_tmpfs=%s env_paths=%s",
-            runtime,
-            True,
-            runtime_env_summary,
-        )
-        logger.info("Singularity bind mount diagnostics: %s", mount_diagnostics)
-        logger.info(
-            "Persisting Singularity stdout/stderr to: %s",
-            singularity_log_paths,
-        )
-        logger.info(f"Running Singularity container: {' '.join(sing_cmd)}")
-        try:
-            with contextlib.ExitStack() as stack:
-                log_files = [
-                    stack.enter_context(open(path, "w", encoding="utf-8"))
-                    for path in singularity_log_paths
-                ]
-                process = subprocess.Popen(
-                    sing_cmd,
-                    env=env,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                )
-                assert process.stdout is not None
-                for line in process.stdout:
-                    print(line, end="")
-                    for log_file in log_files:
-                        log_file.write(line)
-                return_code = process.wait()
-            if return_code != 0:
-                raise subprocess.CalledProcessError(return_code, sing_cmd)
-            return True
-        except subprocess.CalledProcessError as e:
-            logger.error(
-                "Singularity execution failed: %s. Raw container logs: %s",
-                e,
-                singularity_log_paths,
-                exc_info=True,
-            )
-            return False
-
-    @staticmethod
-    def initialize_docker_client(settings):
-        # Deprecated: Consist handles backend initialization
-        return None

@@ -1,7 +1,13 @@
 from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.workflows.stages.vehicle_ownership import select_atlas_usim_input_path
+import pytest
+
+from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
+from pilates.workflows.stages.vehicle_ownership import (
+    _validate_atlas_subyear_usim_datastore,
+    select_atlas_usim_input_path,
+)
 
 
 class _WorkspaceStub:
@@ -25,18 +31,20 @@ def _state(*, forecast_year: int = 2023, run_info_path: str = None) -> SimpleNam
     )
 
 
-def test_select_atlas_usim_input_path_prefers_forecast_output_from_previous_run(tmp_path):
+def test_select_atlas_usim_input_path_prefers_workspace_forecast_even_with_run_info(tmp_path):
     previous_run_dir = tmp_path / "previous_run"
     previous_usim_dir = previous_run_dir / "urbansim" / "data"
     previous_usim_dir.mkdir(parents=True)
     run_info_path = previous_run_dir / "run_info.json"
     run_info_path.write_text("{}")
 
-    expected = previous_usim_dir / "model_data_2023.h5"
-    expected.write_text("")
+    previous_forecast = previous_usim_dir / "model_data_2023.h5"
+    previous_forecast.write_text("")
 
     workspace_usim_dir = tmp_path / "workspace" / "urbansim" / "data"
     workspace_usim_dir.mkdir(parents=True)
+    expected = workspace_usim_dir / "model_data_2023.h5"
+    expected.write_text("")
     current = workspace_usim_dir / "custom_current.h5"
     current.write_text("")
     default = workspace_usim_dir / "custom_default.h5"
@@ -51,6 +59,36 @@ def test_select_atlas_usim_input_path_prefers_forecast_output_from_previous_run(
     )
 
     assert selected == str(expected)
+
+
+def test_select_atlas_usim_input_path_prefers_archive_forecast_over_older_current(tmp_path):
+    archive_run_dir = tmp_path / "archive-run"
+    archive_usim_dir = archive_run_dir / "urbansim" / "data"
+    archive_usim_dir.mkdir(parents=True)
+    run_info_path = archive_run_dir / "run_state.yaml"
+    run_info_path.write_text("{}", encoding="utf-8")
+
+    archive_forecast = archive_usim_dir / "model_data_2029.h5"
+    archive_forecast.write_text("", encoding="utf-8")
+
+    workspace_root = tmp_path / "workspace"
+    workspace_usim_dir = workspace_root / "urbansim" / "data"
+    workspace_usim_dir.mkdir(parents=True)
+    current = workspace_usim_dir / "model_data_2023.h5"
+    current.write_text("", encoding="utf-8")
+
+    selected = select_atlas_usim_input_path(
+        settings=_settings(),
+        state=_state(forecast_year=2029, run_info_path=str(run_info_path)),
+        workspace=SimpleNamespace(
+            full_path=str(workspace_root),
+            get_usim_mutable_data_dir=lambda: str(workspace_usim_dir),
+        ),
+        fallback_current_path=current,
+        fallback_default_path=None,
+    )
+
+    assert selected == str(archive_forecast)
 
 
 def test_select_atlas_usim_input_path_falls_back_to_current(tmp_path):
@@ -122,3 +160,64 @@ def test_select_atlas_usim_input_path_can_prefer_current_over_forecast(tmp_path)
     )
 
     assert selected == str(current)
+
+
+def test_validate_atlas_subyear_usim_datastore_allows_forecast_year_output():
+    _validate_atlas_subyear_usim_datastore(
+        atlas_year=2025,
+        start_year=2023,
+        forecast_year=2029,
+        selected_path="/tmp/model_data_2029.h5",
+        settings=_settings(),
+        state=SimpleNamespace(is_restart_run=True),
+    )
+
+
+def test_validate_atlas_subyear_usim_datastore_allows_interval_start_year_output():
+    _validate_atlas_subyear_usim_datastore(
+        atlas_year=2023,
+        start_year=2023,
+        forecast_year=2029,
+        selected_path="/tmp/model_data_2023.h5",
+        settings=_settings(),
+        state=SimpleNamespace(is_restart_run=True),
+    )
+
+
+def test_validate_atlas_subyear_usim_datastore_rejects_older_datastore():
+    with pytest.raises(RuntimeError, match="requires forecast-year UrbanSim datastore"):
+        _validate_atlas_subyear_usim_datastore(
+            atlas_year=2025,
+            start_year=2023,
+            forecast_year=2029,
+            selected_path="/tmp/model_data_2023.h5",
+            settings=_settings(),
+            state=SimpleNamespace(is_restart_run=True),
+        )
+
+
+def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
+    tmp_path,
+):
+    usim_dir = tmp_path / "workspace" / "urbansim" / "data"
+    usim_dir.mkdir(parents=True)
+    explicit = usim_dir / "artifact_current.h5"
+    explicit.write_text("", encoding="utf-8")
+
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path / "workspace"),
+        get_usim_mutable_data_dir=lambda: str(usim_dir),
+    )
+    state = SimpleNamespace(
+        atlas_usim_datastore_h5=SimpleNamespace(path="urbansim/data/artifact_current.h5"),
+        forecast_year=2029,
+        is_start_year=lambda: False,
+    )
+
+    resolved = resolve_atlas_usim_datastore_path(
+        settings=_settings(output_template="model_data_{year}.h5"),
+        state=state,
+        workspace=workspace,
+    )
+
+    assert resolved == explicit

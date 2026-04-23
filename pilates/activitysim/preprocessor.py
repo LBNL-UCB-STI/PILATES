@@ -22,14 +22,25 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
+from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     load_canonical_zones,
     resolve_canonical_zone_source_path,
 )
-from pilates.utils.io import read_datastore
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    FINAL_SKIMS_OMX,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+)
 from workflow_state import WorkflowState
 
 if TYPE_CHECKING:
@@ -106,7 +117,7 @@ def _copy_path_if_needed(source_path: str, dest_path: str) -> str:
     except OSError:
         pass
     os.makedirs(os.path.dirname(os.fspath(dest)), exist_ok=True)
-    shutil.copy(os.fspath(source), os.fspath(dest))
+    shutil.copy2(os.fspath(source), os.fspath(dest))
     return os.fspath(dest)
 
 
@@ -125,6 +136,11 @@ def _copytree_if_needed(source_dir: str, dest_dir: str) -> str:
     return os.fspath(dest)
 
 
+def _asim_mutable_configs_dir(workspace: "Workspace") -> str:
+    get_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+    if callable(get_configs_dir):
+        return get_configs_dir()
+    return os.path.join(getattr(workspace, "full_path", os.getcwd()), "activitysim", "configs")
 def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
     """
     Retrieves the ordered list of zone keys from the canonical zones file.
@@ -1958,7 +1974,12 @@ def _process_raw_h5_for_asim(
         raw_households, raw_blocks, asim_zone_id_col
     )
     persons = _update_persons_table(
-        raw_persons, households, unassigned_households, raw_blocks, asim_zone_id_col
+        raw_persons,
+        households,
+        unassigned_households,
+        raw_blocks,
+        asim_zone_id_col,
+        settings=settings,
     )
     num_reassigned_jobs, jobs = _update_jobs_table(
         raw_jobs,
@@ -1988,26 +2009,60 @@ class ActivitysimPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Union[str, None]]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
         """
-        region = settings.run.region
-        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-        usim_input_fname = settings.urbansim.input_file_template.format(
-            region_id=region_id
-        )
-        usim_input_path = os.path.join(
-            workspace.get_usim_mutable_data_dir(), usim_input_fname
-        )
+        del state
+        region = getattr(getattr(settings, "run", None), "region", None)
+        urbansim_settings = getattr(settings, "urbansim", None)
+        region_mappings = getattr(urbansim_settings, "region_mappings", {}) or {}
+        region_to_region_id = region_mappings.get("region_to_region_id", {})
+        region_id = region_to_region_id.get(region)
+        input_template = getattr(urbansim_settings, "input_file_template", None)
+        usim_input_path = None
+        if region_id is not None and input_template:
+            usim_input_fname = input_template.format(region_id=region_id)
+            usim_input_path = os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            )
+
+        skims_fname = getattr(getattr(getattr(settings, "shared", None), "skims", None), "fname", None)
+        final_skims_path = None
+        if region and skims_fname:
+            final_skims_path = os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                region,
+                skims_fname,
+            )
         return {
-            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
-            "usim_datastore_h5": (
-                usim_input_path if os.path.exists(usim_input_path) else None
-            ),
+            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
+            "usim_population_source_h5": usim_input_path,
+            FINAL_SKIMS_OMX: final_skims_path,
         }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Union[str, None]]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimPreprocessor.declared_expected_inputs(
+            settings, state, workspace
+        )
+        for key in ("usim_population_source_h5", FINAL_SKIMS_OMX):
+            input_path = inputs.get(key)
+            inputs[key] = input_path if input_path and os.path.exists(input_path) else None
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Union[str, None]]:
+        return ActivitysimPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -2020,16 +2075,25 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         -----
         Output keys
             - ``asim_mutable_data_dir``: Local mutable data dir staged for
-              ActivitySim inputs (tables, configs, skims).
+              ActivitySim inputs.
             - ``asim_mutable_configs_dir``: Config directory for ActivitySim
               run-time settings.
+            - ``land_use_asim_in`` / ``households_asim_in`` /
+              ``persons_asim_in`` / ``omx_skims``: Canonical staged input
+              artifacts produced under the mutable data contract.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
+        del settings, state
+        asim_data_dir = workspace.get_asim_mutable_data_dir()
         return {
-            "asim_mutable_data_dir": workspace.get_asim_mutable_data_dir(),
-            "asim_mutable_configs_dir": workspace.get_asim_mutable_configs_dir(),
+            "asim_mutable_data_dir": asim_data_dir,
+            "asim_mutable_configs_dir": _asim_mutable_configs_dir(workspace),
+            ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
+            ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
+            ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
+            ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
         }
 
     def __init__(
@@ -2053,11 +2117,40 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
+        population_source_h5_path: Optional[str] = None,
+        usim_population_households_table: Optional[str] = None,
+        usim_population_persons_table: Optional[str] = None,
+        usim_population_jobs_table: Optional[str] = None,
+        usim_population_blocks_table: Optional[str] = None,
+        usim_datastore_h5: Optional[Any] = None,
+        usim_datastore_base_h5: Optional[Any] = None,
     ) -> ActivitySimPreprocessOutputs:
         self.state.set_sub_stage_progress("preprocessor")
-        preprocess_kwargs = {}
+        preprocess_kwargs: Dict[str, Any] = {}
         if final_skims_omx is not None:
             preprocess_kwargs["final_skims_omx"] = final_skims_omx
+        if population_source_h5_path is None:
+            population_source_h5_path = (
+                str(usim_datastore_h5)
+                if usim_datastore_h5 is not None
+                else (
+                    str(usim_datastore_base_h5)
+                    if usim_datastore_base_h5 is not None
+                    else None
+                )
+            )
+        if population_source_h5_path is not None:
+            preprocess_kwargs["population_source_h5_path"] = population_source_h5_path
+        resolved_table_paths = {
+            "households": usim_population_households_table,
+            "persons": usim_population_persons_table,
+            "jobs": usim_population_jobs_table,
+            "blocks": usim_population_blocks_table,
+        }
+        if any(path is not None for path in resolved_table_paths.values()):
+            preprocess_kwargs["resolved_h5_table_paths"] = {
+                key: value for key, value in resolved_table_paths.items() if value is not None
+            }
         record_store = self._preprocess(
             workspace,
             previous_records if previous_records is not None else RecordStore(),
@@ -2089,6 +2182,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
+        population_source_h5_path: Optional[str] = None,
+        resolved_h5_table_paths: Optional[Dict[str, str]] = None,
     ) -> RecordStore:
         """
         Run all preprocessing steps for ActivitySim in order.
@@ -2198,10 +2293,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
 
         # 2. Create ActivitySim input data from UrbanSim H5
         logger.info("Using H5 input mode for ActivitySim")
+        if not population_source_h5_path:
+            raise ValueError(
+                "ActivitySim preprocess requires an explicit population_source_h5_path."
+            )
+        create_kwargs: Dict[str, Any] = {
+            "usim_store_path": population_source_h5_path,
+        }
+        if resolved_h5_table_paths is not None:
+            create_kwargs["resolved_h5_table_paths"] = resolved_h5_table_paths
         data_from_usim = create_asim_data_from_h5(
             settings,
             self.state,
             workspace,
+            **create_kwargs,
         )
 
         logger.info("ActivitysimPreprocessor.preprocess() completed.")
@@ -2535,6 +2640,68 @@ def _compute_area_type(zones: pd.DataFrame) -> pd.Series:
     return area_types
 
 
+def _coerce_integer_like_columns(df: pd.DataFrame) -> List[str]:
+    """
+    Convert float columns that only contain whole numbers back to int64.
+
+    GeoPandas can promote nullable integer columns to float when reading the
+    canonical zone source. If those columns are later written as values like
+    ``0.0``, ActivitySim may reject them when it reads the CSV with an integer
+    dtype.
+    """
+    coerced: List[str] = []
+    for col in df.columns:
+        series = df[col]
+        if not pd.api.types.is_float_dtype(series):
+            continue
+
+        numeric = pd.to_numeric(series, errors="coerce")
+        valid = numeric.dropna()
+        if valid.empty:
+            continue
+
+        values = valid.to_numpy(dtype=float, copy=False)
+        if not np.isfinite(values).all():
+            continue
+        if not np.allclose(values, np.round(values)):
+            continue
+
+        df[col] = np.round(numeric.fillna(0)).astype("int64")
+        coerced.append(col)
+
+    return coerced
+
+
+def _log_land_use_table_schema(df: pd.DataFrame) -> None:
+    """
+    Emit a compact debug summary of the land_use CSV schema.
+
+    This is intended for diagnosing CSV dtype mismatches without changing the
+    runtime behavior of the preprocess step.
+    """
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+
+    logger.debug("Land use table schema before CSV write (%d columns):", len(df.columns))
+    for start in range(0, len(df.columns), 8):
+        parts: List[str] = []
+        for pos, col in enumerate(df.columns[start : start + 8], start=start + 1):
+            series = df[col]
+            nulls = int(series.isna().sum())
+            dtype = str(series.dtype)
+            annotation = ""
+            if pd.api.types.is_float_dtype(series):
+                numeric = pd.to_numeric(series, errors="coerce").dropna()
+                if not numeric.empty:
+                    values = numeric.to_numpy(dtype=float, copy=False)
+                    if np.isfinite(values).all() and np.allclose(
+                        values, np.round(values)
+                    ):
+                        annotation = ", integer_like_float"
+            parts.append(f"{pos}:{col}({dtype}, nulls={nulls}{annotation})")
+        logger.debug("  %s", " | ".join(parts))
+
+
 def enrollment_tables(
     settings: PilatesConfig,
     zones: gpd.GeoDataFrame,
@@ -2657,23 +2824,26 @@ def _copy_data_to_mutable_location(
     if os.path.exists(zone_source_path):
         zone_fname = os.path.basename(zone_source_path)
         asim_zones_path = os.path.join(input_dir, zone_fname)
-        logger.info(
-            f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
-        )
-        copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
+        if os.path.abspath(zone_source_path) == os.path.abspath(asim_zones_path):
+            logger.info("Canonical zones already at destination: %s", asim_zones_path)
+        else:
+            logger.info(
+                f"Copying canonical zones from {zone_source_path} to {asim_zones_path}"
+            )
+            copy_canonical_zone_source_to_dir(zone_source_path, input_dir)
 
-        input_records.add_record(
-            FileRecord(
-                file_path=zone_source_path,
-                short_name="canonical_zones_source",
+            input_records.add_record(
+                FileRecord(
+                    file_path=zone_source_path,
+                    short_name="canonical_zones_source",
+                )
             )
-        )
-        output_records.add_record(
-            FileRecord(
-                file_path=asim_zones_path,
-                short_name="canonical_zones",
+            output_records.add_record(
+                FileRecord(
+                    file_path=asim_zones_path,
+                    short_name="canonical_zones",
+                )
             )
-        )
     else:
         logger.warning(
             f"Canonical zone source file not found at {zone_source_path}, skipping copy."
@@ -2859,6 +3029,8 @@ def _update_persons_table(
     unassigned_households: pd.Series,
     blocks: pd.DataFrame,
     asim_zone_id_col: str = "TAZ",
+    settings: Optional[PilatesConfig] = None,
+    state: Optional["WorkflowState"] = None,
 ) -> pd.DataFrame:
     """
     Updates person attributes and assigns zones for ActivitySim processing.
@@ -2875,6 +3047,7 @@ def _update_persons_table(
     - Clearing school/work locations for specific person types (e.g., workers
       shouldn't have school locations, non-workers/students shouldn't have
       work/school locations).
+    - Marking subsets of workers/students for mandatory location re-assignment.
 
     Args:
         persons (pd.DataFrame): DataFrame containing person records.
@@ -2887,11 +3060,55 @@ def _update_persons_table(
             including 'x', 'y' coordinates and the `asim_zone_id_col`.
         asim_zone_id_col (str): Column name for the ActivitySim zone ID
             (e.g., 'TAZ'). Defaults to 'TAZ'.
+        settings (PilatesConfig, optional): PILATES settings for configurable
+            re-assignment shares.
+        state (WorkflowState, optional): Workflow state used to derive
+            deterministic sampling seeds.
 
     Returns:
         pd.DataFrame: DataFrame with updated and cleaned person attributes,
             ready for ActivitySim.
     """
+    def _normalize_person_location_columns() -> None:
+        """
+        Phase 1 of the persons-schema migration: emit canonical ActivitySim
+        location columns while preserving the older PILATES aliases.
+
+        Phase 2 should update PILATES internals to prefer the canonical columns
+        end-to-end and then remove the transitional aliases `work_zone_id`,
+        `workplace_taz`, and `school_taz`.
+        """
+
+        canonical_sources = {
+            "workplace_zone_id": (
+                "workplace_zone_id",
+                "workplace_taz",
+                "work_zone_id",
+            ),
+            "school_zone_id": (
+                "school_zone_id",
+                "school_taz",
+            ),
+        }
+
+        for canonical_col, source_candidates in canonical_sources.items():
+            source_col = next(
+                (candidate for candidate in source_candidates if candidate in persons.columns),
+                None,
+            )
+            if source_col is None:
+                persons[canonical_col] = -1
+                continue
+            persons[canonical_col] = (
+                pd.to_numeric(persons[source_col], errors="coerce").fillna(-1).astype(int)
+            )
+
+        # Keep these aliases temporarily so older PILATES warm-start/postprocess
+        # code keeps working while configs move to the canonical ActivitySim names.
+        persons["work_zone_id"] = persons["workplace_zone_id"]
+        persons["workplace_taz"] = persons["workplace_zone_id"]
+        persons["school_taz"] = persons["school_zone_id"]
+
     # Convert index to int and filter out unassigned persons
     persons.index = persons.index.astype(int)
     unassigned_mask = persons.household_id.isin(unassigned_households)
@@ -2963,17 +3180,7 @@ def _update_persons_table(
     persons["home_x"] = persons["household_id"].map(home_coords["x"])
     persons["home_y"] = persons["household_id"].map(home_coords["y"])
 
-    # Convert location fields
-    for field in ["workplace_taz", "school_taz"]:
-        try:
-            source_field = (
-                "work_zone_id" if field == "workplace_taz" else "school_zone_id"
-            )
-            persons[field] = pd.to_numeric(
-                persons[source_field], errors="coerce"
-            ).fillna(-1)
-        except KeyError:
-            logger.info(f"Field `{field}` not present in input h5 file")
+    _normalize_person_location_columns()
 
     # Clean numeric fields
     persons["worker"] = pd.to_numeric(persons["worker"], errors="coerce").fillna(0)
@@ -2982,11 +3189,14 @@ def _update_persons_table(
     # Filter invalid records
     mask = ~persons[asim_zone_id_col].isnull() & (persons["age"] >= 1.0)
 
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        mask &= ~((persons.worker == 1) & (persons.workplace_taz < 0))
-        mask &= ~((persons.student == 1) & (persons.school_taz < 0))
-
     persons = persons.loc[mask].dropna().copy()
+
+    # Current ActivitySim configs expect these logsum fields to exist on the
+    # input persons table, but they can start empty and be populated by the
+    # location models during the run.
+    for logsum_col in ("workplace_location_logsum", "school_location_logsum"):
+        if logsum_col not in persons.columns:
+            persons[logsum_col] = np.nan
 
     # Reset member IDs
     persons["member_id"] = persons.groupby("household_id").cumcount() + 1
@@ -2996,30 +3206,129 @@ def _update_persons_table(
     nonwork_mask = persons.ptype.isin([4, 5])
 
     # Clear school locations for workers
-    if "school_taz" in persons.columns:
-        before_count = (workers_mask & (persons.school_taz >= 0)).sum()
-        persons.loc[workers_mask, ["school_taz", "school_zone_id"]] = -1
-        after_count = (workers_mask & (persons.school_taz >= 0)).sum()
+    if "school_zone_id" in persons.columns:
+        before_count = (workers_mask & (persons.school_zone_id >= 0)).sum()
+        persons.loc[
+            workers_mask,
+            ["school_zone_id", "school_taz", "school_location_logsum"],
+        ] = [-1, -1, np.nan]
+        after_count = (workers_mask & (persons.school_zone_id >= 0)).sum()
         logger.info(
             f"Workers with school location: {before_count} before, {after_count} after cleaning"
         )
 
     # Clear work/school locations for non-workers
-    if all(col in persons.columns for col in ["workplace_taz", "school_taz"]):
-        before_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        before_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+    if all(col in persons.columns for col in ["workplace_zone_id", "school_zone_id"]):
+        before_school = (nonwork_mask & (persons.school_zone_id > 0)).sum()
+        before_work = (nonwork_mask & (persons.workplace_zone_id > 0)).sum()
         persons.loc[
             nonwork_mask,
-            ["school_taz", "school_zone_id", "workplace_taz", "work_zone_id"],
+            [
+                "school_zone_id",
+                "school_taz",
+                "workplace_zone_id",
+                "workplace_taz",
+                "work_zone_id",
+            ],
         ] = -1
-        after_school = (nonwork_mask & (persons.school_taz > 0)).sum()
-        after_work = (nonwork_mask & (persons.workplace_taz > 0)).sum()
+        persons.loc[
+            nonwork_mask,
+            ["school_location_logsum", "workplace_location_logsum"],
+        ] = np.nan
+        after_school = (nonwork_mask & (persons.school_zone_id > 0)).sum()
+        after_work = (nonwork_mask & (persons.workplace_zone_id > 0)).sum()
 
         logger.info(
             f"Non-workers/students with school location: {before_school} before, {after_school} after"
         )
         logger.info(
             f"Non-workers/students with work location: {before_work} before, {after_work} after"
+        )
+
+    persons["needs_workplace_reassignment"] = False
+    persons["needs_school_reassignment"] = False
+
+    def _rng_for(offset: int) -> np.random.Generator:
+        base_seed = get_setting(settings, "activitysim.random_seed", 0) if settings else 0
+        if base_seed is None:
+            base_seed = 0
+        year = int(getattr(state, "year", 0) or 0)
+        iteration = int(
+            getattr(
+                state,
+                "current_inner_iter",
+                getattr(state, "iteration", 0),
+            )
+            or 0
+        )
+        seed = (int(base_seed) + year * 1009 + iteration * 9176 + offset) % (2**32)
+        return np.random.default_rng(seed)
+
+    def _mark_sampled_reassignments(
+        target_col: str, eligible_mask: pd.Series, share: float, rng: np.random.Generator
+    ) -> None:
+        clipped_share = min(max(float(share), 0.0), 1.0)
+        if clipped_share <= 0.0:
+            return
+        eligible_ids = persons.index[eligible_mask]
+        sample_size = int(round(len(eligible_ids) * clipped_share))
+        sample_size = min(sample_size, len(eligible_ids))
+        if sample_size <= 0:
+            return
+        sampled_ids = rng.choice(eligible_ids.to_numpy(), size=sample_size, replace=False)
+        persons.loc[sampled_ids, target_col] = True
+
+    valid_asim_zone_ids = pd.Index(
+        pd.to_numeric(blocks[asim_zone_id_col], errors="coerce").dropna().astype(int).unique()
+    )
+
+    def _invalid_location_mask(location_ids: pd.Series) -> pd.Series:
+        numeric_location_ids = pd.to_numeric(location_ids, errors="coerce")
+        return (
+            numeric_location_ids.isna()
+            | (numeric_location_ids <= 0)
+            | ~numeric_location_ids.isin(valid_asim_zone_ids)
+        )
+
+    workplace_share = get_setting(settings, "activitysim.workplace_reassignment_share", 0.0)
+    school_share = get_setting(settings, "activitysim.school_reassignment_share", 0.0)
+
+    if "workplace_zone_id" in persons.columns:
+        workplace_location_invalid = _invalid_location_mask(persons["workplace_zone_id"])
+        invalid_work_mask = (persons["worker"] == 1) & workplace_location_invalid
+        valid_work_mask = (persons["worker"] == 1) & ~workplace_location_invalid
+        persons.loc[invalid_work_mask, "needs_workplace_reassignment"] = True
+        _mark_sampled_reassignments(
+            "needs_workplace_reassignment",
+            valid_work_mask,
+            workplace_share,
+            _rng_for(11),
+        )
+        logger.info(
+            "Marked %s workers with invalid workplaces and %s valid workers for reassignment",
+            int(invalid_work_mask.sum()),
+            int((persons.loc[valid_work_mask, "needs_workplace_reassignment"]).sum()),
+        )
+
+    if "school_zone_id" in persons.columns:
+        # Align reassignment eligibility with ActivitySim's effective student
+        # semantics, which are derived from pstudent/is_student rather than the
+        # raw upstream student flag alone.
+        effective_student_mask = persons["pstudent"].isin([1, 2])
+        school_location_invalid = _invalid_location_mask(persons["school_zone_id"])
+        invalid_school_mask = effective_student_mask & school_location_invalid
+        valid_school_mask = effective_student_mask & ~school_location_invalid
+        persons.loc[invalid_school_mask, "needs_school_reassignment"] = True
+        _mark_sampled_reassignments(
+            "needs_school_reassignment",
+            valid_school_mask,
+            school_share,
+            _rng_for(23),
+        )
+        logger.info(
+            "Marked %s students with invalid schools and %s valid students for reassignment",
+            int(invalid_school_mask.sum()),
+            int((persons.loc[valid_school_mask, "needs_school_reassignment"]).sum()),
         )
 
     return persons
@@ -3548,13 +3857,80 @@ def _create_land_use_table(
         except Exception as e:
             logger.info(f"Generated exception when trying to fillna in zones: {e}")
 
+    _log_land_use_table_schema(zones)
+    coerced_columns = _coerce_integer_like_columns(zones)
+    if coerced_columns:
+        logger.info(
+            "Coerced integer-like land use columns to int64 before CSV write: %s",
+            ", ".join(coerced_columns),
+        )
+
     return zones
+
+
+def _detect_activitysim_h5_prefix(
+    store: pd.HDFStore,
+    *,
+    required_tables: Tuple[str, ...],
+    preferred_prefixes: Tuple[Optional[Union[str, int]], ...] = (),
+) -> Optional[str]:
+    normalized_keys = {key.strip("/") for key in store.keys()}
+    candidate_prefixes: List[str] = []
+    for prefix in preferred_prefixes:
+        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
+        if normalized not in candidate_prefixes:
+            candidate_prefixes.append(normalized)
+    for key in normalized_keys:
+        if "/" not in key:
+            continue
+        prefix = key.split("/", 1)[0]
+        if prefix not in candidate_prefixes:
+            candidate_prefixes.append(prefix)
+
+    for prefix in candidate_prefixes:
+        if all(
+            (
+                f"{prefix}/{table_name}" if prefix else table_name
+            ) in normalized_keys
+            for table_name in required_tables
+        ):
+            return prefix
+    return None
+
+
+def _activitysim_h5_preferred_prefixes(
+    state: "WorkflowState",
+) -> Tuple[Optional[Union[str, int]], ...]:
+    """
+    Prefer the forecast-year slice inside a bound UrbanSim population datastore.
+
+    The population-source H5 handed off from UrbanSim/ATLAS can contain multiple
+    year-scoped table families. ActivitySim should consume the semantic target
+    population for the interval, which is represented by ``forecast_year`` when
+    available, not the workflow start year.
+    """
+    ordered_prefixes: List[Optional[Union[str, int]]] = []
+    for prefix in (
+        getattr(state, "forecast_year", None),
+        getattr(state, "year", None),
+        "",
+    ):
+        normalized = str(prefix).strip("/") if prefix not in (None, "") else ""
+        if normalized == "":
+            candidate: Optional[Union[str, int]] = ""
+        else:
+            candidate = normalized
+        if candidate not in ordered_prefixes:
+            ordered_prefixes.append(candidate)
+    return tuple(ordered_prefixes)
 
 
 def create_asim_data_from_h5(
     settings: PilatesConfig,
     state: "WorkflowState",
     workspace: "Workspace",
+    usim_store_path: str,
+    resolved_h5_table_paths: Optional[Dict[str, str]] = None,
 ) -> List[FileRecord]:
     """
     Create ActivitySim input data from UrbanSim H5 outputs.
@@ -3608,54 +3984,42 @@ def create_asim_data_from_h5(
     #     model_run_id=model_run_hash,
     # )
 
-    # Read tables from UrbanSim H5.
-    # Prefer the rolling UrbanSim input datastore path directly to avoid
-    # accidentally selecting a stale year-specific snapshot (e.g., *_2017.h5)
-    # when it exists alongside the current in-place updated input datastore.
-    region = settings.run.region
-    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-    usim_input_fname = settings.urbansim.input_file_template.format(region_id=region_id)
-    usim_input_path = os.path.join(workspace.get_usim_mutable_data_dir(), usim_input_fname)
-
-    if os.path.exists(usim_input_path):
-        logger.info(
-            "ActivitySim preprocess using UrbanSim rolling input datastore: %s",
-            usim_input_path,
-        )
-        store = pd.HDFStore(usim_input_path, mode="r")
-        prefix = ""
-        if "households" not in store:
-            start_year_prefix = str(state.start_year)
-            if f"{start_year_prefix}/households" in store:
-                prefix = start_year_prefix
-            else:
-                raise KeyError(
-                    "No households table found in rolling UrbanSim input datastore "
-                    f"{usim_input_path}. Tables: {store.keys()}"
-                )
-        logger.info(
-            "ActivitySim preprocess UrbanSim table prefix: %s",
-            prefix if prefix else "<root>",
-        )
-    else:
-        logger.warning(
-            "Rolling UrbanSim input datastore not found at %s; "
-            "falling back to legacy read_datastore(year=start_year) resolution.",
-            usim_input_path,
-        )
-        store, prefix = read_datastore(
-            settings,
-            state.start_year,
-            mutable_data_dir=workspace.get_usim_mutable_data_dir(),
-            mode="r",
-        )
+    logger.info(
+        "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
+        usim_store_path,
+    )
+    target_year = getattr(state, "forecast_year", None)
+    if target_year is None:
+        target_year = getattr(state, "year", None)
+    resolved_table_keys = reconcile_usim_population_table_paths(
+        h5_path=usim_store_path,
+        year=target_year,
+        provided_paths=(
+            None
+            if resolved_h5_table_paths is None
+            else {
+                USIM_POPULATION_HOUSEHOLDS_TABLE: resolved_h5_table_paths.get("households"),
+                USIM_POPULATION_PERSONS_TABLE: resolved_h5_table_paths.get("persons"),
+                USIM_POPULATION_JOBS_TABLE: resolved_h5_table_paths.get("jobs"),
+                USIM_POPULATION_BLOCKS_TABLE: resolved_h5_table_paths.get("blocks"),
+            }
+        ),
+    )
+    resolved_h5_table_paths = {
+        "households": resolved_table_keys[USIM_POPULATION_HOUSEHOLDS_TABLE],
+        "persons": resolved_table_keys[USIM_POPULATION_PERSONS_TABLE],
+        "jobs": resolved_table_keys[USIM_POPULATION_JOBS_TABLE],
+        "blocks": resolved_table_keys[USIM_POPULATION_BLOCKS_TABLE],
+    }
+    logger.info(
+        "ActivitySim preprocess UrbanSim tables: households=%s persons=%s jobs=%s blocks=%s",
+        resolved_h5_table_paths.get("households"),
+        resolved_h5_table_paths.get("persons"),
+        resolved_h5_table_paths.get("jobs"),
+        resolved_h5_table_paths.get("blocks"),
+    )
+    store = pd.HDFStore(usim_store_path, mode="r")
     try:
-        resolved_h5_table_paths = {
-            "households": _activitysim_h5_table_path(prefix, "households"),
-            "persons": _activitysim_h5_table_path(prefix, "persons"),
-            "jobs": _activitysim_h5_table_path(prefix, "jobs"),
-            "blocks": _activitysim_h5_table_path(prefix, "blocks"),
-        }
         households = store[resolved_h5_table_paths["households"]]
         persons = store[resolved_h5_table_paths["persons"]]
         jobs = store[resolved_h5_table_paths["jobs"]]
@@ -3663,7 +4027,7 @@ def create_asim_data_from_h5(
     finally:
         store.close()
     _log_activitysim_usim_input_tables(
-        h5_path=usim_input_path,
+        h5_path=usim_store_path,
         resolved_table_paths=resolved_h5_table_paths,
         start_year=getattr(state, "start_year", None),
     )
@@ -3676,7 +4040,13 @@ def create_asim_data_from_h5(
         households, blocks, asim_zone_id_col
     )
     persons = _update_persons_table(
-        persons, households, unassigned_households, blocks, asim_zone_id_col
+        persons,
+        households,
+        unassigned_households,
+        blocks,
+        asim_zone_id_col,
+        settings=settings,
+        state=state,
     )
     num_reassigned_jobs, jobs = _update_jobs_table(
         jobs,

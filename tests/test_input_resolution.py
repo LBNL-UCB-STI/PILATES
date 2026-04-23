@@ -21,8 +21,10 @@ from pilates.workflows.input_resolution import (
     resolve_preferred_step_input,
     resolve_step_inputs,
     resolved_value_for_key,
+    selected_candidate_key,
 )
 from pilates.workflows.artifact_keys import LINKSTATS_WARMSTART
+from pilates.workflows.binding import BindingPlan
 
 
 class _CouplerStub:
@@ -135,6 +137,14 @@ def test_first_resolved_key_returns_first_non_missing_candidate():
     assert first_resolved_key(resolved, ["first", "second", "third"]) == "second"
 
 
+def test_selected_candidate_key_reads_binding_metadata_when_present():
+    resolved = BindingPlan(
+        source_by_key={"semantic": "coupler"},
+        metadata={"selected_key_by_semantic_key": {"semantic": "actual_candidate"}},
+    )
+    assert selected_candidate_key(resolved, "semantic") == "actual_candidate"
+
+
 def test_resolved_value_for_key_fetches_coupler_values():
     """Helper rehydrates coupler-backed values from the coupler when needed."""
     coupler = _CouplerStub({"foo": "from-coupler"})
@@ -146,11 +156,11 @@ def test_resolved_value_for_key_fetches_coupler_values():
 
 
 def test_resolve_step_inputs_prefers_namespaced_view_key_when_available():
-    """When a coupler view exists, resolution should use the namespaced key."""
+    """When a coupler view exists, the storage key is tracked separately."""
     coupler = _NamespacedCouplerStub({"beam/linkstats_warmstart": "from-namespaced"})
     resolved = resolve_step_inputs(keys=[LINKSTATS_WARMSTART], coupler=coupler)
     assert resolved.inputs == {}
-    assert resolved.input_keys == ["beam/linkstats_warmstart"]
+    assert resolved.input_keys == [LINKSTATS_WARMSTART]
     assert resolved.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert (
         resolved.coupler_key_by_key[LINKSTATS_WARMSTART]

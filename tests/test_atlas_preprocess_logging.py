@@ -10,14 +10,15 @@ def test_atlas_preprocess_output_logger_preserves_static_input_metadata(
 ):
     captured = {}
 
-    def _fake_make_typed_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
+        captured["output_replayer"] = spec.output_replayer
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_urbansim_atlas,
-        "_make_typed_step_function",
-        _fake_make_typed_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_atlas_preprocess_step(
@@ -26,6 +27,7 @@ def test_atlas_preprocess_output_logger_preserves_static_input_metadata(
     )
 
     output_logger = captured["output_logger"]
+    assert captured["output_replayer"] is not None
     calls = []
 
     def _log_output_only(*, key, path, description, **meta):

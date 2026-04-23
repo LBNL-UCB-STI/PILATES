@@ -1,6 +1,9 @@
 from sqlalchemy import ForeignKeyConstraint
 
 from pilates.database.schema.beam_schema import (
+    BeamEventsPathTraversal,
+    BeamEventsModeChoice,
+    BeamPathTraversalLinks,
     HouseholdsBeamIn,
     PersonsBeamIn,
     PlansBeamIn,
@@ -41,6 +44,14 @@ def test_vehicles_beam_in_bridges_to_vehicles_atlas_out() -> None:
     assert "VehiclesAtlasOut.household_id" in targets
     assert "VehiclesAtlasOut.vehicle_id" in targets
     assert "VehiclesAtlasOut.year" in targets
+    assert _column_fk_targets(VehiclesBeamIn, "source_vehicle_id") == set()
+
+
+def test_vehicles_beam_in_uses_string_vehicle_id_and_int_source_vehicle_id() -> None:
+    vehicle_id_col = VehiclesBeamIn.model_fields["vehicle_id"].sa_column
+    source_vehicle_id_col = VehiclesBeamIn.model_fields["source_vehicle_id"].sa_column
+    assert vehicle_id_col.type.__class__.__name__ == "String"
+    assert source_vehicle_id_col.type.__class__.__name__ == "BigInteger"
 
 
 def test_plans_beam_in_trip_id_points_to_trips_asim_out() -> None:
@@ -66,3 +77,28 @@ def test_beam_plans_asim_out_bridges_trip_and_tour_ids() -> None:
     }
     assert "tripsAsimOut.trip_id" in trip_targets
     assert "ToursAsimOut.tour_id" in tour_targets
+
+
+def test_beam_events_path_traversal_vehicle_is_not_hard_fk() -> None:
+    vehicle_targets = _column_fk_targets(BeamEventsPathTraversal, "vehicle")
+    assert vehicle_targets == set()
+
+
+def test_beam_events_path_traversal_exposes_soft_vehicle_id_int() -> None:
+    vehicle_id_int_col = BeamEventsPathTraversal.model_fields["vehicle_id_int"].sa_column
+    assert vehicle_id_int_col.type.__class__.__name__ == "BigInteger"
+    assert vehicle_id_int_col.foreign_keys == set()
+
+
+def test_beam_events_mode_choice_trip_and_person_fks() -> None:
+    trip_targets = _column_fk_targets(BeamEventsModeChoice, "tripid")
+    person_targets = _column_fk_targets(BeamEventsModeChoice, "person")
+    assert "tripsAsimOut.trip_id" in trip_targets
+    assert "PersonsBeamIn.person_id" in person_targets
+
+
+def test_beam_path_traversal_links_point_to_traversals_and_network() -> None:
+    path_targets = _column_fk_targets(BeamPathTraversalLinks, "pathtraversaleventid")
+    link_targets = _column_fk_targets(BeamPathTraversalLinks, "linkid")
+    assert "BeamEventsPathTraversal.PathTraversalEventId" in path_targets
+    assert "BeamNetworkFinal.linkId" in link_targets

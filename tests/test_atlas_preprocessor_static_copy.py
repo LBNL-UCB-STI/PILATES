@@ -4,6 +4,8 @@ import pytest
 
 from pilates.atlas.preprocessor import AtlasPreprocessor
 import pilates.atlas.preprocessor as atlas_preprocessor_module
+from pilates.workflows import binding as workflow_binding
+from workflow_state import WorkflowState
 
 
 def _touch(path: Path, content: str = "x") -> None:
@@ -113,3 +115,135 @@ def test_copy_data_to_mutable_location_raises_when_required_static_file_missing(
             settings=settings,
             output_dir=str(output_dir),
         )
+
+
+def test_restore_restart_atlas_year_inputs_copies_base_and_prior_subyear(tmp_path):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input"
+    current_atlas_input = current_run_dir / "atlas" / "atlas_input"
+
+    _touch(previous_atlas_input / "year2017" / "households.csv")
+    _touch(previous_atlas_input / "year2021" / "households.csv")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(current_atlas_input),
+        },
+    )()
+
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(previous_run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2023,
+    )
+
+    assert (current_atlas_input / "year2017" / "households.csv").exists()
+    assert (current_atlas_input / "year2021" / "households.csv").exists()
+
+
+def test_restore_restart_atlas_year_inputs_repairs_partial_prior_subyear_directory(
+    tmp_path,
+):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input"
+    current_atlas_input = current_run_dir / "atlas" / "atlas_input"
+
+    _touch(previous_atlas_input / "year2017" / "households.csv")
+    _touch(previous_atlas_input / "year2017" / "blocks.csv")
+    _touch(previous_atlas_input / "year2021" / "households.csv")
+    _touch(previous_atlas_input / "year2021" / "grave.csv")
+    _touch(previous_atlas_input / "year2021" / "vehicles_output.RData")
+    _touch(previous_atlas_input / "year2021" / "households_output.RData")
+
+    # Simulate a partial local restore: the year directory exists, but core CSVs do not.
+    _touch(current_atlas_input / "year2021" / "vehicles_output.RData")
+    _touch(current_atlas_input / "year2021" / "households_output.RData")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(current_atlas_input),
+        },
+    )()
+
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(previous_run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2023,
+    )
+
+    assert (current_atlas_input / "year2021" / "households.csv").exists()
+    assert (current_atlas_input / "year2021" / "grave.csv").exists()
+
+
+def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year_minus_two():
+    assert atlas_preprocessor_module._restart_required_atlas_input_years(
+        start_year=2017,
+        atlas_year=2023,
+    ) == [2017, 2021]
+
+
+def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_path):
+    atlas_input_dir = tmp_path / "atlas" / "atlas_input"
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(atlas_input_dir),
+        },
+    )()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "run": type("RunCfg", (), {"models": type("Models", (), {"vehicle_ownership": "atlas"})()})()
+        },
+    )()
+    state = type(
+        "State",
+        (),
+        {
+            "start_year": 2017,
+            "year": 2023,
+            "current_year": 2023,
+            "current_major_stage": WorkflowState.Stage.vehicle_ownership_model,
+        },
+    )()
+
+    required = workflow_binding._restart_atlas_required_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        atlas_static_input_relpaths_fn=lambda _settings: ("psid_names.Rdat",),
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    assert required is not None
+    assert required["atlas_static::psid_names.Rdat"] == str(
+        atlas_input_dir / "psid_names.Rdat"
+    )
+    assert required["atlas_restart_seed::2017::households"] == str(
+        atlas_input_dir / "year2017" / "households.csv"
+    )
+    assert required["atlas_restart_seed::2017::blocks"] == str(
+        atlas_input_dir / "year2017" / "blocks.csv"
+    )
+    assert required["atlas_restart_prior::2021::households"] == str(
+        atlas_input_dir / "year2021" / "households.csv"
+    )
+    assert required["atlas_restart_prior::2021::grave"] == str(
+        atlas_input_dir / "year2021" / "grave.csv"
+    )
+    assert required["atlas_restart_prior::2021::vehicles_output_RData"] == str(
+        atlas_input_dir / "year2021" / "vehicles_output.RData"
+    )
+    assert required["atlas_restart_prior::2021::households_output_RData"] == str(
+        atlas_input_dir / "year2021" / "households_output.RData"
+    )

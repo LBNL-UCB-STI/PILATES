@@ -7,11 +7,11 @@ import pytest
 from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
-from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.steps import (
     StepOutputsHolder,
@@ -21,8 +21,8 @@ from pilates.workflows.steps import (
 
 
 class DummyCoupler:
-    def __init__(self) -> None:
-        self._data = {}
+    def __init__(self, data=None) -> None:
+        self._data = dict(data or {})
 
     def get(self, key, default=None):
         return self._data.get(key, default)
@@ -253,9 +253,13 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
         "get_preprocessor",
         lambda self, *args, **kwargs: dummy_preprocessor,
     )
+    population_source_h5 = tmp_path / "population_source.h5"
+    population_source_h5.write_text("stub", encoding="utf-8")
 
     step_fn = make_activitysim_preprocess_step(
-        coupler=DummyCoupler(),
+        coupler=DummyCoupler(
+            {USIM_POPULATION_SOURCE_H5: str(population_source_h5)}
+        ),
         outputs_holder=StepOutputsHolder(),
     )
     step_fn(settings=settings, state=state, workspace=workspace)

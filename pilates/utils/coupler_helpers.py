@@ -3,6 +3,8 @@ import logging
 import re
 import atexit
 import fnmatch
+from contextlib import contextmanager
+from contextvars import ContextVar
 import queue
 import shutil
 import threading
@@ -13,13 +15,18 @@ from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKI
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.coupler_namespace import namespaced_view_target
-from pilates.workflows.coupler_namespace import resolve_coupler_value
+from pilates.workflows.coupler_namespace import (
+    ResolvedCouplerValue,
+    canonical_artifact_key_from_raw_key,
+    namespaced_view_target,
+    resolve_coupler_value,
+)
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
 )
 
 logger = logging.getLogger(__name__)
+_STEP_OUTPUT_WARNING_SIGNATURES: set[tuple[Any, ...]] = set()
 
 _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
 _ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
@@ -38,12 +45,45 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "atlas_input_year_dir_*",
 )
 _archive_queue: Optional[
-    "queue.Queue[Optional[tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]]]"
+    "queue.Queue[Optional[str]]"
 ] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
+_archive_pending_tasks: Dict[
+    str, tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]
+] = {}
+_archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
+_published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
+    "published_coupler_keys",
+    default=None,
+)
+
+
+def _is_noop_artifact(candidate: Any) -> bool:
+    if candidate is None:
+        return False
+    candidate_type = type(candidate)
+    candidate_name = getattr(candidate_type, "__name__", "").lower()
+    candidate_module = getattr(candidate_type, "__module__", "").lower()
+    return "noopartifact" in candidate_name or ".noop" in candidate_module
+
+
+@contextmanager
+def record_published_coupler_keys() -> "set[str]":
+    published_keys: set[str] = set()
+    token = _published_coupler_keys.set(published_keys)
+    try:
+        yield published_keys
+    finally:
+        _published_coupler_keys.reset(token)
+
+
+def _record_published_coupler_key(key: str) -> None:
+    published_keys = _published_coupler_keys.get()
+    if published_keys is not None:
+        published_keys.add(key)
 
 
 def _archive_enabled() -> bool:
@@ -105,6 +145,20 @@ def _resolve_workspace_uri_path(
     return os.path.join(local_root, rel_path)
 
 
+def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
+    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
+    if not isinstance(container_uri, str) or not container_uri.startswith("workspace://"):
+        return None
+    meta = getattr(value, "meta", None)
+    if not isinstance(meta, Mapping):
+        return None
+    mount_root = meta.get("mount_root")
+    if not mount_root:
+        return None
+    rel_path = container_uri[len("workspace://") :].lstrip("/")
+    return os.path.abspath(os.path.join(str(mount_root), rel_path))
+
+
 def _copy_archive_to_local(
     *,
     local_path: str,
@@ -131,12 +185,83 @@ def _archive_dir_allowed(key: str) -> bool:
     return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
 
 
+def _resolve_archive_copy_target(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> Optional[tuple[str, str, bool, Optional[tuple[int, int, bool]]]]:
+    """
+    Resolve and validate an archive copy request.
+
+    Both async enqueueing and synchronous copies use the same target selection
+    and guardrails so path guessing stays centralized.
+    """
+    if path is None:
+        return None
+
+    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
+    if not resolved or "://" in resolved:
+        return None
+    if not os.path.exists(resolved):
+        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
+        return None
+
+    is_dir = os.path.isdir(resolved)
+    if is_dir and not _archive_dir_allowed(key):
+        logger.warning(
+            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
+            resolved,
+            key,
+        )
+        return None
+
+    roots = _archive_roots()
+    if roots is None:
+        return None
+    local_root, archive_root = roots
+    dest = _resolve_archive_path(resolved, local_root, archive_root)
+    if dest is None or dest == resolved:
+        return None
+    signature = _archive_path_signature(resolved, is_dir)
+    return resolved, dest, is_dir, signature
+
+
 def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int, bool]]:
     try:
         stat = os.stat(path)
     except OSError:
         return None
     return (int(stat.st_size), int(stat.st_mtime_ns), bool(is_dir))
+
+
+def _archive_log_method(key: str) -> Callable[..., None]:
+    # Restart diagnostics are latest-state artifacts; keep their archive churn
+    # out of INFO logs while still preserving the archive copies.
+    if str(key).startswith("workflow_diagnostics_"):
+        return logger.debug
+    return logger.info
+
+
+def _copy_archive_payload(
+    *,
+    key: str,
+    src: str,
+    dest: str,
+    is_dir: bool,
+    signature: Optional[tuple[int, int, bool]],
+) -> None:
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    if is_dir:
+        shutil.copytree(src, dest, dirs_exist_ok=True)
+    else:
+        shutil.copy2(src, dest)
+    if signature is not None:
+        with _archive_lock:
+            if _archive_inflight_signature.get(dest) == signature:
+                _archive_inflight_signature.pop(dest, None)
+            _archive_last_copied_signature[dest] = signature
+    _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
 
 
 def _archive_worker() -> None:
@@ -146,19 +271,27 @@ def _archive_worker() -> None:
             if _archive_queue is not None:
                 _archive_queue.task_done()
             break
-        key, src, dest, is_dir, signature = task
+        dest = task
+        with _archive_lock:
+            _archive_queued_destinations.discard(dest)
+            payload = _archive_pending_tasks.pop(dest, None)
+            if payload is not None:
+                signature = payload[-1]
+                if signature is not None:
+                    _archive_inflight_signature[dest] = signature
+        if payload is None:
+            if _archive_queue is not None:
+                _archive_queue.task_done()
+            continue
+        key, src, dest, is_dir, signature = payload
         try:
-            os.makedirs(os.path.dirname(dest), exist_ok=True)
-            if is_dir:
-                shutil.copytree(src, dest, dirs_exist_ok=True)
-            else:
-                shutil.copy2(src, dest)
-            if signature is not None:
-                with _archive_lock:
-                    if _archive_inflight_signature.get(dest) == signature:
-                        _archive_inflight_signature.pop(dest, None)
-                    _archive_last_copied_signature[dest] = signature
-            logger.info("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+            _copy_archive_payload(
+                key=key,
+                src=src,
+                dest=dest,
+                is_dir=is_dir,
+                signature=signature,
+            )
         except Exception as exc:
             if signature is not None:
                 with _archive_lock:
@@ -190,51 +323,119 @@ def _ensure_archive_worker() -> None:
             _archive_thread.start()
 
 
-def _enqueue_archive_copy(key: str, path: str) -> None:
+def _enqueue_archive_copy(
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> None:
     if not _archive_enabled():
         return
-    roots = _archive_roots()
-    if roots is None:
+    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
+    if prepared is None:
         return
-    if not path or (isinstance(path, str) and "://" in path):
-        return
-    if not os.path.exists(path):
-        logger.warning("[Archive] Output path does not exist: %s (key=%s)", path, key)
-        return
-    is_dir = os.path.isdir(path)
-    if is_dir and not _archive_dir_allowed(key):
-        logger.warning(
-            "[Archive] Skipping directory output (not allowlisted): %s (key=%s)",
-            path,
-            key,
-        )
-        return
-    local_root, archive_root = roots
-    dest = _resolve_archive_path(path, local_root, archive_root)
-    if dest is None or dest == path:
-        return
-    signature = _archive_path_signature(path, is_dir)
+    resolved, dest, is_dir, signature = prepared
+    should_queue = False
     if signature is not None:
         with _archive_lock:
+            pending_task = _archive_pending_tasks.get(dest)
+            pending_signature = pending_task[-1] if pending_task is not None else None
+            if pending_signature == signature:
+                logger.debug(
+                    "[Archive] Skipping duplicate enqueue (pending): %s (key=%s)",
+                    resolved,
+                    key,
+                )
+                return
             if _archive_inflight_signature.get(dest) == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (in-flight): %s (key=%s)",
-                    path,
+                    resolved,
                     key,
                 )
                 return
             if _archive_last_copied_signature.get(dest) == signature:
                 logger.debug(
                     "[Archive] Skipping duplicate enqueue (already copied): %s (key=%s)",
-                    path,
+                    resolved,
                     key,
                 )
                 return
-            _archive_inflight_signature[dest] = signature
+            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
+            if dest not in _archive_queued_destinations:
+                _archive_queued_destinations.add(dest)
+                should_queue = True
+    else:
+        with _archive_lock:
+            _archive_pending_tasks[dest] = (key, resolved, dest, is_dir, signature)
+            if dest not in _archive_queued_destinations:
+                _archive_queued_destinations.add(dest)
+                should_queue = True
     _ensure_archive_worker()
-    logger.info("[Archive] Enqueued %s -> %s (key=%s)", path, dest, key)
-    if _archive_queue is not None:
-        _archive_queue.put((key, path, dest, is_dir, signature))
+    if should_queue and _archive_queue is not None:
+        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key)
+        _archive_queue.put(dest)
+    else:
+        logger.debug(
+            "[Archive] Coalesced pending enqueue %s -> %s (key=%s)",
+            resolved,
+            dest,
+            key,
+        )
+
+
+def _warn_once(signature: tuple[Any, ...], message: str, *args: Any) -> None:
+    if signature in _STEP_OUTPUT_WARNING_SIGNATURES:
+        return
+    _STEP_OUTPUT_WARNING_SIGNATURES.add(signature)
+    logger.warning(message, *args)
+
+
+def _warn_for_undeclared_step_output(
+    *,
+    step_name: Optional[str],
+    key: str,
+) -> None:
+    if not step_name:
+        return
+    from pilates.workflows.catalog import (
+        workflow_step_key_match,
+        workflow_step_spec_for_step_name,
+    )
+
+    match = workflow_step_key_match(step_name, key, direction="output")
+    if match.declared:
+        return
+    spec = workflow_step_spec_for_step_name(step_name)
+    dynamic_families = tuple(spec.dynamic_output_families) if spec is not None else ()
+    if dynamic_families:
+        message = (
+            "[CONTRACT-ENFORCEMENT][%s] Step '%s' published undeclared output "
+            "key '%s'%s; it matches no declared output key and no dynamic "
+            "output family %s."
+        )
+        args = (
+            step_name,
+            step_name,
+            key,
+            match.alias_note,
+            dynamic_families,
+        )
+    else:
+        message = (
+            "[CONTRACT-ENFORCEMENT][%s] Step '%s' published undeclared output "
+            "key '%s'%s; the step declares no dynamic output families."
+        )
+        args = (
+            step_name,
+            step_name,
+            key,
+            match.alias_note,
+        )
+    _warn_once(
+        ("undeclared_step_output", step_name, key),
+        message,
+        *args,
+    )
 
 
 def enqueue_archive_copy(
@@ -255,12 +456,43 @@ def enqueue_archive_copy(
     workspace : Workspace, optional
         Workspace used to resolve ``workspace://`` paths.
     """
-    if path is None:
-        return
-    resolved = _resolve_workspace_uri_path(os.fspath(path), workspace=workspace)
-    if not resolved:
-        return
-    _enqueue_archive_copy(key, resolved)
+    _enqueue_archive_copy(key, path, workspace=workspace)
+
+
+def archive_copy_now(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> bool:
+    """
+    Synchronously mirror a restart-critical artifact into the archive run dir.
+    """
+    if not _archive_enabled():
+        return False
+    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
+    if prepared is None:
+        return False
+    resolved, dest, is_dir, signature = prepared
+
+    if signature is not None:
+        with _archive_lock:
+            if _archive_last_copied_signature.get(dest) == signature:
+                logger.debug(
+                    "[Archive] Skipping synchronous copy (already copied): %s (key=%s)",
+                    resolved,
+                    key,
+                )
+                return True
+
+    _copy_archive_payload(
+        key=key,
+        src=resolved,
+        dest=dest,
+        is_dir=is_dir,
+        signature=signature,
+    )
+    return True
 
 
 def flush_archive_queue(
@@ -333,12 +565,19 @@ def artifact_to_path(
     """
     if value is None:
         return None
-    path = (
-        getattr(value, "path", None)
-        or getattr(value, "container_uri", None)
-        or getattr(value, "uri", None)
-        or value
-    )
+    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
+    if isinstance(container_uri, str) and container_uri.startswith("workspace://"):
+        rel_path = container_uri[len("workspace://") :].lstrip("/")
+        if workspace is not None and getattr(workspace, "full_path", None):
+            current_workspace_path = os.path.join(str(workspace.full_path), rel_path)
+            if os.path.exists(current_workspace_path):
+                return current_workspace_path
+        source_workspace_path = _resolve_artifact_source_workspace_path(value)
+        if source_workspace_path and os.path.exists(source_workspace_path):
+            return source_workspace_path
+        if workspace is not None and getattr(workspace, "full_path", None):
+            return os.path.join(str(workspace.full_path), rel_path)
+    path = getattr(value, "path", None) or container_uri or value
     if isinstance(path, Path):
         path = os.fspath(path)
     elif isinstance(path, os.PathLike):
@@ -347,6 +586,36 @@ def artifact_to_path(
         if "://" not in path:
             return os.path.join(workspace.full_path, path)
     return path
+
+
+def _normalize_artifact_path_for_match(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    resolved = _resolve_workspace_uri_path(path)
+    if not resolved:
+        return None
+    if "://" in resolved:
+        return resolved
+    return os.path.abspath(resolved)
+
+
+def _find_current_run_output_artifact(*, key: str, path: str) -> Optional[Any]:
+    tracker = cr.current_tracker()
+    current_consist = getattr(tracker, "current_consist", None) if tracker else None
+    if current_consist is None:
+        return None
+
+    target_path = _normalize_artifact_path_for_match(path)
+    if target_path is None:
+        return None
+
+    for artifact in list(getattr(current_consist, "outputs", []) or []):
+        if getattr(artifact, "key", None) != key:
+            continue
+        artifact_path = _normalize_artifact_path_for_match(artifact_to_path(artifact))
+        if artifact_path == target_path:
+            return artifact
+    return None
 
 
 def resolve_existing_path(
@@ -428,11 +697,17 @@ def artifact_to_existing_path(
     path = artifact_to_path(value, workspace=workspace)
     if path is None and isinstance(value, str):
         path = value
-    return resolve_existing_path(
+    resolved = resolve_existing_path(
         path,
         workspace=workspace,
         materialize_from_archive=materialize_from_archive,
     )
+    if resolved is not None:
+        return resolved
+    source_workspace_path = _resolve_artifact_source_workspace_path(value)
+    if source_workspace_path and os.path.exists(source_workspace_path):
+        return source_workspace_path
+    return None
 
 
 def resolve_artifact_from_value(
@@ -488,33 +763,45 @@ def resolve_input_precedence(
     coupler: Optional[CouplerProtocol],
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
-) -> tuple[str, Any, Optional[str]]:
+) -> ResolvedCouplerValue:
     """
     Resolve one input key using canonical precedence.
 
     Precedence is: explicit input -> coupler value -> fallback input.
-
-    Returns
-    -------
-    tuple
-        ``(source, value, coupler_key)`` where source is one of:
-        ``explicit`` / ``coupler`` / ``fallback`` / ``missing``.
     """
     if explicit_inputs is not None and key in explicit_inputs:
         value = explicit_inputs.get(key)
         if value is not None:
-            return "explicit", value, None
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="explicit",
+            )
 
-    value, resolved_key = resolve_coupler_value(coupler, key)
-    if value is not None:
-        return "coupler", value, resolved_key or key
+    resolved = resolve_coupler_value(coupler, key)
+    if resolved.value is not None:
+        return resolved
 
     if fallback_inputs is not None and key in fallback_inputs:
         value = fallback_inputs.get(key)
         if value is not None:
-            return "fallback", value, None
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_artifact_key_from_raw_key(key),
+                storage_key=None,
+                value=value,
+                source="fallback",
+            )
 
-    return "missing", None, None
+    return ResolvedCouplerValue(
+        requested_key=key,
+        canonical_key=canonical_artifact_key_from_raw_key(key),
+        storage_key=None,
+        value=None,
+        source="missing",
+    )
 
 
 def log_coupler_value(
@@ -875,7 +1162,21 @@ def set_coupler_from_artifact(
         # Only the primary container artifact belongs in the coupler.
         artifact = artifact[0]
     canonical_key = resolve_artifact_key(key)
-    value = artifact or fallback
+    value = artifact
+    if _is_noop_artifact(value) and fallback is not None:
+        value = fallback
+    elif value is None:
+        value = fallback
+
+    def _preserve_artifact_identity(candidate: Any) -> bool:
+        if candidate is None or isinstance(candidate, (str, os.PathLike)):
+            return False
+        if _is_noop_artifact(candidate):
+            return False
+        return any(
+            getattr(candidate, attr_name, None) is not None
+            for attr_name in ("id", "uri", "container_uri", "hash")
+        )
 
     def _set_value(target: Any, target_key: str) -> None:
         set_from_artifact = getattr(target, "set_from_artifact", None)
@@ -885,11 +1186,16 @@ def set_coupler_from_artifact(
         set_value = getattr(target, "set", None)
         if callable(set_value):
             set_value(target_key, value)
+        _record_published_coupler_key(target_key)
 
     # Preferred path: if available, also publish through model namespace view.
     target = namespaced_view_target(canonical_key)
     view_fn = getattr(coupler, "view", None)
-    if target is not None and callable(view_fn):
+    if (
+        target is not None
+        and callable(view_fn)
+        and not _preserve_artifact_identity(value)
+    ):
         namespace, local_key = target
         try:
             view = view_fn(namespace)
@@ -995,12 +1301,70 @@ def _log_with_optional_h5_container(
     return cr.log_input(path, key=key, description=description, **meta)
 
 
+def _log_and_maybe_publish_artifact(
+    *,
+    direction: str,
+    key: str,
+    path: str,
+    description: str,
+    meta: Dict[str, Any],
+    coupler: Optional[CouplerProtocol] = None,
+    publish_to_coupler: bool,
+    enqueue_archive_copy: bool,
+    skip_logging_without_active_run: bool,
+) -> None:
+    """
+    Shared primitive for the coupler helper logging functions.
+
+    This centralizes active-run vs no-active-run behavior so the public wrappers
+    cannot diverge.
+    """
+    has_active_run = cr.current_run() is not None
+    artifact: Optional[Any] = None
+
+    if has_active_run and direction == "output":
+        artifact = _find_current_run_output_artifact(key=key, path=path)
+
+    if artifact is None and has_active_run:
+        artifact = _log_with_optional_h5_container(
+            direction=direction,
+            key=key,
+            path=path,
+            description=description,
+            meta=dict(meta),
+        )
+        # ``cr.log_h5_container(...)`` returns ``(container_artifact, table_artifacts)``.
+        # Only the container artifact is a valid coupler handoff value for later
+        # path/artifact resolution.
+        if isinstance(artifact, tuple):
+            artifact = artifact[0] if artifact else None
+    elif artifact is None and not has_active_run:
+        artifact = _log_with_optional_h5_container(
+            direction=direction,
+            key=key,
+            path=path,
+            description=description,
+            meta={**dict(meta), "enabled": False},
+        )
+        if isinstance(artifact, tuple):
+            artifact = artifact[0] if artifact else None
+
+    if enqueue_archive_copy:
+        _enqueue_archive_copy(key, path)
+
+    if publish_to_coupler:
+        if coupler is None:
+            raise TypeError("coupler must be provided when publish_to_coupler=True")
+        set_coupler_from_artifact(coupler, key, artifact, fallback=path)
+
+
 def log_and_set_output(
     *,
     key: str,
     path: str,
     description: str,
     coupler: CouplerProtocol,
+    step_name: Optional[str] = None,
     **meta: Any,
 ) -> None:
     """
@@ -1016,21 +1380,21 @@ def log_and_set_output(
         Description used in provenance logging.
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
+    step_name : str, optional
+        Canonical workflow step name used for semantic-contract warnings.
     """
-    if cr.current_run() is None:
-        _enqueue_archive_copy(key, path)
-        set_coupler_from_artifact(coupler, key, None, fallback=path)
-        return
-
-    artifact = _log_with_optional_h5_container(
+    _warn_for_undeclared_step_output(step_name=step_name, key=key)
+    _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        coupler=coupler,
+        publish_to_coupler=True,
+        enqueue_archive_copy=True,
+        skip_logging_without_active_run=False,
     )
-    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
-    _enqueue_archive_copy(key, path)
 
 
 def log_output_only(
@@ -1038,6 +1402,7 @@ def log_output_only(
     key: str,
     path: str,
     description: str,
+    step_name: Optional[str] = None,
     **meta: Any,
 ) -> None:
     """
@@ -1051,15 +1416,20 @@ def log_output_only(
         Output path to log.
     description : str
         Description used in provenance logging.
+    step_name : str, optional
+        Canonical workflow step name used for semantic-contract warnings.
     """
-    _log_with_optional_h5_container(
+    _warn_for_undeclared_step_output(step_name=step_name, key=key)
+    _log_and_maybe_publish_artifact(
         direction="output",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        publish_to_coupler=False,
+        enqueue_archive_copy=True,
+        skip_logging_without_active_run=True,
     )
-    _enqueue_archive_copy(key, path)
 
 
 def log_and_set_input(
@@ -1084,18 +1454,17 @@ def log_and_set_input(
     coupler : CouplerProtocol
         Consist coupler or compatible interface.
     """
-    if cr.current_run() is None:
-        set_coupler_from_artifact(coupler, key, None, fallback=path)
-        return
-
-    artifact = _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="input",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        coupler=coupler,
+        publish_to_coupler=True,
+        enqueue_archive_copy=False,
+        skip_logging_without_active_run=False,
     )
-    set_coupler_from_artifact(coupler, key, artifact, fallback=path)
 
 
 def log_input_only(
@@ -1117,10 +1486,13 @@ def log_input_only(
     description : str
         Description used in provenance logging.
     """
-    _log_with_optional_h5_container(
+    _log_and_maybe_publish_artifact(
         direction="input",
         key=key,
         path=path,
         description=description,
         meta=meta,
+        publish_to_coupler=False,
+        enqueue_archive_copy=False,
+        skip_logging_without_active_run=True,
     )

@@ -17,7 +17,7 @@ def log_inputs(inputs: Dict[str, Any], descriptions: Dict[str, Optional[str]]) -
     """
     if not inputs:
         return
-    if cr.current_run() is None:
+    if cr.current_run_id() is None:
         # Inputs are logged when steps run; avoid logging without an active run.
         return
     for key, value in inputs.items():

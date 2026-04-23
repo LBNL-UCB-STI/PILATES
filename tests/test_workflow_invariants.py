@@ -18,7 +18,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from consist import define_step
-import run as run_module
+import pytest
 import yaml
 
 from pilates.activitysim.outputs import (
@@ -26,15 +26,20 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.atlas.outputs import AtlasPreprocessOutputs, AtlasRunOutputs
 from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
 from pilates.workflows import steps
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    USIM_INPUT_NEXT,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
@@ -61,7 +66,10 @@ from pilates.workflows.steps import (
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
 )
+from pilates.workflows.steps import activitysim as steps_activitysim
 from pilates.workflows.steps import beam as steps_beam
+from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
+from pilates.runtime import launcher as run_module
 
 
 class _SchemaCoupler:
@@ -143,15 +151,16 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     """
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
+    monkeypatch.setattr(steps_beam, "_archive_beam_run_inputs", lambda **_kwargs: None)
 
     steps.make_beam_run_step(
         coupler=SimpleNamespace(),
@@ -175,7 +184,7 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     output_logger(
         outputs,
         settings=SimpleNamespace(),
-        state=SimpleNamespace(),
+        state=SimpleNamespace(year=2018, iteration=0),
         workspace=SimpleNamespace(),
         holder=SimpleNamespace(),
     )
@@ -193,14 +202,14 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
 ):
     captured = {}
 
-    def _fake_make_beam_step_function(**kwargs):
-        captured["output_logger"] = kwargs["output_logger"]
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
         return lambda *args, **inner_kwargs: None
 
     monkeypatch.setattr(
         steps_beam,
-        "_make_beam_step_function",
-        _fake_make_beam_step_function,
+        "build_standard_step",
+        _fake_build_standard_step,
     )
 
     steps.make_beam_postprocess_step(
@@ -231,6 +240,12 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
     phys_sim.write_text("phys", encoding="utf-8")
     plans_iter = tmp_path / "plans.xml.gz"
     plans_iter.write_text("plans", encoding="utf-8")
+    output_plans = tmp_path / "output_plans.xml.gz"
+    output_plans.write_text("output-plans", encoding="utf-8")
+    experienced_plans = tmp_path / "experienced_plans.xml.gz"
+    experienced_plans.write_text("experienced", encoding="utf-8")
+    output_experienced_plans = tmp_path / "output_experienced_plans.xml.gz"
+    output_experienced_plans.write_text("output-experienced", encoding="utf-8")
     split_event = tmp_path / "event.parquet"
     split_event.write_text("event", encoding="utf-8")
     split_links = tmp_path / "links.parquet"
@@ -243,6 +258,9 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
             "linkstats_parquet_2018_0_sub1": linkstats_sub,
             "linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3": phys_sim,
             "beam_plans_out_2018_0": plans_iter,
+            "beam_output_plans_xml_2018_0": output_plans,
+            "beam_experienced_plans_xml_2018_0": experienced_plans,
+            "beam_output_experienced_plans_xml_2018_0": output_experienced_plans,
         },
     )
     outputs = BeamPostprocessOutputs(
@@ -268,6 +286,12 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
     assert by_key[LINKSTATS][0] == str(linkstats_iter)
     assert by_key[LINKSTATS_WARMSTART][0] == str(linkstats_iter)
     assert by_key[BEAM_PLANS_OUT][0] == str(plans_iter)
+    assert by_key[BEAM_OUTPUT_PLANS_XML][0] == str(output_plans)
+    assert by_key[BEAM_EXPERIENCED_PLANS_XML][0] == str(experienced_plans)
+    assert (
+        by_key[BEAM_OUTPUT_EXPERIENCED_PLANS_XML][0]
+        == str(output_experienced_plans)
+    )
     assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][0] == str(
         phys_sim
     )
@@ -294,6 +318,12 @@ class _ManifestWorkspace:
 
     def get_asim_mutable_data_dir(self) -> str:
         return str(self._root / "activitysim" / "data")
+
+    def get_atlas_mutable_input_dir(self) -> str:
+        return str(self._root / "atlas" / "atlas_input")
+
+    def get_atlas_output_dir(self) -> str:
+        return str(self._root / "atlas" / "atlas_output")
 
 
 class _ManifestCoupler:
@@ -325,6 +355,17 @@ def _write_file(path: Path) -> None:
     path.write_text("x")
 
 
+@pytest.fixture(autouse=True)
+def _stub_atlas_output_publication(monkeypatch):
+    def _set_on_coupler(*, key, path, coupler, **_kwargs):
+        coupler.set(key, path)
+        return SimpleNamespace(path=path, key=key)
+
+    for module in (steps_activitysim, steps_urbansim_atlas):
+        monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
+        monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
+
+
 def _prepare_activitysim_preprocess_manifest(
     *,
     workspace: _ManifestWorkspace,
@@ -338,8 +379,8 @@ def _prepare_activitysim_preprocess_manifest(
         outputs_holder=seed_holder,
     )
     outputs = _recover_step_outputs(
+        step=StepRef(name="activitysim_preprocess", step_func=step_func),
         step_name="activitysim_preprocess",
-        step_func=step_func,
         outputs_holder=seed_holder,
         settings=SimpleNamespace(),
         state=SimpleNamespace(year=2018, iteration=0),
@@ -454,11 +495,7 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
             )
 
     underlying = _UnderlyingScenario()
-    proxy = run_module._EpochTaggingScenarioProxy(
-        underlying,
-        scenario_id="scenario-alpha",
-        seed=777,
-    )
+    proxy = run_module._ScenarioParentLinkProxy(underlying)
     holder = StepOutputsHolder()
     coupler = _ManifestCoupler()
     state = SimpleNamespace(year=2030, forecast_year=2030, iteration=1)
@@ -480,6 +517,87 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
     proxy.run(model="beam_run", year=2030, iteration=1)
 
     assert underlying.calls[0]["parent_run_id"] == "asim-restored-run"
+
+
+def test_restored_and_live_parent_linkage_match_for_beam_resume():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            model = kwargs.get("model")
+            if model == "activitysim_run":
+                run_id = "asim-live-run"
+            elif model == "beam_run":
+                run_id = "beam-live-run"
+            else:
+                run_id = f"{model}-run"
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id=run_id))
+
+    uninterrupted = _UnderlyingScenario()
+    uninterrupted_proxy = run_module._ScenarioParentLinkProxy(uninterrupted)
+    uninterrupted_proxy.run(model="activitysim_run", year=2030, iteration=0)
+    uninterrupted_proxy.run(model="beam_run", year=2030, iteration=0)
+
+    restored = _UnderlyingScenario()
+    restored_proxy = run_module._ScenarioParentLinkProxy(restored)
+    restored_proxy.remember_restored_run_id(
+        model_name="activitysim_run",
+        year=2030,
+        iteration=0,
+        run_id="asim-live-run",
+    )
+    restored_proxy.run(model="beam_run", year=2030, iteration=0)
+
+    assert uninterrupted.calls[1]["parent_run_id"] == "asim-live-run"
+    assert restored.calls[0]["parent_run_id"] == uninterrupted.calls[1]["parent_run_id"]
+
+
+def test_restored_and_live_parent_linkage_match_for_next_iteration_activitysim():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            model = kwargs.get("model")
+            run_id = "beam-live-run" if model == "beam_run" else "asim-next-run"
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id=run_id))
+
+    uninterrupted = _UnderlyingScenario()
+    uninterrupted_proxy = run_module._ScenarioParentLinkProxy(uninterrupted)
+    uninterrupted_proxy.run(model="beam_run", year=2030, iteration=0)
+    uninterrupted_proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    restored = _UnderlyingScenario()
+    restored_proxy = run_module._ScenarioParentLinkProxy(restored)
+    restored_proxy.remember_restored_run_id(
+        model_name="beam_run",
+        year=2030,
+        iteration=0,
+        run_id="beam-live-run",
+    )
+    restored_proxy.run(model="activitysim_run", year=2030, iteration=1)
+
+    assert uninterrupted.calls[1]["parent_run_id"] == "beam-live-run"
+    assert restored.calls[0]["parent_run_id"] == uninterrupted.calls[1]["parent_run_id"]
+
+
+def test_parent_link_proxy_leaves_parent_unset_when_no_safe_parent_exists():
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id="beam-live-run"))
+
+    underlying = _UnderlyingScenario()
+    proxy = run_module._ScenarioParentLinkProxy(underlying)
+    proxy.run(model="beam_run", year=2030, iteration=0)
+
+    assert "parent_run_id" not in underlying.calls[0]
 
 
 def test_stale_manifest_entry_forces_rerun_and_rewrites_outputs(tmp_path):
@@ -654,7 +772,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
     new_run_path = tmp_path / "run-new" / "households.parquet"
     old_post_path = tmp_path / "post-old" / "households.parquet"
     new_post_path = tmp_path / "post-new" / "households.parquet"
-    usim_h5 = tmp_path / "post-new" / "usim_input_2018.h5"
+    usim_h5 = tmp_path / "post-new" / "usim_input_next.h5"
     for path in (old_run_path, new_run_path, old_post_path, new_post_path, usim_h5):
         _write_file(path)
 
@@ -672,7 +790,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         usim_datastore_h5=usim_h5,
         asim_output_dir=tmp_path / "post-old",
         processed_outputs={"households_asim_out": old_post_path},
-        usim_datastore_key="usim_input_2018",
+        usim_datastore_key="usim_datastore_h5",
     )
 
     manifest_path = tmp_path / "manifest_split_downstream_stale.yaml"
@@ -718,7 +836,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
             usim_datastore_h5=usim_h5,
             asim_output_dir=tmp_path / "post-new",
             processed_outputs={"households_asim_out": new_post_path},
-            usim_datastore_key="usim_input_2018",
+            usim_datastore_key="usim_datastore_h5",
         )
 
     for fn, model in (
@@ -794,3 +912,300 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         ]
         == str(new_post_path)
     )
+
+
+def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
+    old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
+    new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(new_root)
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    current_households_csv = current_atlas_input_dir / "year2023" / "households.csv"
+    current_householdv_csv = current_atlas_output_dir / "householdv_2023.csv"
+    current_vehicles_csv = current_atlas_output_dir / "vehicles_2023.csv"
+    for path in (
+        current_households_csv,
+        current_householdv_csv,
+        current_vehicles_csv,
+    ):
+        _write_file(path)
+
+    old_atlas_input_dir = old_root / "atlas" / "atlas_input"
+    old_atlas_output_dir = old_root / "atlas" / "atlas_output"
+    manifest = {
+        "atlas_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasPreprocessOutputs(
+                    atlas_mutable_input_dir=old_atlas_input_dir,
+                    prepared_inputs={
+                        "atlas_households_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "households.csv"
+                    },
+                )
+            ),
+        },
+        "atlas_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasRunOutputs(
+                    atlas_output_dir=old_atlas_output_dir,
+                    raw_outputs={
+                        "householdv_2023": old_atlas_output_dir / "householdv_2023.csv",
+                        "vehicles_2023": old_atlas_output_dir / "vehicles_2023.csv",
+                    },
+                )
+            ),
+        },
+    }
+    manifest_path = tmp_path / "atlas_manifest.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    scenario = _ManifestScenario(cache_hit=False)
+    state = SimpleNamespace(year=2023, forecast_year=2029, atlas_year=2023, iteration=0)
+
+    run_manifested_steps(
+        stage_name="atlas",
+        steps=[
+            StepRef(
+                name="atlas_preprocess",
+                step_func=make_atlas_preprocess_step(
+                    coupler=coupler,
+                    outputs_holder=holder,
+                ),
+            ),
+            StepRef(
+                name="atlas_run",
+                step_func=make_atlas_run_step(
+                    coupler=coupler,
+                    outputs_holder=holder,
+                ),
+            ),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2023_i0",
+        iteration=0,
+    )
+
+    assert scenario.calls == []
+    assert holder.atlas_preprocess is not None
+    assert holder.atlas_run is not None
+    assert holder.atlas_preprocess.atlas_mutable_input_dir == current_atlas_input_dir
+    assert holder.atlas_preprocess.prepared_inputs["atlas_households_csv"] == current_households_csv
+    assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
+    assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
+    assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv
+
+
+def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(tmp_path):
+    archive_root = tmp_path / "archive-run"
+    current_root = tmp_path / "current-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(current_root)
+
+    run_info_path = archive_root / "run_state.yaml"
+    _write_file(run_info_path)
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "households.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "blocks.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "persons.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "residential.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2017" / "jobs.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "households.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "blocks.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "persons.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "grave.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "residential.csv")
+    _write_file(archive_root / "atlas" / "atlas_input" / "year2021" / "jobs.csv")
+    _write_file(
+        archive_root / "atlas" / "atlas_input" / "year2021" / "vehicles_output.RData"
+    )
+    _write_file(
+        archive_root / "atlas" / "atlas_input" / "year2021" / "households_output.RData"
+    )
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_households_csv = current_atlas_input_dir / "year2023" / "households.csv"
+    _write_file(current_households_csv)
+
+    holder = StepOutputsHolder()
+    step = make_atlas_preprocess_step(
+        coupler=_ManifestCoupler(),
+        outputs_holder=holder,
+    )
+    outputs = AtlasPreprocessOutputs(
+        atlas_mutable_input_dir=current_atlas_input_dir,
+        prepared_inputs={"atlas_households_csv": current_households_csv},
+    )
+
+    step.pilates_output_replayer(
+        outputs,
+        SimpleNamespace(atlas=SimpleNamespace(scenario="baseline")),
+        SimpleNamespace(
+            is_restart_run=True,
+            run_info_path=str(run_info_path),
+            start_year=2017,
+            year=2023,
+            current_year=2023,
+            forecast_year=2029,
+        ),
+        workspace,
+        holder,
+    )
+
+    assert (current_atlas_input_dir / "year2017" / "households.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "blocks.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "persons.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "residential.csv").exists()
+    assert (current_atlas_input_dir / "year2017" / "jobs.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "households.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "grave.csv").exists()
+    assert (current_atlas_input_dir / "year2021" / "vehicles_output.RData").exists()
+    assert (current_atlas_input_dir / "year2021" / "households_output.RData").exists()
+    assert getattr(outputs, "_compatibility_fallback_used", False) is True
+
+
+def test_manifest_restore_reruns_atlas_stage_when_restart_subyear_grave_csv_missing(
+    tmp_path,
+):
+    old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
+    new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
+    workspace = _ManifestWorkspace(new_root)
+
+    current_atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
+    current_atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    for path in (
+        current_atlas_input_dir / "year2023" / "households.csv",
+        current_atlas_input_dir / "year2023" / "blocks.csv",
+        current_atlas_input_dir / "year2023" / "persons.csv",
+        current_atlas_input_dir / "year2023" / "residential.csv",
+        current_atlas_input_dir / "year2023" / "jobs.csv",
+        current_atlas_input_dir / "year2023" / "grave.csv",
+        current_atlas_output_dir / "householdv_2023.csv",
+        current_atlas_output_dir / "vehicles_2023.csv",
+    ):
+        _write_file(path)
+
+    old_atlas_input_dir = old_root / "atlas" / "atlas_input"
+    old_atlas_output_dir = old_root / "atlas" / "atlas_output"
+    manifest = {
+        "atlas_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasPreprocessOutputs(
+                    atlas_mutable_input_dir=old_atlas_input_dir,
+                    prepared_inputs={
+                        "atlas_households_csv": old_atlas_input_dir / "year2023" / "households.csv",
+                        "atlas_blocks_csv": old_atlas_input_dir / "year2023" / "blocks.csv",
+                        "atlas_persons_csv": old_atlas_input_dir / "year2023" / "persons.csv",
+                        "atlas_residential_csv": old_atlas_input_dir / "year2023" / "residential.csv",
+                        "atlas_jobs_csv": old_atlas_input_dir / "year2023" / "jobs.csv",
+                    },
+                )
+            ),
+        },
+        "atlas_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                AtlasRunOutputs(
+                    atlas_output_dir=old_atlas_output_dir,
+                    raw_outputs={
+                        "householdv_2023": old_atlas_output_dir / "householdv_2023.csv",
+                        "vehicles_2023": old_atlas_output_dir / "vehicles_2023.csv",
+                    },
+                )
+            ),
+        },
+    }
+    manifest_path = tmp_path / "atlas_manifest_missing_grave.yaml"
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    state = SimpleNamespace(
+        year=2023,
+        current_year=2023,
+        forecast_year=2029,
+        atlas_year=2023,
+        start_year=2017,
+        iteration=0,
+        is_restart_run=True,
+    )
+
+    def _rerun_preprocess(**_runtime_kwargs):
+        holder.atlas_preprocess = AtlasPreprocessOutputs(
+            atlas_mutable_input_dir=current_atlas_input_dir,
+            prepared_inputs={
+                "atlas_households_csv": current_atlas_input_dir / "year2023" / "households.csv",
+                "atlas_blocks_csv": current_atlas_input_dir / "year2023" / "blocks.csv",
+                "atlas_persons_csv": current_atlas_input_dir / "year2023" / "persons.csv",
+                "atlas_residential_csv": current_atlas_input_dir / "year2023" / "residential.csv",
+                "atlas_jobs_csv": current_atlas_input_dir / "year2023" / "jobs.csv",
+                "atlas_grave_csv": current_atlas_input_dir / "year2023" / "grave.csv",
+            },
+        )
+
+    def _rerun_run(**_runtime_kwargs):
+        holder.atlas_run = AtlasRunOutputs(
+            atlas_output_dir=current_atlas_output_dir,
+            raw_outputs={
+                "householdv_2023": current_atlas_output_dir / "householdv_2023.csv",
+                "vehicles_2023": current_atlas_output_dir / "vehicles_2023.csv",
+            },
+        )
+
+    for fn, model in (
+        (_rerun_preprocess, "atlas_preprocess"),
+        (_rerun_run, "atlas_run"),
+    ):
+        fn.__consist_step__ = SimpleNamespace(model=model)
+
+    class _ExecutingManifestScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            kwargs["fn"]()
+            return SimpleNamespace(cache_hit=False)
+
+    scenario = _ExecutingManifestScenario()
+
+    run_manifested_steps(
+        stage_name="atlas",
+        steps=[
+            StepRef(name="atlas_preprocess", step_func=_rerun_preprocess),
+            StepRef(name="atlas_run", step_func=_rerun_run),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2023_i0",
+        iteration=0,
+    )
+
+    assert [call["fn"].__name__ for call in scenario.calls] == [
+        "_rerun_preprocess",
+        "_rerun_run",
+    ]
+    assert holder.atlas_preprocess is not None
+    assert holder.atlas_preprocess.prepared_inputs["atlas_grave_csv"] == (
+        current_atlas_input_dir / "year2023" / "grave.csv"
+    )
+    assert holder.atlas_run is not None

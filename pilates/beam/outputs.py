@@ -13,8 +13,19 @@ from pilates.workflows.outputs_base import (
     ValidationResult,
 )
 from pilates.workflows.artifact_keys import (
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
     BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     BEAM_PERSONS_IN,
@@ -100,6 +111,13 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+        "vehicles_beam_in",
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
     )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_mutable_data_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
@@ -173,6 +191,19 @@ class BeamRunOutputs(StepOutputsBase):
 
     primary_output_attr: ClassVar[str] = "beam_output_dir"
     declared_outputs: ClassVar[Tuple[str, ...]] = (LINKSTATS, BEAM_PLANS_OUT)
+    optional_outputs: ClassVar[Tuple[str, ...]] = (
+        BEAM_OUTPUT_PLANS_XML,
+        BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        BEAM_EXPERIENCED_PLANS_XML,
+        BEAM_INPUT_PLANS_ARCHIVED,
+        BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+        BEAM_INPUT_PERSONS_ARCHIVED,
+        BEAM_INPUT_CONFIG_ARCHIVED,
+        BEAM_INPUT_VEHICLES_ARCHIVED,
+        BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+        BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("beam_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     beam_output_dir: Path
@@ -267,6 +298,23 @@ class BeamRunOutputs(StepOutputsBase):
     def promoted_plans_for_publication(self) -> Optional[Tuple[str, Path]]:
         return self._latest_publication_output_for_prefix(BEAM_PLANS_OUT)
 
+    def promoted_output_plans_xml_for_publication(self) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(BEAM_OUTPUT_PLANS_XML)
+
+    def promoted_output_experienced_plans_xml_for_publication(
+        self,
+    ) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+        )
+
+    def promoted_experienced_plans_xml_for_publication(
+        self,
+    ) -> Optional[Tuple[str, Path]]:
+        return self._latest_publication_output_for_prefix(
+            BEAM_EXPERIENCED_PLANS_XML
+        )
+
     def iter_linkstats_parquet_outputs(self) -> Iterable[Tuple[str, Path]]:
         for key, path in self.raw_outputs.items():
             if key.startswith("linkstats_parquet_"):
@@ -303,6 +351,38 @@ class BeamRunOutputs(StepOutputsBase):
                 BEAM_PLANS_OUT,
                 path,
                 "BEAM plans output for downstream runs",
+            )
+        latest_output_plans_xml = self._latest_publication_output_for_prefix(
+            BEAM_OUTPUT_PLANS_XML
+        )
+        if latest_output_plans_xml is not None:
+            _, path = latest_output_plans_xml
+            yield (
+                BEAM_OUTPUT_PLANS_XML,
+                path,
+                "BEAM output plans XML for downstream warm-start reuse",
+            )
+        latest_output_experienced_plans_xml = (
+            self._latest_publication_output_for_prefix(
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+            )
+        )
+        if latest_output_experienced_plans_xml is not None:
+            _, path = latest_output_experienced_plans_xml
+            yield (
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+                path,
+                "BEAM output experienced plans XML for downstream warm-start reuse",
+            )
+        latest_experienced_plans_xml = self._latest_publication_output_for_prefix(
+            BEAM_EXPERIENCED_PLANS_XML
+        )
+        if latest_experienced_plans_xml is not None:
+            _, path = latest_experienced_plans_xml
+            yield (
+                BEAM_EXPERIENCED_PLANS_XML,
+                path,
+                "BEAM experienced plans XML for downstream warm-start reuse",
             )
         for key, path in self.raw_outputs.items():
             yield key, path, f"BEAM raw output: {key}"
@@ -360,8 +440,8 @@ class BeamPostprocessOutputs(StepOutputsBase):
     Attributes
     ----------
     zarr_skims : Path, optional
-        Zarr skims updated by BEAM. This is the canonical required
-        postprocess output for the currently supported BEAM integration.
+        Zarr skims updated by BEAM when an ActivitySim-backed shared skims
+        target is active.
     final_skims_omx : Path, optional
         Final OMX skims for downstream models. When present, it is treated as
         the primary output to log.
@@ -374,6 +454,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
     primary_output_attr: ClassVar[str] = "zarr_skims"
     declared_outputs: ClassVar[Tuple[str, ...]] = (ZARR_SKIMS,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ()
+    optional_outputs: ClassVar[Tuple[str, ...]] = (ZARR_SKIMS, FINAL_SKIMS_OMX)
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("zarr_skims", "final_skims_omx")
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("split_events", "split_event_links")
     validators: ClassVar[Tuple[OutputValidator, ...]] = (

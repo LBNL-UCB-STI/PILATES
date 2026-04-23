@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import shutil
 import inspect
 from pathlib import Path
@@ -13,6 +14,7 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -25,6 +27,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     ASIM_SHARROW_CACHE_DIR,
+    ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
@@ -116,6 +119,45 @@ def asim_sharrow_cache_dir(workspace: Workspace) -> str:
     return os.path.join(workspace.full_path, "shared_cache", "numba")
 
 
+def asim_runtime_cache_dir(workspace: Workspace) -> str:
+    """
+    Canonical ActivitySim runtime cache directory for skims.zarr.
+    """
+    get_runtime_cache_dir = getattr(workspace, "get_asim_runtime_cache_dir", None)
+    if callable(get_runtime_cache_dir):
+        return get_runtime_cache_dir()
+    get_output_dir = getattr(workspace, "get_asim_output_dir", None)
+    if callable(get_output_dir):
+        return os.path.join(get_output_dir(), "cache")
+    return os.path.join(getattr(workspace, "full_path", os.getcwd()), "cache")
+
+
+def asim_runtime_zarr_path(workspace: Workspace) -> str:
+    return os.path.join(asim_runtime_cache_dir(workspace), "skims.zarr")
+
+
+def asim_staged_input_paths(workspace: Workspace) -> Dict[str, str]:
+    asim_data_dir = workspace.get_asim_mutable_data_dir()
+    return {
+        ASIM_LAND_USE_IN: os.path.join(asim_data_dir, "land_use.csv"),
+        ASIM_HOUSEHOLDS_IN: os.path.join(asim_data_dir, "households.csv"),
+        ASIM_PERSONS_IN: os.path.join(asim_data_dir, "persons.csv"),
+        ASIM_OMX_SKIMS: os.path.join(asim_data_dir, "skims.omx"),
+    }
+
+
+def asim_required_run_output_paths(workspace: Workspace) -> Dict[str, str]:
+    final_pipeline_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
+    return {
+        output_key: str(
+            final_pipeline_dir
+            / re.sub(r"_asim_out$", "", output_key)
+            / "final.parquet"
+        )
+        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    }
+
+
 def _dir_contains_files(path: str) -> bool:
     if not os.path.isdir(path):
         return False
@@ -136,7 +178,7 @@ def _remove_path_if_present(path: str) -> None:
 
 def _cleanup_activitysim_compile_artifacts(workspace: Workspace) -> None:
     stale_paths = [
-        os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr"),
+        asim_runtime_zarr_path(workspace),
         os.path.join(workspace.get_asim_output_dir(), "cache", "numba"),
         asim_sharrow_cache_dir(workspace),
     ]
@@ -157,7 +199,7 @@ def _stage_runtime_input_path(
     workspace: Workspace,
 ) -> str:
     if key == "zarr_skims":
-        runtime_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
+        runtime_path = asim_runtime_zarr_path(workspace)
     elif key == ASIM_SHARROW_CACHE_DIR:
         runtime_path = asim_sharrow_cache_dir(workspace)
     else:
@@ -198,8 +240,17 @@ class ActivitysimCompileRunner(GenericRunner):
         )
 
     @staticmethod
-    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
-        return ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
+    def get_asim_docker_vols(
+        settings: PilatesConfig,
+        working_dir=None,
+        *,
+        workspace: Optional[Workspace] = None,
+    ):
+        return ActivitysimRunner.get_asim_docker_vols(
+            settings,
+            working_dir=working_dir,
+            workspace=workspace,
+        )
 
     @staticmethod
     def expected_inputs(
@@ -229,7 +280,7 @@ class ActivitysimCompileRunner(GenericRunner):
               descriptions used by ActivitySim and downstream models.
         """
         outputs: Dict[str, Any] = {
-            "zarr_skims": os.path.join(
+            ZARR_SKIMS: os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
         }
@@ -281,7 +332,9 @@ class ActivitysimCompileRunner(GenericRunner):
         os.makedirs(shared_tmp_dir, exist_ok=True)
 
         asim_docker_vols = self.get_asim_docker_vols(
-            settings, working_dir=workspace.full_path
+            settings,
+            workspace=workspace,
+            working_dir=workspace.full_path,
         )
         asim_docker_vols.update(
             {
@@ -301,9 +354,7 @@ class ActivitysimCompileRunner(GenericRunner):
             os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
         )
 
-        all_skims_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        all_skims_path = asim_runtime_zarr_path(workspace)
 
         asim_cmd = self.get_base_asim_cmd(
             settings, household_sample_size=2500, num_processes=1
@@ -332,9 +383,6 @@ class ActivitysimCompileRunner(GenericRunner):
             environment=container_environment,
             output_paths=[all_skims_path],
             lineage_mode="none",
-            before_direct_fallback=lambda: _cleanup_activitysim_compile_artifacts(
-                workspace
-            ),
         )
 
         if not success:
@@ -399,16 +447,45 @@ class ActivitysimRunner(GenericRunner):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this runner expects from the workflow.
+        Declare the input paths/artifacts this runner expects without disk checks.
         """
-        zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
-        return {
-            "zarr_skims": zarr_path if os.path.exists(zarr_path) else None,
-        }
+        del state
+        inputs: Dict[str, Any] = dict(asim_staged_input_paths(workspace))
+        inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
+        cache_dir = asim_sharrow_cache_dir(workspace)
+        inputs[ASIM_SHARROW_CACHE_DIR] = (
+            cache_dir if persist_sharrow_cache_enabled(settings) else None
+        )
+        return inputs
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
+        """
+        inputs = ActivitysimRunner.declared_expected_inputs(settings, state, workspace)
+        inputs[ZARR_SKIMS] = (
+            inputs[ZARR_SKIMS]
+            if inputs.get(ZARR_SKIMS) and os.path.exists(inputs[ZARR_SKIMS])
+            else None
+        )
+        cache_dir = inputs.get(ASIM_SHARROW_CACHE_DIR)
+        inputs[ASIM_SHARROW_CACHE_DIR] = (
+            cache_dir if cache_dir and _dir_contains_files(cache_dir) else None
+        )
+        return inputs
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
+    ) -> Dict[str, Any]:
+        return ActivitysimRunner.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -421,11 +498,16 @@ class ActivitysimRunner(GenericRunner):
         -----
         Output keys
             - ``asim_output_dir``: ActivitySim output directory for the run.
+            - required ``*_asim_out`` keys: Canonical final_pipeline parquet
+              outputs for the stable ActivitySim handoff surface.
         Related docs
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        return {"asim_output_dir": workspace.get_asim_output_dir()}
+        del settings, state
+        outputs: Dict[str, Any] = {"asim_output_dir": workspace.get_asim_output_dir()}
+        outputs.update(asim_required_run_output_paths(workspace))
+        return outputs
 
     def __init__(
         self,
@@ -524,11 +606,41 @@ class ActivitysimRunner(GenericRunner):
         return additional_args
 
     @staticmethod
-    def get_asim_docker_vols(settings: PilatesConfig, working_dir=None):
+    def get_asim_docker_vols(
+        settings: PilatesConfig,
+        working_dir=None,
+        *,
+        workspace: Optional[Workspace] = None,
+    ):
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
-        if working_dir is not None:
+        runtime_cache_dir = None
+        if workspace is not None:
+            asim_local_mutable_data_folder = os.path.abspath(
+                workspace.get_asim_mutable_data_dir()
+            )
+            asim_local_output_folder = os.path.abspath(workspace.get_asim_output_dir())
+            asim_local_configs_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    settings.activitysim.main_configs_dir,
+                )
+            )
+            asim_local_configs_compile_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    "configs_sh_compile",
+                )
+            )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    workspace.get_asim_mutable_configs_dir(),
+                    "configs_mp",
+                )
+            )
+            runtime_cache_dir = os.path.abspath(workspace.get_asim_runtime_cache_dir())
+        elif working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
                 os.path.join(
                     working_dir, settings.activitysim.local_mutable_data_folder
@@ -591,6 +703,10 @@ class ActivitysimRunner(GenericRunner):
             asim_remote_workdir, "configs_sh_compile"
         )
         asim_remote_configs_mp_folder = os.path.join(asim_remote_workdir, "configs_mp")
+        asim_remote_runtime_cache_folder = os.path.join(
+            asim_remote_output_folder,
+            "cache",
+        )
         asim_docker_vols = {
             asim_local_mutable_data_folder: {
                 "bind": asim_remote_input_folder,
@@ -610,6 +726,14 @@ class ActivitysimRunner(GenericRunner):
                 "mode": "rw",
             },
         }
+        default_runtime_cache_dir = os.path.abspath(
+            os.path.join(asim_local_output_folder, "cache")
+        )
+        if runtime_cache_dir and runtime_cache_dir != default_runtime_cache_dir:
+            asim_docker_vols[runtime_cache_dir] = {
+                "bind": asim_remote_runtime_cache_folder,
+                "mode": "rw",
+            }
         return asim_docker_vols
 
     def _parse_year_iteration_from_short_name(self, short_name: str) -> Tuple[int, int]:
@@ -659,7 +783,9 @@ class ActivitysimRunner(GenericRunner):
         client = None  # Handled by Consist
 
         asim_docker_vols = self.get_asim_docker_vols(
-            settings, working_dir=workspace.full_path
+            settings,
+            workspace=workspace,
+            working_dir=workspace.full_path,
         )
 
         asim_docker_vols.update(
@@ -673,9 +799,7 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
-        all_skims_path = os.path.join(
-            workspace.get_asim_output_dir(), "cache", "skims.zarr"
-        )
+        all_skims_path = asim_runtime_zarr_path(workspace)
 
         asim_local_output_folder = os.path.abspath(
             os.path.join(workspace.full_path, settings.activitysim.local_output_folder)

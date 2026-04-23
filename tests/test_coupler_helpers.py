@@ -1,6 +1,12 @@
 import pytest
+from types import SimpleNamespace
 
 from pilates.utils import coupler_helpers
+
+
+class NoopArtifact:
+    def __init__(self) -> None:
+        self.id = "noop"
 
 
 class CouplerWithSetFromArtifact:
@@ -71,8 +77,196 @@ def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> Non
     assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
 
 
-def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatch) -> None:
+def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() -> None:
+    coupler = CouplerWithNamespaceView()
+    artifact = SimpleNamespace(id="artifact-1")
+
+    coupler_helpers.set_coupler_from_artifact(
+        coupler,
+        "usim_h5_updated",
+        artifact,
+        fallback="/tmp/path.h5",
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
+def test_log_and_set_output_publishes_plain_path_without_active_run(monkeypatch) -> None:
     coupler = CouplerWithSetOnly()
+    logged_meta = {}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert logged_meta["meta"]["enabled"] is False
+    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
+    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    archived = []
+    artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: artifact,
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="linkstats_warmstart",
+        path="/tmp/linkstats.parquet",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert archived == [("linkstats_warmstart", "/tmp/linkstats.parquet")]
+    assert ("set_from_artifact", "linkstats_warmstart", artifact) in coupler.calls
+
+
+def test_log_and_set_output_reuses_matching_current_run_artifact(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    artifact = SimpleNamespace(key="usim_datastore_h5", container_uri="/tmp/path.h5")
+    tracker = SimpleNamespace(current_consist=SimpleNamespace(outputs=[artifact]))
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(coupler_helpers.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: pytest.fail("should not log duplicate output"),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
+def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
+    monkeypatch,
+) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    container_artifact = object()
+    table_artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: (container_artifact, [table_artifact]),
+    )
+
+    coupler_helpers.log_and_set_output(
+        key="usim_h5_updated",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [
+        ("set_from_artifact", "usim_datastore_h5", container_artifact)
+    ]
+
+
+def test_log_and_set_input_publishes_plain_path_without_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetOnly()
+    logged_meta = {}
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **kwargs: logged_meta.update(kwargs) or NoopArtifact(),
+    )
+
+    coupler_helpers.log_and_set_input(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert logged_meta["meta"]["enabled"] is False
+    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_and_set_input_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+    coupler = CouplerWithSetFromArtifact()
+    artifact = object()
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: artifact,
+    )
+
+    coupler_helpers.log_and_set_input(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+        coupler=coupler,
+    )
+
+    assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
+
+
+def test_log_output_only_logs_and_enqueues_archive_with_active_run(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
+
+
+def test_log_output_only_logs_and_enqueues_archive_without_active_run(monkeypatch) -> None:
     logged = {"called": False}
     archived = []
 
@@ -88,21 +282,19 @@ def test_log_and_set_output_skips_artifact_logging_without_active_run(monkeypatc
         lambda key, path: archived.append((key, path)),
     )
 
-    coupler_helpers.log_and_set_output(
+    coupler_helpers.log_output_only(
         key="usim_datastore_h5",
         path="/tmp/path.h5",
         description="test",
-        coupler=coupler,
     )
 
-    assert logged["called"] is False
+    assert logged["called"] is True
     assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch) -> None:
-    coupler = CouplerWithSetOnly()
+def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
     logged = {"called": False}
+    archived = []
 
     monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: None)
     monkeypatch.setattr(
@@ -110,13 +302,43 @@ def test_log_and_set_input_skips_artifact_logging_without_active_run(monkeypatch
         "_log_with_optional_h5_container",
         lambda **_kwargs: logged.__setitem__("called", True),
     )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
 
-    coupler_helpers.log_and_set_input(
+    coupler_helpers.log_input_only(
         key="usim_datastore_h5",
         path="/tmp/path.h5",
         description="test",
-        coupler=coupler,
     )
 
-    assert logged["called"] is False
-    assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
+    assert logged["called"] is True
+    assert archived == []
+
+
+def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    coupler_helpers.log_input_only(
+        key="usim_datastore_h5",
+        path="/tmp/path.h5",
+        description="test",
+    )
+
+    assert logged["called"] is True
+    assert archived == []

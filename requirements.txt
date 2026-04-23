@@ -52,11 +52,12 @@ packaging>=21.0
 
 # Database packages
 duckdb
+sqlalchemy
 sqlmodel
-dlt
 pyhocon==0.3.61
 
-# Provenance tracking
+# Workflow and provenance tracking
+consist>=0.1.2
 openlineage-python
 attrs>=20.0
 httpx>=0.27.0

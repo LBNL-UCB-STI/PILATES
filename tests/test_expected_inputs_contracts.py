@@ -79,7 +79,7 @@ def test_beam_expected_inputs_resolve_optional_zarr(tmp_path):
 
     inputs = BeamRunner.expected_inputs(settings, state, workspace)
     assert inputs["beam_mutable_data_dir"] == workspace.get_beam_mutable_data_dir()
-    assert inputs["zarr_skims"] is None
+    assert "zarr_skims" not in inputs
 
     zarr_path = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
     with open(zarr_path, "w") as handle:

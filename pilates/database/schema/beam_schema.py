@@ -13,41 +13,323 @@ from sqlalchemy import (
     String,
 )
 from sqlmodel import Field, SQLModel
-from pilates.database.schema.activitysim_schema import (
-    HouseholdsAsimOut,
-    PersonsAsimOut,
-)
-
-
-class HouseholdsBeamIn(HouseholdsAsimOut, table=True):
+class HouseholdsBeamIn(SQLModel, table=True):
     __tablename__ = "HouseholdsBeamIn"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["household_id"],
-            ["HouseholdsAsimOut.household_id"],
-        ),
-        {"extend_existing": True},
-    )
+    __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
+    household_id: Optional[int] = Field(
+        default=None,
+        description="Household identifier used to relate persons to households.",
+        sa_column=Column(
+            "household_id",
+            BigInteger,
+            ForeignKey("HouseholdsAsimOut.household_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    block_id: Optional[int] = Field(
+        default=None,
+        description="Census block identifier for household location.",
+        sa_column=Column("block_id", BigInteger, nullable=True, index=True),
+    )
+    home_zone_id: Optional[int] = Field(
+        default=None,
+        description="Home TAZ for the household.",
+        sa_column=Column("home_zone_id", BigInteger, nullable=True, index=True),
+    )
+    income: Optional[float] = Field(
+        default=None, sa_column=Column("income", Float, nullable=True)
+    )
+    hhsize: Optional[int] = Field(
+        default=None, sa_column=Column("hhsize", BigInteger, nullable=True)
+    )
+    hht: Optional[int] = Field(
+        default=None, sa_column=Column("HHT", BigInteger, nullable=True)
+    )
+    cars: Optional[int] = Field(
+        default=None, sa_column=Column("cars", BigInteger, nullable=True)
+    )
+    num_workers: Optional[float] = Field(
+        default=None, sa_column=Column("num_workers", Float, nullable=True)
+    )
+    sample_rate: Optional[float] = Field(
+        default=None, sa_column=Column("sample_rate", Float, nullable=True)
+    )
+    income_in_thousands: Optional[float] = Field(
+        default=None,
+        sa_column=Column("income_in_thousands", Float, nullable=True),
+    )
+    income_segment: Optional[int] = Field(
+        default=None, sa_column=Column("income_segment", BigInteger, nullable=True)
+    )
+    median_value_of_time: Optional[float] = Field(
+        default=None,
+        sa_column=Column("median_value_of_time", Float, nullable=True),
+    )
+    hh_value_of_time: Optional[float] = Field(
+        default=None, sa_column=Column("hh_value_of_time", Float, nullable=True)
+    )
+    num_non_workers: Optional[float] = Field(
+        default=None, sa_column=Column("num_non_workers", Float, nullable=True)
+    )
+    num_drivers: Optional[int] = Field(
+        default=None, sa_column=Column("num_drivers", BigInteger, nullable=True)
+    )
+    num_adults: Optional[int] = Field(
+        default=None, sa_column=Column("num_adults", BigInteger, nullable=True)
+    )
+    num_children: Optional[int] = Field(
+        default=None, sa_column=Column("num_children", BigInteger, nullable=True)
+    )
+    num_young_children: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_young_children", BigInteger, nullable=True),
+    )
+    num_children_5_to_15: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_children_5_to_15", BigInteger, nullable=True),
+    )
+    num_children_16_to_17: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_children_16_to_17", BigInteger, nullable=True),
+    )
+    num_college_age: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_college_age", BigInteger, nullable=True),
+    )
+    num_young_adults: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_young_adults", BigInteger, nullable=True),
+    )
+    non_family: Optional[bool] = Field(
+        default=None, sa_column=Column("non_family", Boolean, nullable=True)
+    )
+    family: Optional[bool] = Field(
+        default=None, sa_column=Column("family", Boolean, nullable=True)
+    )
+    home_is_urban: Optional[bool] = Field(
+        default=None, sa_column=Column("home_is_urban", Boolean, nullable=True)
+    )
+    home_is_rural: Optional[bool] = Field(
+        default=None, sa_column=Column("home_is_rural", Boolean, nullable=True)
+    )
+    hh_work_auto_savings_ratio: Optional[float] = Field(
+        default=None,
+        sa_column=Column("hh_work_auto_savings_ratio", Float, nullable=True),
+    )
+    num_under16_not_at_school: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_under16_not_at_school", BigInteger, nullable=True),
+    )
+    num_travel_active: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active", BigInteger, nullable=True),
+    )
+    num_travel_active_adults: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_adults", BigInteger, nullable=True),
+    )
+    num_travel_active_preschoolers: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_preschoolers", BigInteger, nullable=True),
+    )
+    num_travel_active_children: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_children", BigInteger, nullable=True),
+    )
+    num_travel_active_non_preschoolers: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            "num_travel_active_non_preschoolers", BigInteger, nullable=True
+        ),
+    )
+    participates_in_jtf_model: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("participates_in_jtf_model", Boolean, nullable=True),
+    )
+    joint_tour_frequency: Optional[str] = Field(
+        default=None, sa_column=Column("joint_tour_frequency", String, nullable=True)
+    )
+    num_hh_joint_tours: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_hh_joint_tours", BigInteger, nullable=True),
+    )
 
-class PersonsBeamIn(PersonsAsimOut, table=True):
+
+class PersonsBeamIn(SQLModel, table=True):
     __tablename__ = "PersonsBeamIn"
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["person_id"],
-            ["PersonsAsimOut.person_id"],
-        ),
-        {"extend_existing": True},
-    )
+    __table_args__ = {"extend_existing": True}
     __abstract__ = True
+
+    person_id: Optional[int] = Field(
+        default=None,
+        description="Person identifier unique within the input population.",
+        sa_column=Column(
+            "person_id",
+            BigInteger,
+            ForeignKey("PersonsAsimOut.person_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    household_id: Optional[int] = Field(
+        default=None,
+        description="Household identifier to link persons to households.",
+        sa_column=Column(
+            "household_id",
+            BigInteger,
+            ForeignKey("HouseholdsBeamIn.household_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    age: Optional[int] = Field(
+        default=None, sa_column=Column("age", BigInteger, nullable=True)
+    )
+    pnum: Optional[int] = Field(
+        default=None,
+        description="Person number within household (PNUM).",
+        sa_column=Column("PNUM", BigInteger, nullable=True),
+    )
+    sex: Optional[int] = Field(
+        default=None, sa_column=Column("sex", BigInteger, nullable=True)
+    )
+    pemploy: Optional[int] = Field(
+        default=None, sa_column=Column("pemploy", BigInteger, nullable=True)
+    )
+    pstudent: Optional[int] = Field(
+        default=None, sa_column=Column("pstudent", BigInteger, nullable=True)
+    )
+    ptype: Optional[int] = Field(
+        default=None, sa_column=Column("ptype", BigInteger, nullable=True)
+    )
+    home_x: Optional[float] = Field(
+        default=None, sa_column=Column("home_x", Float, nullable=True)
+    )
+    home_y: Optional[float] = Field(
+        default=None, sa_column=Column("home_y", Float, nullable=True)
+    )
+    age_16_to_19: Optional[bool] = Field(
+        default=None, sa_column=Column("age_16_to_19", Boolean, nullable=True)
+    )
+    age_16_p: Optional[bool] = Field(
+        default=None, sa_column=Column("age_16_p", Boolean, nullable=True)
+    )
+    adult: Optional[bool] = Field(
+        default=None, sa_column=Column("adult", Boolean, nullable=True)
+    )
+    male: Optional[bool] = Field(
+        default=None, sa_column=Column("male", Boolean, nullable=True)
+    )
+    female: Optional[bool] = Field(
+        default=None, sa_column=Column("female", Boolean, nullable=True)
+    )
+    has_non_worker: Optional[bool] = Field(
+        default=None, sa_column=Column("has_non_worker", Boolean, nullable=True)
+    )
+    has_retiree: Optional[bool] = Field(
+        default=None, sa_column=Column("has_retiree", Boolean, nullable=True)
+    )
+    has_preschool_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_preschool_kid", Boolean, nullable=True)
+    )
+    has_driving_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_driving_kid", Boolean, nullable=True)
+    )
+    has_school_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_school_kid", Boolean, nullable=True)
+    )
+    has_full_time: Optional[bool] = Field(
+        default=None, sa_column=Column("has_full_time", Boolean, nullable=True)
+    )
+    has_part_time: Optional[bool] = Field(
+        default=None, sa_column=Column("has_part_time", Boolean, nullable=True)
+    )
+    has_university: Optional[bool] = Field(
+        default=None, sa_column=Column("has_university", Boolean, nullable=True)
+    )
+    student_is_employed: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("student_is_employed", Boolean, nullable=True),
+    )
+    nonstudent_to_school: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("nonstudent_to_school", Boolean, nullable=True),
+    )
+    is_student: Optional[bool] = Field(
+        default=None, sa_column=Column("is_student", Boolean, nullable=True)
+    )
+    is_gradeschool: Optional[bool] = Field(
+        default=None, sa_column=Column("is_gradeschool", Boolean, nullable=True)
+    )
+    is_highschool: Optional[bool] = Field(
+        default=None, sa_column=Column("is_highschool", Boolean, nullable=True)
+    )
+    is_university: Optional[bool] = Field(
+        default=None, sa_column=Column("is_university", Boolean, nullable=True)
+    )
+    school_segment: Optional[int] = Field(
+        default=None, sa_column=Column("school_segment", BigInteger, nullable=True)
+    )
+    is_worker: Optional[bool] = Field(
+        default=None, sa_column=Column("is_worker", Boolean, nullable=True)
+    )
+    home_zone_id: Optional[int] = Field(
+        default=None,
+        description="Home TAZ for the person.",
+        sa_column=Column("home_zone_id", BigInteger, nullable=True, index=True),
+    )
+    value_of_time: Optional[float] = Field(
+        default=None, sa_column=Column("value_of_time", Float, nullable=True)
+    )
+    school_zone_id: Optional[int] = Field(
+        default=None, sa_column=Column("school_zone_id", BigInteger, nullable=True)
+    )
+    workplace_zone_id: Optional[int] = Field(
+        default=None, sa_column=Column("workplace_zone_id", BigInteger, nullable=True)
+    )
+    distance_to_work: Optional[float] = Field(
+        default=None, sa_column=Column("distance_to_work", Float, nullable=True)
+    )
+    roundtrip_auto_time_to_work: Optional[float] = Field(
+        default=None,
+        sa_column=Column("roundtrip_auto_time_to_work", Float, nullable=True),
+    )
+    work_from_home: Optional[bool] = Field(
+        default=None, sa_column=Column("work_from_home", Boolean, nullable=True)
+    )
+    transit_pass_ownership: Optional[int] = Field(
+        default=None,
+        sa_column=Column("transit_pass_ownership", BigInteger, nullable=True),
+    )
+    transit_pass_subsidy: Optional[float] = Field(
+        default=None, sa_column=Column("transit_pass_subsidy", Float, nullable=True)
+    )
+    parking_cost: Optional[float] = Field(
+        default=None, sa_column=Column("parking_cost", Float, nullable=True)
+    )
+    has_electric_bike: Optional[bool] = Field(
+        default=None, sa_column=Column("has_electric_bike", Boolean, nullable=True)
+    )
+    has_carshare: Optional[bool] = Field(
+        default=None, sa_column=Column("has_carshare", Boolean, nullable=True)
+    )
+    has_rideshare: Optional[bool] = Field(
+        default=None, sa_column=Column("has_rideshare", Boolean, nullable=True)
+    )
+    free_parking_at_work: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("free_parking_at_work", Boolean, nullable=True),
+    )
 
 
 class VehiclesBeamIn(SQLModel, table=True):
     __tablename__ = "VehiclesBeamIn"
     __table_args__ = (
         ForeignKeyConstraint(
-            ["household_id", "vehicle_id", "year"],
+            ["household_id", "source_vehicle_id", "year"],
             [
                 "VehiclesAtlasOut.household_id",
                 "VehiclesAtlasOut.vehicle_id",
@@ -70,12 +352,17 @@ class VehiclesBeamIn(SQLModel, table=True):
             index=True,
         ),
     )
-    vehicle_id: Optional[int] = Field(
+    vehicle_id: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier within the household.",
+        description="BEAM-facing vehicle identifier.",
         sa_column=Column(
-            "vehicle_id", BigInteger, primary_key=True, nullable=True, index=True
+            "vehicle_id", String, primary_key=True, nullable=True, index=True
         ),
+    )
+    source_vehicle_id: Optional[int] = Field(
+        default=None,
+        description="Original ATLAS vehicle identifier preserved for lineage and foreign-key joins.",
+        sa_column=Column("sourceVehicleId", BigInteger, nullable=True, index=True),
     )
     bodytype: Optional[str] = Field(
         default=None,
@@ -681,8 +968,19 @@ class BeamEventsLeavingParkingEvent(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier involved in the event.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -841,7 +1139,10 @@ class BeamEventsModeChoice(SQLModel, table=True):
     )
     legvehicleids: Optional[str] = Field(
         default=None,
-        description="Serialized leg vehicle identifiers.",
+        description=(
+            "Serialized BEAM leg vehicle references. Entries may contain "
+            "stringified household vehicle ids or other fleet/transit vehicle ids."
+        ),
         sa_column=Column("legVehicleIds", String, nullable=True),
     )
 
@@ -885,8 +1186,19 @@ class BeamEventsParkingEvent(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier involved in the event.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -987,16 +1299,21 @@ class BeamEventsPathTraversal(SQLModel, table=True):
         description="Start Y coordinate.",
         sa_column=Column("startY", Float, nullable=True),
     )
-    vehicle: Optional[int] = Field(
+    vehicle: Optional[str] = Field(
         default=None,
-        description="Optional vehicle identifier when it maps to VehiclesBeamIn.",
-        sa_column=Column(
-            "vehicle",
-            BigInteger,
-            ForeignKey("VehiclesBeamIn.vehicle_id"),
-            nullable=True,
-            index=True,
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
         ),
+        sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the traversal refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     endx: Optional[float] = Field(
         default=None,
@@ -1100,7 +1417,7 @@ class BeamEventsPathTraversal(SQLModel, table=True):
     )
     vehicletype: Optional[str] = Field(
         default=None,
-        description="Vehicle type classification.",
+        description="BEAM-reported vehicle type label for the traversal.",
         sa_column=Column("vehicleType", String, nullable=True),
     )
     emissions: Optional[str] = Field(
@@ -1192,8 +1509,19 @@ class BeamEventsPersonEntersVehicle(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier entered by the person.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,
@@ -1236,8 +1564,19 @@ class BeamEventsPersonLeavesVehicle(SQLModel, table=True):
     )
     vehicle: Optional[str] = Field(
         default=None,
-        description="Vehicle identifier exited by the person.",
+        description=(
+            "Raw BEAM vehicle reference. This may be a stringified household "
+            "vehicle id or a non-household fleet/transit identifier."
+        ),
         sa_column=Column("vehicle", String, nullable=True, index=True),
+    )
+    vehicle_id_int: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional normalized integer vehicle id parsed from the raw BEAM "
+            "vehicle reference when the row refers to a household vehicle."
+        ),
+        sa_column=Column("vehicle_id_int", BigInteger, nullable=True, index=True),
     )
     time: Optional[float] = Field(
         default=None,

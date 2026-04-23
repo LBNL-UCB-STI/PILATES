@@ -2,7 +2,6 @@ import os
 from types import SimpleNamespace
 
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.utils.input_validation import resolve_input_path
 from pilates.workspace import Workspace
 
 
@@ -50,7 +49,6 @@ def test_artifact_path_resolution(tmp_path):
         uri = "s3://bucket/path"
         path = "relative/path"
 
-    assert resolve_input_path(Artifact()) == "relative/path"
     assert artifact_to_path(Artifact(), workspace) == os.path.join(
         str(tmp_path), "relative/path"
     )

@@ -13,6 +13,7 @@ from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
+from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
 
 if TYPE_CHECKING:
@@ -108,7 +109,7 @@ def _restore_missing_mutable_urbansim_supporting_inputs(
     required_files: Dict[str, Tuple[Path, Path]] = {
         "omx_skims": (
             mutable_dir / f"skims_mpo_{region_id}.omx",
-            beam_inputs_root / region / settings.shared.skims.fname,
+            beam_inputs_root / region / get_beam_omx_skims_name(settings),
         ),
         "hh_size": (
             mutable_dir / f"hsize_ct_{region_id}.csv",
@@ -299,11 +300,31 @@ class UrbansimPreprocessor(GenericPreprocessor):
     """
 
     @staticmethod
-    def expected_inputs(
+    def declared_expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Any]:
         """
-        Declare the input paths/artifacts this preprocessor expects from the workflow.
+        Declare the input paths/artifacts this preprocessor expects without disk checks.
+        """
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        usim_input_fname = settings.urbansim.input_file_template.format(
+            region_id=region_id
+        )
+        return {
+            "usim_source_data_dir": settings.urbansim.local_data_input_folder,
+            "usim_mutable_data_dir": workspace.get_usim_mutable_data_dir(),
+            "usim_datastore_h5": os.path.join(
+                workspace.get_usim_mutable_data_dir(), usim_input_fname
+            ),
+        }
+
+    @staticmethod
+    def runtime_expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        """
+        Declare runtime expected inputs, including filesystem presence checks.
         """
         project_root = find_project_root(start_path=os.path.dirname(__file__))
         if not project_root:
@@ -328,6 +349,12 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 usim_input_path if os.path.exists(usim_input_path) else None
             ),
         }
+
+    @staticmethod
+    def expected_inputs(
+        settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        return UrbansimPreprocessor.runtime_expected_inputs(settings, state, workspace)
 
     @staticmethod
     def expected_outputs(
@@ -418,7 +445,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             f"[UrbansimPreprocessor] Copying input urbansim data from {src} to {dest}"
         )
         if os.path.exists(src):
-            shutil.copyfile(src, dest)
+            shutil.copy2(src, dest)
         else:
             # Create an empty HDF5 file if the source does not exist
             with pd.HDFStore(dest, "w"):
@@ -444,7 +471,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
         beam_inputs_root = str(_beam_input_root(settings))
         skims_src = os.path.abspath(
             os.path.join(
-                beam_inputs_root, settings.run.region, settings.shared.skims.fname
+                beam_inputs_root,
+                settings.run.region,
+                get_beam_omx_skims_name(settings),
             )
         )
         skims_target = os.path.join(output_dir, "skims_mpo_{0}.omx".format(region_id))
@@ -456,7 +485,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 description="Raw BEAM OD skims",
             )
         )
-        shutil.copyfile(skims_src, skims_target)
+        shutil.copy2(skims_src, skims_target)
 
         outputs.append(
             FileRecord(
@@ -484,7 +513,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                 logger.info(
                     f"[UrbansimPreprocessor] Copying input urbansim file from {src} to {dest}"
                 )
-                shutil.copyfile(src, dest)
+                shutil.copy2(src, dest)
                 inputs.append(
                     FileRecord(
                         file_path=src,
@@ -585,8 +614,13 @@ class UrbansimPreprocessor(GenericPreprocessor):
                                 "legacy BEAM skims discovery.",
                                 final_skims_omx,
                             )
-                        if self.state.run_info_path and os.path.exists(
-                            self.state.run_info_path
+                        is_restart_run = getattr(self.state, "is_restart_run", None)
+                        if is_restart_run is None:
+                            is_restart_run = bool(self.state.run_info_path)
+                        if (
+                            is_restart_run
+                            and self.state.run_info_path
+                            and os.path.exists(self.state.run_info_path)
                         ):
                             logger.info(
                                 f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
@@ -601,7 +635,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
                         source_skims_path = os.path.join(
                             beam_mutable_data_dir,
                             settings.run.region,
-                            settings.shared.skims.fname,
+                            get_beam_omx_skims_name(settings),
                         )
 
                     region_id = settings.urbansim.region_mappings[

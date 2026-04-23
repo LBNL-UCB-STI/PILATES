@@ -2,17 +2,27 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
+from typing import Any, Callable, Dict, Mapping, Optional
 
 import pandas as pd
+from consist.types import H5ChildSpec
 
-from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
+from pilates.atlas.postprocessor import AtlasPostprocessor
+from pilates.atlas.preprocessor import (
+    _resolve_atlas_h5_table_key,
+    _restore_restart_atlas_year_inputs,
+)
+from pilates.atlas.preprocessor import AtlasPreprocessor
+from pilates.atlas.runner import AtlasRunner
 from pilates.config.models import PilatesConfig
-from pilates.generic.model_factory import ModelFactory
-from pilates.utils import consist_runtime as cr
+from pilates.urbansim.postprocessor import UrbansimPostprocessor
+from pilates.urbansim.preprocessor import UrbansimPreprocessor
+from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
-from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -28,33 +38,32 @@ from .shared import (
     AtlasPreprocessOutputs,
     AtlasRunOutputs,
     CouplerProtocol,
+    StandardStepSpec,
     StepOutputsHolder,
     UrbanSimPostprocessOutputs,
     UrbanSimPreprocessOutputs,
     UrbanSimRunOutputs,
     WorkflowState,
     _atlas_artifact_facet_meta,
-    _decorate_step_with_consist,
-    _declared_outputs_from_class,
-    _log_named_h5_tables,
+    build_standard_step,
     _log_step_records,
-    _schema_outputs_from_class,
-    _upstream_outputs_view,
+    make_default_recoverer,
     _urbansim_output_facet_meta,
     log_and_set_output,
     log_input_only,
     log_output_only,
     logger,
+    recovered_cached_paths,
     warm_start_activities,
 )
-
-StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
 
 
 def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     filtered = dict(kwargs)
     filtered.pop("coupler", None)
     filtered.pop("context", None)
+    if "omx_skims" in filtered and "final_skims_omx" not in filtered:
+        filtered["final_skims_omx"] = filtered.pop("omx_skims")
     return filtered
 
 
@@ -107,183 +116,45 @@ def _root_h5_table_descriptions(path: str, *, action: str) -> Dict[str, str]:
     return descriptions
 
 
-def _make_typed_step_function(
+def _resolve_atlas_postprocess_households_table_path(
     *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., StepOutputsT],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
-    output_logger: Optional[Callable[..., None]] = None,
-    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
-) -> Callable[..., None]:
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        logger.debug("Starting %s %s step", model_name, phase)
-        factory = ModelFactory()
-        component = component_getter(factory, state)
+    path: str,
+    forecast_year: int,
+    is_start_year: bool,
+) -> str:
+    """
+    Resolve the households table path ATLAS postprocess will actually touch.
 
-        extra_kwargs: Dict[str, Any] = {}
-        if input_logger is not None:
-            extra_kwargs = (
-                input_logger(settings, state, workspace, outputs_holder) or {}
-            )
-
-        step_outputs = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if not isinstance(step_outputs, outputs_class):
-            raise TypeError(
-                f"{model_name}_{phase} must return {outputs_class.__name__}, "
-                f"got {type(step_outputs).__name__}"
-            )
-
-        validation_context = ValidationContext(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name=f"{model_name}_{phase}",
-            upstream_outputs=_upstream_outputs_view(
-                outputs_holder, current_step_name=f"{model_name}_{phase}"
-            ),
-        )
-        step_outputs.validate(context=validation_context)
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-        logger.info("%s %s completed successfully", model_name, phase)
-
-    if output_logger is not None:
-        setattr(
-            _step_func,
-            "__pilates_output_replayer__",
-            lambda outputs, settings, state, workspace, holder: output_logger(
-                outputs, settings, state, workspace, holder
-            ),
-        )
-    if output_recoverer is not None:
-        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=f"{model_name}_{phase}",
-        description=f"{model_name} {phase} workflow step",
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=_declared_outputs_from_class(outputs_class),
-        tags=[model_name, phase],
-    )
-
-
-def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    if not run_id:
-        return {}
-    tracker = cr.current_tracker()
-    if tracker is None:
-        return {}
-    get_run_outputs = getattr(tracker, "get_run_outputs", None)
-    if not callable(get_run_outputs):
-        return {}
+    Fall back to the legacy default when the file is missing or unreadable so
+    logging remains best-effort and does not block execution.
+    """
+    default_path = "/households" if is_start_year else f"/{forecast_year}/households"
     try:
-        return get_run_outputs(run_id) or {}
+        with pd.HDFStore(path, mode="r") as store:
+            resolved = _resolve_atlas_h5_table_key(
+                store,
+                year=forecast_year,
+                table="households",
+                is_start_year=is_start_year,
+            )
     except Exception:
-        logger.debug(
-            "Failed loading cached run outputs for run_id=%s", run_id, exc_info=True
-        )
-        return {}
+        return default_path
+
+    return resolved if str(resolved).startswith("/") else f"/{resolved}"
 
 
-def _recovered_cached_paths(
-    *,
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-    workspace: Workspace,
-) -> Dict[str, Path]:
-    merged: Dict[str, Any] = {}
-    if cached_outputs:
-        for raw_key, value in cached_outputs.items():
-            if value is None:
-                continue
-            local_key = str(raw_key).split("/", 1)[-1]
-            merged[resolve_artifact_key(local_key)] = value
-    for raw_key, value in _resolve_cached_run_outputs(run_id).items():
-        if value is None:
-            continue
-        local_key = str(raw_key).split("/", 1)[-1]
-        merged[resolve_artifact_key(local_key)] = value
-    recovered: Dict[str, Path] = {}
-    for key, value in merged.items():
-        path = artifact_to_existing_path(
-            value,
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-        if path is not None:
-            recovered[key] = Path(path)
-    return recovered
-
-
-def _recover_urbansim_run_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[UrbanSimRunOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-    )
-    usim_datastore_h5 = recovered_paths.get(
-        USIM_FORECAST_OUTPUT
-    ) or recovered_paths.get(USIM_DATASTORE_H5)
-    if usim_datastore_h5 is None:
-        return None
-    return UrbanSimRunOutputs(
-        usim_datastore_h5=usim_datastore_h5,
-        raw_outputs=recovered_paths,
+def _urbansim_run_recovered_datastore(
+    recovered_paths: Mapping[str, Path], _state: WorkflowState
+) -> Optional[Path]:
+    return recovered_paths.get(USIM_FORECAST_OUTPUT) or recovered_paths.get(
+        USIM_DATASTORE_H5
     )
 
 
-def _recover_urbansim_postprocess_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[UrbanSimPostprocessOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-    )
-    usim_datastore_h5 = next(
+def _urbansim_postprocess_recovered_datastore(
+    recovered_paths: Mapping[str, Path], _state: WorkflowState
+) -> Optional[Path]:
+    return next(
         (
             path
             for key, path in recovered_paths.items()
@@ -291,44 +162,69 @@ def _recover_urbansim_postprocess_outputs(
         ),
         None,
     ) or recovered_paths.get(USIM_DATASTORE_H5)
-    if usim_datastore_h5 is None:
-        return None
-    return UrbanSimPostprocessOutputs(
-        usim_datastore_h5=usim_datastore_h5,
-        processed_outputs=recovered_paths,
-    )
 
 
-def _recover_atlas_run_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[AtlasRunOutputs]:
-    del settings, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-    )
+def _atlas_run_required_keys(
+    state: WorkflowState, _recovered_paths: Mapping[str, Path]
+) -> Sequence[str]:
     output_year = getattr(state, "forecast_year", None)
     if output_year is None:
-        return None
-    required_keys = (
+        return ("__missing_forecast_year__",)
+    return (
         f"householdv_{output_year}",
         f"vehicles_{output_year}",
     )
-    if any(key not in recovered_paths for key in required_keys):
-        return None
-    return AtlasRunOutputs(
-        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
-        raw_outputs=recovered_paths,
-    )
+
+
+_recover_urbansim_preprocess_outputs = make_default_recoverer(
+    outputs_class=UrbanSimPreprocessOutputs,
+    mapping_field="prepared_inputs",
+    dir_field="usim_mutable_data_dir",
+    dir_getter=lambda workspace: workspace.get_usim_mutable_data_dir(),
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_urbansim_run_outputs = make_default_recoverer(
+    outputs_class=UrbanSimRunOutputs,
+    mapping_field="raw_outputs",
+    primary_path_field="usim_datastore_h5",
+    primary_path_resolver=_urbansim_run_recovered_datastore,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_urbansim_postprocess_outputs = make_default_recoverer(
+    outputs_class=UrbanSimPostprocessOutputs,
+    mapping_field="processed_outputs",
+    primary_path_field="usim_datastore_h5",
+    primary_path_resolver=_urbansim_postprocess_recovered_datastore,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_atlas_preprocess_outputs = make_default_recoverer(
+    outputs_class=AtlasPreprocessOutputs,
+    mapping_field="prepared_inputs",
+    dir_field="atlas_mutable_input_dir",
+    dir_getter=lambda workspace: workspace.get_atlas_mutable_input_dir(),
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
+
+
+_recover_atlas_run_outputs = make_default_recoverer(
+    outputs_class=AtlasRunOutputs,
+    mapping_field="raw_outputs",
+    dir_field="atlas_output_dir",
+    dir_getter=lambda workspace: workspace.get_atlas_output_dir(),
+    required_keys=_atlas_run_required_keys,
+    step_logger=logger,
+    log_context="UrbanSim/ATLAS cached output recovery",
+)
 
 
 def _recover_atlas_postprocess_outputs(
@@ -342,17 +238,40 @@ def _recover_atlas_postprocess_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[AtlasPostprocessOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
+    del coupler, outputs_holder
+    recovered_paths = recovered_cached_paths(
         cached_outputs=cached_outputs,
         run_id=run_id,
         workspace=workspace,
+        step_logger=logger,
+        log_context="UrbanSim/ATLAS cached output recovery",
     )
-    if "atlas_vehicles2_output" not in recovered_paths:
+    expected_outputs = AtlasPostprocessor.expected_outputs(
+        settings, state, workspace
+    )
+    if ATLAS_VEHICLES2_OUTPUT not in recovered_paths:
+        vehicles2_path = artifact_to_existing_path(
+            expected_outputs.get(ATLAS_VEHICLES2_OUTPUT),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if vehicles2_path is not None:
+            recovered_paths[ATLAS_VEHICLES2_OUTPUT] = Path(vehicles2_path)
+    if ATLAS_VEHICLES2_OUTPUT not in recovered_paths:
         return None
-    usim_datastore_h5 = recovered_paths.get(USIM_H5_UPDATED) or recovered_paths.get(
-        USIM_DATASTORE_H5
+    usim_datastore_h5 = (
+        recovered_paths.get(USIM_POPULATION_SOURCE_H5)
+        or recovered_paths.get(USIM_H5_UPDATED)
+        or recovered_paths.get(USIM_DATASTORE_H5)
     )
+    if usim_datastore_h5 is None:
+        candidate_path = artifact_to_existing_path(
+            expected_outputs.get(USIM_POPULATION_SOURCE_H5),
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if candidate_path is not None:
+            usim_datastore_h5 = Path(candidate_path)
     if usim_datastore_h5 is None:
         return None
     return AtlasPostprocessOutputs(
@@ -368,14 +287,10 @@ def _execute_urbansim_preprocess_typed(
     outputs_holder: StepOutputsHolder,
     **kwargs: Any,
 ) -> UrbanSimPreprocessOutputs:
-    filtered_kwargs = _strip_component_runtime_kwargs(kwargs)
-    final_skims_omx = filtered_kwargs.get("final_skims_omx")
-    if final_skims_omx is not None:
-        return preprocessor.preprocess(
-            workspace,
-            final_skims_omx=final_skims_omx,
-        )
-    return preprocessor.preprocess(workspace)
+    return preprocessor.preprocess(
+        workspace,
+        **_strip_component_runtime_kwargs(kwargs),
+    )
 
 
 def _execute_urbansim_run_typed(
@@ -392,6 +307,60 @@ def _execute_urbansim_run_typed(
             "urbansim_run requires UrbanSimPreprocessOutputs from urbansim_preprocess"
         )
     return runner.run(upstream, workspace)
+
+
+def urbansim_run_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return UrbansimRunner.expected_outputs(settings, state, workspace)
+
+
+def urbansim_preprocess_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return UrbansimPreprocessor.expected_outputs(settings, state, workspace)
+
+
+def urbansim_postprocess_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return UrbansimPostprocessor.expected_outputs(settings, state, workspace)
+
+
+def atlas_preprocess_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return AtlasPreprocessor.expected_outputs(settings, state, workspace)
+
+
+def atlas_run_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return AtlasRunner.expected_outputs(settings, state, workspace)
+
+
+def atlas_postprocess_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Dict[str, Any]:
+    return AtlasPostprocessor.expected_outputs(settings, state, workspace)
 
 
 def _execute_urbansim_postprocess_typed(
@@ -420,6 +389,54 @@ def _execute_atlas_preprocess_typed(
         workspace,
         **_strip_component_runtime_kwargs(kwargs),
     )
+
+
+def _rehydrate_restart_atlas_preprocess_state(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> bool:
+    """
+    Restore restart-critical ATLAS year directories for recovered preprocess outputs.
+
+    ``atlas_preprocess`` can now be restored from manifest/cache without rerunning
+    the component. When ``atlas_run`` reruns after that restore, the dynamic ATLAS
+    container still expects the base-year and immediately preceding subyear
+    ``atlas_input/year*`` directories to exist locally. Rehydrate them here so the
+    output replayer makes recovered preprocess state runner-ready.
+    """
+    if not bool(getattr(state, "is_restart_run", False)):
+        return False
+
+    run_info_path = getattr(state, "run_info_path", None)
+    start_year = getattr(state, "start_year", None)
+    atlas_year = getattr(state, "year", getattr(state, "current_year", None))
+    if (
+        not run_info_path
+        or start_year is None
+        or atlas_year is None
+        or not os.path.exists(run_info_path)
+    ):
+        return False
+
+    atlas_input_root = workspace.get_atlas_mutable_input_dir()
+    from pilates.atlas.preprocessor import restart_required_atlas_input_paths
+
+    required_paths = restart_required_atlas_input_paths(
+        atlas_input_root=atlas_input_root,
+        start_year=int(start_year),
+        atlas_year=int(atlas_year),
+    )
+    if all(os.path.exists(path) for path in required_paths.values()):
+        return False
+
+    _restore_restart_atlas_year_inputs(
+        previous_run_dir=os.path.dirname(run_info_path),
+        workspace=workspace,
+        start_year=int(start_year),
+        atlas_year=int(atlas_year),
+    )
+    return True
 
 
 def _execute_atlas_run_typed(
@@ -516,6 +533,7 @@ def make_urbansim_preprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="urbansim_preprocess",
                 **_urbansim_output_facet_meta(short_name, forecast_year=forecast_year),
             )
         usim_data_dir = outputs.usim_mutable_data_dir
@@ -531,6 +549,7 @@ def make_urbansim_preprocess_step(
                 path=str(usim_input_path),
                 description="UrbanSim base datastore for preprocessing",
                 coupler=coupler,
+                step_name="urbansim_preprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
@@ -539,22 +558,28 @@ def make_urbansim_preprocess_step(
                 ),
             )
 
-    return _make_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="preprocess",
-        outputs_class=UrbanSimPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "urbansim", state
+        spec=StandardStepSpec(
+            step_name="urbansim_preprocess",
+            model_name="urbansim",
+            phase="preprocess",
+            outputs_class=UrbanSimPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_preprocess_typed,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_urbansim_preprocess_outputs,
+            output_paths=UrbansimPreprocessor.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        component_executor=_execute_urbansim_preprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
     )
+    return step_func
 
 
 def make_urbansim_run_step(
@@ -597,8 +622,9 @@ def make_urbansim_run_step(
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
-                description=(f"UrbanSim datastore output for year {forecast_year}"),
+                description=(f"UrbanSim forecast datastore output for year {forecast_year}"),
                 coupler=coupler,
+                step_name="urbansim_run",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
@@ -606,21 +632,43 @@ def make_urbansim_run_step(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
+            log_and_set_output(
+                key=USIM_FORECAST_OUTPUT,
+                path=str(outputs.usim_datastore_h5),
+                description=(
+                    f"UrbanSim forecast datastore output for year {forecast_year}"
+                ),
+                coupler=coupler,
+                step_name="urbansim_run",
+                profile_file_schema=True,
+                h5_container=True,
+                hash_tables="if_unchanged",
+                **_urbansim_output_facet_meta(
+                    USIM_FORECAST_OUTPUT, forecast_year=forecast_year
+                ),
+            )
 
-    return _make_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="run",
-        outputs_class=UrbanSimRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("urbansim", state),
-        component_executor=_execute_urbansim_run_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_run", outputs
+        spec=StandardStepSpec(
+            step_name="urbansim_run",
+            model_name="urbansim",
+            phase="run",
+            outputs_class=UrbanSimRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_run_typed,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_urbansim_run_outputs,
+            output_paths=UrbansimRunner.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_urbansim_run_outputs,
     )
+    return step_func
 
 
 def make_urbansim_postprocess_step(
@@ -661,33 +709,68 @@ def make_urbansim_postprocess_step(
             )
         for short_name, path, description in outputs._iter_record_items():
             if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
-                log_output_only(
-                    key=short_name,
-                    path=str(path),
-                    description=description,
-                    profile_file_schema=True,
-                    h5_container=True,
-                    hash_tables="if_unchanged",
-                    **_urbansim_output_facet_meta(
-                        short_name, forecast_year=forecast_year
-                    ),
-                )
                 archive_table_keys = _root_h5_table_keys(
                     str(path),
                     key_prefix="urbansim_postprocess_usim_",
                     key_suffix="_table_archived",
                 )
                 if archive_table_keys:
-                    _log_named_h5_tables(
-                        path=str(path),
-                        direction="output",
-                        table_keys=archive_table_keys,
-                        description_by_table=_root_h5_table_descriptions(
-                            str(path),
-                            action="archived by UrbanSim postprocess",
-                        ),
+                    archive_descriptions = _root_h5_table_descriptions(
+                        str(path),
+                        action="archived by UrbanSim postprocess",
                     )
+                    child_specs = {
+                        table_path: H5ChildSpec(
+                            key=artifact_key,
+                            description=archive_descriptions.get(table_path),
+                            metadata={
+                                "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                                "h5_table_name": table_path.split("/")[-1],
+                            },
+                        )
+                        for table_path, artifact_key in archive_table_keys.items()
+                    }
+                else:
+                    child_specs = None
+                log_output_only(
+                    key=short_name,
+                    path=str(path),
+                    description=description,
+                    step_name="urbansim_postprocess",
+                    profile_file_schema=True,
+                    h5_container=True,
+                    hash_tables="if_unchanged",
+                    h5_tables_used=list(archive_table_keys.keys()),
+                    child_specs=child_specs,
+                    child_selection="include_only" if child_specs else "all",
+                    **_urbansim_output_facet_meta(
+                        short_name, forecast_year=forecast_year
+                    ),
+                )
         if outputs.usim_datastore_h5 is not None:
+            merged_table_keys = _root_h5_table_keys(
+                str(outputs.usim_datastore_h5),
+                key_prefix="urbansim_postprocess_usim_",
+                key_suffix="_table_updated",
+            )
+            if merged_table_keys:
+                merged_descriptions = _root_h5_table_descriptions(
+                    str(outputs.usim_datastore_h5),
+                    action="prepared for the next iteration by UrbanSim postprocess",
+                )
+                merged_child_specs = {
+                    table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description=merged_descriptions.get(table_path),
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": table_path.split("/")[-1],
+                        },
+                    )
+                    for table_path, artifact_key in merged_table_keys.items()
+                }
+            else:
+                merged_child_specs = None
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -696,45 +779,39 @@ def make_urbansim_postprocess_step(
                     f"(year {forecast_year})"
                 ),
                 coupler=coupler,
+                step_name="urbansim_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                h5_tables_used=list(merged_table_keys.keys()),
+                child_specs=merged_child_specs,
+                child_selection="include_only" if merged_child_specs else "all",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
             )
-            merged_table_keys = _root_h5_table_keys(
-                str(outputs.usim_datastore_h5),
-                key_prefix="urbansim_postprocess_usim_",
-                key_suffix="_table_updated",
-            )
-            if merged_table_keys:
-                _log_named_h5_tables(
-                    path=str(outputs.usim_datastore_h5),
-                    direction="output",
-                    table_keys=merged_table_keys,
-                    description_by_table=_root_h5_table_descriptions(
-                        str(outputs.usim_datastore_h5),
-                        action="prepared for the next iteration by UrbanSim postprocess",
-                    ),
-                )
 
-    return _make_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="urbansim",
-        phase="postprocess",
-        outputs_class=UrbanSimPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "urbansim", state
+        spec=StandardStepSpec(
+            step_name="urbansim_postprocess",
+            model_name="urbansim",
+            phase="postprocess",
+            outputs_class=UrbanSimPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "urbansim", state
+            ),
+            component_executor=_execute_urbansim_postprocess_typed,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_urbansim_postprocess_outputs,
+            output_paths=UrbansimPostprocessor.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        component_executor=_execute_urbansim_postprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "urbansim_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_urbansim_postprocess_outputs,
     )
+    return step_func
 
 
 def make_atlas_preprocess_step(
@@ -777,7 +854,13 @@ def make_atlas_preprocess_step(
         prepared_meta = getattr(outputs, "prepared_input_meta", {})
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_preprocess",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
             extra_meta_fn=lambda key, _path, _description: {
                 **prepared_meta.get(key, {}),
@@ -790,21 +873,45 @@ def make_atlas_preprocess_step(
             },
         )
 
-    return _make_typed_step_function(
+    def _replay_outputs(
+        outputs: AtlasPreprocessOutputs,
+        settings: PilatesConfig,
+        state: WorkflowState,
+        workspace: Workspace,
+        holder: StepOutputsHolder,
+    ) -> None:
+        setattr(
+            outputs,
+            "_compatibility_fallback_used",
+            _rehydrate_restart_atlas_preprocess_state(
+                state=state,
+                workspace=workspace,
+            ),
+        )
+        _log_outputs(outputs, settings, state, workspace, holder)
+
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="preprocess",
-        outputs_class=AtlasPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor(
-            "atlas", state
+        spec=StandardStepSpec(
+            step_name="atlas_preprocess",
+            model_name="atlas",
+            phase="preprocess",
+            outputs_class=AtlasPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "atlas", state
+            ),
+            component_executor=_execute_atlas_preprocess_typed,
+            output_logger=_log_outputs,
+            output_replayer=_replay_outputs,
+            output_recoverer=_recover_atlas_preprocess_outputs,
+            output_paths=AtlasPreprocessor.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        component_executor=_execute_atlas_preprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_preprocess", outputs
-        ),
-        output_logger=_log_outputs,
     )
+    return step_func
 
 
 def make_atlas_run_step(
@@ -872,25 +979,36 @@ def make_atlas_run_step(
     ) -> None:
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_run",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
         )
 
-    return _make_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="run",
-        outputs_class=AtlasRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("atlas", state),
-        component_executor=_execute_atlas_run_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_run", outputs
+        spec=StandardStepSpec(
+            step_name="atlas_run",
+            model_name="atlas",
+            phase="run",
+            outputs_class=AtlasRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner("atlas", state),
+            component_executor=_execute_atlas_run_typed,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_atlas_run_outputs,
+            output_paths=AtlasRunner.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_atlas_run_outputs,
     )
+    return step_func
 
 
 def make_atlas_postprocess_step(
@@ -933,10 +1051,19 @@ def make_atlas_postprocess_step(
             raise RuntimeError(
                 "UrbanSim config is required for ATLAS postprocess logging."
             )
-        usim_output_path = resolve_atlas_usim_datastore_path(
+        expected_inputs = AtlasPostprocessor.expected_inputs(
             settings, state, workspace
         )
-        if usim_output_path.exists():
+        usim_output_path = expected_inputs.get("usim_datastore_h5")
+        if usim_output_path is not None:
+            usim_output_path = Path(usim_output_path)
+        if usim_output_path is not None and usim_output_path.exists():
+            households_table_path = _resolve_atlas_postprocess_households_table_path(
+                path=str(usim_output_path),
+                forecast_year=forecast_year,
+                is_start_year=state.is_start_year(),
+            )
+            artifact_key = "atlas_postprocess_usim_households_table_input"
             log_input_only(
                 key=USIM_DATASTORE_H5,
                 path=str(usim_output_path),
@@ -947,26 +1074,21 @@ def make_atlas_postprocess_step(
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
+                h5_tables_used=[households_table_path],
+                child_specs={
+                    households_table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description="UrbanSim households table consumed by ATLAS postprocess",
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": households_table_path.split("/")[-1],
+                        },
+                    )
+                },
+                child_selection="include_only",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
                 ),
-            )
-            households_table_path = (
-                "/households"
-                if state.is_start_year()
-                else f"/{forecast_year}/households"
-            )
-            _log_named_h5_tables(
-                path=str(usim_output_path),
-                direction="input",
-                table_keys={
-                    households_table_path: "atlas_postprocess_usim_households_table_input"
-                },
-                description_by_table={
-                    households_table_path: (
-                        "UrbanSim households table consumed by ATLAS postprocess"
-                    )
-                },
             )
         return {}
 
@@ -986,58 +1108,71 @@ def make_atlas_postprocess_step(
             record_items=(
                 (short_name, path, description)
                 for short_name, path, description in outputs._iter_record_items()
-                if short_name != USIM_H5_UPDATED
+                if short_name not in {USIM_H5_UPDATED, USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5}
             ),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="atlas_postprocess",
+                **meta,
+            ),
             profile_schema_suffixes=(".csv", ".parquet"),
         )
         if outputs.usim_datastore_h5 is not None:
+            households_table_path = _resolve_atlas_postprocess_households_table_path(
+                path=str(outputs.usim_datastore_h5),
+                forecast_year=forecast_year,
+                is_start_year=state.is_start_year(),
+            )
+            artifact_key = "atlas_postprocess_usim_households_table_updated"
             log_and_set_output(
-                key=USIM_DATASTORE_H5,
+                key=USIM_POPULATION_SOURCE_H5,
                 path=str(outputs.usim_datastore_h5),
                 description=(
-                    f"UrbanSim datastore updated by ATLAS for year {forecast_year}"
+                    f"UrbanSim datastore selected as the ActivitySim population source after ATLAS for year {forecast_year}"
                 ),
                 coupler=coupler,
+                step_name="atlas_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
                 hash_tables="if_unchanged",
-                **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=forecast_year
-                ),
-            )
-            households_table_path = (
-                "/households"
-                if state.is_start_year()
-                else f"/{forecast_year}/households"
-            )
-            _log_named_h5_tables(
-                path=str(outputs.usim_datastore_h5),
-                direction="output",
-                table_keys={
-                    households_table_path: "atlas_postprocess_usim_households_table_updated"
-                },
-                description_by_table={
-                    households_table_path: (
-                        "UrbanSim households table updated by ATLAS postprocess"
+                h5_tables_used=[households_table_path],
+                child_specs={
+                    households_table_path: H5ChildSpec(
+                        key=artifact_key,
+                        description="UrbanSim households table updated by ATLAS postprocess",
+                        metadata={
+                            "h5_parent_key": artifact_key.rsplit("_table_", 1)[0],
+                            "h5_table_name": households_table_path.split("/")[-1],
+                        },
                     )
                 },
+                child_selection="include_only",
+                **_urbansim_output_facet_meta(
+                    USIM_POPULATION_SOURCE_H5, forecast_year=forecast_year
+                ),
             )
 
-    return _make_typed_step_function(
+    step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="atlas",
-        phase="postprocess",
-        outputs_class=AtlasPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "atlas", state
+        spec=StandardStepSpec(
+            step_name="atlas_postprocess",
+            model_name="atlas",
+            phase="postprocess",
+            outputs_class=AtlasPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "atlas", state
+            ),
+            component_executor=_execute_atlas_postprocess_typed,
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_atlas_postprocess_outputs,
+            output_paths=AtlasPostprocessor.expected_outputs,
+            input_binding="none",
+            cache_hydration="metadata",
+            step_logger=logger,
         ),
-        component_executor=_execute_atlas_postprocess_typed,
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "atlas_postprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_atlas_postprocess_outputs,
     )
+    return step_func

@@ -5,6 +5,7 @@ import queue
 
 import pytest
 
+from pilates.runtime import consist_audit
 from pilates.utils import coupler_helpers as ch
 from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.orchestration import StepRef, run_workflow
@@ -56,8 +57,11 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_pending_tasks.clear()
+    ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
+    consist_audit.reset_consist_audit_state()
     monkeypatch.delenv("PILATES_ENABLE_ARCHIVE_COPY", raising=False)
     monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
     monkeypatch.delenv("PILATES_ARCHIVE_RUN_DIR", raising=False)
@@ -65,8 +69,11 @@ def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
     ch._archive_queue = None
     ch._archive_thread = None
+    ch._archive_pending_tasks.clear()
+    ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
+    consist_audit.reset_consist_audit_state()
 
 
 def test_archive_copy_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):
@@ -86,6 +93,141 @@ def test_archive_copy_copies_file_and_preserves_relative_path(monkeypatch, tmp_p
     archived = archive_root / "beam" / "output" / "linkstats.csv.gz"
     assert archived.exists()
     assert archived.read_text() == "linkstats"
+
+
+def test_consist_audit_files_are_archived_with_separate_local_and_archive_roots(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    workspace = DummyWorkspace(local_root)
+
+    consist_audit.emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        scenario_id="seattle-baseline",
+        restart_run=False,
+        workspace_root=str(local_root),
+    )
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    local_events = (
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit.jsonl"
+    )
+    local_summary = (
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+    archive_events = (
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit.jsonl"
+    )
+    archive_summary = (
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+
+    assert local_events.exists()
+    assert local_summary.exists()
+    assert archive_events.exists()
+    assert archive_summary.exists()
+    assert archive_events.read_text() == local_events.read_text()
+    assert archive_summary.read_text() == local_summary.read_text()
+
+
+def test_consist_audit_rotates_attempt_scoped_files_without_overwriting_history(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    workspace = DummyWorkspace(local_root)
+    diagnostics_dir = local_root / ".workflow" / "diagnostics"
+    diagnostics_dir.mkdir(parents=True, exist_ok=True)
+    legacy_events = diagnostics_dir / "consist_restart_audit.jsonl"
+    legacy_summary = diagnostics_dir / "consist_restart_audit_summary.json"
+    legacy_events.write_text("legacy-flat\n", encoding="utf-8")
+    legacy_summary.write_text('{"legacy": true}', encoding="utf-8")
+
+    consist_audit.emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        scenario_id="scenario-a",
+        run_name="run-a",
+        restart_run=False,
+        workspace_root=str(local_root),
+    )
+    consist_audit.emit_consist_audit_event(
+        workspace=workspace,
+        event_type="step_resolution",
+        stage_name="land_use",
+        step_name="urbansim_preprocess",
+        resolution_mode="executed",
+        workspace_root=str(local_root),
+    )
+    ch.flush_archive_queue(timeout=5)
+
+    first_attempt_dirs = sorted((diagnostics_dir / "attempts").glob("*"))
+    assert len(first_attempt_dirs) == 1
+    first_attempt_dir = first_attempt_dirs[0]
+    first_attempt_events = first_attempt_dir / "consist_restart_audit.jsonl"
+    first_attempt_summary = first_attempt_dir / "consist_restart_audit_summary.json"
+    assert first_attempt_events.exists()
+    assert first_attempt_summary.exists()
+    assert "legacy-flat" not in first_attempt_events.read_text(encoding="utf-8")
+
+    consist_audit.emit_consist_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        scenario_id="scenario-a",
+        run_name="run-b",
+        restart_run=True,
+        workspace_root=str(local_root),
+    )
+    consist_audit.emit_consist_audit_event(
+        workspace=workspace,
+        event_type="step_resolution",
+        stage_name="land_use",
+        step_name="urbansim_run",
+        resolution_mode="executed",
+        workspace_root=str(local_root),
+    )
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    attempt_dirs = sorted((diagnostics_dir / "attempts").glob("*"))
+    assert len(attempt_dirs) == 2
+
+    latest_events = legacy_events.read_text(encoding="utf-8").splitlines()
+    assert len([line for line in latest_events if line.strip()]) == 2
+    assert "urbansim_run" in legacy_events.read_text(encoding="utf-8")
+    assert "urbansim_preprocess" not in legacy_events.read_text(encoding="utf-8")
+
+    archived_attempt_dirs = sorted(
+        (archive_root / ".workflow" / "diagnostics" / "attempts").glob("*")
+    )
+    assert len(archived_attempt_dirs) == 2
+    assert (archive_root / ".workflow" / "diagnostics" / "consist_restart_audit.jsonl").exists()
+    assert (
+        archive_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    ).exists()
 
 
 def test_resolve_existing_path_materializes_local_from_archive(
@@ -255,6 +397,67 @@ def test_archive_copy_dedupes_same_signature(monkeypatch, tmp_path):
     assert len(copy_calls) == 1
 
 
+def test_archive_copy_coalesces_pending_updates_for_same_destination(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    def _ensure_queue_only():
+        if ch._archive_queue is None:
+            ch._archive_queue = queue.Queue()
+
+    monkeypatch.setattr(ch, "_ensure_archive_worker", _ensure_queue_only)
+
+    source = local_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    _write_file(source, '{"event_count": 1}')
+    ch._enqueue_archive_copy(
+        "workflow_diagnostics_consist_restart_audit_summary",
+        str(source),
+    )
+
+    _write_file(source, '{"event_count": 2, "latest": true}')
+    ch._enqueue_archive_copy(
+        "workflow_diagnostics_consist_restart_audit_summary",
+        str(source),
+    )
+
+    dest = str(
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
+    assert ch._archive_queue is not None
+    assert ch._archive_queue.qsize() == 1
+    assert dest in ch._archive_pending_tasks
+
+    key, pending_src, pending_dest, _is_dir, _signature = ch._archive_pending_tasks[dest]
+    assert key == "workflow_diagnostics_consist_restart_audit_summary"
+    assert pending_src == str(source)
+    assert pending_dest == dest
+
+
+def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / ".workflow" / "year_2018_iteration_0.yaml"
+    _write_file(source, "manifest")
+
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+
+    archived = archive_root / ".workflow" / "year_2018_iteration_0.yaml"
+    assert archived.exists()
+    assert archived.read_text() == "manifest"
+
+
 def test_flush_archive_queue_can_fail_on_timeout():
     ch._archive_queue = queue.Queue()
     ch._archive_queue.put(("pending",))
@@ -283,7 +486,7 @@ def test_log_and_set_output_enqueues_archive_copy_and_sets_coupler(monkeypatch, 
     calls = []
     coupler = DummyCoupler()
     monkeypatch.setattr(ch.cr, "log_output", lambda *args, **kwargs: "artifact")
-    monkeypatch.setattr(ch.cr, "current_run", lambda: None)
+    monkeypatch.setattr(ch.cr, "current_run", lambda: object())
     monkeypatch.setattr(ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path)))
 
     out_path = tmp_path / "out.txt"

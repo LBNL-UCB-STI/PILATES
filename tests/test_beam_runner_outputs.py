@@ -169,6 +169,13 @@ def test_beam_postprocess_outputs_validate_allows_beam_only_without_skims(
         )
     )
 
+    assert BeamPostprocessOutputs.declared_output_keys() == ("zarr_skims",)
+    assert BeamPostprocessOutputs.required_output_keys() == ()
+    assert BeamPostprocessOutputs.optional_output_keys() == (
+        "zarr_skims",
+        "final_skims_omx",
+    )
+
 
 def test_beam_postprocess_outputs_validate_requires_zarr_when_activitysim_enabled(
     tmp_path: Path,

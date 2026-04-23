@@ -23,7 +23,8 @@ except Exception:
 from pilates.activitysim.preprocessor import zone_order
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
+from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -2054,7 +2055,11 @@ def _transfer_tnc_provider_data_zarr(
 
 
 def write_zarr_skim_as_omx_new(
-    all_skims_path, settings: PilatesConfig, new_skim_name, exclude_tables=None
+    all_skims_path,
+    settings: PilatesConfig,
+    new_skim_name,
+    exclude_tables=None,
+    workspace: Optional[Workspace] = None,
 ):
     """
     Write the skims from the Zarr format to an OMX format.
@@ -2079,7 +2084,11 @@ def write_zarr_skim_as_omx_new(
     logger.info(f"Starting conversion of Zarr skims to OMX at {all_skims_path}")
 
     region = settings.run.region
-    beam_input_dir = settings.beam.local_mutable_data_folder
+    beam_input_dir = (
+        workspace.get_beam_mutable_data_dir()
+        if workspace is not None
+        else settings.beam.local_mutable_data_folder
+    )
 
     if not region or not beam_input_dir:
         logger.error(
@@ -2102,22 +2111,43 @@ def write_zarr_skim_as_omx_new(
         skims_ds = skims_ds.load()
         logger.info(f"Opened Zarr skims file: {all_skims_path}")
 
-        # Get zone IDs - simplified logic
-        if "taz_ids" in skims_ds.attrs:
-            # BEAM stores actual TAZ IDs in attributes
+        zone_ids = None
+        if "original_zone_ids" in skims_ds.attrs:
+            zone_ids = skims_ds.attrs["original_zone_ids"]
+            logger.info(
+                "Using original zone IDs from Zarr attributes: %d zones",
+                len(zone_ids),
+            )
+        elif "taz_ids" in skims_ds.attrs:
             zone_ids = skims_ds.attrs["taz_ids"]
             logger.info(f"Using TAZ IDs from attributes: {len(zone_ids)} zones")
+        elif "otaz" in skims_ds.coords:
+            if skims_ds["otaz"].attrs.get("preprocessed") != "zero-based-contiguous":
+                zone_ids = skims_ds.coords["otaz"].values
+                logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+            elif workspace is not None:
+                canonical_zones_df = zone_utils.load_canonical_zones(
+                    settings, workspace
+                )
+                zone_ids = canonical_zones_df.index.tolist()
+                logger.warning(
+                    "Reconstructed zone IDs from canonical zones after zero-based preprocessing: %d zones",
+                    len(zone_ids),
+                )
+            else:
+                zone_ids = skims_ds.coords["otaz"].values
+                logger.warning(
+                    "Zarr uses zero-based coordinates and no canonical workspace was provided; "
+                    "falling back to coordinate values for OMX mapping."
+                )
         else:
-            # Fall back to coordinate values
-            zone_ids = skims_ds.coords["otaz"].values
-            logger.info(f"Using zone IDs from coordinates: {len(zone_ids)} zones")
+            logger.warning("No zone coordinate found in Zarr file.")
 
-        # Ensure zone_ids are integers if they represent numbers
-        try:
-            zone_ids = [int(z) for z in zone_ids]
-        except ValueError:
-            # Keep as strings if they can't be converted to int
-            zone_ids = [str(z) for z in zone_ids]
+        # PILATES' original ActivitySim OMX builder uses a sequential 1..N lookup.
+        # Preserve canonical/original IDs in Zarr metadata, but emit the original
+        # OMX lookup convention here so the exported file is interchangeable with
+        # the pre-BEAM ActivitySim input OMXs.
+        omx_zone_ids = list(range(1, int(skims_ds.sizes["otaz"]) + 1))
 
         # Get time periods
         time_periods = []
@@ -2127,6 +2157,7 @@ def write_zarr_skim_as_omx_new(
 
         # Prepare output file
         logger.info(f"Target output OMX path: {target_skims_path}")
+        os.makedirs(os.path.dirname(target_skims_path), exist_ok=True)
         if os.path.exists(target_skims_path):
             logger.info(f"Deleting existing file: {target_skims_path}")
             os.remove(target_skims_path)
@@ -2135,11 +2166,27 @@ def write_zarr_skim_as_omx_new(
         new_omx_file = omx.open_file(target_skims_path, "w")
         logger.info(f"Created new OMX file: {target_skims_path}")
 
-        # Add zone mapping
-        new_omx_file.create_mapping("zone_id", zone_ids)
-        logger.info(f"Created 'zone_id' mapping with {len(zone_ids)} zones")
+        if omx_zone_ids:
+            new_omx_file.create_mapping("zone_id", omx_zone_ids)
+            logger.info(
+                "Created 'zone_id' mapping with sequential 1-based IDs for %d zones",
+                len(omx_zone_ids),
+            )
 
-        # Write matrices - NO SCALING CHANGES
+        scaled_measures = {
+            "TOTIVT",
+            "IVT",
+            "WACC",
+            "IWAIT",
+            "XWAIT",
+            "WAUX",
+            "WEGR",
+            "DTIM",
+            "FERRYIVT",
+            "KEYIVT",
+            "FAR",
+        }
+
         logger.info("Writing matrices to OMX file...")
         written_count = 0
 
@@ -2151,20 +2198,27 @@ def write_zarr_skim_as_omx_new(
             try:
                 data_array = skims_ds[key]
                 data = data_array.values
+                measure_name = key.split("_")[-1] if "_" in key else key
+                needs_descaling = (
+                    measure_name in scaled_measures
+                    and not key.startswith(("TNC_", "RH_"))
+                )
 
                 if data_array.ndim == 2:
-                    # Write 2D matrix directly
                     data_to_write = np.nan_to_num(data).astype(np.float32)
+                    if needs_descaling:
+                        data_to_write = data_to_write / 100.0
                     new_omx_file[key] = data_to_write
                     written_count += 1
                     logger.debug(f"Wrote 2D matrix '{key}'")
 
                 elif data_array.ndim == 3:
-                    # Write slices for each time period
                     for t_idx, tp in enumerate(time_periods):
                         new_key = f"{key}__{tp}"
                         slice_data = data[:, :, t_idx]
                         data_to_write = np.nan_to_num(slice_data).astype(np.float32)
+                        if needs_descaling:
+                            data_to_write = data_to_write / 100.0
                         new_omx_file[new_key] = data_to_write
 
                         # Add attributes
@@ -2311,14 +2365,14 @@ def write_zarr_skim_as_omx(
         new_omx_file = omx.open_file(target_skims_path, "w")
         logger.info(f"Created new OMX file: {target_skims_path}")
 
-        # --- Add Zone Mapping FIRST ---
-        if zone_ids is not None and len(zone_ids) > 0:
+        # Export the original PILATES ActivitySim OMX lookup convention: 1..N.
+        omx_zone_ids = np.arange(1, int(skims_ds.sizes["otaz"]) + 1, dtype=int)
+        if len(omx_zone_ids) > 0:
             try:
-                # Ensure zone_ids are integers
-                zone_ids = np.array(zone_ids, dtype=int)
-                new_omx_file.create_mapping("zone_id", zone_ids, overwrite=True)
+                new_omx_file.create_mapping("zone_id", omx_zone_ids, overwrite=True)
                 logger.info(
-                    f"Created 'zone_id' mapping in OMX file with {len(zone_ids)} zones."
+                    "Created 'zone_id' mapping in OMX file with sequential 1-based IDs for %d zones.",
+                    len(omx_zone_ids),
                 )
             except Exception as e:
                 logger.error(f"Error creating zone mapping in OMX file: {e}.")
@@ -3680,7 +3734,7 @@ class BeamPostprocessor(GenericPostprocessor):
         )
         if write_omx:
             region = settings.run.region
-            omx_name = settings.shared.skims.fname
+            omx_name = get_beam_omx_skims_name(settings)
             final_omx_path = os.path.join(
                 workspace.get_beam_mutable_data_dir(), region, omx_name
             )
@@ -3709,6 +3763,7 @@ class BeamPostprocessor(GenericPostprocessor):
         raw_outputs: RecordStore,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        zarr_skims: Optional[Any] = None,
     ) -> RecordStore:
         """
         Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
@@ -3769,11 +3824,17 @@ class BeamPostprocessor(GenericPostprocessor):
                     "Failed to split events parquet for %s", events_path, exc_info=True
                 )
 
-        all_skims_path = None
-        if _activitysim_skims_target_enabled(settings):
-            all_skims_path = os.path.join(
+        all_skims_path = artifact_to_existing_path(
+            zarr_skims,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if all_skims_path is None and _activitysim_skims_target_enabled(settings):
+            candidate = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
+            if os.path.exists(candidate):
+                all_skims_path = candidate
 
         zarr_skim_name = (
             f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
@@ -3894,8 +3955,9 @@ class BeamPostprocessor(GenericPostprocessor):
                     final_omx_path = write_zarr_skim_as_omx_new(
                         all_skims_path,
                         settings,
-                        get_setting(settings, "shared.skims.fname"),
+                        get_beam_omx_skims_name(settings),
                         exclude_tables=vars_to_exclude,
+                        workspace=workspace,
                     )
 
                     if final_omx_path:
@@ -3920,6 +3982,7 @@ class BeamPostprocessor(GenericPostprocessor):
         raw_outputs: BeamRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        zarr_skims: Optional[Any] = None,
     ) -> BeamPostprocessOutputs:
         """
         Postprocess typed BEAM run outputs and return typed outputs.
@@ -3937,7 +4000,12 @@ class BeamPostprocessor(GenericPostprocessor):
                 for short_name, path, description in raw_outputs._iter_record_items()
             ]
         )
-        output_store = self._postprocess(input_store, workspace, model_run_hash)
+        output_store = self._postprocess(
+            input_store,
+            workspace,
+            model_run_hash,
+            zarr_skims=zarr_skims,
+        )
         mapping = output_store.to_mapping()
 
         zarr_path = artifact_to_path(mapping.get("zarr_skims"), workspace)

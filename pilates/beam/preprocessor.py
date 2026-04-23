@@ -5,47 +5,40 @@ import os
 import shutil
 from pathlib import Path
 from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
-import re
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
-
-import pandas as pd
-
 from pilates.config import PilatesConfig
+from pilates.beam import beam_exchange
+from pilates.beam.config_hocon import (
+    BeamConfigHoconError,
+    beam_config_env_overrides,
+    beam_primary_config_path,
+    update_staged_beam_config_value,
+)
+from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.utils.io import locate_beam_file
+from pilates.utils.consist_runtime import artifact_fingerprint
+from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
-from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     LINKSTATS_WARMSTART,
 )
-from pilates.activitysim.outputs import has_asim_run_marker
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
-
-
-def _artifact_content_hash(value: Any) -> Optional[str]:
-    if value is None:
-        return None
-    for attr_name in ("content_hash", "hash"):
-        content_hash = getattr(value, attr_name, None)
-        if content_hash:
-            return str(content_hash)
-    return None
-
 
 def _record_store_from_artifact_mappings(
     *,
@@ -78,7 +71,7 @@ def _record_store_from_artifact_mappings(
                     file_path=str(path),
                     short_name=record_key,
                     description=f"{description_prefix}: {record_key}",
-                    content_hash=_artifact_content_hash(value),
+                    content_hash=artifact_fingerprint(value),
                 )
             )
 
@@ -148,21 +141,41 @@ def _prepare_beam_zone_shapefile(
             f"Saving sorted canonical zones to '{output_shapefile_path}' for BEAM."
         )
 
-        # Reset index so the ID becomes a column
+        # Reset index so the canonical ActivitySim zone ID becomes a column.
         canonical_zones_gdf = canonical_zones_gdf.reset_index()
 
         if settings.beam is None:
             raise ValueError("Beam settings are not configured")
         sort_col = settings.beam.skim_zone_geoid_col
+        canonical_id_col = settings.shared.geography.zones.activitysim_index_col
         if sort_col in canonical_zones_gdf.columns:
-            # If the specific beam config column exists, verify sort order
-            canonical_zones_gdf = canonical_zones_gdf.sort_values(by=sort_col)
+            canonical_order = canonical_zones_gdf[canonical_id_col].astype(str).tolist()
+            sort_order = (
+                canonical_zones_gdf.sort_values(by=sort_col, kind="stable")[
+                    canonical_id_col
+                ]
+                .astype(str)
+                .tolist()
+            )
+            if sort_order == canonical_order:
+                logger.info(
+                    "Beam sort column '%s' matches canonical zone order; preserving export.",
+                    sort_col,
+                )
+            else:
+                logger.warning(
+                    "Beam sort column '%s' would reorder canonical zones. "
+                    "Preserving canonical order based on '%s' instead.",
+                    sort_col,
+                    canonical_id_col,
+                )
         else:
-            # If column is missing, it was likely renamed during load_canonical_zones.
-            # Since load_canonical_zones guarantees a sorted index, we accept that order.
-            logger.info(
-                f"Beam sort column '{sort_col}' not found (likely renamed to '{canonical_zones_gdf.columns[0]}'). "
-                "Using existing sort order from load_canonical_zones."
+            logger.warning(
+                "Beam sort column '%s' not found in canonical zones export. "
+                "Preserving canonical order based on '%s'. Available columns: %s",
+                sort_col,
+                canonical_id_col,
+                canonical_zones_gdf.columns.tolist(),
             )
 
         canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")
@@ -174,110 +187,6 @@ def _prepare_beam_zone_shapefile(
             f"An error occurred during BEAM shapefile preparation: {e}", exc_info=True
         )
         raise
-
-
-class BeamDataHelper:
-    """
-    Centralizes logic for reading, cleaning, and standardizing BEAM input data.
-    """
-
-    # Column Renaming Maps
-    RENAMES = {
-        "plans": {
-            "tripId": "trip_id",
-            "tripid": "trip_id",
-            "personId": "person_id",
-            "personid": "person_id",
-            "vehicleId": "vehicle_id",
-            "vehicleid": "vehicle_id",
-            "legVehicleIds": "leg_vehicle_ids",
-            "legvehicleids": "leg_vehicle_ids",
-        },
-        "households": {"VEHICL": "cars", "auto_ownership": "cars"},
-        "persons": {},  # No common renames, but kept for consistency
-    }
-
-    # Dtypes for CSV reading to prevent Int64 -> Float conversion
-    DTYPES = {
-        "plans": {
-            "trip_id": pd.Int64Dtype(),
-            "person_id": pd.Int64Dtype(),
-            "planindex": pd.Int64Dtype(),
-        },
-        "households": {
-            "household_id": pd.Int64Dtype(),
-            "cars": pd.Int64Dtype(),
-            "auto_ownership": pd.Int64Dtype(),
-            "VEHICL": pd.Int64Dtype(),
-        },
-        "persons": {
-            "household_id": pd.Int64Dtype(),
-            "person_id": pd.Int64Dtype(),
-            "age": pd.Int64Dtype(),
-            "sex": pd.Int64Dtype(),
-        },
-    }
-
-    # Default columns to ensure exist in Plans
-    PLAN_DEFAULTS = {
-        "planindex": 0,
-        "planselected": False,  # Default to False; logic can override to True
-        "planscore": 0.0,
-        "legtraveltime": 0.0,
-        "legroutetype": "",
-        "legroutestartlink": 0,
-        "legrouteendlink": 0,
-        "legroutetraveltime": 0.0,
-        "legroutedistance": 0.0,
-        "legroutelinks": "",
-    }
-
-    @classmethod
-    def read_and_clean(
-        cls, file_path: str, table_type: str, file_format: str
-    ) -> pd.DataFrame:
-        """
-        Reads a file (CSV/Parquet), applies dtypes, renames columns, and ensures defaults.
-
-        Args:
-            file_path: Path to the file.
-            table_type: One of 'plans', 'households', 'persons'.
-            file_format: 'csv' or 'parquet'.
-        """
-        if not os.path.exists(file_path):
-            # Let the caller handle missing files, or raise specific error
-            raise FileNotFoundError(f"File not found: {file_path}")
-
-        # 1. Read File
-        if file_format == "parquet":
-            df = pd.read_parquet(file_path)
-        elif file_format == "csv":
-            # Get specific dtypes for this table type
-            dtype_map = cls.DTYPES.get(table_type, {})
-            df = pd.read_csv(file_path, dtype=dtype_map)
-        else:
-            raise ValueError(f"Unsupported file format: {file_format}")
-
-        # 2. Rename Columns
-        rename_map = cls.RENAMES.get(table_type, {})
-        df = df.rename(columns=rename_map)
-
-        # 3. Deduplicate Columns (Fixes issue seen in households with multiple 'cars' inputs)
-        df = df.loc[:, ~df.columns.duplicated()].copy()
-
-        # 4. Apply Defaults (specifically for Plans)
-        if table_type == "plans":
-            for col, default_val in cls.PLAN_DEFAULTS.items():
-                if col not in df.columns:
-                    df[col] = default_val
-
-        # 5. Set standard Index if applicable
-        index_map = {"households": "household_id", "persons": "person_id"}
-        index_col = index_map.get(table_type)
-        if index_col and index_col in df.columns:
-            df.set_index(index_col, inplace=True, drop=True)
-
-        return df
 
 
 class BeamPreprocessor(GenericPreprocessor):
@@ -293,17 +202,59 @@ class BeamPreprocessor(GenericPreprocessor):
         """
         Declare the input paths/artifacts this preprocessor expects from the workflow.
         """
+        beam_scenario_dir = beam_exchange.resolve_beam_exchange_scenario_folder(
+            settings,
+            workspace,
+        )
+        preferred_format = (
+            getattr(getattr(settings, "activitysim", None), "file_format", None)
+            or "parquet"
+        )
+        beam_input_paths = {
+            BEAM_PLANS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "plans", preferred_format
+            )[0],
+            BEAM_HOUSEHOLDS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "households", preferred_format
+            )[0],
+            BEAM_PERSONS_IN: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "persons", preferred_format
+            )[0],
+            LINKSTATS_WARMSTART: beam_exchange.locate_existing_beam_exchange_input(
+                beam_scenario_dir, "linkstats", preferred_format
+            )[0],
+        }
         asim_output_dir = None
-        if getattr(settings, "activity_demand_enabled", False):
+        if settings.runtime.flags.activity_demand_enabled:
             asim_output_dir = workspace.get_asim_output_dir()
 
         atlas_output_dir = None
-        if getattr(settings, "vehicle_ownership_model_enabled", False):
+        if settings.runtime.flags.vehicle_ownership_model_enabled:
             atlas_output_dir = workspace.get_atlas_output_dir()
+        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config_path = (
+            os.path.join(workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config)
+            if beam_config
+            else None
+        )
+        atlas_vehicle_input = None
+        if atlas_output_dir is not None:
+            forecast_year = getattr(state, "forecast_year", None)
+            if forecast_year is not None:
+                for candidate in (
+                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
+                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
+                ):
+                    if os.path.exists(candidate):
+                        atlas_vehicle_input = candidate
+                        break
         return {
             BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
+            BEAM_CONFIG_FILE: beam_config_path,
             ASIM_OUTPUT_DIR: asim_output_dir,
             ATLAS_OUTPUT_DIR: atlas_output_dir,
+            ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_input,
+            **beam_input_paths,
         }
 
     @staticmethod
@@ -339,124 +290,37 @@ class BeamPreprocessor(GenericPreprocessor):
         ]
         self.settings = self.state.full_settings
 
-    def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
-        """
-        Resolve the BEAM exchange scenario folder from the active mutable config.
-
-        Falls back to ``settings.beam.scenario_folder`` if no explicit exchange folder
-        can be read from the config file.
-        """
-        base_input_dir = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
-        )
-        default_folder = os.path.join(base_input_dir, self.settings.beam.scenario_folder)
-
-        config_path = os.path.join(base_input_dir, self.settings.beam.config)
-        if not os.path.exists(config_path):
-            return default_folder
-
-        try:
-            with open(config_path, "r") as config_file:
-                for raw_line in config_file:
-                    line = raw_line.split("#", 1)[0].strip()
-                    if not line or "=" not in line:
-                        continue
-                    key, value = [part.strip() for part in line.split("=", 1)]
-                    # In BEAM HOCON this is typically nested under beam.exchange.scenario:
-                    #   folder = ${beam.inputDirectory}"/urbansim/2018"
-                    if key != "folder":
-                        continue
-                    if "${beam.inputDirectory}" not in value:
-                        continue
-
-                    resolved = value.replace("${beam.inputDirectory}", base_input_dir)
-                    resolved = resolved.replace('"', "")
-                    resolved = os.path.normpath(resolved)
-                    if resolved:
-                        if os.path.normpath(resolved) != os.path.normpath(default_folder):
-                            logger.info(
-                                "[BEAM Preprocessor] Using exchange.scenario.folder from config: %s "
-                                "(default scenario_folder resolves to %s)",
-                                resolved,
-                                default_folder,
-                            )
-                        return resolved
-        except Exception as exc:
-            logger.warning(
-                "[BEAM Preprocessor] Could not parse exchange.scenario.folder from %s: %s. "
-                "Falling back to settings.beam.scenario_folder.",
-                config_path,
-                exc,
-            )
-
-        return default_folder
-
     def _default_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
-        base_input_dir = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
+        return beam_exchange.default_beam_exchange_scenario_folder(
+            self.settings,
+            workspace,
         )
-        return os.path.join(base_input_dir, self.settings.beam.scenario_folder)
 
     def _config_beam_exchange_scenario_folder(
         self, workspace: "Workspace"
     ) -> Optional[str]:
-        base_input_dir = os.path.join(
-            workspace.get_beam_mutable_data_dir(),
-            self.settings.run.region,
+        return beam_exchange.config_beam_exchange_scenario_folder(
+            self.settings,
+            workspace,
         )
-        default_folder = self._default_beam_exchange_scenario_folder(workspace)
-        config_path = os.path.join(base_input_dir, self.settings.beam.config)
-        if not os.path.exists(config_path):
-            return None
 
-        try:
-            with open(config_path, "r") as config_file:
-                for raw_line in config_file:
-                    line = raw_line.split("#", 1)[0].strip()
-                    if not line or "=" not in line:
-                        continue
-                    key, value = [part.strip() for part in line.split("=", 1)]
-                    if key != "folder" or "${beam.inputDirectory}" not in value:
-                        continue
-                    resolved = value.replace("${beam.inputDirectory}", base_input_dir)
-                    resolved = resolved.replace('"', "")
-                    resolved = os.path.normpath(resolved)
-                    if resolved and os.path.normpath(resolved) != os.path.normpath(
-                        default_folder
-                    ):
-                        return resolved
-        except Exception as exc:
-            logger.warning(
-                "[BEAM Preprocessor] Could not parse exchange.scenario.folder from %s: %s. "
-                "Falling back to settings.beam.scenario_folder.",
-                config_path,
-                exc,
-            )
-        return None
+    def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        return beam_exchange.resolve_beam_exchange_scenario_folder(
+            self.settings,
+            workspace,
+        )
 
     def _beam_exchange_scenario_folder_candidates(
         self, workspace: "Workspace"
     ) -> List[str]:
-        candidates = [self._default_beam_exchange_scenario_folder(workspace)]
-        config_folder = self._config_beam_exchange_scenario_folder(workspace)
-        if config_folder is not None and all(
-            os.path.normpath(config_folder) != os.path.normpath(existing)
-            for existing in candidates
-        ):
-            candidates.append(config_folder)
-        return candidates
+        return beam_exchange.beam_exchange_scenario_folder_candidates(
+            self.settings,
+            workspace,
+        )
 
     @staticmethod
     def _beam_exchange_format_candidates(preferred_format: Optional[str]) -> List[str]:
-        candidates: List[str] = []
-        if preferred_format:
-            candidates.append(preferred_format)
-        for fallback in ("parquet", "csv", "csv.gz"):
-            if fallback not in candidates:
-                candidates.append(fallback)
-        return candidates
+        return beam_exchange.beam_exchange_format_candidates(preferred_format)
 
     @classmethod
     def _locate_existing_beam_exchange_input(
@@ -465,16 +329,11 @@ class BeamPreprocessor(GenericPreprocessor):
         stem: str,
         preferred_format: Optional[str],
     ) -> Tuple[Optional[str], Optional[str]]:
-        for candidate_format in cls._beam_exchange_format_candidates(preferred_format):
-            if candidate_format == "csv.gz":
-                path = os.path.join(beam_scenario_folder, f"{stem}.csv.gz")
-            elif candidate_format == "csv":
-                path = os.path.join(beam_scenario_folder, f"{stem}.csv")
-            else:
-                path = locate_beam_file(beam_scenario_folder, stem, candidate_format)
-            if path and os.path.exists(path):
-                return path, candidate_format
-        return None, None
+        return beam_exchange.locate_existing_beam_exchange_input(
+            beam_scenario_folder,
+            stem,
+            preferred_format,
+        )
 
     def _preprocess(
         self,
@@ -533,7 +392,19 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            beam_output_record = self._copy_vehicles_from_atlas(workspace)
+            restored_vehicle_source = next(
+                (
+                    record.file_path
+                    for record in previous_records.all_records()
+                    if getattr(record, "short_name", None)
+                    in (ATLAS_VEHICLES2_OUTPUT, "vehicles_beam_in")
+                ),
+                None,
+            )
+            beam_output_record = self._copy_vehicles_from_atlas(
+                workspace,
+                source_path=restored_vehicle_source,
+            )
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
 
@@ -560,6 +431,8 @@ class BeamPreprocessor(GenericPreprocessor):
                     "beam_preprocess expected ActivitySim to stage the canonical "
                     f"BEAM input trio, but missing outputs were {sorted(missing_keys)}"
                 )
+            if self.state.current_inner_iter == 0:
+                self._validate_population_consistency(workspace)
         else:
             store += self._register_existing_beam_exchange_inputs(workspace)
 
@@ -576,84 +449,16 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def _activity_demand_enabled(self) -> bool:
         """Return whether ActivitySim is enabled for the current run."""
-        explicit = getattr(self.settings, "activity_demand_enabled", None)
-        if explicit is not None:
-            return bool(explicit)
-        models = getattr(getattr(self.settings, "run", None), "models", None)
-        model_name = getattr(models, "activity_demand", None) if models is not None else None
-        if model_name is not None:
-            return True
-        return getattr(self.settings, "activitysim", None) is not None
+        return is_activity_demand_enabled(self.settings)
 
     def _register_existing_beam_exchange_inputs(
         self,
         workspace: "Workspace",
     ) -> RecordStore:
-        """
-        Register the canonical BEAM scenario inputs already present in the exchange folder.
-
-        When ActivitySim is disabled, or when the mutable BEAM repo already contains
-        the current scenario inputs, beam_preprocess still needs to publish the
-        canonical trio as typed outputs for downstream BEAM steps.
-        """
-        required_keys = {
-            BEAM_PLANS_IN: "plans",
-            BEAM_HOUSEHOLDS_IN: "households",
-            BEAM_PERSONS_IN: "persons",
-        }
-
-        file_format = getattr(getattr(self.settings, "activitysim", None), "file_format", None)
-        if not file_format:
-            file_format = "parquet"
-
-        candidate_folders = self._beam_exchange_scenario_folder_candidates(workspace)
-        current_year = getattr(self.state, "current_year", None)
-        current_inner_iter = getattr(self.state, "current_inner_iter", None)
-        folder_errors: List[str] = []
-
-        for idx, beam_scenario_folder in enumerate(candidate_folders):
-            records: List[FileRecord] = []
-            unresolved: List[str] = []
-            for short_name, stem in required_keys.items():
-                path, resolved_format = self._locate_existing_beam_exchange_input(
-                    beam_scenario_folder,
-                    stem,
-                    file_format,
-                )
-                if path and resolved_format:
-                    records.append(
-                        FileRecord(
-                            file_path=path,
-                            short_name=short_name,
-                            description=(
-                                f"Existing BEAM scenario input: {stem}"
-                                f" ({resolved_format})"
-                            ),
-                            year=current_year,
-                            iteration=current_inner_iter,
-                        )
-                    )
-                    continue
-                unresolved.append(
-                    f"{stem}.[{'|'.join(self._beam_exchange_format_candidates(file_format))}]"
-                )
-
-            if not unresolved:
-                if idx > 0:
-                    logger.info(
-                        "[BEAM Preprocessor] Default exchange folder was missing inputs; "
-                        "using fallback exchange.scenario.folder from BEAM config: %s",
-                        beam_scenario_folder,
-                    )
-                return RecordStore(recordList=records)
-
-            folder_errors.append(
-                f"{beam_scenario_folder}: {', '.join(unresolved)}"
-            )
-
-        raise FileNotFoundError(
-            "Missing default BEAM scenario inputs in exchange folders "
-            f"{'; '.join(folder_errors)}"
+        return beam_exchange.register_existing_beam_exchange_inputs(
+            settings=self.settings,
+            state=self.state,
+            workspace=workspace,
         )
 
     def existing_beam_exchange_inputs(self, workspace: "Workspace") -> RecordStore:
@@ -740,28 +545,9 @@ class BeamPreprocessor(GenericPreprocessor):
             # Note: BEAM common directory is not tracked as a separate artifact.
 
         if hasattr(settings.beam, "skims_shapefile"):
-            logger.info(
-                f"[BEAM Preprocessor] Updating beam config to use zone id of {settings.beam.skim_zone_geoid_col}"
-            )
-
-            # FIX: Calculate base path from output_dir if state.workspace is not guaranteed
-            # Original code used triple split logic; here we approximate assuming output_dir is in the workspace
-            # or fallback to self.state.workspace if available.
-            # A safe fallback for initialization time:
-            base_path = None
-            if hasattr(self.state, "workspace"):
-                base_path = self.state.workspace.full_path
-            else:
-                # Replicate logic: output_dir is usually "{root}/beam/data"
-                # os.path.dirname(os.path.dirname(output_dir)) approx "{root}"
-                base_path = os.path.dirname(
-                    os.path.dirname(os.path.abspath(output_dir))
-                )
-
-            self._update_beam_config(
-                "skim_zone_geoid_col",
-                value_override=settings.beam.skim_zone_geoid_col,
-                base_path=base_path,
+            logger.debug(
+                "[BEAM Preprocessor] Deferring zone-id config updates until the "
+                "sorted zone shapefile is prepared."
             )
 
         return RecordStore(recordList=input_records), RecordStore(
@@ -794,198 +580,36 @@ class BeamPreprocessor(GenericPreprocessor):
         return output_shapefile_path
 
     def _copy_vehicles_from_atlas(
-        self, workspace: "Workspace"
+        self,
+        workspace: "Workspace",
+        *,
+        source_path: Optional[str] = None,
     ) -> Optional[FileRecord]:
-        """
-        Copies the vehicles file from the ATLAS output to the BEAM input scenario.
-
-        Returns
-        -------
-        FileRecord or None
-            Output record for BEAM `vehicles_beam_in`.
-        """
-        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
-        os.makedirs(beam_scenario_folder, exist_ok=True)
-        beam_vehicles_path = os.path.join(beam_scenario_folder, "vehicles.csv.gz")
-
-        if self.state.run_info_path and os.path.exists(self.state.run_info_path):
-            logger.info(
-                f"[BeamPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
-            )
-            previous_run_dir = os.path.dirname(self.state.run_info_path)
-            atlas_output_data_dir = os.path.join(
-                previous_run_dir, "atlas", "atlas_output"
-            )
-        else:
-            atlas_output_data_dir = workspace.get_atlas_output_dir()
-
-        # Look for vehicles2_{year}.csv, falling back to year-1
-        atlas_vehicle_file_loc = os.path.join(
-            atlas_output_data_dir, f"vehicles2_{self.state.forecast_year}.csv"
+        return beam_input_staging.copy_vehicles_from_atlas(
+            workspace=workspace,
+            state=self.state,
+            resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            source_path=source_path,
+            preferred_format=(
+                getattr(getattr(self.settings, "activitysim", None), "file_format", None)
+                or "csv"
+            ),
         )
-        if not os.path.exists(atlas_vehicle_file_loc):
-            atlas_vehicle_file_loc = os.path.join(
-                atlas_output_data_dir, f"vehicles2_{self.state.forecast_year - 1}.csv"
-            )
-
-        if not os.path.exists(atlas_vehicle_file_loc):
-            logger.warning(
-                "ATLAS vehicles2 file not found for BEAM input: %s",
-                atlas_vehicle_file_loc,
-            )
-            return None
-
-        logger.info(
-            f"Copying atlas vehicles2 file from {atlas_vehicle_file_loc} to {beam_vehicles_path}"
-        )
-
-        df = pd.read_csv(atlas_vehicle_file_loc)
-        df.to_csv(beam_vehicles_path, compression="gzip", index=False)
-        output_record = FileRecord(
-            file_path=beam_vehicles_path,
-            description="BEAM vehicles input derived from ATLAS vehicles2",
-            short_name="vehicles_beam_in",
-            year=getattr(self.state, "forecast_year", None),
-            iteration=getattr(self.state, "current_inner_iter", None),
-        )
-        return output_record
 
     def _copy_plans_from_asim(
         self,
         input_records: RecordStore,
         workspace: "Workspace",
     ) -> RecordStore:
-        """Copies plans, households, and persons files from ActivitySim output to BEAM input."""
-        if self.state.full_settings.activitysim is None:
-            return RecordStore()
-
-        logger.info("Attempting to copy final ASIM plans from input records.")
-        file_format = self.settings.activitysim.file_format
-
-        base_path = (
-            os.path.dirname(self.state.run_info_path)
-            if self.state.run_info_path and os.path.exists(self.state.run_info_path)
-            else workspace.full_path
+        return beam_input_staging.copy_plans_from_asim(
+            input_records=input_records,
+            workspace=workspace,
+            state=self.state,
+            settings=self.settings,
+            required_input_data=self.required_input_data,
+            copy_initial_asim_files_fn=self._copy_initial_asim_files,
+            merge_replanned_asim_files_fn=self._merge_replanned_asim_files,
         )
-
-        asim_file_paths = {}
-        for record in input_records.all_records():
-            splt = record.short_name.rsplit("_", 2)
-            shortened_name = (
-                splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
-            )
-            if shortened_name.endswith("_asim_out"):
-                shortened_name = shortened_name.split("_asim_out")[0]
-            if shortened_name == "plans":
-                shortened_name = "beam_plans"
-            if shortened_name in self.required_input_data:
-                asim_file_paths[shortened_name] = (
-                    os.path.join(base_path, record.file_path),
-                    record,
-                )
-                logger.info(
-                    f"Found ActivitySim output file {record.short_name}: {record.file_path}"
-                )
-
-        # Fallback: If required files are not found in the input records, try to
-        # locate them directly on the filesystem.
-        required_asim_base_names = [
-            "households",
-            "persons",
-            "beam_plans",  # ActivitySim outputs beam_plans
-        ]
-        if self.state.full_settings.activitysim is None:
-            return record_store
-        asim_output_dir = workspace.get_asim_output_dir()
-        if base_path and os.path.isabs(base_path):
-            rel_asim_output_dir = os.path.relpath(asim_output_dir, workspace.full_path)
-            asim_output_dir = os.path.join(base_path, rel_asim_output_dir)
-
-        allow_final_pipeline = has_asim_run_marker(
-            asim_output_dir, self.state.current_year, self.state.current_inner_iter
-        )
-        if not allow_final_pipeline:
-            logger.warning(
-                "ASim success marker not found for year %s iteration %s; "
-                "skipping final_pipeline fallback for BEAM inputs.",
-                self.state.current_year,
-                self.state.current_inner_iter,
-            )
-
-        # Construct the full path to the year-iteration specific output directory
-        asim_output_iter_dir = os.path.join(
-            asim_output_dir,
-            f"year-{self.state.current_year}-iteration-{self.state.current_inner_iter}",
-        )
-
-        for base_name in required_asim_base_names:
-            if base_name not in asim_file_paths:
-                expected_file_name = f"{base_name}.{file_format}"
-                candidate_paths = [
-                    os.path.join(asim_output_iter_dir, expected_file_name),
-                    os.path.join(
-                        asim_output_iter_dir,
-                        base_name,
-                        f"final.{file_format}",
-                    ),
-                ]
-                if allow_final_pipeline:
-                    candidate_paths.append(
-                        os.path.join(
-                            asim_output_dir,
-                            "final_pipeline",
-                            base_name,
-                            f"final.{file_format}",
-                        )
-                    )
-                found_path = next(
-                    (path for path in candidate_paths if os.path.exists(path)), None
-                )
-
-                if found_path:
-                    logger.warning(
-                        "ActivitySim output file '%s' (expected: %s) not found in input records. "
-                        "Falling back to filesystem at: %s",
-                        base_name,
-                        expected_file_name,
-                        found_path,
-                    )
-                    dummy_path = (
-                        os.path.relpath(found_path, base_path)
-                        if base_path and os.path.isabs(base_path)
-                        else found_path
-                    )
-                    dummy_record = FileRecord(
-                        file_path=dummy_path,
-                        short_name=base_name,
-                        description=(
-                            "ActivitySim output file found via filesystem fallback "
-                            f"({os.path.basename(found_path)})"
-                        ),
-                        year=self.state.current_year,
-                    )
-                    asim_file_paths[base_name] = (found_path, dummy_record)
-                else:
-                    logger.warning(
-                        "Required ActivitySim output file '%s' (expected: %s) not found in input "
-                        "records AND not found on filesystem at any of: %s",
-                        base_name,
-                        expected_file_name,
-                        ", ".join(candidate_paths),
-                    )
-
-        if self.state.current_inner_iter <= 0:
-            # First iteration: just copy files over
-            record_list = self._copy_initial_asim_files(
-                asim_file_paths, file_format, workspace
-            )
-        else:
-            # Subsequent iterations: merge replanned households/persons/plans
-            record_list = self._merge_replanned_asim_files(
-                asim_file_paths, file_format, workspace
-            )
-
-        return RecordStore(recordList=[r for r in record_list if r is not None])
 
     def _copy_initial_asim_files(
         self,
@@ -993,37 +617,13 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         workspace: "Workspace",
     ) -> List[FileRecord]:
-        """Directly copies ActivitySim outputs for the first BEAM iteration."""
-        record_list = []
-        asim_to_beam_mapping = [
-            (
-                "beam_plans",
-                "plans",
-            ),  # ActivitySim outputs 'beam_plans', BEAM needs 'plans'
-            ("households", "households"),
-            ("persons", "persons"),
-        ]
-        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
-        os.makedirs(beam_scenario_folder, exist_ok=True)
-
-        for asim_name, beam_name in asim_to_beam_mapping:
-            asim_file_path, asim_file_record = asim_file_paths.get(
-                asim_name, (None, None)
-            )
-            if asim_file_path:
-                records = self._copy_with_compression_asim_file_to_beam(
-                    asim_file_path,
-                    beam_name,
-                    file_format,
-                    beam_scenario_folder,
-                    input_record=asim_file_record,
-                )
-                if records:
-                    record_list.extend(records)
-            else:
-                logger.warning(f"ActivitySim output file not found: {asim_name}")
-
-        return record_list
+        return beam_input_staging.copy_initial_asim_files(
+            asim_file_paths=asim_file_paths,
+            file_format=file_format,
+            workspace=workspace,
+            resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            copy_with_compression_asim_file_to_beam_fn=self._copy_with_compression_asim_file_to_beam,
+        )
 
     def _merge_replanned_asim_files(
         self,
@@ -1031,101 +631,13 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         workspace: "Workspace",
     ) -> List[FileRecord]:
-        """Merges new ActivitySim outputs with existing BEAM inputs for replanning iterations."""
-        logger.info("Merging asim outputs with existing beam input scenario files.")
-        beam_scenario_folder = self._resolve_beam_exchange_scenario_folder(workspace)
-        os.makedirs(beam_scenario_folder, exist_ok=True)
-
-        asim_plans_path, asim_plans_rec = asim_file_paths.get(
-            "beam_plans", (None, None)
+        return beam_input_staging.merge_replanned_asim_files(
+            asim_file_paths=asim_file_paths,
+            file_format=file_format,
+            workspace=workspace,
+            resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            format_specific_output_records_fn=self._format_specific_output_records,
         )
-        asim_persons_path, asim_persons_rec = asim_file_paths.get(
-            "persons", (None, None)
-        )
-        asim_households_path, asim_households_rec = asim_file_paths.get(
-            "households", (None, None)
-        )
-
-        def get_data(
-            path: str, table_type: str, file_format: str, file_source: str
-        ) -> pd.DataFrame:
-            if path is None:
-                raise FileNotFoundError(
-                    f"{file_source} file for table '{table_type}' not found."
-                )
-            if not os.path.exists(path):
-                raise FileNotFoundError(
-                    f"{file_source} file for table '{table_type}' not found at {path}."
-                )
-            return BeamDataHelper.read_and_clean(path, table_type, file_format)
-
-        beam_plans_path = locate_beam_file(beam_scenario_folder, "plans", file_format)
-        beam_persons_path = locate_beam_file(
-            beam_scenario_folder, "persons", file_format
-        )
-        beam_households_path = locate_beam_file(
-            beam_scenario_folder, "households", file_format
-        )
-
-        # Existing BEAM files (previous iteration)
-        original_hh = get_data(beam_households_path, "households", file_format, "BEAM")
-        original_per = get_data(beam_persons_path, "persons", file_format, "BEAM")
-        original_plans = get_data(beam_plans_path, "plans", file_format, "BEAM")
-
-        # New ActivitySim files (current iteration)
-        updated_hh = get_data(
-            asim_households_path, "households", file_format, "ActivitySim"
-        )
-        updated_per = get_data(asim_persons_path, "persons", file_format, "ActivitySim")
-        updated_plans = get_data(asim_plans_path, "plans", file_format, "ActivitySim")
-
-        # Ensure new plans are marked as selected (override default False)
-        updated_plans["planselected"] = True
-
-        # Log overlap
-        logger.info(
-            f"Replanned {len(updated_per)} persons and {len(updated_hh)} households."
-        )
-
-        # Merge logic
-        per_idx = updated_per.index
-        hh_idx = updated_hh.index
-
-        persons_final = pd.concat(
-            [updated_per, original_per.loc[~original_per.index.isin(per_idx)]]
-        )
-        households_final = pd.concat(
-            [updated_hh, original_hh.loc[~original_hh.index.isin(hh_idx)]]
-        )
-        plans_final = pd.concat(
-            [updated_plans, original_plans.loc[~original_plans.person_id.isin(per_idx)]]
-        )
-
-        # Save and Record
-        record_list = []
-
-        # Map dataframes to their output names and input records
-        outputs = [
-            (persons_final, "persons", asim_persons_rec),
-            (households_final, "households", asim_households_rec),
-            (plans_final, "plans", asim_plans_rec),
-        ]
-
-        for df, name, asim_rec in outputs:
-            path = locate_beam_file(beam_scenario_folder, name, file_format)
-
-            if file_format == "parquet":
-                df.to_parquet(path, index=True)
-            else:
-                df.to_csv(path, index=False, compression="gzip")
-
-            record_list.extend(
-                self._format_specific_output_records(
-                    name, path, file_format, "Merged BEAM input file"
-                )
-            )
-
-        return record_list
 
     def _copy_with_compression_asim_file_to_beam(
         self,
@@ -1135,42 +647,14 @@ class BeamPreprocessor(GenericPreprocessor):
         beam_scenario_folder: str,
         input_record: Optional[FileRecord] = None,
     ) -> Optional[List[FileRecord]]:
-        """Copies and compresses a single file from ActivitySim to BEAM."""
-        beam_file_path = locate_beam_file(
-            beam_scenario_folder, beam_file_name, file_format
+        _ = input_record
+        return beam_input_staging.copy_with_compression_asim_file_to_beam(
+            asim_file_path=asim_file_path,
+            beam_file_name=beam_file_name,
+            file_format=file_format,
+            beam_scenario_folder=beam_scenario_folder,
+            state=self.state,
         )
-        logger.info(
-            f"Copying asim file {asim_file_path} to beam input scenario file {beam_file_path}"
-        )
-
-        if not os.path.exists(asim_file_path):
-            logger.error(f"ActivitySim output file does not exist: {asim_file_path}")
-            return [
-                FileRecord(
-                    file_path=beam_file_path,
-                    description=f"Missing BEAM input file: {beam_file_name}",
-                    short_name=f"{beam_file_name}_beam_in_missing",
-                    year=self.state.current_year,
-                    iteration=self.state.current_inner_iter,
-                )
-            ]
-
-        table_type = "plans" if "plans" in beam_file_name else beam_file_name
-
-        df = BeamDataHelper.read_and_clean(asim_file_path, table_type, file_format)
-
-        if file_format == "parquet":
-            df.to_parquet(beam_file_path, index=True)
-        else:
-            df.to_csv(beam_file_path, compression="gzip", index=False)
-
-        records = self._format_specific_output_records(
-            beam_file_name,
-            beam_file_path,
-            file_format,
-            f"Copied from ActivitySim output: {beam_file_name}",
-        )
-        return records
 
     def _format_specific_output_records(
         self,
@@ -1179,144 +663,31 @@ class BeamPreprocessor(GenericPreprocessor):
         file_format: str,
         description_prefix: str,
     ) -> List[FileRecord]:
-        """
-        Emit explicit output records for BEAM input files by format.
-
-        Parameters
-        ----------
-        file_stem : str
-            Base filename (e.g., "persons").
-        file_path : str
-            Full path to the output file.
-        file_format : str
-            File format ("csv" or "parquet").
-        description_prefix : str
-            Description prefix for the record.
-        """
-        short_name_map = {
-            "plans": BEAM_PLANS_IN,
-            "households": BEAM_HOUSEHOLDS_IN,
-            "persons": BEAM_PERSONS_IN,
-        }
-        short_name = short_name_map.get(file_stem, f"{file_stem}_beam_in")
-        return [
-            FileRecord(
-                file_path=file_path,
-                description=description_prefix,
-                short_name=short_name,
-                year=getattr(self.state, "current_year", None),
-                iteration=getattr(self.state, "current_inner_iter", None),
-            )
-        ]
+        _ = file_format
+        return beam_input_staging.format_specific_output_records(
+            file_stem=file_stem,
+            file_path=file_path,
+            description_prefix=description_prefix,
+            state=self.state,
+        )
 
     def _handle_linkstats(
         self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
     ):
-        """
-        Ensure a single, explicit warm-start linkstats record is present for this BEAM run.
-
-        Semantics:
-        - For the first BEAM run in the PILATES inner-iteration loop, use the initial
-          warm-start linkstats file copied into the BEAM mutable input tree
-          (typically `.../<router_directory>/init.linkstats.csv.gz`).
-        - For subsequent BEAM runs (inner-iterations > 0), use the linkstats produced by
-          the most recent BEAM run's *last* BEAM internal iteration (the one logged without
-          a `_sub...` suffix).
-
-        Implementation note:
-        - We "tag" the selected file via a stable `FileRecord.short_name` of
-          `linkstats_warmstart`, so each BEAM step has a consistent lineage key.
-        """
-        from pilates.generic.records import FileRecord
-
-        def _abs_from_record(rec: FileRecord) -> Optional[str]:
-            if not getattr(rec, "file_path", None):
-                return None
-            if os.path.isabs(rec.file_path):
-                return rec.file_path
-            return os.path.abspath(
-                os.path.join(str(workspace.full_path), rec.file_path)
-            )
-
-        # Prefer the last-sub-iteration BEAM output linkstats (no `_sub`).
-        # Supported warm-start record keys:
-        #   - linkstats_<year>_<inner_iter>                 (csv.gz)
-        #   - linkstats_parquet_<year>_<inner_iter>         (parquet)
-        beam_output_linkstats = None
-        csv_pattern = re.compile(r"^linkstats_\d+_\d+$")
-        parquet_pattern = re.compile(r"^linkstats_parquet_\d+_\d+$")
-        for rec in previous_beam_records or []:
-            sn = getattr(rec, "short_name", "") or ""
-            if "_sub" in sn:
-                continue
-            if csv_pattern.match(sn):
-                beam_output_linkstats = rec
-                break
-
-        if beam_output_linkstats is None:
-            for rec in previous_beam_records or []:
-                sn = getattr(rec, "short_name", "") or ""
-                if "_sub" in sn:
-                    continue
-                if parquet_pattern.match(sn):
-                    beam_output_linkstats = rec
-                    break
-
-        # Back-compat fallback: if a previous run only logged an unversioned `linkstats`
-        # (or `linkstats_parquet`) record, use it, but make it very obvious that
-        # this is not ideal.
-        if beam_output_linkstats is None:
-            for rec in previous_beam_records or []:
-                sn = getattr(rec, "short_name", "") or ""
-                if sn in {"linkstats", "linkstats_parquet"}:
-                    beam_output_linkstats = rec
-                    logger.warning(
-                        "[NOT IDEAL] Using an unversioned `%s` record as warm-start input. "
-                        "Prefer BEAM outputs logged as `linkstats_<year>_<inner_iter>` "
-                        "or `linkstats_parquet_<year>_<inner_iter>` so lineage is unambiguous.",
-                        sn,
-                    )
-                    break
-
-        # Determine which physical file path to use.
-        warmstart_abs_path = None
-        warmstart_source = None
-        if beam_output_linkstats is not None:
-            warmstart_abs_path = _abs_from_record(beam_output_linkstats)
-            warmstart_source = "previous_beam_output"
-
-        if warmstart_abs_path is None:
-            warmstart_abs_path = resolve_initial_linkstats_path(
-                self.settings,
-                workspace,
-            )
-            warmstart_source = "initial_inputs"
-
-        if not warmstart_abs_path or not os.path.exists(warmstart_abs_path):
-            logger.warning(
-                "[BEAM Preprocessor] Warm-start linkstats file not found (source=%s): %s",
-                warmstart_source,
-                warmstart_abs_path,
-            )
-            return
-
-        warmstart_rel_path = os.path.relpath(
-            warmstart_abs_path, str(workspace.full_path)
-        )
-        warmstart_record = FileRecord(
-            file_path=warmstart_rel_path,
-            short_name="linkstats_warmstart",
-            description=f"BEAM warm-start linkstats (source={warmstart_source})",
-            year=getattr(self.state, "forecast_year", None),
-            iteration=getattr(self.state, "current_inner_iter", None),
+        beam_input_staging.handle_linkstats(
+            workspace=workspace,
+            previous_beam_records=previous_beam_records,
+            store=store,
+            state=self.state,
+            settings=self.settings,
         )
 
-        logger.info(
-            "[BEAM Preprocessor] Using warm-start linkstats (source=%s): %s",
-            warmstart_source,
-            warmstart_rel_path,
+    def _validate_population_consistency(self, workspace: "Workspace") -> None:
+        beam_input_staging.validate_population_consistency(
+            workspace=workspace,
+            settings=self.settings,
+            resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
         )
-        store.add_record(warmstart_record)
 
     @staticmethod
     def _find_beam_production_path(
@@ -1403,7 +774,28 @@ class BeamPreprocessor(GenericPreprocessor):
                     f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
                 )
                 return
-            config_value = get_setting(self.settings, pydantic_path)
+            beam_settings = self.settings.beam
+            if beam_settings is None:
+                logger.warning(
+                    "BEAM config is missing; cannot resolve parameter '%s'.",
+                    param,
+                )
+                return
+            if pydantic_path == "beam.sample":
+                config_value = beam_settings.sample
+            elif pydantic_path == "beam.replanning_portion":
+                config_value = beam_settings.replanning_portion
+            elif pydantic_path == "beam.max_plans_memory":
+                config_value = beam_settings.max_plans_memory
+            elif pydantic_path == "beam.skim_zone_geoid_col":
+                config_value = beam_settings.skim_zone_geoid_col
+            else:
+                logger.warning(
+                    "Unsupported BEAM Pydantic path '%s' for parameter '%s'.",
+                    pydantic_path,
+                    param,
+                )
+                return
 
         if config_value is None:
             logger.debug(
@@ -1422,41 +814,35 @@ class BeamPreprocessor(GenericPreprocessor):
             )
             return
 
-        beam_config_path = os.path.join(
-            root,
-            self.settings.beam.local_mutable_data_folder,
-            self.settings.run.region,
-            self.settings.beam.config,
+        beam_config_path = beam_primary_config_path(
+            self.settings,
+            workspace_path=root,
         )
 
-        if not os.path.exists(beam_config_path):
+        if not beam_config_path.exists():
             logger.warning(
                 f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
             )
             return
 
-        with open(beam_config_path, "r") as file:
-            lines = file.readlines()
-
-        modified = False
-        changed = False
-        replacement = f"{config_header} = {config_value}\n"
-        rewritten_lines: List[str] = []
-        for line in lines:
-            if line.strip().startswith(config_header):
-                if not modified:  # Keep only the first occurrence.
-                    rewritten_lines.append(replacement)
-                    modified = True
-                    if line != replacement:
-                        changed = True
-                else:
-                    # Drop duplicate definitions for the same key.
-                    changed = True
-                continue
-            rewritten_lines.append(line)
-        if not modified:
-            rewritten_lines.append(f"\n{replacement}")
-            changed = True
+        try:
+            changed = update_staged_beam_config_value(
+                beam_config_path,
+                key=config_header,
+                value=config_value,
+                env_overrides=beam_config_env_overrides(
+                    self.settings,
+                    workspace_path=root,
+                ),
+            )
+        except BeamConfigHoconError:
+            logger.error(
+                "[BEAM Preprocessor] Failed to update staged BEAM config key %s in %s",
+                config_header,
+                beam_config_path,
+                exc_info=True,
+            )
+            raise
 
         if not changed:
             logger.info(
@@ -1465,9 +851,6 @@ class BeamPreprocessor(GenericPreprocessor):
                 beam_config_path,
             )
             return
-
-        with open(beam_config_path, "w") as file:
-            file.writelines(rewritten_lines)
 
         logger.info(
             f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"

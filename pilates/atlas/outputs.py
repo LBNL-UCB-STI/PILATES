@@ -4,7 +4,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
-from pilates.workflows.outputs_base import StepOutputsBase
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
+from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 
 if TYPE_CHECKING:
     pass
@@ -24,6 +28,14 @@ class AtlasPreprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_mutable_input_dir"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        "atlas_households_csv",
+        "atlas_blocks_csv",
+        "atlas_persons_csv",
+        "atlas_residential_csv",
+        "atlas_jobs_csv",
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_mutable_input_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     atlas_mutable_input_dir: Path
@@ -36,6 +48,23 @@ class AtlasPreprocessOutputs(StepOutputsBase):
         """
         for key, path in self.prepared_inputs.items():
             yield key, path, f"ATLAS prepared input: {key}"
+
+    def validate(self, context: Optional[ValidationContext] = None) -> None:
+        super().validate(context)
+        state = getattr(context, "state", None) if context is not None else None
+        if state is None:
+            return
+
+        year = getattr(state, "year", getattr(state, "current_year", None))
+        start_year = getattr(state, "start_year", None)
+        needs_grave_csv = (
+            year is not None and start_year is not None and int(year) > int(start_year)
+        )
+
+        if needs_grave_csv and "atlas_grave_csv" not in self.prepared_inputs:
+            raise AssertionError(
+                "AtlasPreprocessOutputs must include atlas_grave_csv when atlas year exceeds the global start_year."
+            )
 
 
 @dataclass
@@ -52,6 +81,10 @@ class AtlasRunOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "atlas_output_dir"
+    required_output_families: ClassVar[Tuple[str, ...]] = (
+        "householdv_{year}",
+        "vehicles_{year}",
+    )
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     atlas_output_dir: Path
@@ -90,6 +123,11 @@ class AtlasPostprocessOutputs(StepOutputsBase):
     """
 
     primary_output_attr: ClassVar[str] = "usim_datastore_h5"
+    declared_outputs: ClassVar[Tuple[str, ...]] = (
+        USIM_POPULATION_SOURCE_H5,
+        ATLAS_VEHICLES2_OUTPUT,
+    )
+    required_outputs: ClassVar[Tuple[str, ...]] = declared_outputs
     required_path_fields: ClassVar[Tuple[str, ...]] = ("atlas_output_dir",)
     optional_path_fields: ClassVar[Tuple[str, ...]] = ("usim_datastore_h5",)
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("processed_outputs",)
@@ -101,6 +139,12 @@ class AtlasPostprocessOutputs(StepOutputsBase):
         """
         Yield ATLAS postprocessed output records.
         """
+        if self.usim_datastore_h5 is not None:
+            yield (
+                USIM_POPULATION_SOURCE_H5,
+                self.usim_datastore_h5,
+                f"ATLAS postprocess output: {USIM_POPULATION_SOURCE_H5}",
+            )
         for key, path in self.processed_outputs.items():
             yield key, path, f"ATLAS postprocess output: {key}"
 
@@ -110,7 +154,7 @@ class AtlasPostprocessOutputs(StepOutputsBase):
             raise AssertionError(
                 "AtlasPostprocessOutputs must include the updated UrbanSim datastore H5."
             )
-        if "atlas_vehicles2_output" not in self.processed_outputs:
+        if ATLAS_VEHICLES2_OUTPUT not in self.processed_outputs:
             raise AssertionError(
-                "AtlasPostprocessOutputs must include atlas_vehicles2_output."
+                f"AtlasPostprocessOutputs must include {ATLAS_VEHICLES2_OUTPUT}."
             )

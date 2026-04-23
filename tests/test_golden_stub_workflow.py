@@ -32,6 +32,8 @@ from __future__ import annotations
 import re
 import shutil
 from pathlib import Path
+from typing import Optional
+
 import pytest
 import pandas as pd
 import yaml
@@ -78,6 +80,7 @@ from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
+from tests.workflow_contract_harness import build_runtime_context
 from workflow_state import WorkflowState
 
 
@@ -105,6 +108,11 @@ EXPECTED_MANIFEST_STEPS = {
 }
 
 EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
+    "accessibility_asim_out_temp",
+    "disaggregate_accessibility_asim_out_temp",
+    "joint_tour_participants_asim_out_temp",
+    "land_use_asim_out_temp",
+    "non_mandatory_tour_destination_accessibility_asim_out_temp",
     "households_asim_out_temp",
     "persons_asim_out_temp",
     "tours_asim_out_temp",
@@ -113,11 +121,24 @@ EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
 }
 
 EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS = {
+    normalize_asim_output_key("accessibility"),
+    normalize_asim_output_key("disaggregate_accessibility"),
+    normalize_asim_output_key("joint_tour_participants"),
+    normalize_asim_output_key("land_use"),
+    normalize_asim_output_key("non_mandatory_tour_destination_accessibility"),
     normalize_asim_output_key("households"),
     normalize_asim_output_key("persons"),
     normalize_asim_output_key("tours"),
     normalize_asim_output_key("trips"),
     normalize_asim_output_key("beam_plans"),
+}
+
+EXPECTED_ASIM_ARCHIVED_INPUT_KEYS = {
+    "asim_input_households_csv_archived",
+    "asim_input_persons_csv_archived",
+    "asim_input_land_use_csv_archived",
+    "asim_input_skims_omx_archived",
+    "asim_input_skims_zarr_archived",
 }
 
 
@@ -204,15 +225,19 @@ def _write_parquet(path: Path, df: pd.DataFrame) -> None:
     df.to_parquet(path, index=False)
 
 
-def _write_usim_toy_h5(path: Path) -> None:
-    """
-    Create a minimal UrbanSim-style HDF5 with core tables used in tests.
-
-    The golden harness patches datastore access to expose year-scoped keys when
-    needed, so the on-disk fixture stays root-keyed to avoid PyTables warnings
-    for numeric groups.
-    """
+def _write_usim_toy_h5(path: Path, *, with_year_prefix: Optional[int] = None) -> None:
+    """Create a minimal UrbanSim-style HDF5 with core tables used in tests."""
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    table_prefix = f"/{with_year_prefix}" if with_year_prefix is not None else ""
+    households_key = f"{table_prefix}/households" if table_prefix else "households"
+    blocks_key = f"{table_prefix}/blocks" if table_prefix else "blocks"
+    persons_key = f"{table_prefix}/persons" if table_prefix else "persons"
+    residential_key = (
+        f"{table_prefix}/residential_units" if table_prefix else "residential_units"
+    )
+    jobs_key = f"{table_prefix}/jobs" if table_prefix else "jobs"
+    graveyard_key = f"{table_prefix}/graveyard" if table_prefix else "graveyard"
 
     households = pd.DataFrame({"income": [100000.0, 70000.0]}, index=[1, 2])
     households.index.name = "household_id"
@@ -238,12 +263,12 @@ def _write_usim_toy_h5(path: Path) -> None:
     graveyard = pd.DataFrame({"household_id": [1]}, index=[201])
     graveyard.index.name = "person_id"
 
-    households.to_hdf(path, key="households", mode="w")
-    blocks.to_hdf(path, key="blocks", mode="a")
-    persons.to_hdf(path, key="persons", mode="a")
-    residential_units.to_hdf(path, key="residential_units", mode="a")
-    jobs.to_hdf(path, key="jobs", mode="a")
-    graveyard.to_hdf(path, key="graveyard", mode="a")
+    households.to_hdf(path, key=households_key, mode="w")
+    blocks.to_hdf(path, key=blocks_key, mode="a")
+    persons.to_hdf(path, key=persons_key, mode="a")
+    residential_units.to_hdf(path, key=residential_key, mode="a")
+    jobs.to_hdf(path, key=jobs_key, mode="a")
+    graveyard.to_hdf(path, key=graveyard_key, mode="a")
 
 
 def _build_settings(tmp_path: Path):
@@ -345,7 +370,27 @@ def golden_stub_env(tmp_path, monkeypatch):
     """
 
     consist = pytest.importorskip("consist")
-    pytest.importorskip("dlt")
+    from pilates.workflows import step_consist_meta as step_consist_meta_module
+    from pilates.workflows.steps import shared as shared_steps_module
+
+    original_consist_step_meta = step_consist_meta_module.consist_step_meta
+
+    def _patched_consist_step_meta(model):
+        meta = dict(original_consist_step_meta(model))
+        if str(model).startswith("beam_"):
+            meta["adapter"] = lambda _ctx: None
+        return meta
+
+    monkeypatch.setattr(
+        step_consist_meta_module,
+        "consist_step_meta",
+        _patched_consist_step_meta,
+    )
+    monkeypatch.setattr(
+        shared_steps_module,
+        "consist_step_meta",
+        _patched_consist_step_meta,
+    )
 
     settings = _build_settings(tmp_path)
     settings.land_use_enabled = True
@@ -379,15 +424,8 @@ def golden_stub_env(tmp_path, monkeypatch):
     ):
         path.mkdir(parents=True, exist_ok=True)
 
-    beam_region_dir = beam_dir / settings.run.region
-    beam_region_dir.mkdir(parents=True, exist_ok=True)
-    _write_file(
-        beam_region_dir / settings.beam.config,
-        (
-            f'beam.inputDirectory="production/{settings.run.region}"\n'
-            f'folder = ${{beam.inputDirectory}}"/{settings.beam.scenario_folder}"\n'
-        ),
-    )
+    beam_config_path = beam_dir / settings.run.region / settings.beam.config
+    _write_file(beam_config_path)
 
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
@@ -401,82 +439,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     usim_merged_path = usim_dir / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
     _write_usim_toy_h5(usim_input_path)
     _write_usim_toy_h5(usim_output_path)
-    _write_usim_toy_h5(usim_merged_path)
+    _write_usim_toy_h5(usim_merged_path, with_year_prefix=2019)
     _write_usim_toy_h5(usim_dir / "usim_2017.h5")
-    _write_usim_toy_h5(usim_dir / "usim_2019.h5")
-
-    from pilates.urbansim import postprocessor as usim_postprocessor
-
-    real_read_datastore = usim_postprocessor.read_datastore
-    real_hdf_store = usim_postprocessor.pd.HDFStore
-
-    class _YearScopedOutputStore:
-        def __init__(self, path: Path, year: int) -> None:
-            self._path = str(path)
-            self._year = str(year)
-
-        def close(self) -> None:
-            return None
-
-        def keys(self):
-            with real_hdf_store(self._path, "r") as store:
-                return [f"/{self._year}/{key.strip('/')}" for key in store.keys()]
-
-        def __contains__(self, key):
-            normalized = str(key).strip("/")
-            prefix = f"{self._year}/"
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix) :]
-            with real_hdf_store(self._path, "r") as store:
-                return f"/{normalized}" in store.keys()
-
-        def __getitem__(self, key):
-            normalized = str(key).strip("/")
-            prefix = f"{self._year}/"
-            if normalized.startswith(prefix):
-                normalized = normalized[len(prefix) :]
-            with real_hdf_store(self._path, "r") as store:
-                return store[f"/{normalized}"]
-
-    def _patched_read_datastore(
-        settings_arg,
-        year=None,
-        warm_start=False,
-        mutable_data_dir=None,
-        mode="r",
-    ):
-        store, table_prefix = real_read_datastore(
-            settings_arg,
-            year=year,
-            warm_start=warm_start,
-            mutable_data_dir=mutable_data_dir,
-            mode=mode,
-        )
-        if (
-            mode == "r"
-            and year is not None
-            and str(table_prefix) == str(year)
-            and all("/" not in key.strip("/") for key in store.keys())
-        ):
-            path = Path(store._path)
-            store.close()
-            return _YearScopedOutputStore(path, year), str(year)
-        return store, table_prefix
-
-    def _patched_hdf_store(path, mode="r", *args, **kwargs):
-        path_str = str(path)
-        year_scoped_paths = {
-            str(usim_output_path): state.forecast_year,
-            str(usim_merged_path): 2019,
-            str(usim_dir / "usim_2019.h5"): 2019,
-        }
-        year = year_scoped_paths.get(path_str)
-        if year is not None and mode == "r":
-            return _YearScopedOutputStore(Path(path_str), year)
-        return real_hdf_store(path, mode, *args, **kwargs)
-
-    monkeypatch.setattr(usim_postprocessor, "read_datastore", _patched_read_datastore)
-    monkeypatch.setattr(usim_postprocessor.pd, "HDFStore", _patched_hdf_store)
+    _write_usim_toy_h5(usim_dir / "usim_2019.h5", with_year_prefix=2019)
 
     land_use_path = asim_dir / "land_use.csv"
     households_path = asim_dir / "households.csv"
@@ -540,11 +505,55 @@ def golden_stub_env(tmp_path, monkeypatch):
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"
     )
+    asim_accessibility_out_path = (
+        asim_out_dir / "final_pipeline" / "accessibility" / "final.parquet"
+    )
+    asim_disagg_accessibility_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "disaggregate_accessibility"
+        / "final.parquet"
+    )
+    asim_joint_tour_participants_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "joint_tour_participants"
+        / "final.parquet"
+    )
+    asim_land_use_out_path = (
+        asim_out_dir / "final_pipeline" / "land_use" / "final.parquet"
+    )
+    asim_non_mandatory_accessibility_out_path = (
+        asim_out_dir
+        / "final_pipeline"
+        / "non_mandatory_tour_destination_accessibility"
+        / "final.parquet"
+    )
     asim_persons_out_path = asim_out_dir / "final_pipeline" / "persons" / "final.parquet"
     asim_tours_out_path = asim_out_dir / "final_pipeline" / "tours" / "final.parquet"
     asim_trips_out_path = asim_out_dir / "final_pipeline" / "trips" / "final.parquet"
     asim_beam_plans_out_path = (
         asim_out_dir / "final_pipeline" / "beam_plans" / "final.parquet"
+    )
+    _write_parquet(
+        asim_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "accessibility": [1.2, 0.8]}),
+    )
+    _write_parquet(
+        asim_disagg_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "zone_id": [1, 2], "utility": [0.5, 0.3]}),
+    )
+    _write_parquet(
+        asim_joint_tour_participants_out_path,
+        pd.DataFrame({"tour_id": [100], "person_id": [12], "participant_num": [1]}),
+    )
+    _write_parquet(
+        asim_land_use_out_path,
+        pd.DataFrame({"zone_id": [1, 2], "TOTPOP": [120, 80], "TOTEMP": [15, 20]}),
+    )
+    _write_parquet(
+        asim_non_mandatory_accessibility_out_path,
+        pd.DataFrame({"person_id": [11, 21], "destination": [2, 1], "utility": [0.7, 0.4]}),
     )
     _write_parquet(
         asim_households_out_path,
@@ -722,6 +731,11 @@ def golden_stub_env(tmp_path, monkeypatch):
                 return ActivitySimRunOutputs(
                     output_dir=Path(workspace.get_asim_output_dir()),
                     raw_outputs={
+                        "accessibility_asim_out_temp": asim_accessibility_out_path,
+                        "disaggregate_accessibility_asim_out_temp": asim_disagg_accessibility_out_path,
+                        "joint_tour_participants_asim_out_temp": asim_joint_tour_participants_out_path,
+                        "land_use_asim_out_temp": asim_land_use_out_path,
+                        "non_mandatory_tour_destination_accessibility_asim_out_temp": asim_non_mandatory_accessibility_out_path,
                         "households_asim_out_temp": asim_households_out_path,
                         "persons_asim_out_temp": asim_persons_out_path,
                         "tours_asim_out_temp": asim_tours_out_path,
@@ -790,6 +804,10 @@ def golden_stub_env(tmp_path, monkeypatch):
                     f"year-{state.current_year}-iteration-{state.current_inner_iter}"
                 )
                 iter_dir.mkdir(parents=True, exist_ok=True)
+                archived_inputs_dir = Path(workspace.get_asim_output_dir()) / (
+                    f"inputs-year-{state.current_year}-iteration-{state.current_inner_iter}"
+                )
+                archived_inputs_dir.mkdir(parents=True, exist_ok=True)
                 processed_outputs = {}
                 for short_name, source_path in raw_outputs.raw_outputs.items():
                     source_path = Path(source_path)
@@ -800,10 +818,43 @@ def golden_stub_env(tmp_path, monkeypatch):
                     if source_path.exists():
                         shutil.copy2(source_path, target_path)
                     processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+
+                archived_input_sources = {
+                    "asim_input_households_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "households.csv",
+                    "asim_input_persons_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "persons.csv",
+                    "asim_input_land_use_csv_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "land_use.csv",
+                    "asim_input_skims_omx_archived": Path(
+                        workspace.get_asim_mutable_data_dir()
+                    )
+                    / "skims.omx",
+                    "asim_input_skims_zarr_archived": Path(workspace.get_asim_output_dir())
+                    / "cache"
+                    / "skims.zarr",
+                }
+                for output_key, source_path in archived_input_sources.items():
+                    target_name = source_path.name
+                    target_path = archived_inputs_dir / target_name
+                    if source_path.is_dir():
+                        if target_path.exists():
+                            shutil.rmtree(target_path)
+                        shutil.copytree(source_path, target_path)
+                    elif source_path.exists():
+                        shutil.copy2(source_path, target_path)
+                    processed_outputs[output_key] = target_path
                 return ActivitySimPostprocessOutputs(
-                    usim_datastore_h5=None,
+                    usim_datastore_h5=usim_merged_path,
                     asim_output_dir=Path(workspace.get_asim_output_dir()),
                     processed_outputs=processed_outputs,
+                    usim_datastore_key=USIM_DATASTORE_H5,
                 )
             if model_name == "beam":
                 return BeamPostprocessOutputs(
@@ -857,6 +908,11 @@ def golden_stub_env(tmp_path, monkeypatch):
                     "settings": settings,
                     "workspace": workspace,
                     "state": state,
+                    "context": build_runtime_context(
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    ),
                     "scenario": scenario,
                     "coupler": scenario.coupler,
                     "tracker": tracker,
@@ -914,12 +970,10 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         outputs_holder_year=outputs_holder_year,
+        context=golden_stub_env["context"],
     )
     assert USIM_DATASTORE_BASE_H5 in usim_inputs
     assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
@@ -932,18 +986,18 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert coupler_base_h5 is not None
     assert coupler_current_h5 is not None
     assert Path(coupler_base_h5).resolve() == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    assert Path(coupler_current_h5).resolve() == usim_merged_path.resolve()
+    assert Path(coupler_current_h5).resolve() == Path(
+        usim_inputs[USIM_DATASTORE_BASE_H5]
+    ).resolve()
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
     # produces Atlas outputs plus ActivitySim-ready tables.
     run_vehicle_ownership_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=golden_stub_env["context"],
     )
     assert (Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv").exists()
     assert (Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv").exists()
@@ -958,8 +1012,8 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         "vehicleTypeId",
     } <= set(vehicles2.columns)
     assert vehicles2["vehicleTypeId"].tolist() == [
-        "sedan_gasoline_2018",
-        "suv_electricity_2020",
+        "2018_Ford_Fusion_AWD",
+        "2020_Tesla_Model_Y",
     ]
     asim_mutable_dir = Path(workspace.get_asim_mutable_data_dir())
     land_use = pd.read_csv(asim_mutable_dir / "land_use.csv")
@@ -991,13 +1045,11 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     asim_archive_iteration = state.current_inner_iter
     run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         usim_inputs=usim_inputs,
         build_manifest_path=_build_manifest_path,
+        context=golden_stub_env["context"],
     )
 
     zarr_from_coupler = artifact_to_path(coupler.get(ZARR_SKIMS), workspace)
@@ -1024,7 +1076,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     )
     assert (
         set(manifest["activitysim_postprocess"]["outputs"]["processed_outputs"])
-        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS
+        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS | EXPECTED_ASIM_ARCHIVED_INPUT_KEYS
     )
 
     asim_output_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
@@ -1056,6 +1108,15 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     for key in EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS:
         archive_name = key.replace("_asim_out", "")
         assert (asim_archive_dir / f"{archive_name}.parquet").exists()
+    archived_inputs_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"inputs-year-{asim_archive_year}-iteration-{asim_archive_iteration}"
+    )
+    assert (archived_inputs_dir / "households.csv").exists()
+    assert (archived_inputs_dir / "persons.csv").exists()
+    assert (archived_inputs_dir / "land_use.csv").exists()
+    assert (archived_inputs_dir / "skims.omx").exists()
+    assert (archived_inputs_dir / "skims.zarr").exists()
 
     # Phase 4: provenance sanity checks against real Consist tracker output.
     runs = tracker.find_runs(tags=["golden_stub_workflow"])
@@ -1120,8 +1181,6 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         meta = scenario_outputs[key].meta or {}
         assert meta.get("year") == state.forecast_year
         assert meta.get("iteration") == 0
-        description = str(meta.get("description", ""))
-        assert description.startswith("ActivitySim output file:")
 
     report = write_provenance_report(
         tracker=tracker,

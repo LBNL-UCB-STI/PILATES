@@ -1,0 +1,75 @@
+[project]
+site_name = "PILATES"
+repo_url = "https://github.com/LBNL-UCB-STI/PILATES"
+site_description = "Integrated land use, travel demand, traffic, and vehicle fleet simulation workflows"
+site_author = "Zach Needell"
+site_url = "https://LBNL-UCB-STI.github.io/PILATES/"
+copyright = """
+Copyright &copy; 2026 The Regents of the University of California, through Lawrence Berkeley National Laboratory
+"""
+nav = [
+    { "Home" = "index.md" },
+    { "Start Here" = ["start-here/getting_started.md", "start-here/first_run_walkthrough.md", "start-here/configuration_basics.md", "start-here/data_bootstrap.md"] },
+    { "Run PILATES" = ["run/scenario_lifecycle.md", "run/cli.md", "run/configuration_reference.md", "run/restart_and_resume.md", "run/hpc_overview.md", "run/lawrencium.md", "run/troubleshooting.md"] },
+    { "Workflow & Semantics" = ["workflow/workflow_primer.md", "workflow/architecture.md", "workflow/stages_and_steps.md", "workflow/consist_in_pilates.md", "workflow/artifact_flow.md", "workflow/artifact_semantics.md", "workflow/step_contracts.md", "workflow/artifact_facet_catalog.md", "workflow/lineage_map.md", "workflow/simulation_logic_by_stage.md"] },
+    { "Extend PILATES" = ["extend/model_integration_guide.md", "extend/adding_a_model.md", "extend/model_contract_checklist.md", "extend/output_validation.md", "extend/testing_new_integrations.md"] },
+    { "Analyze Runs" = ["analysis/overview.md", "analysis/opening_archives.md", "analysis/consist_analysis_cli.md", "analysis/run_discovery_and_runsets.md", "analysis/scenario_comparison.md", "analysis/datasets.md", "analysis/sql_and_duckdb.md", "analysis/analysis_patterns.md"] },
+    { "Reference" = ["reference/model_stack.md", "reference/workspace_layout.md", "reference/database_setup.md", "reference/database_schema_reference.md", "reference/database_documentation_guide.md", "reference/glossary.md", "reference/faq.md"] },
+    { "Operations" = ["operations/overview.md", "operations/test_output_preservation.md"] },
+]
+extra_css = ["stylesheets/extra.css"]
+
+[project.theme.icon]
+logo = "lucide/building-2"
+favicon = "lucide/building-2"
+
+[project.theme]
+#favicon = "lucide/building-2"
+#icon = "lucide/building-2"
+language = "en"
+features = [
+    "announce.dismiss",
+    "content.action.view",
+    "content.code.annotate",
+    "content.code.copy",
+    "content.code.select",
+    "content.footnote.tooltips",
+    "content.tabs.link",
+    "content.tooltips",
+    "header.autohide",
+    "navigation.expand",
+    "navigation.footer",
+    "navigation.indexes",
+    "navigation.path",
+    "navigation.sections",
+    "navigation.tabs",
+    "navigation.top",
+    "navigation.tracking",
+    "search.highlight",
+    "toc.follow",
+]
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme)"
+toggle.icon = "lucide/sun-moon"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: light)"
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+media = "(prefers-color-scheme: dark)"
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to system preference"
+
+[project.theme.font]
+text = "Libre Franklin"
+code = "JetBrains Mono"
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/LBNL-UCB-STI/PILATES"

@@ -3,12 +3,77 @@ from __future__ import annotations
 import logging
 import os
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, TypedDict
 
-from pilates.utils.io import get_traffic_assignment_model
+from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    resolve_existing_path,
+    set_coupler_from_artifact,
+)
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_PLANS_OUT,
+    LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
+)
+from pilates.workflows.binding import restart_required_local_artifact_policy
+from pilates.workflows.catalog import (
+    RestartProducerCandidate,
+    restart_artifact_producers,
+    restart_query_scope_for_step,
+)
+from pilates.workflows.surface import RestartFrontierContract
+from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 
 logger = logging.getLogger(__name__)
+
+
+class WorkflowStageLike(Protocol):
+    supply_demand_loop: Any
+    traffic_assignment: Any
+
+
+class RestartArtifactDiagnostic(TypedDict):
+    key: str
+    path: str
+    reason: str
+
+
+class RestartHydrationSummary(TypedDict):
+    frontier_stage: Optional[str]
+    frontier_step: Optional[str]
+    success: bool
+    hydrated_keys: List[str]
+    missing_keys: List[str]
+    producer_steps_by_key: Dict[str, str]
+    fallback_reason: Optional[str]
+    rewind_restore: bool
+    overlay_root: Optional[str]
 
 
 def _coerce_int(value: Any) -> Optional[int]:
@@ -18,242 +83,49 @@ def _coerce_int(value: Any) -> Optional[int]:
         return None
 
 
-def _activitysim_iteration_output_requirements(
-    *, asim_output_dir: str, year: Any, iteration: Any
-) -> List[Dict[str, str]]:
-    iter_dir = os.path.join(
-        asim_output_dir,
-        f"year-{year}-iteration-{iteration}",
-    )
-    return [
-        {
-            "key": "activitysim_iteration_beam_plans_parquet",
-            "path": os.path.join(iter_dir, "beam_plans.parquet"),
-            "reason": (
-                "ActivitySim beam plans required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-        {
-            "key": "activitysim_iteration_households_parquet",
-            "path": os.path.join(iter_dir, "households.parquet"),
-            "reason": (
-                "ActivitySim households required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-        {
-            "key": "activitysim_iteration_persons_parquet",
-            "path": os.path.join(iter_dir, "persons.parquet"),
-            "reason": (
-                "ActivitySim persons required to resume BEAM from "
-                "traffic assignment"
-            ),
-        },
-    ]
-
-
 def restart_required_local_artifacts(
     *,
     settings: Any,
     state: Any,
     workspace: Any,
+    surface: Any = None,
     get_usim_datastore_fname_fn: Callable[..., str],
     required_asim_config_dirs_fn: Callable[[str], Sequence[str]],
     atlas_static_input_relpaths_fn: Callable[[Any], Sequence[str]],
     workflow_stage: Any,
-) -> List[Dict[str, str]]:
+) -> List[RestartArtifactDiagnostic]:
+    """Build the local restart artifact inventory used by preflight checks.
+
+    This stays operational rather than semantic: the surface decides which
+    frontier/bootstrap classifications are active, while this function keeps the
+    existing path resolution and local-materialization checks.
     """
-    Build a pragmatic set of local artifacts that must exist to safely skip bootstrap.
-    """
-    required: List[Dict[str, str]] = []
-
-    current_stage = getattr(state, "current_major_stage", None)
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    requires_usim_base_h5 = (
-        getattr(model_cfg, "land_use", None) == "urbansim"
-        or getattr(model_cfg, "activity_demand", None) == "activitysim"
-    )
-    if requires_usim_base_h5:
-        usim_data_dir = workspace.get_usim_mutable_data_dir()
-        usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-        required.append(
-            {
-                "key": "usim_datastore_base_h5",
-                "path": os.path.join(usim_data_dir, usim_base_fname),
-                "reason": "UrbanSim base datastore required for downstream restart inputs",
-            }
+    required: List[RestartArtifactDiagnostic] = []
+    for rule in restart_required_local_artifact_policy():
+        resolved = rule.resolve(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            get_usim_datastore_fname_fn=get_usim_datastore_fname_fn,
+            required_asim_config_dirs_fn=required_asim_config_dirs_fn,
+            atlas_static_input_relpaths_fn=atlas_static_input_relpaths_fn,
+            workflow_stage=workflow_stage,
         )
-
-    region = getattr(getattr(settings, "run", None), "region", None)
-    urbansim_cfg = getattr(settings, "urbansim", None)
-    requires_urbansim_run_locals = current_stage in {
-        None,
-        workflow_stage.land_use,
-    }
-    if requires_urbansim_run_locals and region and urbansim_cfg is not None:
-        region_id = (
-            getattr(urbansim_cfg, "region_mappings", {})
-            .get("region_to_region_id", {})
-            .get(region)
-        )
-        if region_id:
-            required.extend(
-                [
-                    {
-                        "key": "omx_skims",
-                        "path": os.path.join(usim_data_dir, f"skims_mpo_{region_id}.omx"),
-                        "reason": "UrbanSim run requires mutable OMX skims in the local workspace",
-                    },
-                    {
-                        "key": "hh_size",
-                        "path": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
-                        "reason": "UrbanSim run requires household-size lookup data in the local workspace",
-                    },
-                    {
-                        "key": "income_rates",
-                        "path": os.path.join(usim_data_dir, f"income_rates_{region_id}.csv"),
-                        "reason": "UrbanSim run requires income-rate lookup data in the local workspace",
-                    },
-                    {
-                        "key": "relmap",
-                        "path": os.path.join(usim_data_dir, f"relmap_{region_id}.csv"),
-                        "reason": "UrbanSim run requires relationship-mapping data in the local workspace",
-                    },
-                    {
-                        "key": "schools",
-                        "path": os.path.join(usim_data_dir, "schools_2010.csv"),
-                        "reason": "UrbanSim run requires schools lookup data in the local workspace",
-                    },
-                    {
-                        "key": "school_districts",
-                        "path": os.path.join(usim_data_dir, "blocks_school_districts_2010.csv"),
-                        "reason": "UrbanSim run requires school-district lookup data in the local workspace",
-                    },
-                ]
-            )
-
-    requires_activitysim_locals = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and (
-            current_stage is None
-            or current_stage
-            in {
-                workflow_stage.supply_demand_loop,
-                workflow_stage.activity_demand,
-                workflow_stage.activity_demand_directly_from_land_use,
-            }
-        )
-    )
-    if requires_activitysim_locals:
-        asim_configs_dir = workspace.get_asim_mutable_configs_dir()
-        main_configs_dir = (
-            getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
-            or "configs"
-        )
-        for dirname in required_asim_config_dirs_fn(main_configs_dir):
+        if not resolved:
+            continue
+        for key, path in resolved.items():
+            if path is None:
+                continue
             required.append(
                 {
-                    "key": f"activitysim_config_settings_yaml_{dirname}",
-                    "path": os.path.join(asim_configs_dir, dirname, "settings.yaml"),
+                    "key": key,
+                    "path": path,
                     "reason": (
-                        "ActivitySim mutable config tree required on restart "
-                        f"(config_dir={dirname})"
+                        f"Restart policy '{rule.name}' requires {key}"
+                        + (f" ({rule.notes})" if rule.notes else "")
                     ),
                 }
             )
-
-    requires_activitysim_zarr = (
-        getattr(model_cfg, "activity_demand", None) == "activitysim"
-        and bool(getattr(state, "asim_compiled", False))
-        and current_stage
-        in {
-            workflow_stage.supply_demand_loop,
-            workflow_stage.activity_demand,
-            workflow_stage.activity_demand_directly_from_land_use,
-            workflow_stage.traffic_assignment,
-        }
-    )
-    get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-    if requires_activitysim_zarr and callable(get_asim_output_dir):
-        required.append(
-            {
-                "key": "zarr_skims",
-                "path": os.path.join(get_asim_output_dir(), "cache", "skims.zarr"),
-                "reason": "ActivitySim compiled skims required for resumed supply-demand loop",
-            }
-        )
-        current_sub_stage = getattr(state, "current_sub_stage", None)
-        if current_stage == workflow_stage.supply_demand_loop and (
-            current_sub_stage == workflow_stage.traffic_assignment
-        ):
-            required.extend(
-                _activitysim_iteration_output_requirements(
-                    asim_output_dir=get_asim_output_dir(),
-                    year=getattr(state, "current_year", "unknown"),
-                    iteration=getattr(state, "current_inner_iter", 0),
-                )
-            )
-
-    requires_beam_locals = (
-        get_traffic_assignment_model(settings) == "beam"
-        and current_stage
-        in {
-            workflow_stage.supply_demand_loop,
-            workflow_stage.traffic_assignment,
-        }
-    )
-    get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
-    if requires_beam_locals and callable(get_beam_input_dir) and region:
-        beam_input_dir = get_beam_input_dir()
-        required.append(
-            {
-                "key": "beam_mutable_data_dir",
-                "path": beam_input_dir,
-                "reason": (
-                    "BEAM mutable data root required for restart metadata and "
-                    "resumed traffic assignment"
-                ),
-            }
-        )
-        required.append(
-            {
-                "key": "beam_region_input_dir",
-                "path": os.path.join(beam_input_dir, region),
-                "reason": (
-                    "BEAM mutable input tree required for resumed traffic assignment"
-                ),
-            }
-        )
-        beam_cfg = getattr(settings, "beam", None)
-        beam_config_name = getattr(beam_cfg, "config", None)
-        if beam_config_name:
-            required.append(
-                {
-                    "key": "beam_primary_config_file",
-                    "path": os.path.join(beam_input_dir, region, beam_config_name),
-                    "reason": (
-                        "BEAM primary config required for resumed traffic assignment"
-                    ),
-                }
-            )
-
-    requires_atlas_locals = (
-        getattr(model_cfg, "vehicle_ownership", None) == "atlas"
-        and current_stage == workflow_stage.vehicle_ownership_model
-    )
-    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
-    if requires_atlas_locals and callable(get_atlas_input_dir):
-        atlas_input_dir = get_atlas_input_dir()
-        for relpath in atlas_static_input_relpaths_fn(settings):
-            required.append(
-                {
-                    "key": f"atlas_static::{relpath}",
-                    "path": os.path.join(atlas_input_dir, relpath),
-                    "reason": "ATLAS static input required during vehicle ownership restart",
-                }
-            )
-
     return required
 
 
@@ -262,14 +134,26 @@ def find_missing_restart_local_artifacts(
     settings: Any,
     state: Any,
     workspace: Any,
-    restart_required_local_artifacts_fn: Callable[..., List[Dict[str, str]]],
-) -> List[Dict[str, str]]:
-    missing: List[Dict[str, str]] = []
-    for artifact in restart_required_local_artifacts_fn(
-        settings=settings, state=state, workspace=workspace
-    ):
+    surface: Any = None,
+    restart_required_local_artifacts_fn: Callable[..., List[RestartArtifactDiagnostic]],
+) -> List[RestartArtifactDiagnostic]:
+    """Resolve the restart inventory against local/archive materialization state."""
+    missing: List[RestartArtifactDiagnostic] = []
+    kwargs = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    if surface is not None:
+        kwargs["surface"] = surface
+    for artifact in restart_required_local_artifacts_fn(**kwargs):
         path = os.path.realpath(artifact["path"])
-        if not os.path.exists(path):
+        resolved_path = resolve_existing_path(
+            path,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if resolved_path is None or not os.path.exists(resolved_path):
             missing.append(
                 {
                     "key": artifact["key"],
@@ -280,43 +164,120 @@ def find_missing_restart_local_artifacts(
     return missing
 
 
-def format_missing_artifact_summary(artifacts: List[Dict[str, str]]) -> str:
+def format_missing_artifact_summary(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+) -> str:
     if not artifacts:
         return "none"
     return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
 
 
-def resolve_restart_rehydrate_mode(settings: Any) -> str:
-    run_cfg = getattr(settings, "run", None)
-    raw = getattr(run_cfg, "restart_rehydrate_mode", "bundle")
-    mode = str(raw).strip().lower() if raw is not None else "bundle"
-    if mode in {"bundle", "full", "off"}:
-        return mode
-    logger.warning(
-        "Unknown run.restart_rehydrate_mode=%r; defaulting to 'bundle'.",
-        raw,
-    )
-    return "bundle"
-
-
-def is_restart_strict(settings: Any) -> bool:
-    run_cfg = getattr(settings, "run", None)
-    return bool(getattr(run_cfg, "restart_strict", False))
-
-
 def read_archive_run_state_year(
     state_path: str,
     *,
-    read_current_stage_fn: Callable[[str], tuple[Any, ...]],
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
 ) -> Optional[int]:
     if not state_path:
         return None
     try:
         year, *_ = read_current_stage_fn(state_path)
     except Exception as exc:
-        logger.warning("Failed reading archive run_state year from %s: %s", state_path, exc)
+        logger.warning(
+            "Failed reading archive run_state year from %s: %s", state_path, exc
+        )
         return None
     return _coerce_int(year)
+
+
+def read_archive_run_state_snapshot(
+    state_path: str,
+    *,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+) -> RestartStateSnapshot:
+    if not state_path:
+        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
+    try:
+        year, stage, iteration, *_ = read_current_stage_fn(state_path)
+    except Exception as exc:
+        logger.warning(
+            "Failed reading archive run_state snapshot from %s: %s", state_path, exc
+        )
+        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
+    return RestartStateSnapshot(
+        year=_coerce_int(year),
+        stage_name=getattr(stage, "name", None) if stage is not None else None,
+        iteration=_coerce_int(iteration),
+    )
+
+
+def _runtime_state_snapshot(state: Any) -> RestartStateSnapshot:
+    current_stage = getattr(state, "current_sub_stage", None) or getattr(
+        state, "current_major_stage", None
+    )
+    return RestartStateSnapshot(
+        year=_coerce_int(getattr(state, "current_year", None)),
+        stage_name=getattr(current_stage, "name", None)
+        if current_stage is not None
+        else None,
+        iteration=_coerce_int(getattr(state, "current_inner_iter", None)),
+    )
+
+
+def _stage_progress_rank(stage_name: Optional[str]) -> int:
+    order = {
+        "initialize_data": 0,
+        "land_use": 10,
+        "vehicle_ownership_model": 20,
+        "activity_demand": 30,
+        "activity_demand_directly_from_land_use": 30,
+        "traffic_assignment": 40,
+        "postprocessing": 50,
+    }
+    return order.get(str(stage_name), -1)
+
+
+def _progress_tuple(snapshot: RestartStateSnapshot) -> Tuple[int, int, int]:
+    return (
+        snapshot.year if snapshot.year is not None else -1,
+        snapshot.iteration if snapshot.iteration is not None else 0,
+        _stage_progress_rank(snapshot.stage_name),
+    )
+
+
+def _hydrate_archive_workflow_manifests(
+    *,
+    local_run_dir: str,
+    archive_run_dir: str,
+) -> None:
+    if not local_run_dir or not archive_run_dir:
+        return
+    source_workflow_dir = Path(archive_run_dir) / ".workflow"
+    if not source_workflow_dir.exists():
+        return
+    target_workflow_dir = Path(local_run_dir) / ".workflow"
+    for manifest_path in source_workflow_dir.rglob("*.yaml"):
+        relative_path = manifest_path.relative_to(source_workflow_dir)
+        target_path = target_workflow_dir / relative_path
+        if target_path.exists():
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest_path, target_path)
+
+
+def is_rewind_resume_request(
+    *,
+    state: Any,
+    archive_state_path: str,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+) -> bool:
+    requested = _runtime_state_snapshot(state)
+    archive = read_archive_run_state_snapshot(
+        archive_state_path,
+        read_current_stage_fn=read_current_stage_fn,
+    )
+    if requested.year is None or archive.year is None:
+        return False
+    return _progress_tuple(requested) < _progress_tuple(archive)
 
 
 def enforce_resume_rewind_guardrail(
@@ -344,373 +305,1061 @@ def enforce_resume_rewind_guardrail(
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
 
 
-def repair_restart_state_for_incomplete_atlas_outputs(
+class RestartHydrationError(RuntimeError):
+    def __init__(self, message: str, *, summary: Mapping[str, Any]):
+        super().__init__(message)
+        self.summary = dict(summary)
+
+
+@dataclass(frozen=True)
+class RestartStateSnapshot:
+    year: Optional[int]
+    stage_name: Optional[str]
+    iteration: Optional[int]
+
+
+@dataclass(frozen=True)
+class RestartExactRewindContract:
+    stage_name: str
+    target_step: str
+    producer_step: str
+    overlay_family: str
+    required_snapshot_keys: Tuple[str, ...]
+    optional_snapshot_keys: Tuple[str, ...] = ()
+
+
+def _surface_restart_frontier_contract(surface: Any) -> Optional[RestartFrontierContract]:
+    if surface is None:
+        return None
+    getter = getattr(surface, "restart_frontier", None)
+    contract = getter() if callable(getter) else getattr(surface, "restart_frontier_contract", None)
+    if contract is None:
+        return None
+    return RestartFrontierContract(
+        frontier_stage=str(contract.frontier_stage),
+        frontier_step=str(contract.frontier_step),
+        required_keys=tuple(contract.required_keys),
+    )
+
+
+def _enabled_restart_models(settings: Any) -> Tuple[str, ...]:
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None:
+        return ()
+
+    enabled: List[str] = []
+    for attr_name in (
+        "land_use",
+        "vehicle_ownership",
+        "activity_demand",
+        "traffic_assignment",
+        "postprocessing",
+    ):
+        model_name = getattr(models, attr_name, None)
+        if model_name is None:
+            continue
+        text = str(model_name).strip()
+        if text:
+            enabled.append(text)
+    return tuple(dict.fromkeys(enabled))
+
+
+def restart_frontier_contract(
     *,
     settings: Any,
     state: Any,
-    archive_run_dir: str,
-) -> bool:
-    """Rewind stale supply-demand resumes back to ATLAS when atlas outputs are incomplete."""
-    model_cfg = getattr(getattr(settings, "run", None), "models", None)
-    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
-        return False
+    workflow_stage: WorkflowStageLike,
+    surface: Any = None,
+) -> Optional[RestartFrontierContract]:
+    """Return the effective restart frontier, preferring the shared surface.
 
-    stage_enum = getattr(state, "Stage", None)
-    current_major_stage = getattr(state, "current_major_stage", None)
-    if stage_enum is None or current_major_stage != stage_enum.supply_demand_loop:
-        return False
+    Keeping this bridge lets older restart callers continue using the legacy
+    module API while the runtime authority moves into `EnabledWorkflowSurface`.
+    """
+    surface_contract = _surface_restart_frontier_contract(surface)
+    if surface_contract is not None:
+        return surface_contract
 
-    current_year = _coerce_int(getattr(state, "current_year", None))
-    forecast_year = _coerce_int(getattr(state, "forecast_year", None))
-    if current_year is None or forecast_year is None or forecast_year < current_year:
-        return False
-
-    atlas_output_dir = os.path.join(
-        os.path.realpath(archive_run_dir), "atlas", "atlas_output"
-    )
-    sub_years = [current_year]
-    if forecast_year > current_year:
-        sub_years.extend(range(current_year + 2, forecast_year + 1, 2))
-
-    incomplete_years: List[int] = []
-    for atlas_year in sub_years:
-        required_outputs = (
-            os.path.join(atlas_output_dir, f"householdv_{atlas_year}.csv"),
-            os.path.join(atlas_output_dir, f"vehicles_{atlas_year}.csv"),
-            os.path.join(atlas_output_dir, f"vehicles2_{atlas_year}.csv"),
-        )
-        if not all(os.path.exists(path) for path in required_outputs):
-            incomplete_years.append(atlas_year)
-
-    if not incomplete_years:
-        return False
-
-    state.current_major_stage = stage_enum.vehicle_ownership_model
-    state.current_sub_stage = None
-    state.current_inner_iter = 0
-    if hasattr(state, "sub_stage_progress"):
-        state.sub_stage_progress = None
-    write_state = getattr(state, "write_state", None)
-    if callable(write_state):
-        write_state()
-    logger.warning(
-        "[RestartRepair] Rewinding stale restart state from supply_demand_loop to "
-        "vehicle_ownership_model because archived ATLAS outputs are incomplete for "
-        "years=%s in %s",
-        incomplete_years,
-        atlas_output_dir,
-    )
-    return True
-
-
-def map_local_path_to_archive(
-    *,
-    local_path: str,
-    local_run_dir: str,
-    archive_run_dir: str,
-) -> Optional[str]:
-    local_abs = os.path.realpath(local_path)
-    local_root = os.path.realpath(local_run_dir)
-    archive_root = os.path.realpath(archive_run_dir)
-    try:
-        if os.path.commonpath([local_abs, local_root]) != local_root:
-            return None
-    except ValueError:
+    if getattr(state, "current_major_stage", None) != workflow_stage.supply_demand_loop:
         return None
-    rel = os.path.relpath(local_abs, local_root)
-    return os.path.join(archive_root, rel)
+    if getattr(state, "current_sub_stage", None) != workflow_stage.traffic_assignment:
+        return None
 
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None:
+        return None
+    if getattr(models, "activity_demand", None) != "activitysim":
+        return None
+    if getattr(models, "traffic_assignment", None) != "beam":
+        return None
 
-def copy_archive_entry_preserve_existing(
-    *,
-    archive_path: str,
-    local_path: str,
-) -> Tuple[int, int]:
-    copied = 0
-    skipped_existing = 0
-
-    if os.path.isdir(archive_path):
-        for root, _, files in os.walk(archive_path):
-            rel_root = os.path.relpath(root, archive_path)
-            dest_root = local_path if rel_root == "." else os.path.join(local_path, rel_root)
-            os.makedirs(dest_root, exist_ok=True)
-            for filename in files:
-                src = os.path.join(root, filename)
-                dest = os.path.join(dest_root, filename)
-                if os.path.exists(dest):
-                    skipped_existing += 1
-                    continue
-                shutil.copy2(src, dest)
-                copied += 1
-        return copied, skipped_existing
-
-    os.makedirs(os.path.dirname(local_path), exist_ok=True)
-    if os.path.exists(local_path):
-        return 0, 1
-    shutil.copy2(archive_path, local_path)
-    return 1, 0
-
-
-def rehydrate_missing_local_artifacts_from_archive(
-    *,
-    missing_artifacts: List[Dict[str, str]],
-    local_run_dir: str,
-    archive_run_dir: str,
-    map_local_path_to_archive_fn: Callable[..., Optional[str]] = map_local_path_to_archive,
-    copy_archive_entry_fn: Callable[..., Tuple[int, int]] = copy_archive_entry_preserve_existing,
-) -> Dict[str, int]:
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    for artifact in missing_artifacts:
-        local_path = os.path.realpath(artifact["path"])
-        key = artifact.get("key", "unknown")
-        kind = artifact.get("kind", "file")
-
-        if os.path.exists(local_path) and not (kind == "dir" and os.path.isdir(local_path)):
-            summary["skipped_existing"] += 1
-            logger.info("[RestartRehydrate] Skip existing local artifact key=%s path=%s", key, local_path)
-            continue
-
-        archive_path = map_local_path_to_archive_fn(
-            local_path=local_path,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-        )
-        if archive_path is None:
-            summary["skipped_unmapped"] += 1
-            logger.warning("[RestartRehydrate] Cannot map local path to archive key=%s path=%s", key, local_path)
-            continue
-        archive_path = os.path.realpath(archive_path)
-        if not os.path.exists(archive_path):
-            summary["skipped_missing_archive"] += 1
-            logger.warning("[RestartRehydrate] Archive source missing key=%s archive_path=%s", key, archive_path)
-            continue
-
-        try:
-            copied, skipped_existing = copy_archive_entry_fn(
-                archive_path=archive_path,
-                local_path=local_path,
-            )
-            summary["copied"] += copied
-            summary["skipped_existing"] += skipped_existing
-            logger.info(
-                "[RestartRehydrate] key=%s copied=%s skipped_existing=%s source=%s dest=%s",
-                key,
-                copied,
-                skipped_existing,
-                archive_path,
-                local_path,
-            )
-        except Exception as exc:
-            summary["copy_errors"] += 1
-            logger.warning(
-                "[RestartRehydrate] Failed copy key=%s source=%s dest=%s error=%s",
-                key,
-                archive_path,
-                local_path,
-                exc,
-            )
-
-    logger.info(
-        "[RestartRehydrate] Summary copied=%s skipped_existing=%s skipped_missing_archive=%s skipped_unmapped=%s copy_errors=%s",
-        summary["copied"],
-        summary["skipped_existing"],
-        summary["skipped_missing_archive"],
-        summary["skipped_unmapped"],
-        summary["copy_errors"],
-    )
-    return summary
-
-
-def rehydrate_full_local_run_from_archive(
-    *,
-    local_run_dir: str,
-    archive_run_dir: str,
-    copy_archive_entry_fn: Callable[..., Tuple[int, int]] = copy_archive_entry_preserve_existing,
-) -> Dict[str, int]:
-    summary = {
-        "copied": 0,
-        "skipped_existing": 0,
-        "skipped_missing_archive": 0,
-        "skipped_unmapped": 0,
-        "copy_errors": 0,
-    }
-    archive_root = os.path.realpath(archive_run_dir)
-    if not os.path.exists(archive_root):
-        summary["skipped_missing_archive"] = 1
-        logger.warning("[RestartRehydrate] Full mode archive root missing: %s", archive_root)
-        return summary
-
-    try:
-        copied, skipped_existing = copy_archive_entry_fn(
-            archive_path=archive_root,
-            local_path=os.path.realpath(local_run_dir),
-        )
-        summary["copied"] = copied
-        summary["skipped_existing"] = skipped_existing
-    except Exception as exc:
-        summary["copy_errors"] = 1
-        logger.warning(
-            "[RestartRehydrate] Full mode copy failed source=%s dest=%s error=%s",
-            archive_root,
-            os.path.realpath(local_run_dir),
-            exc,
-        )
-    return summary
-
-
-def rehydrate_bundle_local_artifacts_from_archive(
-    *,
-    bundle_manifest: Optional[Dict[str, Any]],
-    local_run_dir: str,
-    archive_run_dir: str,
-    manifest_entries_to_local_artifacts_fn: Callable[..., List[Dict[str, str]]],
-    rehydrate_missing_local_artifacts_fn: Callable[..., Dict[str, int]] = rehydrate_missing_local_artifacts_from_archive,
-) -> Dict[str, int]:
-    bundle_artifacts = manifest_entries_to_local_artifacts_fn(
-        manifest=bundle_manifest,
-        local_run_dir=local_run_dir,
-    )
-    if not bundle_artifacts:
-        logger.warning("[RestartRehydrate] Bundle mode found no manifest artifacts to hydrate.")
-        return {
-            "copied": 0,
-            "skipped_existing": 0,
-            "skipped_missing_archive": 0,
-            "skipped_unmapped": 0,
-            "copy_errors": 0,
-        }
-    return rehydrate_missing_local_artifacts_fn(
-        missing_artifacts=bundle_artifacts,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
+    return RestartFrontierContract(
+        frontier_stage="traffic_assignment",
+        frontier_step="beam_preprocess",
+        required_keys=(
+            "beam_plans_asim_out",
+            "households_asim_out",
+            "persons_asim_out",
+            ZARR_SKIMS,
+        ),
     )
 
 
-def log_resume_doctor_check(
+def restart_exact_rewind_contract(
     *,
-    check: str,
-    ok: bool,
-    detail: str,
-) -> None:
-    status = "ok" if ok else "missing"
-    log_fn = logger.info if ok else logger.warning
-    log_fn("[ResumeDoctor] check=%s status=%s %s", check, status, detail)
-
-
-def run_resume_doctor_diagnostics(
-    *,
+    settings: Any,
     state: Any,
+    workflow_stage: WorkflowStageLike,
+) -> Optional[RestartExactRewindContract]:
+    current_stage = getattr(state, "current_sub_stage", None) or getattr(
+        state, "current_major_stage", None
+    )
+    models = getattr(getattr(settings, "run", None), "models", None)
+    if models is None or current_stage is None:
+        return None
+
+    if (
+        current_stage == workflow_stage.activity_demand
+        and getattr(models, "activity_demand", None) == "activitysim"
+    ):
+        return RestartExactRewindContract(
+            stage_name="activity_demand",
+            target_step="activitysim_run",
+            producer_step="activitysim_postprocess",
+            overlay_family="activitysim",
+            required_snapshot_keys=(
+                "asim_input_households_csv_archived",
+                "asim_input_persons_csv_archived",
+                "asim_input_land_use_csv_archived",
+            ),
+            optional_snapshot_keys=(
+                "asim_input_skims_zarr_archived",
+                "asim_input_skims_omx_archived",
+            ),
+        )
+
+    if (
+        current_stage == workflow_stage.traffic_assignment
+        and getattr(models, "traffic_assignment", None) == "beam"
+    ):
+        return RestartExactRewindContract(
+            stage_name="traffic_assignment",
+            target_step="beam_run",
+            producer_step="beam_run",
+            overlay_family="beam",
+            required_snapshot_keys=(
+                BEAM_INPUT_PLANS_ARCHIVED,
+                BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+                BEAM_INPUT_PERSONS_ARCHIVED,
+                BEAM_INPUT_CONFIG_ARCHIVED,
+            ),
+            optional_snapshot_keys=(
+                BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+                BEAM_INPUT_VEHICLES_ARCHIVED,
+                BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+                BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+                BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+            ),
+        )
+
+    return None
+
+
+def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
+    if not runs:
+        return None
+
+    def _latest_key(run: Any) -> Tuple[int, float, str]:
+        created_at_value = float("-inf")
+        created_at = getattr(run, "created_at", None)
+        if hasattr(created_at, "timestamp"):
+            try:
+                created_at_value = float(created_at.timestamp())
+            except Exception:
+                created_at_value = float("-inf")
+        return (
+            _coerce_int(getattr(run, "iteration", None)) or -1,
+            created_at_value,
+            str(getattr(run, "id", "")),
+        )
+
+    return max(runs, key=_latest_key)
+
+
+def _find_latest_run_for_restart_target(
+    *,
+    tracker: Any,
+    target: Mapping[str, Any],
+) -> Any:
+    find_latest_run = getattr(tracker, "find_latest_run", None)
+    if callable(find_latest_run):
+        return find_latest_run(**dict(target))
+
+    find_runs = getattr(tracker, "find_runs", None)
+    if callable(find_runs):
+        runs = find_runs(limit=10_000, **dict(target))
+        if isinstance(runs, dict):
+            runs = list(runs.values())
+        run = _select_latest_run_from_candidates(list(runs or ()))
+        if run is None:
+            raise ValueError(
+                f"No runs found matching criteria for restart target: {dict(target)}"
+            )
+        return run
+
+    raise AttributeError("tracker does not support find_latest_run/find_runs")
+
+
+def _materialization_failures(result: Any) -> List[str]:
+    failures: List[str] = []
+    for field_name in ("failed", "skipped_unmapped", "skipped_missing_source"):
+        entries = list(getattr(result, field_name, []) or [])
+        for entry in entries:
+            failures.append(f"{field_name}={entry}")
+    return failures
+
+
+def _remap_workspace_local_path(
+    path_value: str,
+    *,
+    workspace: Any,
+) -> Optional[str]:
+    current_root_raw = getattr(workspace, "full_path", None)
+    if not current_root_raw:
+        return None
+    current_root = Path(str(current_root_raw))
+    current_run_dir_name = current_root.name
+    if not current_run_dir_name:
+        return None
+
+    candidate_path = Path(path_value)
+    matching_indices = [
+        index
+        for index, part in enumerate(candidate_path.parts)
+        if part == current_run_dir_name
+    ]
+    for index in reversed(matching_indices):
+        suffix = candidate_path.parts[index + 1 :]
+        remapped = current_root.joinpath(*suffix)
+        resolved = resolve_existing_path(
+            str(remapped),
+            workspace=workspace,
+            materialize_from_archive=False,
+        )
+        if resolved is not None:
+            return resolved
+    return None
+
+
+def _resolve_restart_hydrated_path(
+    *,
+    artifact: Any,
+    workspace: Any,
+    materialized_path: Optional[str],
+) -> Optional[str]:
+    resolved = artifact_to_existing_path(artifact, workspace)
+    if resolved is not None:
+        return resolved
+
+    raw_artifact_path = (
+        str(artifact) if isinstance(artifact, (str, os.PathLike)) else None
+    )
+    if raw_artifact_path is not None:
+        remapped = _remap_workspace_local_path(
+            raw_artifact_path,
+            workspace=workspace,
+        )
+        if remapped is not None:
+            return remapped
+
+    if materialized_path is None:
+        return None
+
+    resolved_materialized = resolve_existing_path(
+        str(materialized_path),
+        workspace=workspace,
+        materialize_from_archive=False,
+    )
+    if resolved_materialized is not None:
+        if os.path.isdir(resolved_materialized) and raw_artifact_path is not None:
+            basename = os.path.basename(raw_artifact_path.rstrip(os.sep))
+            if basename:
+                candidate = os.path.join(resolved_materialized, basename)
+                remapped_candidate = resolve_existing_path(
+                    candidate,
+                    workspace=workspace,
+                    materialize_from_archive=False,
+                )
+                if remapped_candidate is not None:
+                    return remapped_candidate
+        return resolved_materialized
+    return None
+
+
+def _build_restart_query_target(
+    *,
+    settings: Any,
+    year: int,
+    iteration: Optional[int],
+    producer: RestartProducerCandidate,
+    query_facet: Optional[Mapping[str, Any]],
+    include_iteration: bool,
+) -> Dict[str, Any]:
+    scope = restart_query_scope_for_step(producer.step_name)
+    target: Dict[str, Any] = {
+        "year": year,
+        "model": scope["model"],
+        "stage": scope["stage"],
+        "status": "completed",
+        "cache_epoch": resolve_cache_epoch(settings),
+    }
+    phase = scope.get("phase")
+    if phase is not None:
+        target["phase"] = phase
+    if include_iteration and iteration is not None:
+        target["iteration"] = iteration
+    if query_facet is not None:
+        target["facet"] = dict(query_facet)
+    return target
+
+
+def _raise_restart_hydration_error(
+    *,
+    summary: RestartHydrationSummary,
+    missing_key: str,
+    producer_step: Optional[str],
+    reason: str,
+) -> None:
+    message = (
+        "Restart hydration failed for "
+        f"frontier_stage={summary.get('frontier_stage')} "
+        f"frontier_step={summary.get('frontier_step')} "
+        f"missing_key={missing_key} "
+        f"producer_step={producer_step or 'unresolved'} "
+        f"reason={reason}"
+    )
+    raise RestartHydrationError(message, summary=summary)
+
+
+def _copy_to_target(source: Path, target: Path) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        if target.is_dir():
+            shutil.rmtree(target)
+        else:
+            target.unlink()
+    if source.is_dir():
+        shutil.copytree(source, target)
+    else:
+        shutil.copy2(source, target)
+    return target
+
+
+def _merge_tree_into_target(source_root: Path, target_root: Path) -> None:
+    if not source_root.exists() or not source_root.is_dir():
+        return
+    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
+        if child.name == "__archive_manifest.json":
+            continue
+        _copy_to_target(child, target_root / child.name)
+
+
+def _set_coupler_path(coupler: CouplerProtocol, key: str, path: Path) -> None:
+    set_coupler_from_artifact(
+        coupler,
+        key,
+        None,
+        fallback=str(path),
+    )
+
+
+def _clear_coupler_key(coupler: CouplerProtocol, key: str) -> None:
+    view_fn = getattr(coupler, "view", None)
+    if callable(view_fn):
+        try:
+            from pilates.workflows.coupler_namespace import namespaced_view_target
+
+            target = namespaced_view_target(key)
+            if target is not None:
+                namespace, local_key = target
+                view = view_fn(namespace)
+                set_value = getattr(view, "set", None)
+                if callable(set_value):
+                    set_value(local_key, None)
+        except Exception:
+            logger.debug("Failed clearing namespaced coupler key %s", key, exc_info=True)
+    set_value = getattr(coupler, "set", None)
+    if callable(set_value):
+        set_value(key, None)
+
+
+def _materialize_run_output_paths(
+    *,
+    tracker: Any,
+    run_id: str,
     workspace: Any,
     local_run_dir: str,
     archive_run_dir: str,
-    archive_state_path: str,
-    local_state_path: str,
-    local_consist_db_path: Optional[str],
-    restart_missing_artifacts_initial: List[Dict[str, str]],
-    restart_missing_artifacts_after_rehydrate: List[Dict[str, str]],
-    snapshot_latest_dir_fn: Callable[[str], Path],
-    build_manifest_path_fn: Callable[..., Path],
-    map_local_path_to_archive_fn: Callable[..., Optional[str]] = map_local_path_to_archive,
-    format_missing_artifact_summary_fn: Callable[[List[Dict[str, str]]], str] = format_missing_artifact_summary,
-    log_resume_doctor_check_fn: Callable[..., None] = log_resume_doctor_check,
-) -> None:
-    degraded_checks: List[str] = []
+    requested_keys: Sequence[str],
+) -> Dict[str, str]:
+    outputs = load_tracker_run_outputs(
+        run_id,
+        tracker=tracker,
+        logger=logger,
+        log_context=f"rewind restore output lookup for {run_id}",
+    )
+    available_keys = [key for key in requested_keys if outputs.get(key) is not None]
+    materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+    if not callable(materialize_run_outputs):
+        raise RuntimeError("tracker_missing_materialize_run_outputs")
+    if not available_keys:
+        return {}
 
-    def record(check: str, ok: bool, detail: str, *, required: bool = True) -> None:
-        log_resume_doctor_check_fn(check=check, ok=ok, detail=detail)
-        if required and not ok:
-            degraded_checks.append(check)
+    result = materialize_run_outputs(
+        run_id=run_id,
+        target_root=os.path.realpath(local_run_dir),
+        source_root=os.path.realpath(archive_run_dir) if archive_run_dir else None,
+        preserve_existing=True,
+        keys=list(available_keys),
+    )
+    failures = _materialization_failures(result)
+    if failures:
+        raise RuntimeError("materialization_incomplete:" + ";".join(failures))
 
-    logger.info(
-        "[ResumeDoctor] start year=%s iteration=%s local_run_dir=%s archive_run_dir=%s",
-        state.current_year,
-        state.current_inner_iter,
-        local_run_dir,
-        archive_run_dir,
+    materialized_path = None
+    materialized_from_filesystem = getattr(
+        result, "materialized_from_filesystem", {}
+    ) or {}
+    if isinstance(materialized_from_filesystem, Mapping):
+        materialized_path = materialized_from_filesystem.get(run_id)
+
+    resolved: Dict[str, str] = {}
+    for key in available_keys:
+        artifact = outputs.get(key)
+        restored = _resolve_restart_hydrated_path(
+            artifact=artifact,
+            workspace=workspace,
+            materialized_path=(
+                str(materialized_path) if materialized_path is not None else None
+            ),
+        )
+        if restored is not None and os.path.exists(restored):
+            resolved[key] = restored
+    return resolved
+
+
+def _find_exact_rewind_source_run(
+    *,
+    tracker: Any,
+    settings: Any,
+    contract: RestartExactRewindContract,
+    year: int,
+    iteration: int,
+    query_facet: Optional[Mapping[str, Any]],
+) -> Any:
+    scope = restart_query_scope_for_step(contract.producer_step)
+    target: Dict[str, Any] = {
+        "year": year,
+        "iteration": iteration,
+        "model": scope["model"],
+        "stage": scope["stage"],
+        "status": "completed",
+        "cache_epoch": resolve_cache_epoch(settings),
+    }
+    if scope.get("phase") is not None:
+        target["phase"] = scope["phase"]
+    if query_facet is not None:
+        target["facet"] = dict(query_facet)
+    return _find_latest_run_for_restart_target(
+        tracker=tracker,
+        target=target,
     )
 
-    archive_state_real = os.path.realpath(archive_state_path)
-    local_state_real = os.path.realpath(local_state_path)
-    record("archive_run_state", os.path.exists(archive_state_real), f"path={archive_state_real}")
-    record("local_run_state_mirror", os.path.exists(local_state_real), f"path={local_state_real}")
 
-    if local_consist_db_path:
-        local_consist_db_real = os.path.realpath(local_consist_db_path)
-        record("local_consist_db", os.path.exists(local_consist_db_real), f"path={local_consist_db_real}")
-        latest_snapshot_db = snapshot_latest_dir_fn(archive_run_dir) / Path(local_consist_db_real).name
-        latest_snapshot_real = os.path.realpath(str(latest_snapshot_db))
-        record("archive_latest_consist_db_snapshot", os.path.exists(latest_snapshot_real), f"path={latest_snapshot_real}")
-    else:
-        record("local_consist_db", True, "path=none reason=disabled_or_unconfigured", required=False)
-        record("archive_latest_consist_db_snapshot", True, "path=none reason=disabled_or_unconfigured", required=False)
+def _restore_activitysim_rewind_overlay(
+    *,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    overlay_root: Path,
+    restored_snapshot_paths: Mapping[str, str],
+    year: int,
+    iteration: int,
+) -> None:
+    data_dir = overlay_root / "data"
+    cache_dir = overlay_root / "cache"
 
-    if state.data_initialized:
-        missing_summary = format_missing_artifact_summary_fn(restart_missing_artifacts_after_rehydrate)
-        record(
-            "required_restart_local_artifacts",
-            not restart_missing_artifacts_after_rehydrate,
-            "data_initialized=true "
-            f"initial_missing={len(restart_missing_artifacts_initial)} "
-            f"remaining_missing={len(restart_missing_artifacts_after_rehydrate)} "
-            f"missing={missing_summary}",
+    required_targets = {
+        "asim_input_households_csv_archived": data_dir / "households.csv",
+        "asim_input_persons_csv_archived": data_dir / "persons.csv",
+        "asim_input_land_use_csv_archived": data_dir / "land_use.csv",
+    }
+    for key, target in required_targets.items():
+        _copy_to_target(Path(restored_snapshot_paths[key]), target)
+
+    if "asim_input_skims_omx_archived" in restored_snapshot_paths:
+        _copy_to_target(
+            Path(restored_snapshot_paths["asim_input_skims_omx_archived"]),
+            data_dir / "skims.omx",
         )
-    else:
-        record(
-            "required_restart_local_artifacts",
-            True,
-            "data_initialized=false reason=bootstrap_required",
-            required=False,
+    if "asim_input_skims_zarr_archived" in restored_snapshot_paths:
+        _copy_to_target(
+            Path(restored_snapshot_paths["asim_input_skims_zarr_archived"]),
+            cache_dir / "skims.zarr",
         )
 
-    year = state.current_year
-    iteration = state.current_inner_iter
-    local_manifest_path: Optional[Path] = None
+    workspace.set_asim_mutable_data_dir_override(str(data_dir))
+    workspace.set_asim_runtime_cache_dir_override(str(cache_dir))
+
+    _set_coupler_path(coupler, ASIM_HOUSEHOLDS_IN, data_dir / "households.csv")
+    _set_coupler_path(coupler, ASIM_PERSONS_IN, data_dir / "persons.csv")
+    _set_coupler_path(coupler, ASIM_LAND_USE_IN, data_dir / "land_use.csv")
+    omx_path = data_dir / "skims.omx"
+    if omx_path.exists():
+        _set_coupler_path(coupler, ASIM_OMX_SKIMS, omx_path)
+    zarr_path = cache_dir / "skims.zarr"
+    if zarr_path.exists():
+        _set_coupler_path(coupler, ZARR_SKIMS, zarr_path)
+    else:
+        _clear_coupler_key(coupler, ZARR_SKIMS)
+    _clear_coupler_key(coupler, ASIM_SHARROW_CACHE_DIR)
+    setattr(
+        workspace,
+        "_activitysim_exact_rewind_restore",
+        {
+            "overlay_root": str(overlay_root),
+            "mutable_data_dir": str(data_dir),
+            "runtime_cache_dir": str(cache_dir),
+            "zarr_available": zarr_path.exists(),
+            "omx_path": str(omx_path) if omx_path.exists() else None,
+            "year": year,
+            "iteration": iteration,
+        },
+    )
+
+
+def _restore_beam_rewind_overlay(
+    *,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    overlay_root: Path,
+    restored_snapshot_paths: Mapping[str, str],
+    year: int,
+    iteration: int,
+) -> None:
+    from pilates.beam import beam_exchange
+
+    beam_input_root = overlay_root / "input"
+    workspace.set_beam_mutable_data_dir_override(str(beam_input_root))
+
+    region_dir = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    config_reference_dir = restored_snapshot_paths.get(
+        BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+    )
+    if config_reference_dir is not None:
+        _merge_tree_into_target(Path(config_reference_dir), region_dir)
+    config_target = region_dir / str(getattr(settings.beam, "config", "beam.conf"))
+    _copy_to_target(
+        Path(restored_snapshot_paths[BEAM_INPUT_CONFIG_ARCHIVED]),
+        config_target,
+    )
+
+    scenario_dir = Path(
+        beam_exchange.resolve_beam_exchange_scenario_folder(settings, workspace)
+    )
+    runtime_targets = {
+        BEAM_INPUT_PLANS_ARCHIVED: "plans",
+        BEAM_INPUT_HOUSEHOLDS_ARCHIVED: "households",
+        BEAM_INPUT_PERSONS_ARCHIVED: "persons",
+        BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles",
+        BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: "linkstats",
+    }
+    restored_runtime_paths: Dict[str, Path] = {}
+    for archive_key, stem in runtime_targets.items():
+        snapshot_path = restored_snapshot_paths.get(archive_key)
+        if snapshot_path is None:
+            continue
+        source = Path(snapshot_path)
+        target = scenario_dir / f"{stem}{''.join(source.suffixes)}"
+        restored_runtime_paths[archive_key] = _copy_to_target(source, target)
+
+    warmstart_dir = overlay_root / "warmstart"
+    warmstart_restored: Dict[str, Path] = {}
+    for archive_key, stem in (
+        (BEAM_INPUT_PLANS_WARMSTART_ARCHIVED, "beam_warmstart_plans"),
+        (
+            BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+            "beam_warmstart_experienced_plans",
+        ),
+    ):
+        snapshot_path = restored_snapshot_paths.get(archive_key)
+        if snapshot_path is None:
+            continue
+        source = Path(snapshot_path)
+        warmstart_restored[archive_key] = _copy_to_target(
+            source,
+            warmstart_dir / f"{stem}{''.join(source.suffixes)}",
+        )
+
+    _set_coupler_path(coupler, BEAM_CONFIG_FILE, config_target)
+    _set_coupler_path(
+        coupler,
+        BEAM_PLANS_IN,
+        restored_runtime_paths[BEAM_INPUT_PLANS_ARCHIVED],
+    )
+    _set_coupler_path(
+        coupler,
+        BEAM_HOUSEHOLDS_IN,
+        restored_runtime_paths[BEAM_INPUT_HOUSEHOLDS_ARCHIVED],
+    )
+    _set_coupler_path(
+        coupler,
+        BEAM_PERSONS_IN,
+        restored_runtime_paths[BEAM_INPUT_PERSONS_ARCHIVED],
+    )
+    if BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED in restored_runtime_paths:
+        _set_coupler_path(
+            coupler,
+            LINKSTATS_WARMSTART,
+            restored_runtime_paths[BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED],
+        )
+    if BEAM_INPUT_VEHICLES_ARCHIVED in restored_runtime_paths:
+        _set_coupler_path(
+            coupler,
+            "vehicles_beam_in",
+            restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED],
+        )
+        _set_coupler_path(
+            coupler,
+            ATLAS_VEHICLES2_OUTPUT,
+            restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED],
+        )
+    warmstart_plans = warmstart_restored.get(BEAM_INPUT_PLANS_WARMSTART_ARCHIVED)
+    if warmstart_plans is not None:
+        if warmstart_plans.suffixes[-2:] == [".xml", ".gz"] or warmstart_plans.suffix == ".xml":
+            _set_coupler_path(coupler, BEAM_OUTPUT_PLANS_XML, warmstart_plans)
+        else:
+            _set_coupler_path(coupler, BEAM_PLANS_OUT, warmstart_plans)
+    warmstart_experienced = warmstart_restored.get(
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED
+    )
+    if warmstart_experienced is not None:
+        _set_coupler_path(coupler, BEAM_EXPERIENCED_PLANS_XML, warmstart_experienced)
+        _set_coupler_path(
+            coupler,
+            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            warmstart_experienced,
+        )
+    setattr(
+        workspace,
+        "_beam_exact_rewind_restore",
+        {
+            "overlay_root": str(overlay_root),
+            "beam_input_root": str(beam_input_root),
+            "vehicles_path": str(restored_runtime_paths[BEAM_INPUT_VEHICLES_ARCHIVED])
+            if BEAM_INPUT_VEHICLES_ARCHIVED in restored_runtime_paths
+            else None,
+            "year": year,
+            "iteration": iteration,
+        },
+    )
+
+
+def hydrate_rewind_runner_inputs(
+    *,
+    tracker: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    local_run_dir: str,
+    archive_run_dir: str,
+    archive_state_path: str,
+    allow_rewind_resume: bool,
+    workflow_stage: WorkflowStageLike,
+    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
+    query_facet: Optional[Mapping[str, Any]] = None,
+) -> Optional[RestartHydrationSummary]:
+    """
+    Legacy manual recovery helper for exact-rewind resume overlays.
+
+    The normal launcher path no longer calls this; replay-first restarts should
+    rely on scenario replay plus cache hits instead.
+    """
+    contract = restart_exact_rewind_contract(
+        settings=settings,
+        state=state,
+        workflow_stage=workflow_stage,
+    )
+    if contract is None or not allow_rewind_resume:
+        return None
+    if not is_rewind_resume_request(
+        state=state,
+        archive_state_path=archive_state_path,
+        read_current_stage_fn=read_current_stage_fn,
+    ):
+        return None
+
+    year = _coerce_int(getattr(state, "current_year", None))
+    iteration = _coerce_int(getattr(state, "current_inner_iter", None))
+    summary: RestartHydrationSummary = {
+        "frontier_stage": contract.stage_name,
+        "frontier_step": contract.target_step,
+        "success": False,
+        "hydrated_keys": [],
+        "missing_keys": [],
+        "producer_steps_by_key": {},
+        "fallback_reason": None,
+        "rewind_restore": True,
+        "overlay_root": None,
+    }
+    if year is None or iteration is None:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason="missing_resume_year_or_iteration",
+        )
+
     try:
-        local_manifest_path = build_manifest_path_fn(
-            workspace=workspace,
-            year=int(year),
-            iteration=int(iteration),
+        run = _find_exact_rewind_source_run(
+            tracker=tracker,
+            settings=settings,
+            contract=contract,
+            year=year,
+            iteration=iteration,
+            query_facet=query_facet,
         )
     except Exception as exc:
-        record("supply_demand_manifest_local", False, f"year={year} iteration={iteration} error={exc}")
-        record("supply_demand_manifest_archive_mapped", False, f"year={year} iteration={iteration} error=local_manifest_path_unavailable")
-
-    if local_manifest_path is not None:
-        local_manifest_real = os.path.realpath(str(local_manifest_path))
-        record(
-            "supply_demand_manifest_local",
-            os.path.exists(local_manifest_real),
-            f"year={year} iteration={iteration} path={local_manifest_real}",
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason=f"no_completed_run_found:{exc}",
         )
-        archive_manifest_path = map_local_path_to_archive_fn(
-            local_path=local_manifest_real,
+
+    run_id = str(getattr(run, "id", "")).strip()
+    if not run_id:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason="matched_run_missing_id",
+        )
+
+    requested_snapshot_keys = (
+        *contract.required_snapshot_keys,
+        *contract.optional_snapshot_keys,
+    )
+    try:
+        restored_snapshot_paths = _materialize_run_output_paths(
+            tracker=tracker,
+            run_id=run_id,
+            workspace=workspace,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            requested_keys=requested_snapshot_keys,
+        )
+    except Exception as exc:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason=str(exc),
+        )
+
+    for key in contract.required_snapshot_keys:
+        summary["producer_steps_by_key"][key] = contract.producer_step
+        if key not in restored_snapshot_paths:
+            summary["missing_keys"].append(key)
+    for key in contract.optional_snapshot_keys:
+        if key in restored_snapshot_paths:
+            summary["producer_steps_by_key"][key] = contract.producer_step
+
+    if contract.overlay_family == "activitysim" and not any(
+        key in restored_snapshot_paths
+        for key in ("asim_input_skims_zarr_archived", "asim_input_skims_omx_archived")
+    ):
+        summary["missing_keys"].append("asim_input_skims_{zarr|omx}_archived")
+    if summary["missing_keys"]:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=summary["missing_keys"][0],
+            producer_step=contract.producer_step,
+            reason="producer_run_missing_declared_output",
+        )
+
+    overlay_root = (
+        Path(workspace.full_path)
+        / ".restart_overlays"
+        / contract.overlay_family
+        / f"year-{year}-iteration-{iteration}"
+    )
+    if overlay_root.exists():
+        shutil.rmtree(overlay_root)
+    overlay_root.mkdir(parents=True, exist_ok=True)
+
+    if contract.overlay_family == "activitysim":
+        _restore_activitysim_rewind_overlay(
+            workspace=workspace,
+            coupler=coupler,
+            overlay_root=overlay_root,
+            restored_snapshot_paths=restored_snapshot_paths,
+            year=year,
+            iteration=iteration,
+        )
+    else:
+        _restore_beam_rewind_overlay(
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            overlay_root=overlay_root,
+            restored_snapshot_paths=restored_snapshot_paths,
+            year=year,
+            iteration=iteration,
+        )
+
+    summary["success"] = True
+    summary["overlay_root"] = str(overlay_root)
+    summary["hydrated_keys"] = list(dict.fromkeys(restored_snapshot_paths.keys()))
+    return summary
+
+
+def hydrate_missing_restart_artifacts(
+    *,
+    tracker: Any,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    local_run_dir: str,
+    archive_run_dir: str,
+    workflow_stage: WorkflowStageLike,
+    query_facet: Optional[Mapping[str, Any]] = None,
+    surface: Any = None,
+) -> RestartHydrationSummary:
+    """
+    Legacy manual recovery helper for explicit frontier artifact hydration.
+
+    The default launcher path is replay-first and does not invoke this helper.
+    It remains available as narrow operator tooling and for focused tests while
+    the legacy restart subsystem is retired incrementally.
+    """
+    contract = restart_frontier_contract(
+        settings=settings,
+        state=state,
+        workflow_stage=workflow_stage,
+        surface=surface,
+    )
+    if contract is None:
+        return {
+            "frontier_stage": None,
+            "frontier_step": None,
+            "success": True,
+            "hydrated_keys": [],
+            "missing_keys": [],
+            "producer_steps_by_key": {},
+            "fallback_reason": None,
+            "rewind_restore": False,
+            "overlay_root": None,
+        }
+
+    year = _coerce_int(getattr(state, "current_year", None))
+    iteration = _coerce_int(getattr(state, "current_inner_iter", None))
+    get_value = getattr(coupler, "get", None)
+    missing_keys: List[str] = []
+    if callable(get_value):
+        for key in contract.required_keys:
+            value = get_value(key)
+            if value is None or artifact_to_existing_path(value, workspace) is None:
+                missing_keys.append(key)
+    else:
+        missing_keys.extend(contract.required_keys)
+
+    summary: RestartHydrationSummary = {
+        "frontier_stage": contract.frontier_stage,
+        "frontier_step": contract.frontier_step,
+        "success": False,
+        "hydrated_keys": [],
+        "missing_keys": list(missing_keys),
+        "producer_steps_by_key": {},
+        "fallback_reason": None,
+        "rewind_restore": False,
+        "overlay_root": None,
+    }
+    if year is None:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=missing_keys[0] if missing_keys else "unknown",
+            producer_step=None,
+            reason="missing_resume_year",
+        )
+    if not missing_keys:
+        _hydrate_archive_workflow_manifests(
             local_run_dir=local_run_dir,
             archive_run_dir=archive_run_dir,
         )
-        if archive_manifest_path is None:
-            record(
-                "supply_demand_manifest_archive_mapped",
-                False,
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path=unmapped",
+        summary["success"] = True
+        return summary
+
+    producers_by_key = restart_artifact_producers(
+        frontier_stage=contract.frontier_stage,
+        enabled_models=_enabled_restart_models(settings),
+    )
+    materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+    if not callable(materialize_run_outputs):
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=missing_keys[0],
+            producer_step=None,
+            reason="tracker_missing_materialize_run_outputs",
+        )
+
+    target_root = os.path.realpath(local_run_dir)
+    source_root = os.path.realpath(archive_run_dir) if archive_run_dir else None
+
+    for key in missing_keys:
+        candidates = tuple(producers_by_key.get(key, ()))
+        if not candidates:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=None,
+                reason="no_registered_producer",
             )
-        else:
-            archive_manifest_real = os.path.realpath(archive_manifest_path)
-            record(
-                "supply_demand_manifest_archive_mapped",
-                os.path.exists(archive_manifest_real),
-                f"year={year} iteration={iteration} local_path={local_manifest_real} archive_path={archive_manifest_real}",
+        producer = candidates[0]
+        summary["producer_steps_by_key"][key] = producer.step_name
+
+        query_target = _build_restart_query_target(
+            settings=settings,
+            year=year,
+            iteration=iteration,
+            producer=producer,
+            query_facet=query_facet,
+            include_iteration=True,
+        )
+        used_iteration_fallback = False
+        try:
+            run = _find_latest_run_for_restart_target(
+                tracker=tracker,
+                target=query_target,
+            )
+        except ValueError:
+            query_target = _build_restart_query_target(
+                settings=settings,
+                year=year,
+                iteration=iteration,
+                producer=producer,
+                query_facet=query_facet,
+                include_iteration=False,
+            )
+            try:
+                run = _find_latest_run_for_restart_target(
+                    tracker=tracker,
+                    target=query_target,
+                )
+            except ValueError:
+                _raise_restart_hydration_error(
+                    summary=summary,
+                    missing_key=key,
+                    producer_step=producer.step_name,
+                    reason="no_completed_run_found",
+                )
+            used_iteration_fallback = True
+        except Exception as exc:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason=f"tracker_query_failed:{exc}",
             )
 
-    if degraded_checks:
-        logger.warning(
-            "[ResumeDoctor] summary status=degraded reason=missing_checks:%s",
-            ",".join(degraded_checks),
+        run_id = str(getattr(run, "id", "")).strip()
+        if not run_id:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="matched_run_missing_id",
+            )
+
+        outputs = load_tracker_run_outputs(
+            run_id,
+            tracker=tracker,
+            logger=logger,
+            log_context=f"restart hydration output lookup for {key}",
         )
-    else:
-        logger.info("[ResumeDoctor] summary status=ready reason=all_checks_ok")
+        artifact = outputs.get(key)
+        if artifact is None:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="producer_run_missing_declared_output",
+            )
+
+        try:
+            result = materialize_run_outputs(
+                run_id=run_id,
+                target_root=target_root,
+                source_root=source_root,
+                preserve_existing=True,
+                keys=[key],
+            )
+        except Exception as exc:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason=f"materialize_run_outputs_failed:{exc}",
+            )
+
+        failures = _materialization_failures(result)
+        if failures:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="materialization_incomplete:" + ";".join(failures),
+            )
+
+        materialized_path = None
+        materialized_from_filesystem = getattr(
+            result, "materialized_from_filesystem", {}
+        ) or {}
+        if isinstance(materialized_from_filesystem, Mapping):
+            materialized_path = materialized_from_filesystem.get(run_id)
+
+        resolved_path = _resolve_restart_hydrated_path(
+            artifact=artifact,
+            workspace=workspace,
+            materialized_path=str(materialized_path) if materialized_path is not None else None,
+        )
+        artifact_for_coupler = artifact
+        if isinstance(artifact, (str, os.PathLike)):
+            artifact_for_coupler = None
+        set_coupler_from_artifact(
+            coupler,
+            key,
+            artifact_for_coupler,
+            fallback=resolved_path,
+        )
+        coupler_value = get_value(key) if callable(get_value) else artifact
+        if artifact_to_existing_path(coupler_value, workspace) is None:
+            _raise_restart_hydration_error(
+                summary=summary,
+                missing_key=key,
+                producer_step=producer.step_name,
+                reason="hydrated_value_not_resolved_in_workspace",
+            )
+
+        summary["hydrated_keys"].append(key)
+        if used_iteration_fallback:
+            summary["fallback_reason"] = "iteration_agnostic_retry"
+
+    _hydrate_archive_workflow_manifests(
+        local_run_dir=local_run_dir,
+        archive_run_dir=archive_run_dir,
+    )
+    summary["success"] = True
+    return summary

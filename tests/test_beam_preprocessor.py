@@ -1,16 +1,18 @@
 import os
 import pytest
 import pandas as pd
-
-gpd = pytest.importorskip("geopandas")
-pytest.importorskip("shapely.geometry")
-from shapely.geometry import Polygon
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 import yaml
 import json
 
+gpd = pytest.importorskip("geopandas")
+pytest.importorskip("shapely.geometry")
+from shapely.geometry import Polygon
+
 from pilates.config.models import load_config
 from pilates.activitysim.outputs import normalize_asim_output_key
+from pilates.beam.preprocessor import BeamPreprocessor
 
 # Define a canonical order for GEOIDs that our test will enforce
 CANONICAL_GEOID_ORDER = [f"5303300{i:04d}" for i in range(5)]
@@ -203,12 +205,6 @@ def mock_settings(tmp_path, mock_h5_datastore, mock_beam_shapefile):
     return load_config(config_path)
 
 
-import pytest
-from types import SimpleNamespace  # Import SimpleNamespace for mocking WorkflowState
-
-from pilates.beam.preprocessor import (
-    BeamPreprocessor,
-)  # Import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
 
 # Define a canonical order for GEOIDs that our test will enforce
@@ -395,6 +391,63 @@ class TestBeamPreprocessor:
         assert mock_settings.beam.skim_zone_geoid_col in sorted_gdf.columns
 
 
+def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_missing(
+    mock_settings, mock_workspace, caplog
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
+
+    with caplog.at_level("WARNING"):
+        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+
+    sorted_gdf = gpd.read_file(output_shapefile_path)
+
+    assert sorted_gdf["TAZ"].astype(str).tolist() == CANONICAL_GEOID_ORDER
+    assert "not found in canonical zones export" in caplog.text
+
+
+def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_conflicts(
+    mock_settings, mock_workspace, monkeypatch, caplog
+):
+    mock_state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=mock_state)
+    object.__setattr__(mock_settings.beam, "skim_zone_geoid_col", "geoid10")
+
+    scrambled_geoids = CANONICAL_GEOID_ORDER[::-1]
+    canonical_gdf = gpd.GeoDataFrame(
+        {
+            "district": range(len(CANONICAL_GEOID_ORDER)),
+            "geoid10": scrambled_geoids,
+            "geometry": [None] * len(CANONICAL_GEOID_ORDER),
+        },
+        index=pd.Index(CANONICAL_GEOID_ORDER, name="TAZ"),
+    )
+
+    monkeypatch.setattr(
+        "pilates.utils.zone_utils.load_canonical_zones",
+        lambda settings, workspace: canonical_gdf,
+    )
+
+    with caplog.at_level("WARNING"):
+        output_shapefile_path = preprocessor.prepare_beam_zone_shapefile(mock_workspace)
+
+    sorted_gdf = gpd.read_file(output_shapefile_path)
+
+    assert sorted_gdf["TAZ"].astype(str).tolist() == CANONICAL_GEOID_ORDER
+    assert "would reorder canonical zones" in caplog.text
+
+
 def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settings, mock_workspace):
     state = SimpleNamespace(
         full_settings=mock_settings,
@@ -451,10 +504,29 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
         "_handle_linkstats",
         lambda _workspace, _previous_beam_records, _store: None,
     )
+    monkeypatch.setattr(preprocessor, "_activity_demand_enabled", lambda: True)
 
     def _capture_input_records(input_records, _workspace):
         captured["keys"] = [record.short_name for record in input_records.all_records()]
-        return RecordStore()
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path="/tmp/plans.parquet",
+                    short_name="plans_beam_in",
+                    description="mock staged plans",
+                ),
+                FileRecord(
+                    file_path="/tmp/households.parquet",
+                    short_name="households_beam_in",
+                    description="mock staged households",
+                ),
+                FileRecord(
+                    file_path="/tmp/persons.parquet",
+                    short_name="persons_beam_in",
+                    description="mock staged persons",
+                ),
+            ]
+        )
 
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _capture_input_records)
 
@@ -466,6 +538,45 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
 
 def test_normalize_asim_output_key_maps_plans_alias() -> None:
     assert normalize_asim_output_key("plans") == "beam_plans_asim_out"
+
+
+def test_copy_data_to_mutable_location_does_not_try_legacy_skim_zone_config_update(
+    monkeypatch, tmp_path, mock_settings
+):
+    state = SimpleNamespace(
+        full_settings=mock_settings,
+        current_year=2020,
+        current_inner_iter=0,
+        forecast_year=2020,
+        run_info_path=None,
+    )
+    preprocessor = BeamPreprocessor(model_name="beam", state=state)
+
+    calls = []
+    monkeypatch.setattr(
+        preprocessor,
+        "_find_beam_production_path",
+        lambda *_args, **_kwargs: str(tmp_path / "beam-production" / "seattle"),
+    )
+    monkeypatch.setattr(
+        "pilates.beam.preprocessor.shutil.copytree",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        preprocessor,
+        "_update_beam_config",
+        lambda param, **kwargs: calls.append((param, kwargs)),
+    )
+
+    production_region = tmp_path / "beam-production" / "seattle"
+    production_region.mkdir(parents=True, exist_ok=True)
+
+    preprocessor.copy_data_to_mutable_location(
+        settings=mock_settings,
+        output_dir=str(tmp_path / "beam" / "input"),
+    )
+
+    assert all(param != "skim_zone_geoid_col" for param, _kwargs in calls)
 
 
 def test_copy_plans_from_asim_accepts_plans_asim_out_alias(

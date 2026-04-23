@@ -134,7 +134,13 @@ class LandUseAsimOut(SQLModel, table=True):
     zone_id: Optional[int] = Field(
         default=None,
         description='Traffic analysis zone identifier for ActivitySim land-use output.',
-        sa_column=Column('zone_id', BigInteger, nullable=True, index=True),
+        sa_column=Column(
+            'zone_id',
+            BigInteger,
+            ForeignKey('LandUseAsimIn.TAZ'),
+            nullable=True,
+            index=True,
+        ),
     )
     geometry: Optional[str] = Field(
         default=None,

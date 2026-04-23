@@ -1,8 +1,8 @@
 """
 Unit tests for BEAM full-skim mode (BackgroundSkimsCreatorApp).
 
-Tests verify that BeamFullSkimRunner constructs the dedicated
-FullSkimsCreatorApp command and environment.
+Tests verify that BeamRunner correctly detects full-skim configuration and
+constructs the appropriate command and environment for the BackgroundSkimsCreatorApp.
 """
 
 import pytest
@@ -55,7 +55,7 @@ class TestBeamFullSkimMode:
         shared_cfg = SimpleNamespace(skims=SimpleNamespace(fname="skims.omx"))
         return SimpleNamespace(run=run_cfg, beam=beam_cfg, shared=shared_cfg)
 
-    def _setup_runner_test(self, skim_cfg, *, full_skim_runner=True):
+    def _setup_runner_test(self, skim_cfg, *, full_skim=False):
         """Common test setup for runner tests."""
         from pilates.beam.runner import BeamFullSkimRunner, BeamRunner
         from pilates.generic.records import RecordStore
@@ -65,10 +65,9 @@ class TestBeamFullSkimMode:
         state.full_settings = settings
         state.current_year = 2020
         state.current_inner_iter = 0
-        state.forecast_year = 2020
-        runner_cls = BeamFullSkimRunner if full_skim_runner else BeamRunner
-        runner_name = "beam_full_skim" if full_skim_runner else "beam"
-        runner = runner_cls(runner_name, state)
+        runner_cls = BeamFullSkimRunner if full_skim else BeamRunner
+        model_name = "beam_full_skim" if full_skim else "beam"
+        runner = runner_cls(model_name, state)
 
         workspace = MagicMock()
         workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
@@ -108,7 +107,7 @@ class TestBeamFullSkimMode:
             linkstats_file=None,
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)
@@ -163,7 +162,7 @@ class TestBeamFullSkimMode:
             linkstats_file=None,  # No linkstats
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)
@@ -172,7 +171,7 @@ class TestBeamFullSkimMode:
         command = call_kwargs["command"]
 
         # Verify linkstats is NOT in command
-        assert "--linkstats=" not in command
+        assert "--linkstatsPath=" not in command
 
         # Verify other required params are present
         assert "--configPath=" in command
@@ -203,7 +202,7 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)
@@ -238,7 +237,7 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": True, "transit": True},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)
@@ -267,9 +266,7 @@ class TestBeamFullSkimMode:
         mock_get_setting.return_value = "skims.omx"
 
         skim_cfg = self._make_skim_config(run_schedule="disabled")
-        runner, workspace, store = self._setup_runner_test(
-            skim_cfg, full_skim_runner=False
-        )
+        runner, workspace, store = self._setup_runner_test(skim_cfg)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             with patch.object(runner, "gather_outputs", return_value=[]):
@@ -312,7 +309,7 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": False, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)
@@ -347,7 +344,7 @@ class TestBeamFullSkimMode:
             peak_hours=[6.0, 8.5, 12.0, 17.5, 20.0],
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
         with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
             runner._run(store, workspace)

@@ -2,7 +2,7 @@ import types
 from contextlib import contextmanager
 from types import SimpleNamespace
 
-import duckdb
+import pytest
 
 from pilates.utils import consist_runtime as cr
 
@@ -73,34 +73,6 @@ def test_h5_fast_hash_override_disabled_when_tracker_hashing_is_full(tmp_path, m
     assert cr._maybe_fast_hash_h5(str(file_path), {}) == {}
 
 
-def test_create_tracker_retries_after_schema_compatibility_repair(monkeypatch):
-    calls = {"count": 0}
-
-    def _create_tracker(*, enabled, tracker_factory):
-        calls["count"] += 1
-        if calls["count"] == 1:
-            return _FakeNoopTracker()
-        return _FakeTracker()
-
-    fake_consist = types.SimpleNamespace(
-        Tracker=lambda **kwargs: _FakeTracker(),
-        create_tracker=_create_tracker,
-    )
-    monkeypatch.setattr(cr, "consist", fake_consist)
-    monkeypatch.setattr(
-        cr,
-        "_repair_tracker_db_schema_compatibility",
-        lambda tracker_kwargs: True,
-    )
-
-    try:
-        tracker = cr.create_tracker(run_dir="/tmp/consist-runs", db_path="/tmp/x.duckdb")
-        assert isinstance(tracker, _FakeTracker)
-        assert calls["count"] == 2
-    finally:
-        cr.set_enabled(None)
-
-
 def test_scenario_disabled_delegates_to_consist_noop_context(monkeypatch):
     calls = []
     sentinel = object()
@@ -118,7 +90,7 @@ def test_scenario_disabled_delegates_to_consist_noop_context(monkeypatch):
     assert calls == [("noop-step", None, False, {"phase": "test"})]
 
 
-def test_log_input_falls_back_to_consist_disabled_mode_on_runtime_error(monkeypatch):
+def test_log_input_raises_when_enabled_outside_active_run(monkeypatch):
     calls = []
 
     def _log_input(path, key=None, *, enabled=True, **meta):
@@ -129,34 +101,43 @@ def test_log_input_falls_back_to_consist_disabled_mode_on_runtime_error(monkeypa
 
     monkeypatch.setattr(cr, "consist", types.SimpleNamespace(log_input=_log_input))
 
-    artifact = cr.log_input("/tmp/in.txt", key="input_key", enabled=True)
+    with pytest.raises(RuntimeError, match="no active run"):
+        cr.log_input("/tmp/in.txt", key="input_key", enabled=True)
 
-    assert artifact is not None
-    assert artifact.key == "input_key"
-    assert calls[0][0] is True
-    assert calls[1][0] is False
+    assert len(calls) == 1
+    enabled, path, key, meta = calls[0]
+    assert enabled is True
+    assert key == "input_key"
+    assert meta == {}
+    assert str(path).endswith("/tmp/in.txt")
 
 
-def test_repair_tracker_db_schema_adds_missing_container_uri(tmp_path):
-    db_path = tmp_path / "compat.duckdb"
-    conn = duckdb.connect(str(db_path))
+def test_current_run_id_returns_none_when_runtime_disabled(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: SimpleNamespace(id="run-123"))
+    monkeypatch.setattr(cr, "consist", fake_consist)
+    cr.set_enabled(False)
+
     try:
-        conn.execute("CREATE TABLE artifact (id VARCHAR, uri VARCHAR)")
-        conn.execute("INSERT INTO artifact (id, uri) VALUES ('a1', 'workspace://x')")
+        assert cr.current_run_id() is None
     finally:
-        conn.close()
+        cr.set_enabled(None)
 
-    migrated = cr._repair_tracker_db_schema_compatibility({"db_path": str(db_path)})
-    assert migrated is True
 
-    conn = duckdb.connect(str(db_path))
+def test_current_run_id_returns_none_when_consist_has_no_active_run(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: None)
+    monkeypatch.setattr(cr, "consist", fake_consist)
+
     try:
-        cols = conn.execute("PRAGMA table_info('artifact')").fetchall()
-        names = {row[1] for row in cols}
-        assert "container_uri" in names
-        rows = conn.execute(
-            "SELECT uri, container_uri FROM artifact WHERE id = 'a1'"
-        ).fetchall()
-        assert rows == [("workspace://x", "workspace://x")]
+        assert cr.current_run_id() is None
     finally:
-        conn.close()
+        cr.set_enabled(None)
+
+
+def test_current_run_id_returns_stringified_run_id(monkeypatch):
+    fake_consist = types.SimpleNamespace(current_run=lambda: SimpleNamespace(id=12345))
+    monkeypatch.setattr(cr, "consist", fake_consist)
+
+    try:
+        assert cr.current_run_id() == "12345"
+    finally:
+        cr.set_enabled(None)

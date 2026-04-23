@@ -15,6 +15,7 @@ from .handoff import (
     export_sql_query,
     ingest_artifacts as ingest_artifacts_core,
     list_run_artifacts as list_run_artifacts_core,
+    resolve_urbansim_activitysim_boundary_h5s as resolve_urbansim_activitysim_boundary_h5s_core,
 )
 from .epochs import (
     EpochPanel,
@@ -422,6 +423,18 @@ class AnalysisSession:
             direction=direction,
             key_contains=key_contains,
             artifact_family_prefix=artifact_family_prefix,
+        )
+
+    def resolve_urbansim_activitysim_boundary_h5s(
+        self,
+        *,
+        forecast_year: int,
+        next_input_year: Optional[int] = None,
+    ) -> pd.DataFrame:
+        return resolve_urbansim_activitysim_boundary_h5s_core(
+            self.archive_run_dir,
+            forecast_year=forecast_year,
+            next_input_year=next_input_year,
         )
 
     def export_scenario_db(

@@ -110,16 +110,23 @@ def resolve_canonical_zone_source(
         if primary_source["source_file"]
         else None
     )
+    primary_exists = bool(primary_resolved and os.path.exists(primary_resolved))
 
     for candidate, source_config in candidates:
         if os.path.exists(candidate):
             if primary_resolved and os.path.abspath(candidate) != os.path.abspath(
                 primary_resolved
             ):
-                logger.warning(
-                    "Primary canonical zone source unavailable; using fallback source: %s",
-                    candidate,
-                )
+                if not primary_exists:
+                    logger.warning(
+                        "Primary canonical zone source unavailable; using fallback source: %s",
+                        candidate,
+                    )
+                else:
+                    logger.info(
+                        "Using staged canonical zone source: %s",
+                        candidate,
+                    )
             return candidate, source_config
 
     raise FileNotFoundError(
@@ -144,6 +151,7 @@ def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
             logger.info("Canonical zone source already at destination: %s", dest_path)
             return str(dest_path)
     except OSError:
+        # Fall through to normal copy handling if either path cannot be resolved.
         pass
 
     if source.suffix.lower() == ".shp":
@@ -157,10 +165,10 @@ def copy_canonical_zone_source_to_dir(source_path: str, dest_dir: str) -> str:
         except OSError:
             pass
         for sibling in source.parent.glob(f"{source.stem}.*"):
-            shutil.copy(sibling, Path(dest_dir) / sibling.name)
+            shutil.copy2(sibling, Path(dest_dir) / sibling.name)
         return str(dest_path)
 
-    shutil.copy(source, dest_path)
+    shutil.copy2(source, dest_path)
     return str(dest_path)
 
 

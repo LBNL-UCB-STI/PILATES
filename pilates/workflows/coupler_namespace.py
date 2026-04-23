@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import logging
+from dataclasses import dataclass
 from typing import Any, Optional, Tuple
+
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -10,6 +15,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_PERSONS_IN,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_INPUT,
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
@@ -23,10 +29,13 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
+    USIM_POPULATION_SOURCE_H5,
     USIM_MUTABLE_DATA_DIR,
 )
 
 NAMESPACE_SEPARATOR = "/"
+_KNOWN_NAMESPACES = {"activitysim", "atlas", "beam", "urbansim"}
+logger = logging.getLogger(__name__)
 
 
 _EXPLICIT_NAMESPACE_BY_KEY = {
@@ -37,6 +46,7 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     USIM_H5_UPDATED: "urbansim",
     USIM_MUTABLE_DATA_DIR: "urbansim",
     USIM_FORECAST_OUTPUT: "urbansim",
+    USIM_POPULATION_SOURCE_H5: "urbansim",
     # ActivitySim
     ASIM_MUTABLE_DATA_DIR: "activitysim",
     ASIM_LAND_USE_IN: "activitysim",
@@ -47,6 +57,7 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     BEAM_OUTPUT_DIR: "beam",
     BEAM_MUTABLE_DATA_DIR: "beam",
     BEAM_PLANS_IN: "beam",
+    "beam_plans_asim_out": "beam",
     BEAM_HOUSEHOLDS_IN: "beam",
     BEAM_PERSONS_IN: "beam",
     BEAM_PLANS_OUT: "beam",
@@ -55,6 +66,7 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     # ATLAS
     ATLAS_OUTPUT_DIR: "atlas",
     ATLAS_VEHICLES2_INPUT: "atlas",
+    ATLAS_VEHICLES2_OUTPUT: "atlas",
 }
 
 _NAMESPACE_PREFIX_RULES = (
@@ -72,7 +84,10 @@ _NAMESPACE_PREFIX_RULES = (
 
 
 def is_namespaced_key(key: str) -> bool:
-    return NAMESPACE_SEPARATOR in key
+    if NAMESPACE_SEPARATOR not in key:
+        return False
+    namespace, _local_key = key.split(NAMESPACE_SEPARATOR, 1)
+    return namespace in _KNOWN_NAMESPACES
 
 
 def infer_namespace_for_key(key: str) -> Optional[str]:
@@ -90,6 +105,21 @@ def infer_namespace_for_key(key: str) -> Optional[str]:
     if "_asim_" in key:
         return "activitysim"
     return None
+
+
+def _namespace_and_local_key_for_key(key: str) -> tuple[Optional[str], str]:
+    if is_namespaced_key(key):
+        namespace, local_key = key.split(NAMESPACE_SEPARATOR, 1)
+        return namespace or None, local_key
+    return infer_namespace_for_key(key), key
+
+
+def canonical_artifact_key_from_raw_key(key: str) -> str:
+    """
+    Canonicalize a raw storage or alias key back to the workflow key surface.
+    """
+    _namespace, local_key = _namespace_and_local_key_for_key(key)
+    return resolve_artifact_key(local_key)
 
 
 def qualify_key(namespace: str, key: str) -> str:
@@ -132,7 +162,49 @@ def namespaced_alias_for_key(key: str) -> Optional[str]:
     return alias
 
 
-def resolve_coupler_value(coupler: Any, key: str) -> Tuple[Any, Optional[str]]:
+@dataclass(frozen=True)
+class ResolvedCouplerValue:
+    requested_key: str
+    canonical_key: str
+    storage_key: Optional[str]
+    value: Any
+    source: str
+    lookup_source: Optional[str] = None
+    namespace: Optional[str] = None
+
+
+def _is_noop_artifact_placeholder(value: Any) -> bool:
+    if value is None:
+        return False
+    value_type = type(value)
+    name = getattr(value_type, "__name__", "").lower()
+    module = getattr(value_type, "__module__", "").lower()
+    return "noopartifact" in name or ".noop" in module
+
+
+def _log_ignored_noop_artifact(
+    *,
+    requested_key: str,
+    storage_key: str,
+    lookup_source: str,
+    value: Any,
+) -> None:
+    logger.warning(
+        "Ignoring NoopArtifact placeholder for coupler key '%s' (storage_key='%s', "
+        "lookup_source=%s, type=%s, path=%s, container_uri=%s); falling back to "
+        "other input sources.",
+        requested_key,
+        storage_key,
+        lookup_source,
+        type(value).__name__,
+        getattr(value, "path", None),
+        getattr(value, "container_uri", None),
+    )
+
+
+def resolve_coupler_value(
+    coupler: Optional[CouplerProtocol], key: str
+) -> ResolvedCouplerValue:
     """
     Resolve a key from a coupler using canonical namespace-aware lookup order.
 
@@ -142,37 +214,122 @@ def resolve_coupler_value(coupler: Any, key: str) -> Tuple[Any, Optional[str]]:
     3. namespaced global alias (`coupler.get(namespace/key)`)
     """
     if coupler is None:
-        return None, None
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_artifact_key_from_raw_key(key),
+            storage_key=None,
+            value=None,
+            source="missing",
+        )
 
-    namespace = infer_namespace_for_key(key)
+    namespace, local_key = _namespace_and_local_key_for_key(key)
+    canonical_key = canonical_artifact_key_from_raw_key(key)
     view_fn = getattr(coupler, "view", None)
     if namespace and callable(view_fn):
         try:
             namespaced_view = view_fn(namespace)
             view_get = getattr(namespaced_view, "get", None)
             if callable(view_get):
-                local_key = local_key_for_namespace(key, namespace)
                 value = view_get(local_key)
-                if value is not None:
-                    return value, qualify_key(namespace, local_key)
+                if value is not None and _is_noop_artifact_placeholder(value):
+                    _log_ignored_noop_artifact(
+                        requested_key=key,
+                        storage_key=qualify_key(namespace, local_key),
+                        lookup_source="namespaced_view",
+                        value=value,
+                    )
+                if value is not None and not _is_noop_artifact_placeholder(value):
+                    return ResolvedCouplerValue(
+                        requested_key=key,
+                        canonical_key=canonical_key,
+                        storage_key=qualify_key(namespace, local_key),
+                        value=value,
+                        source="coupler",
+                        lookup_source="namespaced_view",
+                        namespace=namespace,
+                    )
         except Exception:
             pass
 
     get_value = getattr(coupler, "get", None)
     if not callable(get_value):
-        return None, None
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_key,
+            storage_key=None,
+            value=None,
+            source="missing",
+            namespace=namespace,
+        )
 
     value = get_value(key)
-    if value is not None:
-        return value, key
+    if value is not None and _is_noop_artifact_placeholder(value):
+        _log_ignored_noop_artifact(
+            requested_key=key,
+            storage_key=key,
+            lookup_source="legacy",
+            value=value,
+        )
+    if value is not None and not _is_noop_artifact_placeholder(value):
+        return ResolvedCouplerValue(
+            requested_key=key,
+            canonical_key=canonical_key,
+            storage_key=key,
+            value=value,
+            source="coupler",
+            lookup_source="legacy",
+            namespace=namespace,
+        )
+
+    if canonical_key != key:
+        value = get_value(canonical_key)
+        if value is not None and _is_noop_artifact_placeholder(value):
+            _log_ignored_noop_artifact(
+                requested_key=key,
+                storage_key=canonical_key,
+                lookup_source="canonical",
+                value=value,
+            )
+        if value is not None and not _is_noop_artifact_placeholder(value):
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_key,
+                storage_key=canonical_key,
+                value=value,
+                source="coupler",
+                lookup_source="canonical",
+                namespace=namespace,
+            )
 
     alias = namespaced_alias_for_key(key)
     if alias is not None:
         value = get_value(alias)
-        if value is not None:
-            return value, alias
+        if value is not None and _is_noop_artifact_placeholder(value):
+            _log_ignored_noop_artifact(
+                requested_key=key,
+                storage_key=alias,
+                lookup_source="alias",
+                value=value,
+            )
+        if value is not None and not _is_noop_artifact_placeholder(value):
+            return ResolvedCouplerValue(
+                requested_key=key,
+                canonical_key=canonical_key,
+                storage_key=alias,
+                value=value,
+                source="coupler",
+                lookup_source="namespaced_alias",
+                namespace=namespace,
+            )
 
-    return None, None
+    return ResolvedCouplerValue(
+        requested_key=key,
+        canonical_key=canonical_key,
+        storage_key=None,
+        value=None,
+        source="missing",
+        namespace=namespace,
+    )
 
 
 def namespaced_view_target(key: str) -> Optional[Tuple[str, str]]:

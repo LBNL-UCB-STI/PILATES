@@ -1,19 +1,42 @@
 from __future__ import annotations
 
+import json
+import inspect
+import logging
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Type, TypeVar
+import re
+import shutil
+from typing import Any, Callable, Dict, Mapping, Optional
 
+from pilates.beam.config_hocon import (
+    BeamConfigHoconError,
+    beam_config_env_overrides,
+    beam_config_root,
+    beam_primary_config_path,
+    load_resolved_beam_config_tree,
+)
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_INPUT_VEHICLES_ARCHIVED,
     BEAM_NETWORK_FINAL,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
     LINKSTATS,
     LINKSTATS_WARMSTART,
+    ZARR_SKIMS,
 )
-from pilates.workflows.outputs_base import StepOutputsBase, ValidationContext
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -28,35 +51,37 @@ from .shared import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
     CouplerProtocol,
+    StandardStepSpec,
     StepOutputsHolder,
     WorkflowState,
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
-    _decorate_step_with_consist,
+    build_standard_step,
     _log_beam_r5_osm_input,
     _log_step_records,
+    make_default_recoverer,
     _schema_outputs_from_class,
-    _upstream_outputs_view,
     cr,
     find_last_run_output_plans,
-    log_and_set_input,
     log_and_set_output,
     log_input_only,
     log_output_only,
+    recovered_cached_paths,
 )
 
-StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)
+logger = logging.getLogger(__name__)
+
+_BEAM_INCLUDE_RE = re.compile(
+    r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))'
+)
+_BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 
 
 def _primary_beam_config_path(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> Path:
-    return (
-        Path(workspace.get_beam_mutable_data_dir())
-        / settings.run.region
-        / settings.beam.config
-    )
+    return beam_primary_config_path(settings, workspace=workspace)
 
 
 def _require_primary_beam_config(
@@ -117,6 +142,427 @@ def _beam_linkstats_publication_meta(
     return {}
 
 
+_BEAM_RUN_ARCHIVE_KEY_MAP: Dict[str, str] = {
+    BEAM_PLANS_IN: BEAM_INPUT_PLANS_ARCHIVED,
+    BEAM_HOUSEHOLDS_IN: BEAM_INPUT_HOUSEHOLDS_ARCHIVED,
+    BEAM_PERSONS_IN: BEAM_INPUT_PERSONS_ARCHIVED,
+    BEAM_CONFIG_FILE: BEAM_INPUT_CONFIG_ARCHIVED,
+    "vehicles_beam_in": BEAM_INPUT_VEHICLES_ARCHIVED,
+    LINKSTATS_WARMSTART: BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_PLANS_OUT: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_OUTPUT_PLANS_XML: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
+    BEAM_EXPERIENCED_PLANS_XML: BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (
+        BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED
+    ),
+}
+
+_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
+    BEAM_INPUT_PLANS_ARCHIVED: "Archived BEAM runner plans input snapshot",
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED: "Archived BEAM runner households input snapshot",
+    BEAM_INPUT_PERSONS_ARCHIVED: "Archived BEAM runner persons input snapshot",
+    BEAM_INPUT_CONFIG_ARCHIVED: "Archived BEAM runner config input snapshot",
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: (
+        "Archived BEAM config include/reference inputs snapshot"
+    ),
+    BEAM_INPUT_VEHICLES_ARCHIVED: "Archived BEAM runner vehicles input snapshot",
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start linkstats input snapshot"
+    ),
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start plans input snapshot"
+    ),
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
+        "Archived BEAM runner warm-start experienced plans input snapshot"
+    ),
+}
+
+
+def _beam_run_snapshot_dir(
+    *,
+    workspace: Workspace,
+    state: WorkflowState,
+) -> Path:
+    return (
+        Path(workspace.get_beam_output_dir())
+        / f"inputs-year-{state.year}-iteration-{state.iteration}"
+    )
+
+
+def _beam_input_archive_meta(
+    *,
+    archive_key: str,
+    year: int,
+    iteration: int,
+) -> Dict[str, Any]:
+    input_name = archive_key.removeprefix("beam_input_").removesuffix("_archived")
+    return {
+        "facet": {
+            "artifact_family": "beam_input_archived",
+            "input_name": input_name,
+            "year": year,
+            "iteration": iteration,
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+def _scan_beam_config_includes(root: Path) -> list[Path]:
+    seen: set[Path] = set()
+    ordered: list[Path] = []
+    queue = [root.resolve()]
+    while queue:
+        current = queue.pop(0)
+        if current in seen or not current.exists() or not current.is_file():
+            continue
+        seen.add(current)
+        ordered.append(current)
+        try:
+            lines = current.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in lines:
+            match = _BEAM_INCLUDE_RE.match(line)
+            if not match:
+                continue
+            rel = match.group(1) or match.group(2)
+            if not rel:
+                continue
+            queue.append((current.parent / rel).resolve())
+    return ordered
+
+def _collect_beam_config_path_references(config_tree: Mapping[str, Any]) -> set[str]:
+    refs: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+        elif isinstance(node, str):
+            candidate = node.strip()
+            if _looks_like_beam_path_reference(candidate):
+                refs.add(candidate)
+
+    walk(config_tree)
+    return refs
+
+
+def _looks_like_beam_path_reference(candidate: str) -> bool:
+    ignore_tokens = {
+        "csv",
+        "csv.gz",
+        "xml",
+        "xml.gz",
+        "parquet",
+        "omx",
+        "h5",
+    }
+    if not candidate or candidate in ignore_tokens:
+        return False
+    if candidate.startswith(("http://", "https://", "tcp://")):
+        return False
+    return "/" in candidate or candidate.endswith(
+        (
+            ".csv",
+            ".csv.gz",
+            ".xml",
+            ".xml.gz",
+            ".gz",
+            ".parquet",
+            ".zip",
+            ".omx",
+            ".h5",
+        )
+    )
+
+
+def _resolve_beam_config_reference(value: str, root_dir: Path) -> Optional[Path]:
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    resolved = (root_dir / candidate).resolve()
+    return resolved
+
+
+def _beam_config_reference_relative_path(path: Path, config_root: Path) -> Path:
+    resolved = path.resolve()
+    root_resolved = config_root.resolve()
+    if resolved.is_relative_to(root_resolved):
+        return resolved.relative_to(root_resolved)
+    parts = list(resolved.parts)
+    if parts and parts[0] == resolved.anchor:
+        parts = parts[1:]
+    return Path("__external__", *parts)
+
+
+def _copy_tree_contents(source_root: Path, target_root: Path) -> None:
+    if not source_root.exists() or not source_root.is_dir():
+        return
+    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
+        target = target_root / child.name
+        if child.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(child, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _archive_beam_config_references(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    snapshot_dir: Path,
+) -> Optional[Path]:
+    config_path = _require_primary_beam_config(settings, workspace).resolve()
+    config_root = beam_config_root(settings, workspace=workspace).resolve()
+    archive_root = snapshot_dir / BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+    sources_by_target: Dict[Path, Path] = {}
+    config_files = _scan_beam_config_includes(config_path)
+
+    for include_path in config_files:
+        if include_path == config_path:
+            continue
+        sources_by_target[
+            _beam_config_reference_relative_path(include_path, config_root)
+        ] = include_path
+
+    try:
+        config_tree = load_resolved_beam_config_tree(
+            config_path,
+            env_overrides=beam_config_env_overrides(
+                settings,
+                config_root=config_root,
+            ),
+        )
+    except BeamConfigHoconError as exc:
+        logger.warning(
+            "Failed to resolve BEAM config references for archival from %s: %s",
+            config_path,
+            exc,
+        )
+        config_tree = None
+    if config_tree is None:
+        if not sources_by_target:
+            return None
+        logger.debug(
+            "pyhocon unavailable while archiving BEAM config references; "
+            "archiving include files only."
+        )
+    else:
+        raw_refs = _collect_beam_config_path_references(config_tree)
+
+        for raw_ref in sorted(raw_refs):
+            resolved = _resolve_beam_config_reference(raw_ref, config_root)
+            if resolved is None or not resolved.exists() or resolved == config_path:
+                continue
+            sources_by_target.setdefault(
+                _beam_config_reference_relative_path(resolved, config_root),
+                resolved,
+            )
+
+    if not sources_by_target:
+        return None
+
+    if archive_root.exists():
+        shutil.rmtree(archive_root)
+    archive_root.mkdir(parents=True, exist_ok=True)
+
+    manifest: Dict[str, str] = {}
+    for rel_target, source_path in sorted(
+        sources_by_target.items(),
+        key=lambda item: (0 if item[1].is_dir() else 1, len(item[0].parts), item[0].as_posix()),
+    ):
+        target_path = archive_root / rel_target
+        if source_path.is_dir():
+            _copy_tree_contents(source_path, target_path)
+        else:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source_path, target_path)
+        manifest[rel_target.as_posix()] = str(source_path)
+
+    (archive_root / _BEAM_CONFIG_REFERENCE_MANIFEST).write_text(
+        json.dumps(manifest, indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return archive_root
+
+
+def _resolve_existing_coupler_input(
+    *,
+    coupler: CouplerProtocol,
+    key: str,
+    workspace: Workspace,
+) -> Optional[tuple[str, str]]:
+    get_value = getattr(coupler, "get", None)
+    if not callable(get_value):
+        return None
+    resolved_path = artifact_to_existing_path(
+        get_value(key),
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
+    if resolved_path is None:
+        return None
+    return key, resolved_path
+
+
+def _resolve_beam_run_warmstart_inputs(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> tuple[Optional[tuple[str, str]], Optional[tuple[str, str]]]:
+    plans_match = (
+        _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_OUTPUT_PLANS_XML,
+            workspace=workspace,
+        )
+        or _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_PLANS_OUT,
+            workspace=workspace,
+        )
+    )
+    experienced_match = (
+        _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            workspace=workspace,
+        )
+        or _resolve_existing_coupler_input(
+            coupler=coupler,
+            key=BEAM_EXPERIENCED_PLANS_XML,
+            workspace=workspace,
+        )
+    )
+
+    output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
+    if plans_match is None or experienced_match is None:
+        scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
+            output_root, "year-"
+        )
+        if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
+            scanned_plans_key = (
+                BEAM_OUTPUT_PLANS_XML
+                if scanned_plans_path.name == "output_plans.xml.gz"
+                else BEAM_PLANS_OUT
+            )
+            plans_match = (scanned_plans_key, str(scanned_plans_path))
+        if (
+            experienced_match is None
+            and scanned_experienced_path is not None
+            and scanned_experienced_path.exists()
+        ):
+            scanned_experienced_key = (
+                BEAM_OUTPUT_EXPERIENCED_PLANS_XML
+                if scanned_experienced_path.name == "output_experienced_plans.xml.gz"
+                else BEAM_EXPERIENCED_PLANS_XML
+            )
+            experienced_match = (scanned_experienced_key, str(scanned_experienced_path))
+    return plans_match, experienced_match
+
+
+def _collect_beam_run_snapshot_sources(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    holder: StepOutputsHolder,
+    coupler: CouplerProtocol,
+) -> Dict[str, Path]:
+    upstream = holder.beam_preprocess
+    if upstream is None:
+        raise RuntimeError("BEAM preprocess must complete first")
+
+    snapshot_sources: Dict[str, Path] = {
+        BEAM_INPUT_CONFIG_ARCHIVED: _require_primary_beam_config(settings, workspace),
+    }
+    for short_name, path, _description in upstream._iter_record_items():
+        archive_key = _BEAM_RUN_ARCHIVE_KEY_MAP.get(short_name)
+        if archive_key is None:
+            continue
+        snapshot_sources[archive_key] = Path(path)
+
+    plans_match, experienced_match = _resolve_beam_run_warmstart_inputs(
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+    )
+    if plans_match is not None and Path(plans_match[1]).exists():
+        snapshot_sources[BEAM_INPUT_PLANS_WARMSTART_ARCHIVED] = Path(plans_match[1])
+    if experienced_match is not None and Path(experienced_match[1]).exists():
+        snapshot_sources[BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED] = Path(
+            experienced_match[1]
+        )
+    return snapshot_sources
+
+
+def _archive_beam_run_inputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    holder: StepOutputsHolder,
+    coupler: CouplerProtocol,
+) -> None:
+    snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+    config_reference_snapshot = _archive_beam_config_references(
+        settings=settings,
+        workspace=workspace,
+        snapshot_dir=snapshot_dir,
+    )
+    if config_reference_snapshot is not None:
+        log_output_only(
+            key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+            path=str(config_reference_snapshot),
+            description=_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP[
+                BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+            ],
+            step_name="beam_run",
+            **_beam_input_archive_meta(
+                archive_key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+                year=state.year,
+                iteration=state.iteration,
+            ),
+        )
+
+    for archive_key, source_path in _collect_beam_run_snapshot_sources(
+        settings=settings,
+        workspace=workspace,
+        holder=holder,
+        coupler=coupler,
+    ).items():
+        if not source_path.exists():
+            raise FileNotFoundError(
+                f"BEAM run input snapshot source is missing for {archive_key}: {source_path}"
+            )
+        target_path = snapshot_dir / f"{archive_key}{''.join(source_path.suffixes)}"
+        if source_path.is_dir():
+            if target_path.exists():
+                shutil.rmtree(target_path)
+            shutil.copytree(source_path, target_path)
+        else:
+            shutil.copy2(source_path, target_path)
+        log_output_only(
+            key=archive_key,
+            path=str(target_path),
+            description=_BEAM_RUN_ARCHIVE_DESCRIPTION_MAP[archive_key],
+            step_name="beam_run",
+            **_beam_input_archive_meta(
+                archive_key=archive_key,
+                year=state.year,
+                iteration=state.iteration,
+            ),
+        )
+
+
 def _publish_beam_run_outputs(
     *,
     outputs: BeamRunOutputs,
@@ -134,6 +580,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM linkstats output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -142,6 +589,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM warm-start linkstats for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -153,6 +601,7 @@ def _publish_beam_run_outputs(
                 key=short_name,
                 path=str(path),
                 description="BEAM linkstats parquet output for downstream runs",
+                step_name="beam_run",
                 profile_file_schema=True,
                 **linkstats_meta,
             )
@@ -162,6 +611,7 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM linkstats parquet output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **linkstats_meta,
         )
@@ -176,6 +626,7 @@ def _publish_beam_run_outputs(
                     "BEAM unmodified linkstats parquet output for phys sim "
                     "sub-iteration"
                 ),
+                step_name="beam_run",
                 profile_file_schema=True,
                 **record_meta,
             )
@@ -187,6 +638,7 @@ def _publish_beam_run_outputs(
                 "BEAM unmodified linkstats parquet output for phys sim sub-iteration"
             ),
             coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
             **record_meta,
         )
@@ -199,6 +651,49 @@ def _publish_beam_run_outputs(
             path=str(path),
             description="BEAM plans output for downstream runs",
             coupler=coupler,
+            step_name="beam_run",
+            profile_file_schema=True,
+        )
+
+    promoted_output_plans_xml = outputs.promoted_output_plans_xml_for_publication()
+    if promoted_output_plans_xml is not None:
+        _, path = promoted_output_plans_xml
+        log_and_set_output(
+            key=BEAM_OUTPUT_PLANS_XML,
+            path=str(path),
+            description="BEAM output plans XML for downstream warm-start reuse",
+            coupler=coupler,
+            step_name="beam_run",
+            profile_file_schema=True,
+        )
+
+    promoted_output_experienced_plans_xml = (
+        outputs.promoted_output_experienced_plans_xml_for_publication()
+    )
+    if promoted_output_experienced_plans_xml is not None:
+        _, path = promoted_output_experienced_plans_xml
+        log_and_set_output(
+            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+            path=str(path),
+            description=(
+                "BEAM output experienced plans XML for downstream warm-start reuse"
+            ),
+            coupler=coupler,
+            step_name="beam_run",
+            profile_file_schema=True,
+        )
+
+    promoted_experienced_plans_xml = (
+        outputs.promoted_experienced_plans_xml_for_publication()
+    )
+    if promoted_experienced_plans_xml is not None:
+        _, path = promoted_experienced_plans_xml
+        log_and_set_output(
+            key=BEAM_EXPERIENCED_PLANS_XML,
+            path=str(path),
+            description="BEAM experienced plans XML for downstream warm-start reuse",
+            coupler=coupler,
+            step_name="beam_run",
             profile_file_schema=True,
         )
 
@@ -245,6 +740,8 @@ def _execute_beam_postprocess(
     postprocessor: Any,
     workspace: Workspace,
     outputs_holder: StepOutputsHolder,
+    *,
+    zarr_skims: Optional[Any] = None,
     **_: Any,
 ) -> BeamPostprocessOutputs:
     upstream = outputs_holder.beam_run
@@ -252,6 +749,21 @@ def _execute_beam_postprocess(
         raise RuntimeError("BEAM run must complete first")
     if not isinstance(upstream, BeamRunOutputs):
         raise TypeError("beam_postprocess requires BeamRunOutputs from beam_run")
+    if zarr_skims is not None:
+        try:
+            parameters = inspect.signature(postprocessor.postprocess).parameters
+        except (TypeError, ValueError):
+            parameters = {}
+        accepts_zarr_skims = "zarr_skims" in parameters or any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in parameters.values()
+        )
+        if accepts_zarr_skims:
+            return postprocessor.postprocess(
+                upstream,
+                workspace,
+                zarr_skims=zarr_skims,
+            )
     return postprocessor.postprocess(upstream, workspace)
 
 
@@ -277,140 +789,17 @@ def _execute_beam_full_skim(
     )
 
 
-def _make_beam_step_function(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    model_name: str,
-    phase: str,
-    outputs_class: Type[StepOutputsT],
-    component_getter: Callable[[ModelFactory, WorkflowState], Any],
-    component_executor: Callable[..., StepOutputsT],
-    outputs_holder_setter: Callable[[StepOutputsHolder, StepOutputsT], None],
-    input_logger: Optional[Callable[..., Dict[str, Any]]] = None,
-    output_logger: Optional[Callable[..., None]] = None,
-    output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
-) -> Callable[..., None]:
-    @cr.require_runtime_kwargs("settings", "state", "workspace")
-    def _step_func(
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        **kwargs: Any,
-    ) -> None:
-        factory = ModelFactory()
-        component = component_getter(factory, state)
-
-        extra_kwargs = (
-            dict(input_logger(settings, state, workspace, outputs_holder) or {})
-            if input_logger is not None
-            else {}
-        )
-        step_outputs = component_executor(
-            component,
-            workspace,
-            outputs_holder,
-            coupler=coupler,
-            context=f"{model_name}_{phase}",
-            **extra_kwargs,
-            **kwargs,
-        )
-        if not isinstance(step_outputs, outputs_class):
-            raise TypeError(
-                f"{model_name}_{phase} must return {outputs_class.__name__}, "
-                f"got {type(step_outputs).__name__}"
-            )
-        step_outputs.validate(
-            context=ValidationContext(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                step_name=f"{model_name}_{phase}",
-                upstream_outputs=_upstream_outputs_view(
-                    outputs_holder,
-                    current_step_name=f"{model_name}_{phase}",
-                ),
-            )
-        )
-        outputs_holder_setter(outputs_holder, step_outputs)
-
-        if output_logger is not None:
-            output_logger(step_outputs, settings, state, workspace, outputs_holder)
-
-    if output_logger is not None:
-        setattr(
-            _step_func,
-            "__pilates_output_replayer__",
-            lambda outputs, settings, state, workspace, holder: output_logger(
-                outputs, settings, state, workspace, holder
-            ),
-        )
-    if output_recoverer is not None:
-        setattr(_step_func, "__pilates_output_recoverer__", output_recoverer)
-
-    step_model = f"{model_name}_{phase}"
-    return _decorate_step_with_consist(
-        step_func=_step_func,
-        step_model=step_model,
-        description=f"{step_model} workflow step",
-        schema_outputs=_schema_outputs_from_class(outputs_class),
-        outputs=list(outputs_class.declared_output_keys()) or None,
-        tags=[model_name, phase],
-    )
+_recover_beam_run_outputs = make_default_recoverer(
+    outputs_class=BeamRunOutputs,
+    mapping_field="raw_outputs",
+    dir_field="beam_output_dir",
+    dir_getter=lambda workspace: workspace.get_beam_output_dir(),
+    step_logger=logger,
+    log_context="BEAM cached output recovery",
+)
 
 
-def _resolve_cached_run_outputs(run_id: Optional[str]) -> Dict[str, Any]:
-    if not run_id:
-        return {}
-    tracker = cr.current_tracker()
-    if tracker is None:
-        return {}
-    get_run_outputs = getattr(tracker, "get_run_outputs", None)
-    if not callable(get_run_outputs):
-        return {}
-    try:
-        run_outputs = get_run_outputs(run_id) or {}
-    except Exception:
-        return {}
-    resolved: Dict[str, Any] = {}
-    for raw_key, value in run_outputs.items():
-        if value is None:
-            continue
-        raw_key_str = str(raw_key)
-        local_key = raw_key_str.split("/", 1)[-1]
-        resolved[resolve_artifact_key(local_key)] = value
-    return resolved
-
-
-def _recovered_cached_paths(
-    *,
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-    workspace: Workspace,
-) -> Dict[str, Path]:
-    merged: Dict[str, Any] = {}
-    if cached_outputs:
-        for raw_key, value in cached_outputs.items():
-            if value is None:
-                continue
-            raw_key_str = str(raw_key)
-            local_key = raw_key_str.split("/", 1)[-1]
-            merged[resolve_artifact_key(local_key)] = value
-    for key, value in _resolve_cached_run_outputs(run_id).items():
-        merged[key] = value
-    recovered: Dict[str, Path] = {}
-    for key, value in merged.items():
-        path = artifact_to_existing_path(
-            value,
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-        if path is not None:
-            recovered[key] = Path(path)
-    return recovered
-
-
-def _recover_beam_run_outputs(
+def _recover_beam_preprocess_outputs(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
@@ -420,18 +809,31 @@ def _recover_beam_run_outputs(
     step_inputs: Optional[Mapping[str, Any]],
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
-) -> Optional[BeamRunOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
-    )
-    if not recovered_paths:
+) -> Optional[BeamPreprocessOutputs]:
+    del settings, state, coupler, outputs_holder, cached_outputs, run_id
+    prepared_inputs: Dict[str, Path] = {}
+    if step_inputs:
+        allowed_keys = {
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+        }
+        for key, value in step_inputs.items():
+            if key not in allowed_keys:
+                continue
+            path = artifact_to_existing_path(
+                value,
+                workspace=workspace,
+                materialize_from_archive=True,
+            )
+            if path is not None:
+                prepared_inputs[key] = Path(path)
+    if not prepared_inputs:
         return None
-    return BeamRunOutputs(
-        beam_output_dir=Path(workspace.get_beam_output_dir()),
-        raw_outputs=recovered_paths,
+    return BeamPreprocessOutputs(
+        beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+        prepared_inputs=prepared_inputs,
     )
 
 
@@ -447,10 +849,12 @@ def _recover_beam_postprocess_outputs(
     run_id: Optional[str],
 ) -> Optional[BeamPostprocessOutputs]:
     del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
+    recovered_paths = recovered_cached_paths(
         cached_outputs=cached_outputs,
         run_id=run_id,
         workspace=workspace,
+        step_logger=logger,
+        log_context="BEAM cached output recovery",
     )
     if not recovered_paths:
         return None
@@ -470,27 +874,74 @@ def _recover_beam_postprocess_outputs(
     )
 
 
-def _recover_beam_full_skim_outputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    step_inputs: Optional[Mapping[str, Any]],
-    cached_outputs: Optional[Mapping[str, Any]],
-    run_id: Optional[str],
-) -> Optional[BeamFullSkimOutputs]:
-    del settings, state, coupler, outputs_holder, step_inputs
-    recovered_paths = _recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
-        workspace=workspace,
+_recover_beam_full_skim_outputs = make_default_recoverer(
+    outputs_class=BeamFullSkimOutputs,
+    primary_path_field="full_skims",
+    primary_path_resolver=lambda recovered_paths, _state: recovered_paths.get(
+        "beam_full_skims"
+    ),
+    step_logger=logger,
+    log_context="BEAM cached output recovery",
+)
+
+
+def _beam_step_runtime(ctx: Any) -> tuple[Any, Any, Any]:
+    return (
+        ctx.require_runtime("settings"),
+        ctx.require_runtime("state"),
+        ctx.require_runtime("workspace"),
     )
-    full_skims = recovered_paths.get("beam_full_skims")
-    if full_skims is None:
-        return None
-    return BeamFullSkimOutputs(full_skims=full_skims)
+
+
+def _beam_preprocess_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.preprocessor import BeamPreprocessor
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPreprocessor.expected_inputs(settings, state, workspace)
+
+
+def _beam_preprocess_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.preprocessor import BeamPreprocessor
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPreprocessor.expected_outputs(settings, state, workspace)
+
+
+def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamRunner
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamRunner.runtime_expected_inputs(settings, state, workspace)
+
+
+def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamRunner
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamRunner.expected_outputs(settings, state, workspace)
+
+
+def _beam_postprocess_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.postprocessor import BeamPostprocessor
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamPostprocessor.expected_inputs(settings, state, workspace)
+
+
+def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.postprocessor import BeamPostprocessor
+    settings, state, workspace = _beam_step_runtime(ctx)
+    expected = BeamPostprocessor.expected_outputs(settings, state, workspace)
+    if ZARR_SKIMS in expected:
+        return {ZARR_SKIMS: expected[ZARR_SKIMS]}
+    return {}
+
+
+def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamFullSkimRunner
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamFullSkimRunner.expected_inputs(settings, state, workspace)
+
+
+def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
+    from pilates.beam.runner import BeamFullSkimRunner
+    settings, state, workspace = _beam_step_runtime(ctx)
+    return BeamFullSkimRunner.expected_outputs(settings, state, workspace)
 
 
 def make_beam_preprocess_step(
@@ -571,6 +1022,7 @@ def make_beam_preprocess_step(
                 path=path,
                 description=description,
                 coupler=coupler,
+                step_name="beam_preprocess",
                 **meta,
             ),
             profile_schema_keys={
@@ -579,27 +1031,35 @@ def make_beam_preprocess_step(
             },
         )
 
-    return _make_beam_step_function(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="preprocess",
-        outputs_class=BeamPreprocessOutputs,
-        component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_preprocess(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
+        spec=StandardStepSpec(
+            step_name="beam_preprocess",
+            model_name="beam",
+            phase="preprocess",
+            outputs_class=BeamPreprocessOutputs,
+            component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_preprocess(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_preprocess_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamPreprocessOutputs),
+            inputs=_beam_preprocess_inputs,
+            output_paths=_beam_preprocess_output_paths,
+            input_binding="paths",
+            cache_hydration="metadata",
+            use_logged_wrapper=False,
         ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_preprocess", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
     )
+    return step
 
 
 def make_beam_run_step(
@@ -651,40 +1111,32 @@ def make_beam_run_step(
                 workspace=workspace,
             )
         for short_name, path, description in upstream._iter_record_items():
-            log_and_set_input(
+            log_input_only(
                 key=short_name,
                 path=str(path),
                 description=description,
-                coupler=coupler,
             )
 
-        output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
-        plans_path, experienced_path = find_last_run_output_plans(output_root, "year-")
-        if plans_path is not None and plans_path.exists():
-            if plans_path.name == "output_plans.xml.gz":
-                plans_key = BEAM_OUTPUT_PLANS_XML
-            else:
-                plans_key = BEAM_PLANS_OUT
-            log_and_set_input(
-                key=plans_key,
-                path=str(plans_path),
+        plans_match, experienced_match = _resolve_beam_run_warmstart_inputs(
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+        )
+        if plans_match is not None and Path(plans_match[1]).exists():
+            log_input_only(
+                key=plans_match[0],
+                path=plans_match[1],
                 description=(
                     "BEAM warm-start plans (selected by BEAM from previous outputs)"
                 ),
-                coupler=coupler,
             )
-        if experienced_path is not None and experienced_path.exists():
-            if experienced_path.name == "output_experienced_plans.xml.gz":
-                experienced_key = BEAM_OUTPUT_EXPERIENCED_PLANS_XML
-            else:
-                experienced_key = BEAM_EXPERIENCED_PLANS_XML
-            log_and_set_input(
-                key=experienced_key,
-                path=str(experienced_path),
+        if experienced_match is not None and Path(experienced_match[1]).exists():
+            log_input_only(
+                key=experienced_match[0],
+                path=experienced_match[1],
                 description=(
                     "BEAM warm-start experienced plans (selected by BEAM from previous outputs)"
                 ),
-                coupler=coupler,
             )
         return {}
 
@@ -723,34 +1175,55 @@ def make_beam_run_step(
                     meta["schema"] = beam_network_schema
             return meta
 
+        _archive_beam_run_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            holder=holder,
+            coupler=coupler,
+        )
+
         _log_step_records(
             record_items=outputs._iter_record_items(),
-            log_fn=log_output_only,
+            log_fn=lambda key, path, description, **meta: log_output_only(
+                key=key,
+                path=path,
+                description=description,
+                step_name="beam_run",
+                **meta,
+            ),
             extra_meta_fn=_beam_run_extra_meta,
         )
 
-    return _make_beam_step_function(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="run",
-        outputs_class=BeamRunOutputs,
-        component_getter=lambda factory, state: factory.get_runner("beam", state),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_run(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
+        spec=StandardStepSpec(
+            step_name="beam_run",
+            model_name="beam",
+            phase="run",
+            outputs_class=BeamRunOutputs,
+            component_getter=lambda factory, state: factory.get_runner("beam", state),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_run(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            input_logger=_log_inputs,
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_run_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamRunOutputs),
+            inputs=_beam_run_inputs,
+            output_paths=_beam_run_output_paths,
+            input_binding="paths",
+            cache_hydration="inputs-missing",
+            use_logged_wrapper=False,
         ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_run", outputs
-        ),
-        input_logger=_log_inputs,
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_run_outputs,
     )
+    return step
 
 
 def make_beam_postprocess_step(
@@ -790,6 +1263,7 @@ def make_beam_postprocess_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="beam_postprocess",
             )
         for short_name, path in outputs.split_events.items():
             facet_meta = _beam_postprocess_split_facet_meta(short_name)
@@ -797,6 +1271,7 @@ def make_beam_postprocess_step(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events parquet split ({short_name})",
+                step_name="beam_postprocess",
                 profile_file_schema=True,
                 **facet_meta,
             )
@@ -806,6 +1281,7 @@ def make_beam_postprocess_step(
                 key=short_name,
                 path=str(path),
                 description=f"BEAM events link table ({short_name})",
+                step_name="beam_postprocess",
                 profile_file_schema=True,
                 **facet_meta,
             )
@@ -814,29 +1290,37 @@ def make_beam_postprocess_step(
             return
         _publish_beam_run_outputs(outputs=upstream, coupler=coupler)
 
-    return _make_beam_step_function(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam",
-        phase="postprocess",
-        outputs_class=BeamPostprocessOutputs,
-        component_getter=lambda factory, state: factory.get_postprocessor(
-            "beam", state
+        spec=StandardStepSpec(
+            step_name="beam_postprocess",
+            model_name="beam",
+            phase="postprocess",
+            outputs_class=BeamPostprocessOutputs,
+            component_getter=lambda factory, state: factory.get_postprocessor(
+                "beam", state
+            ),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_postprocess(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            declared_outputs=[ZARR_SKIMS],
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_postprocess_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamPostprocessOutputs),
+            inputs=_beam_postprocess_inputs,
+            output_paths=_beam_postprocess_output_paths,
+            input_binding="paths",
+            cache_hydration="inputs-missing",
+            use_logged_wrapper=False,
         ),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_postprocess(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
-        ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_postprocess", outputs
-        ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_postprocess_outputs,
     )
+    return step
 
 
 def make_beam_full_skim_step(
@@ -864,28 +1348,36 @@ def make_beam_full_skim_step(
                 path=str(path),
                 description=description,
                 coupler=coupler,
+                step_name="beam_full_skim",
             )
 
-    return _make_beam_step_function(
+    step = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
-        model_name="beam_full",
-        phase="skim",
-        outputs_class=BeamFullSkimOutputs,
-        component_getter=lambda factory, state: factory.get_runner(
-            "beam_full_skim", state
+        spec=StandardStepSpec(
+            step_name="beam_full_skim",
+            model_name="beam_full",
+            phase="skim",
+            outputs_class=BeamFullSkimOutputs,
+            component_getter=lambda factory, state: factory.get_runner(
+                "beam_full_skim", state
+            ),
+            component_executor=lambda component, workspace, outputs_holder, **kwargs: (
+                _execute_beam_full_skim(
+                    component,
+                    workspace,
+                    outputs_holder,
+                    **kwargs,
+                )
+            ),
+            output_logger=_log_outputs,
+            output_recoverer=_recover_beam_full_skim_outputs,
+            schema_outputs=_schema_outputs_from_class(BeamFullSkimOutputs),
+            inputs=_beam_full_skim_inputs,
+            output_paths=_beam_full_skim_output_paths,
+            input_binding="paths",
+            cache_hydration="inputs-missing",
+            use_logged_wrapper=False,
         ),
-        component_executor=lambda component, workspace, outputs_holder, **kwargs: (
-            _execute_beam_full_skim(
-                component,
-                workspace,
-                outputs_holder,
-                **kwargs,
-            )
-        ),
-        outputs_holder_setter=lambda holder, outputs: setattr(
-            holder, "beam_full_skim", outputs
-        ),
-        output_logger=_log_outputs,
-        output_recoverer=_recover_beam_full_skim_outputs,
     )
+    return step
