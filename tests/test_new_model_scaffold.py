@@ -183,9 +183,15 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     step_module_text = (
         tmp_path / "pilates/workflows/steps/freight.py"
     ).read_text(encoding="utf-8")
+    ast.parse(step_module_text)
     assert "StandardStepSpec" in step_module_text
     assert "build_standard_step" in step_module_text
     assert "component_executor=_execute_freight_preprocess" in step_module_text
+    assert "WorkflowState.Stage." not in step_module_text
+    compact_step_module_text = "".join(step_module_text.split())
+    assert 'factory.get_preprocessor("freight",state)' in compact_step_module_text
+    assert 'factory.get_runner("freight",state)' in compact_step_module_text
+    assert 'factory.get_postprocessor("freight",state)' in compact_step_module_text
 
     catalog_text = (tmp_path / "pilates/workflows/catalog.py").read_text(encoding="utf-8")
     ast.parse(catalog_text)

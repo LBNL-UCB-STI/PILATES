@@ -940,9 +940,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="preprocess",
                     outputs_class={spec.preprocess_output_class},
                     component_getter=lambda factory, state: factory.get_preprocessor(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_preprocess,
                     outputs_holder_key="{spec.holder_prefix}_preprocess",
@@ -984,9 +982,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="run",
                     outputs_class={spec.run_output_class},
                     component_getter=lambda factory, state: factory.get_runner(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_run,
                     outputs_holder_key="{spec.holder_prefix}_run",
@@ -1028,9 +1024,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="postprocess",
                     outputs_class={spec.postprocess_output_class},
                     component_getter=lambda factory, state: factory.get_postprocessor(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_postprocess,
                     outputs_holder_key="{spec.holder_prefix}_postprocess",
@@ -1675,7 +1669,10 @@ def _parse_args() -> argparse.Namespace:
             "supply_demand_loop",
             "postprocessing",
         ],
-        help="WorkflowState.Stage enum used in generated step factory component_getter lambdas",
+        help=(
+            "Major workflow stage used to infer default catalog metadata and "
+            "stage-template guidance"
+        ),
     )
     parser.add_argument(
         "--catalog-stage",
