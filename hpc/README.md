@@ -48,13 +48,13 @@ Use high-memory `lr7` mode (`480G`):
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --high-mem
 ```
 
-Force shared archive output on LRC while keeping execution on scratch:
+Force shared live archive output on LRC while keeping execution on node-local storage:
 
 ```bash
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --archive shared
 ```
 
-Force scratch-only output:
+Force scratch live archive output while keeping execution on node-local storage:
 
 ```bash
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --archive scratch
@@ -89,10 +89,12 @@ Restart from an existing stage file:
 `BEAM_EXTRA_JVM_ARGS` defaults to empty. Use it to append extra JVM flags for
 profiling or debugging without editing the runner code.
 
-`--archive` controls where the run writes outputs:
+`--archive` controls the live run/archive topology:
 
-- `shared`: archive to `/clusterfs/beem-core-data-nfs/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
-- `scratch`: archive to `/global/scratch/users/$USER/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
+- `shared`: write the archive run dir to `/clusterfs/beem-core-data-nfs/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
+- `scratch`: write the archive run dir to `/global/scratch/users/$USER/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
+
+In both modes, `job_runner.sh` clears `run.recovery_archive_roots`. Promotion to colder/shared recovery roots is a separate post-run mechanism and should be configured explicitly in scenario YAML when desired rather than implied by `--archive`.
 
 Override explicitly:
 

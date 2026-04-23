@@ -73,7 +73,7 @@ while [ $# -gt 0 ]; do
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --beam-profile: enable BEAM Java Flight Recorder output in /app/output."
-        echo "  --archive: set archive target to shared or scratch."
+        echo "  --archive: set live archive target to shared or scratch."
         echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
         exit 0
         ;;
@@ -205,10 +205,12 @@ if mode == "shared":
     run_cfg["output_directory"] = shared_root
     run_cfg["local_workspace_root"] = local_root
     run_cfg["enable_archive_copy"] = True
+    run_cfg.pop("recovery_archive_roots", None)
 elif mode == "scratch":
     run_cfg["output_directory"] = scratch_root
     run_cfg["local_workspace_root"] = local_root
     run_cfg["enable_archive_copy"] = True
+    run_cfg.pop("recovery_archive_roots", None)
 else:
     raise SystemExit(f"unsupported archive mode: {mode}")
 
