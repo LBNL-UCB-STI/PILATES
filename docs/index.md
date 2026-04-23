@@ -80,8 +80,10 @@ It helps you:
 
 === "Understanding the workflow"
 
+    - [Scenario Lifecycle](run/scenario_lifecycle.md)
     - [Workflow Primer](workflow/workflow_primer.md)
     - [Architecture](workflow/architecture.md)
+    - [Stages and Steps](workflow/stages_and_steps.md)
     - [Model Boundaries](reference/model_boundaries.md)
     - [Simulation Logic by Stage](workflow/simulation_logic_by_stage.md)
     - [Artifact Flow](workflow/artifact_flow.md)
@@ -89,10 +91,11 @@ It helps you:
 
 === "Extending PILATES"
 
-    - [Model Boundaries](reference/model_boundaries.md)
-    - [Model Integration Guide](extend/model_integration_guide.md)
     - [Adding a Model](extend/adding_a_model.md)
+    - [Model Integration Guide](extend/model_integration_guide.md)
+    - [Model Contract Checklist](extend/model_contract_checklist.md)
     - [Step Contracts](workflow/step_contracts.md)
+    - [Model Boundaries](reference/model_boundaries.md)
     - [Output Validation](extend/output_validation.md)
 
 === "Analyzing archived runs"

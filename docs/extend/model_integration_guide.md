@@ -40,6 +40,33 @@ The scaffold is the maintained contributor path for the current architecture. It
 
 That is preferable to copying an older model by hand, because the scaffold tracks the current surface-first runtime conventions.
 
+## Current Developer Mental Model
+
+Think of a model integration as four layers, in this order:
+
+1. **Adapter layer**: `pilates/<model>/` knows how to prepare files, run the model, and interpret its local outputs.
+2. **Typed boundary layer**: `pilates/<model>/outputs.py` tells the workflow which outputs are public enough to validate, log, and hand off.
+3. **Workflow contract layer**: `pilates/workflows/catalog.py` and `pilates/workflows/steps/<model>.py` declare and execute the tracked step boundary.
+4. **Stage layer**: `pilates/workflows/stages/` decides when the tracked step runs in the year or iteration loop.
+
+The launcher should not need to know model-local details. A reader should be
+able to open `pilates/runtime/launcher.py`, understand the lifecycle, and then
+follow the stage call into the model-specific workflow files.
+
+## What Not To Copy From Older Integrations
+
+Some established models still carry historical shape. For new work, avoid
+copying these patterns unless there is a concrete reason:
+
+- broad `getattr(...)` probing where typed config fields are guaranteed
+- stage-local reconstructions of model enablement flags
+- direct filesystem discovery when a workflow key or binding plan should provide the source
+- untyped dictionaries for outputs that later steps or restart logic consume
+- launcher changes for model-specific behavior
+
+The preferred replacement is explicit: typed config access, enabled-surface
+decisions, binding plans, typed outputs, and stage-local sequencing only.
+
 ## Integration Shape
 
 ### ModelFactory
@@ -84,6 +111,21 @@ The normal orchestration shape is:
 
 That boundary is intentional. It keeps stage modules readable and stops policy from scattering across model packages.
 
+### Launcher stays model-agnostic
+
+`pilates/runtime/launcher.py` owns the run lifecycle:
+
+- prepare settings, state, surface, tracker, workspace, and storage roots
+- run restart preflight and bootstrap
+- enter the Consist scenario context
+- declare the coupler schema and seed bootstrap artifacts
+- call the major stage modules in year order
+- snapshot and shut down archive workers
+
+Model-specific fallback logic should not be added there. If a fallback belongs
+to ATLAS, BEAM, ActivitySim, UrbanSim, or postprocessing, put it in the model
+package or the stage that owns that boundary and pass it in explicitly.
+
 ### Typed outputs and publication
 
 Model code returns a typed outputs object that extends `StepOutputsBase`. The step factory then:
@@ -112,6 +154,7 @@ When you are new to a model family, use this order:
 3. inspect the step factory in `pilates/workflows/steps/*.py`
 4. inspect the binding or input-selection helper
 5. inspect the stage module that actually runs the step
+6. inspect the model adapter module only after the workflow boundary is clear
 
 That sequence answers five different questions cleanly:
 
@@ -120,6 +163,7 @@ That sequence answers five different questions cleanly:
 - how runtime source precedence is resolved
 - where the step runs in the stage loop
 - what later stages consume next
+- what the model adapter does internally after the workflow has selected inputs
 
 ## Evidence Basis
 
