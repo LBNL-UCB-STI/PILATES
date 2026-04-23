@@ -1224,6 +1224,10 @@ def validate_workflow_step_contracts(
     declared_steps: Optional[Iterable[Callable[..., Any]]] = None,
     allow_untracked_declared: Optional[Set[str]] = None,
     step_refs: Optional[Iterable[Any]] = None,
+    settings: Any = None,
+    state: Any = None,
+    workspace: Any = None,
+    require_all_tracked_declared: bool = True,
 ) -> None:
     """
     Validate internal workflow step contracts.
@@ -1350,7 +1354,7 @@ def validate_workflow_step_contracts(
 
         declared_names = set(declared_counts.keys())
         missing_declared = tracked_step_names - declared_names
-        if missing_declared:
+        if require_all_tracked_declared and missing_declared:
             errors.append(
                 "Tracked step names missing from declared steps: "
                 + ", ".join(sorted(missing_declared))
@@ -1374,17 +1378,62 @@ def validate_workflow_step_contracts(
             step_func = declared_by_model.get(step_name)
             if outputs_class is None or step_func is None:
                 continue
-            canonical = list(declared_outputs_for_step_outputs_class(outputs_class))
+            required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
+            declared_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
             step_meta = getattr(step_func, "__consist_step__", None)
             metadata_outputs = _normalize_output_keys(
                 getattr(step_meta, "outputs", None)
             )
-            if canonical != metadata_outputs:
+            metadata_set = set(metadata_outputs)
+            if (
+                metadata_outputs != required_outputs
+                and metadata_outputs != declared_outputs
+            ) or not set(required_outputs).issubset(metadata_set):
                 errors.append(
-                    f"Step '{step_name}': canonical outputs {canonical} conflict with metadata outputs "
+                    f"Step '{step_name}': canonical required outputs {required_outputs} "
+                    f"and declared outputs {declared_outputs} conflict with metadata outputs "
                     f"{metadata_outputs}. Fix: remove metadata override or update declared_outputs in "
                     f"{outputs_class.__name__}."
                 )
+            if (
+                step_meta is not None
+                and settings is not None
+                and state is not None
+                and workspace is not None
+            ):
+                spec = workflow_step_spec_for_step_name(step_name)
+                input_paths_provider = _step_meta_value(step_meta, "input_paths")
+                if input_paths_provider is not None:
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="input",
+                        provider_name="input_paths",
+                        provider=input_paths_provider,
+                        required_keys=tuple(spec.input_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_input_keys)
+                        if spec is not None
+                        else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
+                if step_name in STRICT_OUTPUT_PATH_CONTRACT_STEPS:
+                    output_paths_provider = _step_meta_value(step_meta, "output_paths")
+                    _validate_contract_provider_keys(
+                        errors=errors,
+                        step_name=step_name,
+                        direction="output",
+                        provider_name="output_paths",
+                        provider=output_paths_provider,
+                        required_keys=tuple(spec.output_keys) if spec is not None else (),
+                        optional_keys=tuple(spec.optional_output_keys)
+                        if spec is not None
+                        else (),
+                        settings=settings,
+                        state=state,
+                        workspace=workspace,
+                    )
 
     if step_refs is not None:
         for step_ref in step_refs:
@@ -1456,6 +1505,14 @@ def _decorate_step_with_consist(
     description: str,
     schema_outputs: Any = None,
     outputs: Optional[list[str]] = None,
+    inputs: Any = None,
+    output_paths: Any = None,
+    load_inputs: Optional[bool] = None,
+    cache_mode: Optional[str] = None,
+    cache_hydration: Optional[str] = None,
+    input_binding: Optional[str] = None,
+    input_paths: Any = None,
+    input_materialization: Optional[str] = None,
     tags: Optional[list[str]] = None,
 ) -> Callable[..., Any]:
     """
@@ -1469,12 +1526,35 @@ def _decorate_step_with_consist(
         "description": description,
         "name_template": "{func_name}__y{year}__i{iteration}__phase_{phase}",
         "tags": tags or [step_model],
+        # Injects lazy identity metadata used by Consist cache keys.
         **consist_step_meta(step_model),
     }
+    if input_binding is None and load_inputs is True:
+        input_binding = "loaded"
+        load_inputs = None
+    elif input_binding is None and load_inputs is False:
+        input_binding = "none"
+        load_inputs = None
     if schema_outputs:
         kwargs["schema_outputs"] = schema_outputs
     if outputs:
         kwargs["outputs"] = outputs
+    if inputs is not None:
+        kwargs["inputs"] = inputs
+    if output_paths is not None:
+        kwargs["output_paths"] = output_paths
+    if load_inputs is not None:
+        kwargs["load_inputs"] = load_inputs
+    if cache_mode is not None:
+        kwargs["cache_mode"] = cache_mode
+    if cache_hydration is not None:
+        kwargs["cache_hydration"] = cache_hydration
+    if input_binding is not None:
+        kwargs["input_binding"] = input_binding
+    if input_paths is not None:
+        kwargs["input_paths"] = input_paths
+    if input_materialization is not None:
+        kwargs["input_materialization"] = input_materialization
     return define_step(**kwargs)(step_func)
 
 

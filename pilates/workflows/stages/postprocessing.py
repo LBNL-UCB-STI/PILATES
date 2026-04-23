@@ -4,12 +4,14 @@ import logging
 from pathlib import Path
 
 from pilates.config.models import PilatesConfig
+from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
-from pilates.workflows.orchestration import StepRef, run_workflow
+from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_impacts_postprocess_step,
@@ -28,11 +30,9 @@ def _build_postprocessing_manifest_path(workspace: Workspace, year: int) -> Path
 def run_postprocessing_stage(
     *,
     scenario: ScenarioWithCoupler,
-    state: WorkflowState,
-    settings: PilatesConfig,
-    workspace: Workspace,
     coupler: CouplerProtocol,
     year: int,
+    context: WorkflowRuntimeContext,
 ) -> None:
     """
     Run the postprocessing stage.
@@ -57,7 +57,15 @@ def run_postprocessing_stage(
     year : int
         Forecast year being postprocessed.
     """
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
+    logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
+
     outputs_holder = StepOutputsHolder()
+    manifest_config = ManifestConfig(
+        path=_build_postprocessing_manifest_path(workspace=workspace, year=year)
+    )
     postprocess_steps = []
     if getattr(settings, "impacts_enabled", False):
         postprocess_steps.extend(
@@ -128,5 +136,6 @@ def run_postprocessing_stage(
         outputs_holder=outputs_holder,
         name_suffix=str(year),
         iteration=getattr(state, "iteration", 0),
+        manifest_config=manifest_config,
     )
-    flush_archive_queue(timeout=300, fail_on_timeout=True)
+    flush_archive_queue(timeout=300, fail_on_timeout=False)
