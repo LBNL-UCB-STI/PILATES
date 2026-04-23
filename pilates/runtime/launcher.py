@@ -602,6 +602,78 @@ def _prepare_run_context(
     )
 
 
+def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, Any]]:
+    """
+    Run restart preflight, bootstrap initialization, and post-bootstrap checks.
+
+    This keeps `main()` focused on the top-level lifecycle while preserving the
+    launcher-level wrapper seams used by tests and runtime integrations.
+    """
+    settings = prepared.settings
+    state = prepared.state
+    surface = prepared.surface
+    workspace = prepared.workspace
+    tracker = prepared.tracker
+    scenario_id = prepared.scenario_id
+    run_seed = prepared.seed
+    is_restart_run = prepared.is_restart_run
+
+    if state.data_initialized:
+        restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            surface=surface,
+        )
+        restart_runtime.log_prebootstrap_missing_artifacts(
+            restart_missing_artifacts_initial,
+            surface=surface,
+        )
+
+    cr.set_tracker(tracker)
+    bootstrap_result: Optional[Dict[str, Any]] = None
+    should_run_bootstrap = is_restart_run or not state.data_initialized
+    if should_run_bootstrap:
+        if is_restart_run and state.data_initialized:
+            logger.info(
+                "Running bootstrap pre-scenario hydration for restart. "
+                "bootstrap re-hydrates workspace invariants through the normal "
+                "cached run path before restart frontier hydration runs inside "
+                "the scenario context."
+            )
+        else:
+            logger.info("Running bootstrap initialization phase.")
+        bootstrap_result = run_bootstrap_phase(
+            tracker=tracker,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            scenario_id=scenario_id,
+            seed=run_seed,
+            surface=surface,
+        )
+        _assert_bootstrap_output_invariant(bootstrap_result)
+        if not state.data_initialized:
+            state.set_data_initialized(True)
+    else:
+        logger.info("Restarting from a previous state. Skipping bootstrap phase.")
+    bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
+
+    if is_restart_run:
+        restart_missing_artifacts_after_bootstrap = _find_missing_restart_local_artifacts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            surface=surface,
+        )
+        restart_runtime.enforce_postbootstrap_missing_artifacts(
+            restart_missing_artifacts_after_bootstrap,
+            settings=settings,
+        )
+
+    return bootstrap_result
+
+
 def main(
     *,
     settings: Optional[PilatesConfig] = None,
@@ -670,60 +742,11 @@ def main(
         data_initialized=bool(state.data_initialized),
         bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
     )
-    if state.data_initialized:
-        restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
-        )
-        restart_runtime.log_prebootstrap_missing_artifacts(
-            restart_missing_artifacts_initial,
-            surface=surface,
-        )
 
     # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
     # Initialization runs before entering scenario step execution so bootstrap
     # lifecycle can evolve independently from normal model steps.
-    cr.set_tracker(tracker)
-    bootstrap_result: Optional[Dict[str, Any]] = None
-    should_run_bootstrap = is_restart_run or not state.data_initialized
-    if should_run_bootstrap:
-        if is_restart_run and state.data_initialized:
-            logger.info(
-                "Running bootstrap pre-scenario hydration for restart. "
-                "bootstrap re-hydrates workspace invariants through the normal "
-                "cached run path before restart frontier hydration runs inside "
-                "the scenario context."
-            )
-        else:
-            logger.info("Running bootstrap initialization phase.")
-        bootstrap_result = run_bootstrap_phase(
-            tracker=tracker,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            scenario_id=scenario_id,
-            seed=run_seed,
-            surface=surface,
-        )
-        _assert_bootstrap_output_invariant(bootstrap_result)
-        if not state.data_initialized:
-            state.set_data_initialized(True)
-    else:
-        logger.info("Restarting from a previous state. Skipping bootstrap phase.")
-    bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
-    if is_restart_run:
-        restart_missing_artifacts_after_bootstrap = _find_missing_restart_local_artifacts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
-        )
-        restart_runtime.enforce_postbootstrap_missing_artifacts(
-            restart_missing_artifacts_after_bootstrap,
-            settings=settings,
-        )
+    _run_bootstrap_sequence(prepared)
 
     # 6. START SCENARIO CONTEXT
     # The scenario context is where all model execution happens. Each step runs inside
