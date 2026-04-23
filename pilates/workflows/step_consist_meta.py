@@ -51,6 +51,7 @@ discovered until the workspace is created for each run.
 4. Register the new model in ``WORKFLOW_STEP_SPECS`` (catalog.py) and implement
    the step function in ``pilates/workflows/steps/``.
 """
+
 from __future__ import annotations
 
 from pathlib import Path

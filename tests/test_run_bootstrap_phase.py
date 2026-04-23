@@ -4,7 +4,6 @@ import json
 import logging
 import os
 from pathlib import Path
-import re
 
 import pytest
 from consist.types import CacheOptions
@@ -207,6 +206,50 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     cache_options = first_call["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_hydration == "outputs-requested"
+
+
+def test_log_bootstrap_result_summary_includes_cache_miss_fields(caplog):
+    bootstrap_result = {
+        "bootstrap_cache_hit": True,
+        "cache_probe_hit": True,
+        "replay_hydration_complete": True,
+        "fallback_rerun_triggered": False,
+        "run_reference": {"probe_run_id": "bootstrap_probe"},
+        "staged_artifact_summary": {"copied_records_total": 2},
+        "cache_miss_explanation": {
+            "reason": "config_changed",
+            "candidate_run_id": "bootstrap_prior",
+        },
+    }
+
+    with caplog.at_level(logging.INFO, logger=bootstrap_runtime.__name__):
+        bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result)
+
+    assert "Bootstrap phase complete: cache_hit=True probe_hit=True" in caplog.text
+    assert "cache_miss_reason=config_changed" in caplog.text
+    assert "cache_miss_candidate_run_id=bootstrap_prior" in caplog.text
+
+
+def test_log_bootstrap_result_summary_preserves_injected_logger(caplog):
+    bootstrap_result = {
+        "bootstrap_cache_hit": False,
+        "cache_probe_hit": False,
+        "replay_hydration_complete": False,
+        "fallback_rerun_triggered": False,
+        "run_reference": {"probe_run_id": "bootstrap_probe"},
+        "staged_artifact_summary": {"copied_records_total": 2},
+        "cache_miss_explanation": None,
+    }
+    injected_logger = logging.getLogger("pilates.tests.bootstrap_summary")
+
+    with caplog.at_level(logging.INFO, logger=injected_logger.name):
+        bootstrap_runtime.log_bootstrap_result_summary(
+            bootstrap_result,
+            log=injected_logger,
+        )
+
+    assert "Bootstrap phase complete: cache_hit=False probe_hit=False" in caplog.text
+    assert caplog.records[0].name == injected_logger.name
 
 
 def test_find_missing_bootstrap_workspace_artifacts_respects_surface_bootstrap_owned_keys(
@@ -1444,6 +1487,100 @@ def test_resolve_run_storage_roots_defaults_local_to_archive_root(tmp_path):
 
     assert resolved_archive_root == str(archive_root.resolve())
     assert resolved_local_root == str(archive_root.resolve())
+
+
+def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
+    tmp_path, monkeypatch
+):
+    class WorkspaceStub:
+        def __init__(self, _settings, local_root: str, folder_name: str):
+            self.full_path = os.path.join(local_root, folder_name)
+            os.makedirs(self.full_path, exist_ok=True)
+
+    class SnapshotStub:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class TrackerStub:
+        def __init__(self):
+            self.trace_calls = []
+
+        def trace(self, **kwargs):
+            self.trace_calls.append(kwargs)
+            return nullcontext()
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="seattle",
+            output_directory=str(tmp_path / "archive-root"),
+            local_workspace_root=str(tmp_path / "local-root"),
+            enable_archive_copy=False,
+            output_run_name="prepare-context-test",
+        ),
+        shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file="scenarios/settings-seattle.yaml",
+    )
+    state = SimpleNamespace(
+        run_info_path=None,
+        data_initialized=False,
+    )
+    state.set_run_info_path = lambda path: setattr(state, "run_info_path", path)
+
+    tracker = TrackerStub()
+    create_tracker_kwargs = {}
+
+    def _create_tracker(**kwargs):
+        create_tracker_kwargs.update(kwargs)
+        return tracker
+
+    monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
+    monkeypatch.setattr(
+        run_module,
+        "resolve_consist_db_paths",
+        lambda **_kwargs: (None, None),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "restore_local_consist_db_from_snapshot",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "seed_local_consist_db_from_shared",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: 7)
+    monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
+    monkeypatch.setattr(run_module.cr, "create_tracker", _create_tracker)
+    monkeypatch.setattr(
+        run_module,
+        "ConsistDbSnapshotManager",
+        lambda **kwargs: SnapshotStub(**kwargs),
+    )
+    monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
+
+    prepared = run_module._prepare_run_context(settings=settings, state=state)
+
+    assert prepared.settings is settings
+    assert prepared.state is state
+    assert prepared.tracker is tracker
+    assert prepared.cache_epoch == 7
+    assert prepared.is_restart_run is False
+    assert prepared.run_name.startswith("pilates-run--seattle--prepare-context-test--")
+    assert prepared.archive_run_dir.startswith(str(tmp_path / "archive-root"))
+    assert prepared.local_run_dir.startswith(str(tmp_path / "local-root"))
+    assert state.file_loc == prepared.archive_state_path
+    assert state.mirror_file_loc == prepared.local_state_path
+    assert state.run_info_path == prepared.archive_state_path
+    assert create_tracker_kwargs["run_dir"] == prepared.archive_run_dir
+    assert create_tracker_kwargs["mounts"]["workspace"] == prepared.local_run_dir
+    assert tracker.trace_calls == [
+        {
+            "name": "workspace_setup",
+            "model": "pilates_orchestrator",
+            "tags": [f"scenario_id:{prepared.scenario_id}"],
+        }
+    ]
 
 
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):

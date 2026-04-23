@@ -56,8 +56,8 @@ class AtlasSubState:
         self.start_year = parent_state.start_year
         self.atlas_interval_start_year = interval_start_year
         self.full_settings = parent_state.full_settings
-        self.is_start_year: Callable[[], bool] = (
-            lambda: year == self.atlas_interval_start_year
+        self.is_start_year: Callable[[], bool] = lambda: (
+            year == self.atlas_interval_start_year
         )
         self.atlas_usim_datastore_h5: Optional[Any] = None
         self.atlas_usim_datastore_base_h5: Optional[Any] = None

@@ -3,14 +3,12 @@ from __future__ import annotations
 import os
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Union, cast, TYPE_CHECKING
+from typing import Dict, Optional, cast, TYPE_CHECKING
 
-from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
 
 from pilates.utils.formatting import formatted_print
 from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
@@ -45,7 +43,7 @@ from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
+    pass
 
 
 def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
@@ -172,11 +170,7 @@ def run_land_use_stage(
     # into the UrbanSim run binding contract.
     for key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
         resolved = resolve_coupler_value(coupler, key)
-        value = (
-            resolved.value
-            if resolved.value is not None
-            else usim_inputs.get(key)
-        )
+        value = resolved.value if resolved.value is not None else usim_inputs.get(key)
         logger.debug(
             "[land_use] Runtime handoff for %s resolved via %s (storage_key=%s, "
             "value_type=%s, fallback_used=%s)",
@@ -198,7 +192,9 @@ def run_land_use_stage(
     postprocess_binding = build_binding_plan(
         step_name="urbansim_postprocess",
         coupler=coupler,
-        explicit_inputs={USIM_DATASTORE_CURRENT_H5: usim_inputs.get(USIM_DATASTORE_CURRENT_H5)},
+        explicit_inputs={
+            USIM_DATASTORE_CURRENT_H5: usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        },
         fallback_inputs=usim_inputs,
         required_keys=[USIM_DATASTORE_CURRENT_H5],
         surface=surface,

@@ -21,7 +21,7 @@ def canonicalize_output_mapping(
 
 
 def merge_canonical_output_mappings(
-    *mappings: Optional[Mapping[str, Any]]
+    *mappings: Optional[Mapping[str, Any]],
 ) -> Dict[str, Any]:
     merged: Dict[str, Any] = {}
     for mapping in mappings:

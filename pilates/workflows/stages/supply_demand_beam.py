@@ -253,9 +253,7 @@ def _finalize_beam_run_input_keys(
     if has_warmstart and LINKSTATS_WARMSTART not in finalized_keys:
         finalized_keys.append(LINKSTATS_WARMSTART)
     if not has_warmstart and LINKSTATS_WARMSTART in finalized_keys:
-        finalized_keys = [
-            key for key in finalized_keys if key != LINKSTATS_WARMSTART
-        ]
+        finalized_keys = [key for key in finalized_keys if key != LINKSTATS_WARMSTART]
     return finalized_keys
 
 
@@ -382,7 +380,9 @@ def _run_beam_steps(
     )
     beam_postprocess_binding = None
     if beam_postprocess_input_keys:
-        optional_keys = [ZARR_SKIMS] if ZARR_SKIMS in beam_postprocess_input_keys else []
+        optional_keys = (
+            [ZARR_SKIMS] if ZARR_SKIMS in beam_postprocess_input_keys else []
+        )
         required_keys = [
             key for key in beam_postprocess_input_keys if key not in optional_keys
         ]

@@ -48,9 +48,11 @@ class StepRuntimeOverlayRule:
             return False
         if self.run_mode is not None and _run_mode_name(run_mode) != self.run_mode:
             return False
-        if self.land_use_enabled is not None and bool(
-            getattr(profile, "land_use_enabled", False)
-        ) != self.land_use_enabled:
+        if (
+            self.land_use_enabled is not None
+            and bool(getattr(profile, "land_use_enabled", False))
+            != self.land_use_enabled
+        ):
             return False
         return True
 

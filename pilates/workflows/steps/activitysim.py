@@ -132,9 +132,12 @@ def _filter_kwargs_for_callable(
         parameters = inspect.signature(func).parameters
     except (TypeError, ValueError):
         return kwargs
-    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+    if any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+    ):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in parameters}
+
 
 def _execute_activitysim_preprocess(
     preprocessor: Any,
@@ -164,7 +167,9 @@ def _execute_activitysim_preprocess(
             USIM_POPULATION_BLOCKS_TABLE,
         }
     }
-    callable_kwargs = _filter_kwargs_for_callable(preprocessor.preprocess, filtered_kwargs)
+    callable_kwargs = _filter_kwargs_for_callable(
+        preprocessor.preprocess, filtered_kwargs
+    )
     if (
         "population_source_h5_path" in filtered_kwargs
         and "population_source_h5_path" not in callable_kwargs
@@ -173,7 +178,10 @@ def _execute_activitysim_preprocess(
             key: value
             for key, value in (
                 ("usim_datastore_h5", filtered_kwargs["population_source_h5_path"]),
-                ("usim_datastore_base_h5", filtered_kwargs["population_source_h5_path"]),
+                (
+                    "usim_datastore_base_h5",
+                    filtered_kwargs["population_source_h5_path"],
+                ),
             )
             if key in inspect.signature(preprocessor.preprocess).parameters
         }
@@ -217,8 +225,7 @@ def _execute_activitysim_postprocess(
         )
     runtime_kwargs = _strip_component_runtime_kwargs(kwargs)
     runtime_kwargs.setdefault(
-        "population_source_h5_path",
-        runtime_kwargs.get("usim_population_source_h5")
+        "population_source_h5_path", runtime_kwargs.get("usim_population_source_h5")
     )
     runtime_kwargs.setdefault(
         "current_input_h5_path",
@@ -234,14 +241,19 @@ def _execute_activitysim_postprocess(
             "current_input_h5_path",
         }
     }
-    callable_kwargs = _filter_kwargs_for_callable(postprocessor.postprocess, filtered_kwargs)
+    callable_kwargs = _filter_kwargs_for_callable(
+        postprocessor.postprocess, filtered_kwargs
+    )
     legacy_postprocess_kwargs: Dict[str, Any] = {}
     if (
         filtered_kwargs.get("current_input_h5_path") is not None
         and "current_input_h5_path" not in callable_kwargs
-        and "usim_datastore_h5" in inspect.signature(postprocessor.postprocess).parameters
+        and "usim_datastore_h5"
+        in inspect.signature(postprocessor.postprocess).parameters
     ):
-        legacy_postprocess_kwargs["usim_datastore_h5"] = filtered_kwargs["current_input_h5_path"]
+        legacy_postprocess_kwargs["usim_datastore_h5"] = filtered_kwargs[
+            "current_input_h5_path"
+        ]
     callable_kwargs.update(legacy_postprocess_kwargs)
     return postprocessor.postprocess(
         upstream,
@@ -523,7 +535,8 @@ def _recover_activitysim_preprocess_outputs(
         for key, path in ActivitysimPreprocessor.expected_outputs(
             settings, state, workspace
         ).items()
-        if key in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
+        if key
+        in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
         and isinstance(path, str)
     }
     recovered_inputs: Dict[str, Path] = {}
@@ -653,9 +666,14 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
-    runner_expected_inputs = ActivitysimRunner.expected_inputs(settings, state, workspace)
+    runner_expected_inputs = ActivitysimRunner.expected_inputs(
+        settings, state, workspace
+    )
     runtime_zarr_candidate = Path(
-        cast(str, runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace))
+        cast(
+            str,
+            runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace),
+        )
     )
     zarr_candidate = Path(
         _existing_local_path(runtime_zarr_candidate, workspace)
@@ -800,7 +818,9 @@ def _recover_activitysim_postprocess_outputs(
             USIM_POPULATION_SOURCE_H5,
             USIM_DATASTORE_CURRENT_H5,
         )
-        if not step_inputs or any(key not in step_inputs for key in required_land_use_keys):
+        if not step_inputs or any(
+            key not in step_inputs for key in required_land_use_keys
+        ):
             return None
         usim_path = _existing_artifact_path(
             step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
@@ -1065,9 +1085,7 @@ def make_activitysim_preprocess_step(
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
             input_key = USIM_POPULATION_SOURCE_H5
-            input_desc = (
-                f"UrbanSim population-source datastore for ActivitySim year {state.year}"
-            )
+            input_desc = f"UrbanSim population-source datastore for ActivitySim year {state.year}"
             table_config = (
                 (USIM_POPULATION_HOUSEHOLDS_TABLE, "households"),
                 (USIM_POPULATION_PERSONS_TABLE, "persons"),
@@ -1094,7 +1112,9 @@ def make_activitysim_preprocess_step(
                     and table_path.startswith(f"/{start_year}/")
                     else "resolved"
                 )
-                artifact_key = f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                artifact_key = (
+                    f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                )
                 child_specs[table_path] = H5ChildSpec(
                     key=artifact_key,
                     description=(
@@ -1317,9 +1337,9 @@ def make_activitysim_run_step(
         )
         if zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
-            content_hash = artifact_fingerprint(
-                zarr_value
-            ) or compile_input_hashes.get(ZARR_SKIMS)
+            content_hash = artifact_fingerprint(zarr_value) or compile_input_hashes.get(
+                ZARR_SKIMS
+            )
             if content_hash:
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
 

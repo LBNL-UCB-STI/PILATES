@@ -172,6 +172,72 @@ def format_missing_artifact_summary(
     return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
 
 
+def split_prebootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    surface: Any,
+) -> Tuple[List[RestartArtifactDiagnostic], List[RestartArtifactDiagnostic]]:
+    blocking_missing = [
+        item
+        for item in artifacts
+        if not surface.is_restart_prebootstrap_deferred_artifact_key(
+            item.get("key", "")
+        )
+    ]
+    deferred_missing = [
+        item
+        for item in artifacts
+        if surface.is_restart_prebootstrap_deferred_artifact_key(item.get("key", ""))
+    ]
+    return blocking_missing, deferred_missing
+
+
+def log_prebootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    surface: Any,
+) -> None:
+    if not artifacts:
+        return
+    blocking_missing, deferred_missing = split_prebootstrap_missing_artifacts(
+        artifacts,
+        surface=surface,
+    )
+    if blocking_missing:
+        logger.warning(
+            "Restart diagnostic found missing local workspace inputs while "
+            "data_initialized=True: %s",
+            format_missing_artifact_summary(blocking_missing),
+        )
+    if deferred_missing:
+        logger.info(
+            "Restart diagnostic deferring bootstrap-owned workspace inputs "
+            "until bootstrap hydration: %s",
+            format_missing_artifact_summary(deferred_missing),
+        )
+
+
+def enforce_postbootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    settings: Any,
+) -> None:
+    if artifacts:
+        logger.warning(
+            "Restart diagnostic still sees missing local workspace inputs "
+            "after restart bootstrap: %s",
+            format_missing_artifact_summary(artifacts),
+        )
+    if artifacts and bool(
+        getattr(getattr(settings, "run", None), "restart_strict", False)
+    ):
+        raise RuntimeError(
+            "Strict restart preflight failed; required restart artifacts are "
+            "still missing after restart bootstrap. missing="
+            + format_missing_artifact_summary(artifacts)
+        )
+
+
 def read_archive_run_state_year(
     state_path: str,
     *,

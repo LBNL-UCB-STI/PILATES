@@ -16,7 +16,6 @@ from pilates.beam.config_hocon import (
     load_resolved_beam_config_tree,
 )
 from pilates.config.models import PilatesConfig
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
@@ -71,9 +70,7 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-_BEAM_INCLUDE_RE = re.compile(
-    r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))'
-)
+_BEAM_INCLUDE_RE = re.compile(r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))')
 _BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 
 
@@ -207,6 +204,7 @@ def _beam_input_archive_meta(
         "facet_index": True,
     }
 
+
 def _scan_beam_config_includes(root: Path) -> list[Path]:
     seen: set[Path] = set()
     ordered: list[Path] = []
@@ -230,6 +228,7 @@ def _scan_beam_config_includes(root: Path) -> list[Path]:
                 continue
             queue.append((current.parent / rel).resolve())
     return ordered
+
 
 def _collect_beam_config_path_references(config_tree: Mapping[str, Any]) -> set[str]:
     refs: set[str] = set()
@@ -375,7 +374,11 @@ def _archive_beam_config_references(
     manifest: Dict[str, str] = {}
     for rel_target, source_path in sorted(
         sources_by_target.items(),
-        key=lambda item: (0 if item[1].is_dir() else 1, len(item[0].parts), item[0].as_posix()),
+        key=lambda item: (
+            0 if item[1].is_dir() else 1,
+            len(item[0].parts),
+            item[0].as_posix(),
+        ),
     ):
         target_path = archive_root / rel_target
         if source_path.is_dir():
@@ -417,29 +420,23 @@ def _resolve_beam_run_warmstart_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> tuple[Optional[tuple[str, str]], Optional[tuple[str, str]]]:
-    plans_match = (
-        _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_OUTPUT_PLANS_XML,
-            workspace=workspace,
-        )
-        or _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_PLANS_OUT,
-            workspace=workspace,
-        )
+    plans_match = _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_OUTPUT_PLANS_XML,
+        workspace=workspace,
+    ) or _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_PLANS_OUT,
+        workspace=workspace,
     )
-    experienced_match = (
-        _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-            workspace=workspace,
-        )
-        or _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_EXPERIENCED_PLANS_XML,
-            workspace=workspace,
-        )
+    experienced_match = _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        workspace=workspace,
+    ) or _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_EXPERIENCED_PLANS_XML,
+        workspace=workspace,
     )
 
     output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
@@ -447,7 +444,11 @@ def _resolve_beam_run_warmstart_inputs(
         scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
             output_root, "year-"
         )
-        if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
+        if (
+            plans_match is None
+            and scanned_plans_path is not None
+            and scanned_plans_path.exists()
+        ):
             scanned_plans_key = (
                 BEAM_OUTPUT_PLANS_XML
                 if scanned_plans_path.name == "output_plans.xml.gz"
@@ -755,8 +756,7 @@ def _execute_beam_postprocess(
         except (TypeError, ValueError):
             parameters = {}
         accepts_zarr_skims = "zarr_skims" in parameters or any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in parameters.values()
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
         )
         if accepts_zarr_skims:
             return postprocessor.postprocess(
@@ -895,36 +895,42 @@ def _beam_step_runtime(ctx: Any) -> tuple[Any, Any, Any]:
 
 def _beam_preprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPreprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_preprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPreprocessor.expected_outputs(settings, state, workspace)
 
 
 def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamRunner.runtime_expected_inputs(settings, state, workspace)
 
 
 def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamRunner.expected_outputs(settings, state, workspace)
 
 
 def _beam_postprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPostprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     expected = BeamPostprocessor.expected_outputs(settings, state, workspace)
     if ZARR_SKIMS in expected:
@@ -934,12 +940,14 @@ def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
 
 def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamFullSkimRunner.expected_inputs(settings, state, workspace)
 
 
 def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamFullSkimRunner.expected_outputs(settings, state, workspace)
 
@@ -1039,7 +1047,9 @@ def make_beam_preprocess_step(
             model_name="beam",
             phase="preprocess",
             outputs_class=BeamPreprocessOutputs,
-            component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "beam", state
+            ),
             component_executor=lambda component, workspace, outputs_holder, **kwargs: (
                 _execute_beam_preprocess(
                     component,

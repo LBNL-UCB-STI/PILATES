@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from consist.types import CacheOptions
 
@@ -78,6 +78,44 @@ def build_bootstrap_run_reference(
     if materialization_run_id:
         reference["materialization_run_id"] = materialization_run_id
     return reference
+
+
+def log_bootstrap_result_summary(
+    bootstrap_result: Optional[Mapping[str, Any]],
+    *,
+    log: Optional[logging.Logger] = None,
+) -> None:
+    if bootstrap_result is None:
+        return
+
+    output_logger = log or logger
+    cache_miss_explanation = bootstrap_result.get("cache_miss_explanation")
+    if isinstance(cache_miss_explanation, dict):
+        output_logger.info(
+            "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+            "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s "
+            "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
+            bootstrap_result.get("bootstrap_cache_hit"),
+            bootstrap_result.get("cache_probe_hit"),
+            bootstrap_result.get("replay_hydration_complete"),
+            bootstrap_result.get("fallback_rerun_triggered"),
+            bootstrap_result.get("run_reference"),
+            bootstrap_result.get("staged_artifact_summary"),
+            cache_miss_explanation.get("reason"),
+            cache_miss_explanation.get("candidate_run_id"),
+        )
+        return
+
+    output_logger.info(
+        "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+        "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s",
+        bootstrap_result.get("bootstrap_cache_hit"),
+        bootstrap_result.get("cache_probe_hit"),
+        bootstrap_result.get("replay_hydration_complete"),
+        bootstrap_result.get("fallback_rerun_triggered"),
+        bootstrap_result.get("run_reference"),
+        bootstrap_result.get("staged_artifact_summary"),
+    )
 
 
 def _bootstrap_output_paths(

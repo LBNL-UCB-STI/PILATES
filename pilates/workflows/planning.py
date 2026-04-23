@@ -4,7 +4,7 @@ from dataclasses import asdict, dataclass, field
 import os
 from pathlib import Path
 import re
-from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional
 
 from pilates.atlas.inputs import (
     atlas_run_years,
@@ -23,6 +23,7 @@ from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_spec_for_step_name,
 )
+
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
 
@@ -259,9 +260,7 @@ def _artifact_instance_key(
     if external or step_run is None:
         prefix = "external"
         suffix = (
-            _scope_suffix(step_run)
-            if step_run is not None and scope_external
-            else ""
+            _scope_suffix(step_run) if step_run is not None and scope_external else ""
         )
     else:
         prefix = step_run.step_name
@@ -552,7 +551,9 @@ class _PlanBuilder:
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
         if self._stage_enabled("land_use"):
-            self._add_step_run("urbansim_preprocess", year=year, forecast_year=forecast_year)
+            self._add_step_run(
+                "urbansim_preprocess", year=year, forecast_year=forecast_year
+            )
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
                 "urbansim_postprocess",
@@ -1044,22 +1045,21 @@ class _PlanBuilder:
             or contract["dynamic_output_families"]
         )
 
-        if (
-            not has_declared_inputs
-            and (
-                contract["depends_on"]
-                or contract["upstream_step_inputs"]
-                or step_run.step_name == "postprocessing"
-            )
+        if not has_declared_inputs and (
+            contract["depends_on"]
+            or contract["upstream_step_inputs"]
+            or step_run.step_name == "postprocessing"
         ):
             message = "No declared input contract is available for this step."
             if step_run.step_name == "postprocessing":
-                message = (
-                    "Postprocessing currently reads workspace outputs directly; inbound artifact contract is not declared."
-                )
+                message = "Postprocessing currently reads workspace outputs directly; inbound artifact contract is not declared."
             self._append_gap(step_run, "underdeclared_inputs", message)
 
-        if not has_declared_outputs and spec is not None and spec.outputs_class is not None:
+        if (
+            not has_declared_outputs
+            and spec is not None
+            and spec.outputs_class is not None
+        ):
             self._append_gap(
                 step_run,
                 "underdeclared_outputs",

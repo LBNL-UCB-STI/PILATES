@@ -292,6 +292,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 def _log_step_records(
     *,
     record_items: Any,
@@ -337,6 +338,7 @@ def _log_step_records(
             description=description,
             **meta,
         )
+
 
 def _parse_prefixed_iteration_key(
     short_name: str, prefix: str
@@ -1025,8 +1027,7 @@ def _invoke_contract_provider(
     accepts_single_context = (
         not accepts_var_kwargs
         and len(required_positional_params) == 1
-        and required_positional_params[0].name
-        not in {"settings", "state", "workspace"}
+        and required_positional_params[0].name not in {"settings", "state", "workspace"}
     )
     if accepts_single_context:
         return provider(context)
@@ -1281,8 +1282,12 @@ def validate_workflow_step_contracts(
             spec = workflow_step_spec_for_step_name(step_name)
             if outputs_class is None or step_func is None:
                 continue
-            required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
-            declared_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
+            required_outputs = list(
+                required_outputs_for_step_outputs_class(outputs_class)
+            )
+            declared_outputs = list(
+                declared_outputs_for_step_outputs_class(outputs_class)
+            )
             step_meta = getattr(step_func, "__consist_step__", None)
             metadata_outputs = _normalize_output_keys(
                 getattr(step_meta, "outputs", None)
@@ -1312,8 +1317,12 @@ def validate_workflow_step_contracts(
                         direction="input",
                         provider_name="input_paths",
                         provider=input_paths_provider,
-                        required_keys=tuple(spec.input_keys) if spec is not None else (),
-                        optional_keys=tuple(spec.optional_input_keys) if spec is not None else (),
+                        required_keys=tuple(spec.input_keys)
+                        if spec is not None
+                        else (),
+                        optional_keys=tuple(spec.optional_input_keys)
+                        if spec is not None
+                        else (),
                         settings=settings,
                         state=state,
                         workspace=workspace,
@@ -1326,8 +1335,12 @@ def validate_workflow_step_contracts(
                         direction="output",
                         provider_name="output_paths",
                         provider=output_paths_provider,
-                        required_keys=tuple(spec.output_keys) if spec is not None else (),
-                        optional_keys=tuple(spec.optional_output_keys) if spec is not None else (),
+                        required_keys=tuple(spec.output_keys)
+                        if spec is not None
+                        else (),
+                        optional_keys=tuple(spec.optional_output_keys)
+                        if spec is not None
+                        else (),
                         settings=settings,
                         state=state,
                         workspace=workspace,
@@ -1412,12 +1425,9 @@ def _make_typed_step_function(
         if input_logger is not None:
             input_logger_kwargs: Dict[str, Any] = {}
             input_logger_signature = pyinspect.signature(input_logger)
-            if (
-                "step_inputs" in input_logger_signature.parameters
-                or any(
-                    param.kind == pyinspect.Parameter.VAR_KEYWORD
-                    for param in input_logger_signature.parameters.values()
-                )
+            if "step_inputs" in input_logger_signature.parameters or any(
+                param.kind == pyinspect.Parameter.VAR_KEYWORD
+                for param in input_logger_signature.parameters.values()
             ):
                 input_logger_kwargs["step_inputs"] = dict(kwargs)
             extra_kwargs = dict(
@@ -1505,7 +1515,9 @@ def _make_typed_step_function(
         step_model=step_name,
         description=description,
         schema_outputs=(
-            schema_outputs if schema_outputs is not None else _schema_outputs_from_class(outputs_class)
+            schema_outputs
+            if schema_outputs is not None
+            else _schema_outputs_from_class(outputs_class)
         ),
         outputs=(
             declared_outputs
@@ -1831,7 +1843,9 @@ def make_default_recoverer(
                     f"{outputs_class.__name__} recoverer requires dir_getter when dir_field is set."
                 )
             dir_value = dir_getter(workspace)
-            init_kwargs[dir_field] = dir_value if isinstance(dir_value, Path) else Path(dir_value)
+            init_kwargs[dir_field] = (
+                dir_value if isinstance(dir_value, Path) else Path(dir_value)
+            )
 
         if primary_path_field is not None:
             if primary_path_resolver is None:

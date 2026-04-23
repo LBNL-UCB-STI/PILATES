@@ -306,10 +306,9 @@ def _run_activity_demand_phase(
     else:
         preprocess_explicit_inputs: Optional[Dict[str, Union[str, os.PathLike]]] = None
         if not profile.land_use_enabled:
-            population_source = (
-                resolved_usim_inputs.get(USIM_DATASTORE_BASE_H5)
-                or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
-            )
+            population_source = resolved_usim_inputs.get(
+                USIM_DATASTORE_BASE_H5
+            ) or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
             if population_source is not None:
                 preprocess_explicit_inputs = {
                     USIM_POPULATION_SOURCE_H5: population_source,
@@ -503,11 +502,8 @@ def _run_activity_demand_phase(
     final_cache_path = (
         _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
     )
-    if (
-        exact_rewind_restore is None
-        and (
-            not final_zarr_path or (requires_numba_cache and not final_cache_path)
-        )
+    if exact_rewind_restore is None and (
+        not final_zarr_path or (requires_numba_cache and not final_cache_path)
     ):
         missing_parts = []
         if not final_zarr_path:
@@ -600,8 +596,12 @@ def _run_activity_demand_phase(
     )
     if activitysim_postprocess_binding.missing_required:
         get_value = getattr(coupler, "get", None)
-        coupler_current = get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
-        coupler_population = get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
+        coupler_current = (
+            get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
+        )
+        coupler_population = (
+            get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
+        )
         raise RuntimeError(
             "ActivitySim postprocess could not resolve its required UrbanSim H5 roles: "
             f"{', '.join(activitysim_postprocess_binding.missing_required)}; "

@@ -704,7 +704,9 @@ class WorkflowState:
         """Move to the next interval boundary year and reset to first stage"""
         self._advance_schedule_to_current_year()
         if self._schedule_index is None:
-            current_year = self.current_year if self.current_year is not None else self.start_year
+            current_year = (
+                self.current_year if self.current_year is not None else self.start_year
+            )
             self._schedule_index = bisect_left(self._year_schedule, current_year)
         next_index = self._schedule_index + 1
         if next_index < len(self._year_schedule):

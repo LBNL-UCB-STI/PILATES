@@ -43,7 +43,7 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
+    pass
 
 
 def _atlas_subyear_manifest_path(
@@ -85,6 +85,7 @@ def _atlas_sub_years(state: WorkflowState) -> list[int]:
         return years
     years.extend(range(state.year + 2, forecast_year + 1, 2))
     return years
+
 
 def select_atlas_usim_input_path(
     *,
@@ -202,7 +203,11 @@ def _validate_atlas_subyear_usim_datastore(
     if selected_name == expected_name:
         return
 
-    restart_note = " during restart resume" if bool(getattr(state, "is_restart_run", False)) else ""
+    restart_note = (
+        " during restart resume"
+        if bool(getattr(state, "is_restart_run", False))
+        else ""
+    )
     raise RuntimeError(
         "ATLAS subyear datastore resolution mismatch%s: year %s requires forecast-year "
         "UrbanSim datastore %r, but resolved %r. This would cause ATLAS to fall back "
@@ -358,18 +363,15 @@ def run_vehicle_ownership_stage(
         step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path
         # Keep ATLAS pre/postprocess H5 selection artifact-driven until the
         # model code actually needs a concrete existing path.
-        atlas_state.atlas_usim_datastore_h5 = step_inputs.get(
-            USIM_DATASTORE_CURRENT_H5
-        )
+        atlas_state.atlas_usim_datastore_h5 = step_inputs.get(USIM_DATASTORE_CURRENT_H5)
         atlas_state.atlas_usim_datastore_base_h5 = step_inputs.get(
             USIM_DATASTORE_BASE_H5
         )
         atlas_preprocess_explicit_inputs = dict(step_inputs)
         atlas_preprocess_required_keys = None
-        if (
-            atlas_preprocess_explicit_inputs.get(USIM_DATASTORE_CURRENT_H5)
-            == atlas_preprocess_explicit_inputs.get(USIM_DATASTORE_BASE_H5)
-        ):
+        if atlas_preprocess_explicit_inputs.get(
+            USIM_DATASTORE_CURRENT_H5
+        ) == atlas_preprocess_explicit_inputs.get(USIM_DATASTORE_BASE_H5):
             # Atlas preprocess uses one selected UrbanSim datastore per subyear.
             # When current/base collapse to the same H5, binding both semantic
             # aliases only perturbs cache identity without changing execution.

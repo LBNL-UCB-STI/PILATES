@@ -9,7 +9,12 @@ from types import SimpleNamespace
 from typing import Any, Callable, Dict, Literal, Mapping, Optional, Sequence, Set
 
 from consist.core.step_context import StepContext
-from consist.types import BindingResult, CacheOptions, ExecutionOptions, OutputPolicyOptions
+from consist.types import (
+    BindingResult,
+    CacheOptions,
+    ExecutionOptions,
+    OutputPolicyOptions,
+)
 
 from pilates.runtime.cache_recovery import (
     cache_miss_audit_fields,
@@ -19,7 +24,6 @@ from pilates.runtime.cache_recovery import (
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
-    artifact_to_existing_path,
     artifact_to_path,
     record_published_coupler_keys,
     resolve_existing_path,
@@ -29,22 +33,15 @@ from pilates.utils.coupler_helpers import (
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
     workflow_step_declared_output_keys,
-    workflow_step_key_is_declared,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
-from pilates.beam.outputs import (
-    BeamPreprocessOutputs,
-)
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
-from pilates.workflows.artifact_keys import (
-    BEAM_HOUSEHOLDS_IN,
-    BEAM_PERSONS_IN,
-    BEAM_PLANS_IN,
-    LINKSTATS_WARMSTART,
-)
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.state_access import current_year as state_current_year, iteration_index
+from pilates.utils.state_access import (
+    current_year as state_current_year,
+    iteration_index,
+)
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     ValidationContext,
@@ -188,7 +185,9 @@ def _warn_for_undeclared_step_inputs(
     if binding is not None:
         if binding.inputs:
             declared_inputs.extend(str(key) for key in binding.inputs.keys())
-        declared_inputs.extend(_normalize_key_iter(getattr(binding, "input_keys", None)))
+        declared_inputs.extend(
+            _normalize_key_iter(getattr(binding, "input_keys", None))
+        )
         declared_inputs.extend(
             _normalize_key_iter(getattr(binding, "optional_input_keys", None))
         )
@@ -322,7 +321,9 @@ def _declared_required_and_optional_output_keys(
         outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
         if outputs_class is not None:
             if not optional:
-                optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
+                optional = list(
+                    getattr(outputs_class, "optional_output_keys", lambda: ())()
+                )
             required = list(
                 required_outputs_for_step_outputs_class(outputs_class, state=state)
             )
@@ -334,12 +335,16 @@ def _declared_required_and_optional_output_keys(
         declared = list(declared_outputs_for_step_outputs_class(outputs_class))
     required: list[str] = []
     if outputs_class is not None:
-        required = list(required_outputs_for_step_outputs_class(outputs_class, state=state))
+        required = list(
+            required_outputs_for_step_outputs_class(outputs_class, state=state)
+        )
     optional: list[str] = []
     if outputs_class is not None:
         optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
-    return sorted(dict.fromkeys(declared)), sorted(dict.fromkeys(required)), sorted(
-        dict.fromkeys(optional)
+    return (
+        sorted(dict.fromkeys(declared)),
+        sorted(dict.fromkeys(required)),
+        sorted(dict.fromkeys(optional)),
     )
 
 
@@ -620,7 +625,9 @@ def _build_step_run_kwargs(
             resolved_input_paths = requested_input_paths
         if resolved_input_paths:
             explicit_requested_keys = sorted(
-                key for key in resolved_input_paths.keys() if str(key) in explicit_input_keys
+                key
+                for key in resolved_input_paths.keys()
+                if str(key) in explicit_input_keys
             )
             if explicit_requested_keys:
                 logger.debug(
@@ -638,9 +645,7 @@ def _build_step_run_kwargs(
         load_inputs=resolved_load_inputs,
         input_binding=resolved_input_binding,
         input_paths=(
-            dict(resolved_input_paths)
-            if resolved_input_paths is not None
-            else None
+            dict(resolved_input_paths) if resolved_input_paths is not None else None
         ),
         input_materialization=resolved_input_materialization,
     )
@@ -954,7 +959,9 @@ def _resolve_step_metadata_value(
     if not parameters:
         return value()
 
-    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+    if any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+    ):
         return value(settings=settings, state=state, workspace=workspace)
 
     names = list(parameters)
@@ -1223,7 +1230,9 @@ def run_manifested_steps(
         expects_outputs = STEP_OUTPUTS_CLASSES.get(spec.name) is not None
         if spec.name in manifest:
             if expects_outputs:
-                logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
+                logger.info(
+                    "[%s] %s already completed (skipping)", stage_name, spec.name
+                )
                 outputs = outputs_holder.get_attribute(spec.name)
                 recovery_meta = {
                     "used_manifest_restore": True,
@@ -1258,7 +1267,9 @@ def run_manifested_steps(
                         state=state,
                         resolution_mode="manifest_restore",
                         run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(manifest.get(spec.name, {}).get("cache_hit", False)),
+                        cache_hit=bool(
+                            manifest.get(spec.name, {}).get("cache_hit", False)
+                        ),
                         recovery_meta=recovery_meta,
                     )
                     _emit_output_hydration_audit(
@@ -1270,7 +1281,9 @@ def run_manifested_steps(
                         resolution_mode="manifest_restore",
                         outputs=outputs,
                         run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(manifest.get(spec.name, {}).get("cache_hit", False)),
+                        cache_hit=bool(
+                            manifest.get(spec.name, {}).get("cache_hit", False)
+                        ),
                         recovery_meta=recovery_meta,
                     )
                 remember_restored_run_id = getattr(
@@ -1865,8 +1878,5 @@ def _remap_outputs_workspace_paths(
         value = getattr(outputs, field_name, None)
         if not isinstance(value, Mapping):
             continue
-        remapped = {
-            key: _remap_path(path_value)
-            for key, path_value in value.items()
-        }
+        remapped = {key: _remap_path(path_value) for key, path_value in value.items()}
         setattr(outputs, field_name, remapped)

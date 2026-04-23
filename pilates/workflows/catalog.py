@@ -3,7 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass
 import re
 from fnmatch import fnmatchcase
-from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple, Type
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+    Type,
+)
 
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
@@ -40,35 +52,24 @@ from pilates.activitysim.outputs import (
     ASIM_PERSONS_IN,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_MUTABLE_DATA_DIR,
-    ASIM_OUTPUT_DIR,
     BEAM_CONFIG_FILE,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
-    BEAM_MUTABLE_DATA_DIR,
-    BEAM_OUTPUT_DIR,
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
     BEAM_OUTPUT_PLANS_XML,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
-    ATLAS_OUTPUT_DIR,
-    ATLAS_VEHICLES2_INPUT,
     ATLAS_VEHICLES2_OUTPUT,
     ASIM_SHARROW_CACHE_DIR,
-    LINKSTATS,
     LINKSTATS_WARMSTART,
     OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
-    USIM_INPUT_NEXT,
-    USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
 from pilates.generic.records import sanitize_artifact_key
@@ -260,7 +261,13 @@ _BEAM_RUN_ARCHIVE_OUTPUT_KEYS = (
 )
 _BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
     _BEAM_RUN_OUTPUT_KEYS,
-    (BEAM_OUTPUT_PLANS_XML, BEAM_OUTPUT_EXPERIENCED_PLANS_XML, BEAM_EXPERIENCED_PLANS_XML, ZARR_SKIMS, FINAL_SKIMS_OMX),
+    (
+        BEAM_OUTPUT_PLANS_XML,
+        BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        BEAM_EXPERIENCED_PLANS_XML,
+        ZARR_SKIMS,
+        FINAL_SKIMS_OMX,
+    ),
 )
 
 
@@ -273,9 +280,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=UrbanSimPreprocessOutputs,
         input_keys=(USIM_DATASTORE_BASE_H5,),
         optional_input_keys=(USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX, OMX_SKIMS),
-        output_keys=(
-            *_URBANSIM_PREPROCESS_PREPARED_KEYS,
-        ),
+        output_keys=(*_URBANSIM_PREPROCESS_PREPARED_KEYS,),
         optional_output_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
         depends_on=(),
         holder_inputs=(),
@@ -391,9 +396,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         order=70,
         outputs_class=ActivitySimPreprocessOutputs,
         input_keys=(USIM_POPULATION_SOURCE_H5,),
-        optional_input_keys=(
-            FINAL_SKIMS_OMX,
-        ),
+        optional_input_keys=(FINAL_SKIMS_OMX,),
         output_keys=(
             ASIM_LAND_USE_IN,
             ASIM_HOUSEHOLDS_IN,
@@ -436,9 +439,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ZARR_SKIMS,
         ),
         optional_input_keys=(ASIM_SHARROW_CACHE_DIR,),
-        output_keys=(
-            *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-        ),
+        output_keys=(*ASIM_REQUIRED_RUN_OUTPUT_KEYS,),
         optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
@@ -461,9 +462,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ZARR_SKIMS,
             *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         ),
-        output_keys=(
-            *_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,
-        ),
+        output_keys=(*_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,),
         optional_input_keys=(
             *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             USIM_POPULATION_SOURCE_H5,
@@ -494,9 +493,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             BEAM_PERSONS_IN,
         ),
         optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
-        output_keys=(
-            *BeamPreprocessOutputs.required_output_keys(),
-        ),
+        output_keys=(*BeamPreprocessOutputs.required_output_keys(),),
         optional_output_keys=("vehicles_beam_in", LINKSTATS_WARMSTART),
         depends_on=("activitysim_postprocess",),
         holder_inputs=("activitysim_postprocess",),
@@ -518,9 +515,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             BEAM_PERSONS_IN,
         ),
         optional_input_keys=(LINKSTATS_WARMSTART,),
-        output_keys=(
-            *_BEAM_RUN_OUTPUT_KEYS,
-        ),
+        output_keys=(*_BEAM_RUN_OUTPUT_KEYS,),
         optional_output_keys=(
             LINKSTATS_WARMSTART,
             BEAM_OUTPUT_PLANS_XML,
@@ -556,9 +551,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         outputs_class=BeamPostprocessOutputs,
         input_keys=(),
         optional_input_keys=(ZARR_SKIMS,),
-        output_keys=(
-            ZARR_SKIMS,
-        ),
+        output_keys=(ZARR_SKIMS,),
         optional_output_keys=(FINAL_SKIMS_OMX,),
         dynamic_input_families=(
             "events_parquet_{year}_{iteration}",
@@ -744,7 +737,9 @@ def restart_query_scope_for_step(step_name: str) -> Mapping[str, Optional[str]]:
     }
 
 
-def _restart_producer_candidates_by_key() -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
+def _restart_producer_candidates_by_key() -> Dict[
+    str, Tuple[RestartProducerCandidate, ...]
+]:
     candidates_by_key: Dict[str, List[RestartProducerCandidate]] = {}
     for spec in sorted(WORKFLOW_STEP_SPECS, key=lambda item: item.order):
         for key in workflow_step_declared_output_keys(spec.step_name):
@@ -756,10 +751,7 @@ def _restart_producer_candidates_by_key() -> Dict[str, Tuple[RestartProducerCand
                     phase=spec.phase,
                 )
             )
-    return {
-        key: tuple(candidates)
-        for key, candidates in candidates_by_key.items()
-    }
+    return {key: tuple(candidates) for key, candidates in candidates_by_key.items()}
 
 
 _RESTART_PRODUCER_OVERRIDES: Tuple[RestartProducerOverride, ...] = (
