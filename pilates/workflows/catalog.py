@@ -81,6 +81,14 @@ class WorkflowStepKeyMatch:
         return f" (canonicalized to '{self.canonical_key}')"
 
 
+@dataclass(frozen=True)
+class RestartProducerCandidate:
+    key: str
+    step_name: str
+    stage_name: str
+    phase: Optional[str]
+
+
 _URBANSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="urbansim")
 _ATLAS_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="atlas")
 _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
@@ -399,6 +407,93 @@ def workflow_step_key_match(
         declared=False,
         used_alias=(canonical_key != key),
     )
+
+
+def workflow_step_key_is_declared(
+    step_name: str,
+    key: str,
+    *,
+    direction: str,
+) -> bool:
+    return workflow_step_key_match(step_name, key, direction=direction).declared
+
+
+def workflow_step_declared_input_keys(step_name: str) -> Tuple[str, ...]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        return ()
+    return tuple(dict.fromkeys((*spec.input_keys, *spec.optional_input_keys)))
+
+
+def workflow_step_declared_output_keys(step_name: str) -> Tuple[str, ...]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        return ()
+    return tuple(dict.fromkeys((*spec.output_keys, *spec.optional_output_keys)))
+
+
+def workflow_step_contracts_by_name(
+    settings: Optional[Any] = None,
+) -> Dict[str, Dict[str, Any]]:
+    del settings
+    contracts: Dict[str, Dict[str, Any]] = {}
+    for spec in WORKFLOW_STEP_SPECS:
+        contracts[spec.step_name] = {
+            "step_name": spec.step_name,
+            "stage_name": spec.stage_name,
+            "phase": spec.phase,
+            "depends_on": list(spec.depends_on),
+            "input_keys": list(spec.input_keys),
+            "optional_input_keys": list(spec.optional_input_keys),
+            "upstream_step_inputs": list(spec.upstream_step_inputs),
+            "output_keys": list(spec.output_keys),
+            "optional_output_keys": list(spec.optional_output_keys),
+            "dynamic_input_families": list(spec.dynamic_input_families),
+            "dynamic_output_families": list(spec.dynamic_output_families),
+            "optional": spec.optional,
+        }
+    return contracts
+
+
+def restart_query_scope_for_step(step_name: str) -> Dict[str, Optional[str]]:
+    spec = workflow_step_spec_for_step_name(step_name)
+    if spec is None:
+        raise KeyError(f"Unknown restart query step name: {step_name}")
+    if spec.stage_name == "activity_demand":
+        return {
+            "model": spec.step_name,
+            "stage": f"activity_demand_{spec.phase}",
+            "phase": spec.phase,
+        }
+    if spec.stage_name == "land_use":
+        return {"model": spec.step_name, "stage": "land_use", "phase": spec.phase}
+    if spec.stage_name == "vehicle_ownership_model":
+        return {"model": spec.step_name, "stage": "atlas", "phase": spec.phase}
+    if spec.stage_name == "traffic_assignment":
+        return {"model": spec.step_name, "stage": "beam", "phase": spec.phase}
+    if spec.stage_name == "postprocessing":
+        return {"model": spec.step_name, "stage": "postprocessing", "phase": None}
+    return {"model": spec.step_name, "stage": spec.stage_name, "phase": spec.phase}
+
+
+def restart_artifact_producers(
+    *,
+    frontier_stage: Optional[str] = None,
+    enabled_models: Optional[Sequence[str]] = None,
+) -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
+    del frontier_stage, enabled_models
+    producers: Dict[str, list[RestartProducerCandidate]] = {}
+    for spec in sorted(WORKFLOW_STEP_SPECS, key=lambda item: item.order):
+        for key in workflow_step_declared_output_keys(spec.step_name):
+            producers.setdefault(key, []).append(
+                RestartProducerCandidate(
+                    key=key,
+                    step_name=spec.step_name,
+                    stage_name=spec.stage_name,
+                    phase=spec.phase,
+                )
+            )
+    return {key: tuple(candidates) for key, candidates in producers.items()}
 
 
 def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:

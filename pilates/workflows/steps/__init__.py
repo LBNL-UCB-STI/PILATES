@@ -7,6 +7,8 @@ implementations live in sibling modules.
 
 from __future__ import annotations
 
+from typing import Any, Callable, Dict
+
 from pilates.generic.model_factory import ModelFactory as ModelFactory
 
 from .shared import (
@@ -22,6 +24,7 @@ from .shared import (
     _urbansim_output_facet_meta as _urbansim_output_facet_meta,
 )
 from .activitysim import (
+    activitysim_compile_output_paths as activitysim_compile_output_paths,
     make_activitysim_compile_step as make_activitysim_compile_step,
     make_activitysim_postprocess_step as make_activitysim_postprocess_step,
     make_activitysim_preprocess_step as make_activitysim_preprocess_step,
@@ -48,6 +51,7 @@ from .urbansim_atlas import (
     make_urbansim_postprocess_step as make_urbansim_postprocess_step,
     make_urbansim_preprocess_step as make_urbansim_preprocess_step,
     make_urbansim_run_step as make_urbansim_run_step,
+    urbansim_run_output_paths as urbansim_run_output_paths,
 )
 
 # Re-export modules for callers/tests that monkeypatch module-level symbols.
@@ -59,3 +63,29 @@ from . import (
     shared as shared,
     urbansim_atlas as urbansim_atlas,
 )
+
+
+SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
+    "urbansim_preprocess": make_urbansim_preprocess_step,
+    "urbansim_run": make_urbansim_run_step,
+    "urbansim_postprocess": make_urbansim_postprocess_step,
+    "atlas_preprocess": make_atlas_preprocess_step,
+    "atlas_run": make_atlas_run_step,
+    "atlas_postprocess": make_atlas_postprocess_step,
+    "activitysim_preprocess": make_activitysim_preprocess_step,
+    "activitysim_compile": make_activitysim_compile_step,
+    "activitysim_run": make_activitysim_run_step,
+    "activitysim_postprocess": make_activitysim_postprocess_step,
+    "beam_preprocess": make_beam_preprocess_step,
+    "beam_run": make_beam_run_step,
+    "beam_postprocess": make_beam_postprocess_step,
+    "beam_full_skim": make_beam_full_skim_step,
+    "impacts_preprocess": make_impacts_preprocess_step,
+    "impacts_run": make_impacts_run_step,
+    "impacts_postprocess": make_impacts_postprocess_step,
+}
+
+
+def schema_step_builder_registry() -> Dict[str, Callable[..., Any]]:
+    """Return the canonical schema-step builder registry keyed by step name."""
+    return dict(SCHEMA_STEP_BUILDERS)
