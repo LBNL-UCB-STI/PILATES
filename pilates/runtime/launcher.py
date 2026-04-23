@@ -21,7 +21,6 @@ from typing import Optional, Dict, Any, Callable, List, Sequence, cast
 
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.generic.records import sanitize_artifact_key
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -44,7 +43,10 @@ from pilates.utils.coupler_helpers import (
     flush_archive_queue,
     stop_archive_worker,
 )
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.inputs import (
+    atlas_static_input_relpaths,
+    build_atlas_static_inputs_fallback,
+)
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
@@ -203,7 +205,7 @@ def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
     if not output_directory:
         raise ValueError("output_directory not found in config")
     archive_root = os.path.realpath(os.path.expandvars(output_directory))
-    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
+    local_workspace_root = settings.run.local_workspace_root
     if local_workspace_root:
         local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
     else:
@@ -284,56 +286,6 @@ def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path
         / ".workflow"
         / f"year_{year}_iteration_{iteration}.yaml"
     )
-
-
-def _atlas_static_input_key(relpath: str) -> str:
-    normalized_relpath = relpath.replace("\\", "/")
-    rel_no_ext = os.path.splitext(normalized_relpath)[0]
-    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
-
-
-def _iter_existing_atlas_static_inputs(
-    settings: PilatesConfig,
-    atlas_input_dir: str,
-):
-    for relpath in atlas_static_input_relpaths(settings):
-        normalized_relpath = relpath.replace("\\", "/")
-        path = os.path.join(atlas_input_dir, normalized_relpath)
-        if not os.path.exists(path):
-            continue
-        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
-
-
-def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
-    """
-    Enumerate static ATLAS inputs from the mutable input directory.
-
-    This fallback is used when Initialization was skipped (e.g., restart) and the
-    in-memory RecordStore of copied inputs is unavailable. It may include files
-    produced by prior ATLAS preprocess runs.
-    """
-    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
-    if not os.path.exists(atlas_input_dir):
-        return {}
-
-    settings = getattr(workspace, "settings", None)
-    if settings is not None:
-        inputs: Dict[str, str] = {}
-        for _relpath, key, path in _iter_existing_atlas_static_inputs(
-            settings, atlas_input_dir
-        ):
-            inputs.setdefault(key, path)
-        if inputs:
-            return inputs
-
-    inputs: Dict[str, str] = {}
-    for root, _, files in os.walk(atlas_input_dir):
-        for filename in sorted(files):
-            path = os.path.join(root, filename)
-            relpath = os.path.relpath(path, atlas_input_dir)
-            key = _atlas_static_input_key(relpath)
-            inputs.setdefault(key, path)
-    return inputs
 
 
 def _log_local_storage_info() -> None:
@@ -489,7 +441,7 @@ def _prepare_run_context(
     _configure_run_storage_environment(
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
-        enable_archive_copy=bool(getattr(settings.run, "enable_archive_copy", False)),
+        enable_archive_copy=settings.run.enable_archive_copy,
     )
 
     project_root_abs = str(Path(__file__).resolve().parents[2])
@@ -507,11 +459,10 @@ def _prepare_run_context(
         archive_run_dir=archive_run_dir,
     )
     if not restored_from_snapshot:
-        shared_db_path = getattr(getattr(settings, "shared", None), "database", None)
         seed_local_consist_db_from_shared(
             settings=settings,
             local_db_path=local_consist_db_path,
-            shared_db_path=getattr(shared_db_path, "path", None),
+            shared_db_path=settings.shared.database.path,
         )
     logger.info(
         "Initializing Consist Tracker in %s (db_path=%s)",
@@ -567,7 +518,7 @@ def _prepare_run_context(
         _enforce_resume_rewind_guardrail(
             state=state,
             archive_state_path=archive_state_path,
-            allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+            allow_rewind_resume=settings.allow_rewind_resume,
         )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
@@ -732,7 +683,7 @@ def main(
         event_type="run_context",
         scenario_id=scenario_id,
         seed=run_seed,
-        settings_file=getattr(settings, "settings_file", None),
+        settings_file=settings.settings_file,
         run_name=run_name,
         workspace_root=workspace.full_path,
         local_run_dir=local_run_dir,

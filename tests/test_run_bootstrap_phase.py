@@ -15,6 +15,7 @@ from pilates.runtime.consist_audit import (
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
+from pilates.atlas.inputs import build_atlas_static_inputs_fallback
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils import consist_db_snapshot as snapshot_module
 from workflow_state import WorkflowState
@@ -1479,7 +1480,12 @@ def test_resolve_run_storage_roots_expands_env_vars(monkeypatch, tmp_path):
 
 def test_resolve_run_storage_roots_defaults_local_to_archive_root(tmp_path):
     archive_root = tmp_path / "archive-root"
-    settings = SimpleNamespace(run=SimpleNamespace(output_directory=str(archive_root)))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            output_directory=str(archive_root),
+            local_workspace_root=None,
+        )
+    )
 
     resolved_archive_root, resolved_local_root = run_module._resolve_run_storage_roots(
         settings
@@ -1809,7 +1815,7 @@ def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_pat
         atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
     ).write_text("used", encoding="utf-8")
 
-    fallback = run_module.build_atlas_static_inputs_fallback(workspace)
+    fallback = build_atlas_static_inputs_fallback(workspace)
 
     assert fallback["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
     assert (
@@ -1880,6 +1886,7 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
             output_run_name="tracker-topology-test",
         ),
         shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file=None,
     )
     state = StateStub()
     tracker_kwargs = {}
@@ -1985,6 +1992,8 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
             restart_strict=True,
         ),
         shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file=None,
+        allow_rewind_resume=False,
     )
     state = StateStub(str(run_state_path))
 
@@ -2111,6 +2120,8 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
             restart_strict=False,
         ),
         shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file=None,
+        allow_rewind_resume=False,
     )
     state = StateStub(str(run_state_path))
     surface = SimpleNamespace(
@@ -2190,6 +2201,8 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
             restart_strict=True,
         ),
         shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file=None,
+        allow_rewind_resume=False,
     )
     state = SimpleNamespace(
         run_info_path=str(run_state_path),
@@ -2313,6 +2326,8 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
             models=SimpleNamespace(vehicle_ownership="atlas"),
         ),
         shared=SimpleNamespace(database=SimpleNamespace(enabled=False, path=None)),
+        settings_file=None,
+        allow_rewind_resume=False,
     )
     state = SimpleNamespace(
         Stage=WorkflowState.Stage,

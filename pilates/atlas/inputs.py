@@ -250,6 +250,54 @@ def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
     return tuple(deduped)
 
 
+def _atlas_static_input_key(relpath: str) -> str:
+    normalized_relpath = relpath.replace("\\", "/")
+    rel_no_ext = os.path.splitext(normalized_relpath)[0]
+    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
+
+
+def _iter_existing_atlas_static_inputs(
+    settings: PilatesConfig,
+    atlas_input_dir: str,
+):
+    for relpath in atlas_static_input_relpaths(settings):
+        normalized_relpath = relpath.replace("\\", "/")
+        path = os.path.join(atlas_input_dir, normalized_relpath)
+        if not os.path.exists(path):
+            continue
+        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
+
+
+def build_atlas_static_inputs_fallback(workspace: "Workspace") -> Dict[str, str]:
+    """
+    Enumerate static ATLAS inputs from the mutable input directory.
+
+    This fallback is used when Initialization was skipped and the in-memory
+    RecordStore of copied inputs is unavailable. It may include files produced
+    by prior ATLAS preprocess runs.
+    """
+    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+    if not os.path.exists(atlas_input_dir):
+        return {}
+
+    inputs: Dict[str, str] = {}
+    for _relpath, key, path in _iter_existing_atlas_static_inputs(
+        workspace.settings,
+        atlas_input_dir,
+    ):
+        inputs.setdefault(key, path)
+    if inputs:
+        return inputs
+
+    for root, _, files in os.walk(atlas_input_dir):
+        for filename in sorted(files):
+            path = os.path.join(root, filename)
+            relpath = os.path.relpath(path, atlas_input_dir)
+            key = _atlas_static_input_key(relpath)
+            inputs.setdefault(key, path)
+    return inputs
+
+
 def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
     relpaths = atlas_static_input_relpaths(settings)
 
