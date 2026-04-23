@@ -31,6 +31,7 @@ partition_arg="lr7"
 account_arg=""
 high_mem=false
 beam_profile=false
+archive_mode="scratch"
 hours_arg=""
 
 while [ $# -gt 0 ]; do
@@ -59,24 +60,38 @@ while [ $# -gt 0 ]; do
         beam_profile=true
         shift
         ;;
+    --archive)
+        archive_mode="${2:-}"
+        shift 2
+        ;;
     -t|--hours)
         hours_arg="${2:-}"
         shift 2
         ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [-t hours]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --beam-profile: enable BEAM Java Flight Recorder output in /app/output."
+        echo "  --archive: set archive target to shared or scratch."
         echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [-t hours]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours]\n" "$0"
         exit 2
         ;;
     esac
 done
+
+case "$archive_mode" in
+    shared|scratch)
+        ;;
+    *)
+        echo "ERROR: unsupported --archive mode '$archive_mode' (expected shared or scratch)"
+        exit 2
+        ;;
+esac
 
 if [ "$beam_profile" = true ] && [ -z "${BEAM_EXTRA_JVM_ARGS:-}" ]; then
     BEAM_EXTRA_JVM_ARGS="-XX:StartFlightRecording=delay=5s,duration=30m,filename=/app/output/recording_${JOB_NAME}.jfr,dumponexit=true,settings=default"
@@ -163,6 +178,46 @@ else
         sed -i "s|\${BEAM_EXTRA_JVM_ARGS}||g" "$generated_settings_path"
     fi
 fi
+
+SCRATCH_OUTPUT_ROOT="/global/scratch/users/$USER/pilates-outputs"
+SHARED_OUTPUT_ROOT="/clusterfs/beem-core-data-nfs/pilates-outputs"
+LOCAL_WORKSPACE_ROOT="/local/job\${SLURM_JOB_ID}/pilates-workspace"
+
+apply_archive_mode_override() {
+    local config_path="$1"
+    local mode="$2"
+    python3 - "$config_path" "$mode" "$SCRATCH_OUTPUT_ROOT" "$SHARED_OUTPUT_ROOT" "$LOCAL_WORKSPACE_ROOT" <<'PY'
+import sys
+from pathlib import Path
+import yaml
+
+config_path = Path(sys.argv[1])
+mode = sys.argv[2]
+scratch_root = sys.argv[3]
+shared_root = sys.argv[4]
+local_root = sys.argv[5]
+
+with config_path.open("r", encoding="utf-8") as fh:
+    data = yaml.safe_load(fh)
+
+run_cfg = data.setdefault("run", {})
+if mode == "shared":
+    run_cfg["output_directory"] = shared_root
+    run_cfg["local_workspace_root"] = local_root
+    run_cfg["enable_archive_copy"] = True
+elif mode == "scratch":
+    run_cfg["output_directory"] = scratch_root
+    run_cfg["local_workspace_root"] = local_root
+    run_cfg["enable_archive_copy"] = True
+else:
+    raise SystemExit(f"unsupported archive mode: {mode}")
+
+with config_path.open("w", encoding="utf-8") as fh:
+    yaml.safe_dump(data, fh, sort_keys=False)
+PY
+}
+
+apply_archive_mode_override "$generated_settings_path" "$archive_mode"
 
 export BEAM_MEMORY
 

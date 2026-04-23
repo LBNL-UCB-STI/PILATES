@@ -47,6 +47,18 @@ Use high-memory `lr7` mode (`480G`):
 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --high-mem
 ```
 
+Force shared archive output on LRC while keeping execution on scratch:
+
+```bash
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --archive shared
+```
+
+Force scratch-only output:
+
+```bash
+./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --archive scratch
+```
+
 Enable BEAM Java Flight Recorder profiling:
 
 ```bash
@@ -75,6 +87,11 @@ Restart from an existing stage file:
 
 `BEAM_EXTRA_JVM_ARGS` defaults to empty. Use it to append extra JVM flags for
 profiling or debugging without editing the runner code.
+
+`--archive` controls where the run writes outputs:
+
+- `shared`: archive to `/clusterfs/beem-core-data-nfs/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
+- `scratch`: archive to `/global/scratch/users/$USER/pilates-outputs`, run locally in `/local/job${SLURM_JOB_ID}/pilates-workspace`, and enable archive copying
 
 Override explicitly:
 
