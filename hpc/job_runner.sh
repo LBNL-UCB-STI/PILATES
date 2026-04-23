@@ -215,7 +215,7 @@ else:
     raise SystemExit(f"unsupported archive mode: {mode}")
 
 with config_path.open("w", encoding="utf-8") as fh:
-    yaml.safe_dump(data, fh, sort_keys=False)
+    yaml.safe_dump(data, fh)
 PY
 }
 
