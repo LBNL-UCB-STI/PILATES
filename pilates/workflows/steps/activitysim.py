@@ -456,13 +456,14 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             surface=surface,
         )
     if not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs:
+        current_year = getattr(state, "year", getattr(state, "current_year", None))
         current_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
             settings=settings,
             state=state,
             workspace=workspace,
-            year=state.year,
+            year=current_year,
             surface=surface,
         )
     population_source_value = (

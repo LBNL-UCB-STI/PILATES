@@ -80,10 +80,10 @@ from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _r
 from pilates.workflows.stages import supply_demand as supply_demand_stage
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.supply_demand import (
-    _build_beam_postprocess_input_keys,
     _run_traffic_assignment_phase,
     TrafficAssignmentPhaseInputs,
 )
+from pilates.workflows.stages.supply_demand_beam import _build_beam_postprocess_input_keys
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
     _restore_supply_demand_usim_inputs_for_resume,
@@ -1562,6 +1562,67 @@ def test_supply_demand_activitysim_postprocess_uses_local_usim_base_fallback(
     binding = postprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
     assert USIM_DATASTORE_BASE_H5 not in (binding.input_keys or [])
+
+
+@pytest.mark.parametrize(
+    ("current_year", "forecast_year"),
+    [
+        (2019, 2021),
+        (2021, 2023),
+    ],
+)
+def test_supply_demand_activitysim_postprocess_binds_population_source_to_forecast_year(
+    stage_env,
+    tmp_path,
+    current_year,
+    forecast_year,
+):
+    usim_dir = Path(stage_env["workspace"].get_usim_mutable_data_dir())
+    current_h5 = usim_dir / stage_env["settings"].urbansim.output_file_template.format(
+        year=current_year
+    )
+    forecast_h5 = usim_dir / stage_env["settings"].urbansim.output_file_template.format(
+        year=forecast_year
+    )
+    _write_file(current_h5)
+    _write_file(forecast_h5)
+
+    state = stage_env["state"]
+    state.current_year = current_year
+    state.forecast_year = forecast_year
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, str(current_h5))
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, str(current_h5))
+    usim_inputs = {
+        USIM_POPULATION_SOURCE_H5: str(current_h5),
+        USIM_DATASTORE_CURRENT_H5: str(current_h5),
+    }
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs=usim_inputs,
+        build_manifest_path=lambda _workspace, year, iteration: tmp_path
+        / f"manifest_{year}_{iteration}.json",
+    )
+
+    postprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_postprocess"
+    ]
+    assert postprocess_calls, "Expected an ActivitySim postprocess step call."
+    binding = postprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == str(forecast_h5)
+    assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
 
 
 def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_use(

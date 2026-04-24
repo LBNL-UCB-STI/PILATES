@@ -457,12 +457,21 @@ def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_curre
     assert runtime_inputs["current_input_h5_path"] == str(h5_path)
 
 
+@pytest.mark.parametrize(
+    ("current_year", "forecast_year"),
+    [
+        (2019, 2021),
+        (2021, 2023),
+    ],
+)
 def test_activitysim_postprocess_runtime_inputs_split_population_and_current_years(
     monkeypatch,
     tmp_path,
+    current_year,
+    forecast_year,
 ) -> None:
-    population_h5 = tmp_path / "model_data_2025.h5"
-    current_h5 = tmp_path / "model_data_2023.h5"
+    population_h5 = tmp_path / f"model_data_{forecast_year}.h5"
+    current_h5 = tmp_path / f"model_data_{current_year}.h5"
     population_h5.write_text("population")
     current_h5.write_text("current")
 
@@ -471,12 +480,12 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     def _fake_build_binding_plan(**kwargs):
         year = kwargs["year"]
         captured_years.append(year)
-        if year == 2025:
+        if year == forecast_year:
             return BindingPlan(
                 inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
                 source_by_key={USIM_POPULATION_SOURCE_H5: "fake"},
             )
-        if year == 2023:
+        if year == current_year:
             return BindingPlan(
                 inputs={USIM_DATASTORE_CURRENT_H5: str(current_h5)},
                 source_by_key={USIM_DATASTORE_CURRENT_H5: "fake"},
@@ -497,8 +506,8 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
         settings=SimpleNamespace(),
         state=SimpleNamespace(
-            year=2023,
-            forecast_year=2025,
+            year=current_year,
+            forecast_year=forecast_year,
             Stage=SimpleNamespace(land_use="land_use"),
             is_enabled=lambda _stage: True,
         ),
@@ -506,7 +515,7 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
         coupler=_dummy_coupler(),
     )
 
-    assert captured_years == [2025, 2023]
+    assert captured_years == [forecast_year, current_year]
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
     assert runtime_inputs["current_input_h5_path"] == str(current_h5)
 
