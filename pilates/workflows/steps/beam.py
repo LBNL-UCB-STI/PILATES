@@ -174,6 +174,20 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     ),
 }
 
+_BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
+    BEAM_INPUT_PLANS_ARCHIVED: BEAM_PLANS_IN,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED: BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_PERSONS_ARCHIVED: BEAM_PERSONS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED: BEAM_CONFIG_FILE,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: "beam_config_references",
+    BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles_beam_in",
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: LINKSTATS_WARMSTART,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: "beam_plans_warmstart",
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
+        "beam_experienced_plans_warmstart"
+    ),
+}
+
 
 def _beam_run_snapshot_dir(
     *,
@@ -197,6 +211,13 @@ def _beam_input_archive_meta(
         "facet": {
             "artifact_family": "beam_input_archived",
             "input_name": input_name,
+            "source_role": _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP.get(
+                archive_key,
+                input_name,
+            ),
+            "snapshot_role": f"beam_input_{input_name}",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
             "year": year,
             "iteration": iteration,
         },

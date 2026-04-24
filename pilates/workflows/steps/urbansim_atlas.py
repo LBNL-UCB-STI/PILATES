@@ -771,6 +771,17 @@ def make_urbansim_postprocess_step(
                 }
             else:
                 merged_child_specs = None
+            merged_meta = _urbansim_output_facet_meta(
+                USIM_DATASTORE_H5, forecast_year=forecast_year
+            )
+            merged_meta.setdefault("facet", {}).update(
+                {
+                    "source_role": f"{USIM_INPUT_MERGED_PREFIX}{forecast_year}",
+                    "snapshot_role": "usim_input_merged",
+                    "snapshot_reason": "post_merge_handoff",
+                    "storage_event": "merged_h5_output",
+                }
+            )
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -786,9 +797,7 @@ def make_urbansim_postprocess_step(
                 h5_tables_used=list(merged_table_keys.keys()),
                 child_specs=merged_child_specs,
                 child_selection="include_only" if merged_child_specs else "all",
-                **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=forecast_year
-                ),
+                **merged_meta,
             )
 
     step_func = build_standard_step(

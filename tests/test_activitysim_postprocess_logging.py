@@ -70,6 +70,11 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     assert len(calls) == 1
     assert calls[0][0] == "asim_input_skims_zarr_archived"
     assert calls[0][1]["content_hash"] == "abc123"
+    assert calls[0][1]["facet"]["artifact_family"] == "asim_input_archived"
+    assert calls[0][1]["facet"]["source_role"] == "zarr_skims"
+    assert calls[0][1]["facet"]["snapshot_role"] == "asim_input_skims_zarr"
+    assert calls[0][1]["facet"]["snapshot_reason"] == "exact_rewind"
+    assert calls[0][1]["facet"]["storage_event"] == "snapshot_copy"
 
 
 def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(

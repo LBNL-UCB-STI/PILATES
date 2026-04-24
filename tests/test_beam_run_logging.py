@@ -372,12 +372,20 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     assert snapshot_meta["beam_input_plans_archived"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "plans",
+        "source_role": "plans_beam_in",
+        "snapshot_role": "beam_input_plans",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2030,
         "iteration": 2,
     }
     assert snapshot_meta["beam_input_plans_warmstart_archived"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "plans_warmstart",
+        "source_role": "beam_plans_warmstart",
+        "snapshot_role": "beam_input_plans_warmstart",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2030,
         "iteration": 2,
     }
@@ -455,6 +463,10 @@ def test_beam_run_archives_atlas_vehicles_input_when_present(monkeypatch, tmp_pa
     assert vehicles_calls[0][2]["facet"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "vehicles",
+        "source_role": "vehicles_beam_in",
+        "snapshot_role": "beam_input_vehicles",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2035,
         "iteration": 1,
     }

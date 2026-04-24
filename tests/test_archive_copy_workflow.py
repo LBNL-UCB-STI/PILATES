@@ -1,5 +1,6 @@
 from pathlib import Path
 from types import SimpleNamespace
+import json
 import logging
 import queue
 
@@ -52,6 +53,17 @@ def _write_file(path: Path, content: str = "x") -> None:
     path.write_text(content)
 
 
+def _lifecycle_summary(root: Path) -> dict:
+    return json.loads(
+        (
+            root
+            / ".workflow"
+            / "diagnostics"
+            / "artifact_lifecycle_audit_summary.json"
+        ).read_text(encoding="utf-8")
+    )
+
+
 @pytest.fixture(autouse=True)
 def _reset_archive_state(monkeypatch):
     ch.stop_archive_worker(timeout=1)
@@ -93,6 +105,45 @@ def test_archive_copy_copies_file_and_preserves_relative_path(monkeypatch, tmp_p
     archived = archive_root / "beam" / "output" / "linkstats.csv.gz"
     assert archived.exists()
     assert archived.read_text() == "linkstats"
+
+
+def test_local_archive_copy_does_not_write_recovery_roots(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    recovery_root_calls = []
+    tracker = SimpleNamespace(
+        current_consist=None,
+        set_artifact_recovery_roots=lambda *args, **kwargs: recovery_root_calls.append(
+            (args, kwargs)
+        ),
+    )
+    monkeypatch.setattr(ch.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(ch.cr, "log_output", lambda *args, **kwargs: "artifact")
+
+    source = local_root / "beam" / "output" / "inputs" / "households.csv.gz"
+    _write_file(source, "households")
+    ch.log_output_only(
+        key="beam_input_households_archived",
+        path=str(source),
+        description="mock BEAM input snapshot",
+        facet={
+            "artifact_family": "beam_input_archived",
+            "source_role": "households_beam_in",
+            "snapshot_role": "beam_input_households",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
+            "year": 2030,
+            "iteration": 0,
+        },
+    )
+    ch.flush_archive_queue(timeout=5)
+
+    assert recovery_root_calls == []
+    assert _lifecycle_summary(local_root)["local_to_scratch_recovery_roots_written"] == 0
 
 
 def test_consist_audit_files_are_archived_with_separate_local_and_archive_roots(
@@ -228,6 +279,191 @@ def test_consist_audit_rotates_attempt_scoped_files_without_overwriting_history(
     assert (
         archive_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
     ).exists()
+
+
+def test_artifact_lifecycle_summary_updates_on_log_and_copy(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "beam" / "output" / "inputs" / "plans.csv.gz"
+    _write_file(source, "plans")
+
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="beam_input_plans_archived",
+        path=str(source),
+        artifact_family="beam_input_archived",
+        source_role="plans_beam_in",
+        snapshot_role="beam_input_plans",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=2,
+        artifact_id="artifact-1",
+        producing_run_id="run-1",
+    )
+
+    summary_after_log = _lifecycle_summary(local_root)
+    assert summary_after_log["snapshot_artifacts_logged"] == 1
+    assert summary_after_log["snapshot_artifacts_missing_required_facets"] == 0
+    assert summary_after_log["event_counts"]["artifact_logged"] == 1
+
+    assert ch.archive_copy_now(
+        key="beam_input_plans_archived",
+        path=str(source),
+    ) is True
+    ch.flush_archive_queue(timeout=5)
+
+    summary_after_copy = _lifecycle_summary(local_root)
+    assert (
+        summary_after_copy[
+            "copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+        == 1
+    )
+    assert summary_after_copy["local_to_scratch_recovery_roots_written"] == 0
+    assert "beam_input_archived" in summary_after_copy["safe_families_for_phase2"]
+    assert summary_after_copy["phase2_recommendation"] == "go"
+
+
+def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    copied_before_log = local_root / "beam" / "output" / "persons.csv.gz"
+    _write_file(copied_before_log, "persons")
+    assert ch.archive_copy_now(
+        key="beam_input_persons_archived",
+        path=str(copied_before_log),
+    ) is True
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="beam_input_persons_archived",
+        path=str(copied_before_log),
+        artifact_family="beam_input_archived",
+        source_role="persons_beam_in",
+        snapshot_role="beam_input_persons",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=0,
+    )
+
+    zarr_dir = local_root / "activitysim" / "cache" / "skims.zarr"
+    _write_file(zarr_dir / "0" / "values", "zarr")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="asim_input_skims_zarr_archived",
+        path=str(zarr_dir),
+        artifact_family="asim_input_archived",
+        source_role="zarr_skims",
+        snapshot_role="asim_input_skims_zarr",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=0,
+    )
+    assert ch.archive_copy_now(
+        key="asim_input_skims_zarr_archived",
+        path=str(zarr_dir),
+    ) is True
+
+    h5_path = local_root / "urbansim" / "data" / "model_data_2030.h5"
+    _write_file(h5_path, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_datastore_h5",
+        path=str(h5_path),
+        artifact_family="usim_datastore_h5",
+        source_role="usim_input_merged_2030",
+        snapshot_role="usim_input_merged",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+    )
+    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(h5_path)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["copied_artifacts_blocked_artifact_logging_after_copying"] == 1
+    assert summary["directory_artifacts_blocked_shallow_directory_signatures"] == 1
+    assert summary["h5_parent_child_artifacts_requiring_policy"] == 1
+    assert summary["phase2_recommendation"] == "defer"
+    assert summary["blocker_counts_by_reason"]["artifact_logging_after_copying"] == 1
+    assert summary["blocker_counts_by_reason"]["shallow_directory_signature"] == 1
+    assert summary["blocker_counts_by_reason"]["h5_parent_child_policy"] == 1
+
+
+def test_artifact_lifecycle_summary_resets_event_log_on_run_context(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+
+    workspace = DummyWorkspace(local_root)
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="first",
+    )
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="artifact_logged",
+        key="beam_input_plans_archived",
+        path=str(local_root / "old.csv"),
+        artifact_family="beam_input_archived",
+    )
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="second",
+    )
+
+    events_path = (
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "artifact_lifecycle_audit.jsonl"
+    )
+    events = events_path.read_text(encoding="utf-8").splitlines()
+    assert len(events) == 1
+    assert "second" in events[0]
+    assert "beam_input_plans_archived" not in events[0]
+
+
+def test_artifact_lifecycle_summary_blocks_copy_only_promotions(
+    monkeypatch, tmp_path
+):
+    run_dir = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(run_dir))
+
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        run_dir=run_dir,
+        event_type="promotion_status",
+        recovery_root=str(tmp_path / "nfs"),
+        destination_run_dir=str(tmp_path / "nfs" / "run"),
+        status="promoted",
+        copy_performed=True,
+        verified=True,
+        artifact_metadata_updated=False,
+    )
+
+    summary = _lifecycle_summary(run_dir)
+    assert summary["copy_only_promotions_db_tracker_metadata_unavailable"] == 1
+    assert "post_run_promotion" in summary["blocked_families_for_phase2"]
+    assert (
+        summary["blocker_counts_by_reason"][
+            "copy_only_promotion_metadata_unavailable"
+        ]
+        == 1
+    )
+    assert summary["phase2_recommendation"] == "defer"
 
 
 def test_resolve_existing_path_materializes_local_from_archive(

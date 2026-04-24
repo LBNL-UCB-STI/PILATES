@@ -62,6 +62,17 @@ def test_activitysim_output_facet_meta():
     assert meta["facet_schema_version"] == "v1"
     assert meta["facet_index"] is True
 
+    archived_meta = _activitysim_output_facet_meta(
+        "asim_input_households_csv_archived",
+        year=2030,
+        iteration=3,
+    )
+    assert archived_meta["facet"]["artifact_family"] == "asim_input_archived"
+    assert archived_meta["facet"]["source_role"] == "households_asim_in"
+    assert archived_meta["facet"]["snapshot_role"] == "asim_input_households_csv"
+    assert archived_meta["facet"]["snapshot_reason"] == "exact_rewind"
+    assert archived_meta["facet"]["storage_event"] == "snapshot_copy"
+
 
 def test_urbansim_output_facet_meta():
     meta = _urbansim_output_facet_meta(
@@ -70,6 +81,10 @@ def test_urbansim_output_facet_meta():
     )
     assert meta["facet"]["artifact_family"] == "usim_input_archive"
     assert meta["facet"]["year"] == 2035
+    assert meta["facet"]["source_role"] == "usim_datastore_h5"
+    assert meta["facet"]["snapshot_role"] == "usim_input_archive"
+    assert meta["facet"]["snapshot_reason"] == "pre_merge_input"
+    assert meta["facet"]["storage_event"] == "snapshot_move"
     assert meta["facet_schema_version"] == "v1"
     assert meta["facet_index"] is True
 

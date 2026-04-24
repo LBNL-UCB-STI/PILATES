@@ -13,6 +13,47 @@ from pilates.utils.coupler_helpers import enqueue_archive_copy
 
 _AUDIT_LOCK = threading.Lock()
 _AUDIT_STATE_BY_ROOT: Dict[str, Dict[str, Any]] = {}
+_LIFECYCLE_STATE_BY_ROOT: Dict[str, Dict[str, Any]] = {}
+
+_LIFECYCLE_EVENTS_NAME = "artifact_lifecycle_audit.jsonl"
+_LIFECYCLE_SUMMARY_NAME = "artifact_lifecycle_audit_summary.json"
+_ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
+_ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
+_LIFECYCLE_REQUIRED_SNAPSHOT_FIELDS = {
+    "artifact_family",
+    "source_role",
+    "snapshot_role",
+    "snapshot_reason",
+    "storage_event",
+    "year",
+}
+_LIFECYCLE_REQUIRED_ITERATION_FAMILIES = {
+    "asim_input_archived",
+    "beam_input_archived",
+}
+_LIFECYCLE_SCOPED_KEY_PREFIXES = (
+    "asim_input_",
+    "beam_input_",
+    "usim_input_archive_",
+    "usim_input_merged_",
+    "atlas_input_year_dir",
+)
+_LIFECYCLE_SCOPED_KEYS = {
+    "usim_datastore_h5",
+    "usim_datastore_base_h5",
+    "usim_datastore_current_h5",
+    "usim_forecast_output",
+    "usim_population_source_h5",
+    "zarr_skims",
+    "asim_sharrow_cache_dir",
+}
+_LIFECYCLE_ATLAS_PREFIXES = (
+    "atlas_",
+    "adopt_",
+    "accessbility",
+    "modeaccessibility",
+    "vehicle_type_mapping_",
+)
 
 
 def _json_safe(value: Any) -> Any:
@@ -43,6 +84,30 @@ def _audit_paths(workspace: Any) -> Optional[Dict[str, Path]]:
         "diagnostics_dir": diagnostics_dir,
         "events": diagnostics_dir / "consist_restart_audit.jsonl",
         "summary": diagnostics_dir / "consist_restart_audit_summary.json",
+    }
+
+
+def _lifecycle_paths(
+    workspace: Any = None,
+    *,
+    run_dir: Any = None,
+) -> Optional[Dict[str, Path]]:
+    root: Optional[Path] = None
+    if run_dir is not None:
+        root = Path(str(run_dir))
+    elif workspace is not None:
+        root = _workspace_root(workspace)
+    else:
+        local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
+        if local_root:
+            root = Path(local_root)
+    if root is None:
+        return None
+    diagnostics_dir = root / ".workflow" / "diagnostics"
+    return {
+        "diagnostics_dir": diagnostics_dir,
+        "events": diagnostics_dir / _LIFECYCLE_EVENTS_NAME,
+        "summary": diagnostics_dir / _LIFECYCLE_SUMMARY_NAME,
     }
 
 
@@ -105,6 +170,7 @@ def reset_consist_audit_state() -> None:
     """Clear in-memory audit state, primarily for tests."""
     with _AUDIT_LOCK:
         _AUDIT_STATE_BY_ROOT.clear()
+        _LIFECYCLE_STATE_BY_ROOT.clear()
 
 
 def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
@@ -140,6 +206,242 @@ def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
             )
         },
         "restart_hydration": _json_safe(state.get("restart_hydration", {})),
+    }
+
+
+def _path_under_root(path: Optional[str], root: Optional[str]) -> bool:
+    if not path or not root:
+        return False
+    try:
+        return os.path.commonpath([os.path.abspath(path), os.path.abspath(root)]) == os.path.abspath(root)
+    except ValueError:
+        return False
+
+
+def _archive_path_for_local(path: Optional[str]) -> Optional[str]:
+    local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
+    archive_root = os.environ.get(_ARCHIVE_ROOT_ENV)
+    if not path or not local_root or not archive_root:
+        return None
+    abs_path = os.path.abspath(path)
+    if not _path_under_root(abs_path, local_root):
+        return None
+    rel_path = os.path.relpath(abs_path, os.path.abspath(local_root))
+    return os.path.join(os.path.abspath(archive_root), rel_path)
+
+
+def _lifecycle_new_state() -> Dict[str, Any]:
+    return {
+        "events": [],
+        "last_event_at": None,
+    }
+
+
+def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
+    event_type = str(event.get("event_type", ""))
+    if event_type in {"run_context", "stage_boundary", "archive_copy_checkpoint", "final_shutdown", "promotion_status"}:
+        return True
+    key = str(event.get("key") or "")
+    if key.startswith("workflow_diagnostics_"):
+        return False
+    if key in _LIFECYCLE_SCOPED_KEYS:
+        return True
+    if key.startswith(_LIFECYCLE_SCOPED_KEY_PREFIXES):
+        return True
+    artifact_family = str(event.get("artifact_family") or "")
+    if artifact_family in {
+        "asim_input_archived",
+        "beam_input_archived",
+        "usim_input_archive",
+        "usim_input_merged",
+        "usim_datastore_h5",
+    }:
+        return True
+    if key.startswith(_LIFECYCLE_ATLAS_PREFIXES):
+        return True
+    return False
+
+
+def _lifecycle_family(event: Mapping[str, Any]) -> str:
+    artifact_family = str(event.get("artifact_family") or "")
+    if artifact_family:
+        return artifact_family
+    key = str(event.get("key") or "")
+    if key.startswith("beam_input_") and key.endswith("_archived"):
+        return "beam_input_archived"
+    if key.startswith("asim_input_") and key.endswith("_archived"):
+        return "asim_input_archived"
+    if key.startswith("usim_input_archive_"):
+        return "usim_input_archive"
+    if key.startswith("usim_input_merged_"):
+        return "usim_input_merged"
+    if key.startswith(_LIFECYCLE_ATLAS_PREFIXES):
+        return "atlas_observe_only"
+    return key or "unknown"
+
+
+def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
+    if bool(event.get("h5_container")) or str(path or "").lower().endswith((".h5", ".hdf5")):
+        return "h5"
+    if bool(event.get("is_dir")):
+        return "directory"
+    if path and os.path.isdir(path):
+        return "directory"
+    return "file"
+
+
+def _lifecycle_missing_required_facets(event: Mapping[str, Any]) -> list[str]:
+    family = _lifecycle_family(event)
+    if family not in {"asim_input_archived", "beam_input_archived", "usim_input_archive", "usim_input_merged"}:
+        return []
+    required = set(_LIFECYCLE_REQUIRED_SNAPSHOT_FIELDS)
+    if family in _LIFECYCLE_REQUIRED_ITERATION_FAMILIES:
+        required.add("iteration")
+    missing = [field for field in sorted(required) if event.get(field) in (None, "")]
+    return missing
+
+
+def _copy_match_key(event: Mapping[str, Any]) -> tuple[str, str]:
+    key = str(event.get("key") or "")
+    path = str(event.get("path") or event.get("src") or "")
+    return key, os.path.abspath(path) if path and "://" not in path else path
+
+
+def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
+    events = list(state.get("events") or [])
+    logged: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
+    copied: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
+    families_seen: set[str] = set()
+    safe_families: set[str] = set()
+    blocked_families: set[str] = set()
+    blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
+    blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
+    snapshot_logged = 0
+    missing_required = 0
+    copy_only_promotions = 0
+    local_to_scratch_recovery_root_writes = 0
+
+    for index, event in enumerate(events):
+        family = _lifecycle_family(event)
+        families_seen.add(family)
+        event_type = str(event.get("event_type"))
+        if event_type == "artifact_logged":
+            logged[_copy_match_key(event)] = (index, event)
+            if family in {"asim_input_archived", "beam_input_archived", "usim_input_archive", "usim_input_merged"}:
+                snapshot_logged += 1
+                if _lifecycle_missing_required_facets(event):
+                    missing_required += 1
+                    blocked_families.add(family)
+                    blocking_reasons_by_family[family].add("missing_required_snapshot_facets")
+                    blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
+        elif event_type == "archive_copy_completed":
+            copied[_copy_match_key(event)] = (index, event)
+        elif event_type == "promotion_status":
+            metadata_updated = bool(event.get("artifact_metadata_updated"))
+            copy_only_promotion = (
+                not metadata_updated
+                and bool(event.get("copy_performed"))
+                and str(event.get("status")) == "promoted"
+            )
+            if copy_only_promotion:
+                copy_only_promotions += 1
+                blocked_families.add("post_run_promotion")
+                blocking_reasons_by_family["post_run_promotion"].add("copy_only_promotion_metadata_unavailable")
+                blocker_counts_by_reason["copy_only_promotion_metadata_unavailable"] += 1
+            elif metadata_updated:
+                safe_families.add("post_run_promotion")
+        if bool(event.get("local_to_scratch_recovery_roots_written")):
+            local_to_scratch_recovery_root_writes += 1
+
+    eligible = 0
+    archive_bytes_missing = 0
+    copy_before_log = 0
+    source_outside_run_tree = 0
+    shallow_directory = 0
+    h5_policy = 0
+
+    for match_key, (copy_index, copy_event) in copied.items():
+        family = _lifecycle_family(copy_event)
+        families_seen.add(family)
+        local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
+        path = str(copy_event.get("src") or copy_event.get("path") or "")
+        dest = str(copy_event.get("dest") or _archive_path_for_local(path) or "")
+        reasons: list[str] = []
+        logged_entry = logged.get(match_key)
+        path_kind = _lifecycle_path_kind(path, copy_event)
+
+        if not _path_under_root(path, local_root):
+            source_outside_run_tree += 1
+            reasons.append("source_outside_run_tree")
+        if not dest or not os.path.exists(dest):
+            archive_bytes_missing += 1
+            reasons.append("archive_bytes_missing")
+        if logged_entry is None:
+            reasons.append("artifact_not_logged")
+        elif copy_index < logged_entry[0]:
+            copy_before_log += 1
+            reasons.append("artifact_logging_after_copying")
+        if path_kind == "directory":
+            shallow_directory += 1
+            reasons.append("shallow_directory_signature")
+        if path_kind == "h5":
+            h5_policy += 1
+            reasons.append("h5_parent_child_policy")
+
+        if reasons:
+            blocked_families.add(family)
+            for reason in sorted(set(reasons)):
+                blocking_reasons_by_family[family].add(reason)
+                blocker_counts_by_reason[reason] += 1
+        else:
+            eligible += 1
+            safe_families.add(family)
+
+    if "atlas_observe_only" in families_seen:
+        blocked_families.add("atlas_observe_only")
+        blocking_reasons_by_family["atlas_observe_only"].add("deferred_policy")
+        blocker_counts_by_reason["deferred_policy"] += 1
+
+    if safe_families and blocked_families:
+        recommendation = "narrow"
+        reason = "Some artifact families look safe, but blocked families remain."
+    elif safe_families and not blocked_families:
+        recommendation = "go"
+        reason = "All intended-scope lifecycle gates passed."
+    else:
+        recommendation = "defer"
+        reason = "The audit cannot yet prove safe recovery-root registration."
+
+    return {
+        "generated_at": state.get("last_event_at"),
+        "event_counts": {
+            event_type: sum(1 for event in events if event.get("event_type") == event_type)
+            for event_type in sorted({str(event.get("event_type")) for event in events})
+        },
+        "families_seen": sorted(families_seen),
+        "snapshot_artifacts_logged": snapshot_logged,
+        "snapshot_artifacts_missing_required_facets": missing_required,
+        "copied_artifacts_eligible_for_recovery_root_registration": eligible,
+        "copied_artifacts_blocked_archive_bytes_missing": archive_bytes_missing,
+        "copied_artifacts_blocked_artifact_logging_after_copying": copy_before_log,
+        "copied_artifacts_blocked_source_outside_run_tree": source_outside_run_tree,
+        "directory_artifacts_blocked_shallow_directory_signatures": shallow_directory,
+        "h5_parent_child_artifacts_requiring_policy": h5_policy,
+        "copy_only_promotions_db_tracker_metadata_unavailable": copy_only_promotions,
+        "local_to_scratch_recovery_roots_written": local_to_scratch_recovery_root_writes,
+        "atlas_observe_only_deferred": True,
+        "phase2_recommendation": recommendation,
+        "phase2_recommendation_reason": reason,
+        "safe_families_for_phase2": sorted(safe_families - blocked_families),
+        "blocked_families_for_phase2": sorted(blocked_families),
+        "blocking_reasons_by_family": {
+            family: sorted(reasons)
+            for family, reasons in sorted(blocking_reasons_by_family.items())
+        },
+        "blocker_counts_by_reason": {
+            reason: blocker_counts_by_reason[reason]
+            for reason in sorted(blocker_counts_by_reason)
+        },
     }
 
 
@@ -250,3 +552,75 @@ def emit_consist_audit_event(
             key="workflow_diagnostics_consist_restart_audit_summary_attempt",
             path=attempt_paths["summary"],
         )
+    if event_type == "run_context":
+        emit_artifact_lifecycle_audit_event(
+            workspace=workspace,
+            event_type="run_context",
+            run_name=fields.get("run_name"),
+            local_run_dir=fields.get("local_run_dir"),
+            archive_run_dir=fields.get("archive_run_dir"),
+            restart_run=fields.get("restart_run"),
+        )
+    elif event_type in {"step_resolution", "output_hydration_check"}:
+        emit_artifact_lifecycle_audit_event(
+            workspace=workspace,
+            event_type="stage_boundary",
+            stage_name=fields.get("stage_name"),
+            step_name=fields.get("step_name"),
+            year=fields.get("year"),
+            iteration=fields.get("iteration"),
+            run_id=fields.get("run_id"),
+            resolution_mode=fields.get("resolution_mode"),
+        )
+
+
+def emit_artifact_lifecycle_audit_event(
+    *,
+    workspace: Any = None,
+    run_dir: Any = None,
+    event_type: str,
+    **fields: Any,
+) -> None:
+    """Record shadow-mode artifact lifecycle evidence without affecting execution."""
+    paths = _lifecycle_paths(workspace, run_dir=run_dir)
+    if paths is None:
+        return
+
+    event = {
+        "event_type": str(event_type),
+        "recorded_at": datetime.now().isoformat(),
+        **{key: _json_safe(value) for key, value in fields.items()},
+    }
+    if not _lifecycle_event_in_scope(event):
+        return
+    root_key = str(paths["diagnostics_dir"].parent.parent)
+
+    try:
+        with _AUDIT_LOCK:
+            state = _LIFECYCLE_STATE_BY_ROOT.get(root_key)
+            if state is None or event_type == "run_context":
+                state = _lifecycle_new_state()
+                _LIFECYCLE_STATE_BY_ROOT[root_key] = state
+            state["events"].append(event)
+            state["last_event_at"] = event["recorded_at"]
+            paths["diagnostics_dir"].mkdir(parents=True, exist_ok=True)
+            event_mode = "w" if event_type == "run_context" else "a"
+            with paths["events"].open(event_mode, encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+            summary_payload = _lifecycle_summary_payload(state)
+            paths["summary"].write_text(
+                json.dumps(summary_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_artifact_lifecycle_audit",
+            path=paths["events"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_artifact_lifecycle_audit_summary",
+            path=paths["summary"],
+        )
+    except Exception:
+        # This audit is intentionally shadow-mode and must never alter workflow
+        # correctness.
+        return

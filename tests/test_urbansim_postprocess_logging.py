@@ -70,6 +70,11 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     assert set_output_keys == ["usim_datastore_h5"]
     assert len(publish_calls) == 1
     assert publish_calls[0]["child_selection"] == "include_only"
+    assert publish_calls[0]["facet"]["artifact_family"] == "usim_datastore_h5"
+    assert publish_calls[0]["facet"]["source_role"] == "usim_input_merged_2023"
+    assert publish_calls[0]["facet"]["snapshot_role"] == "usim_input_merged"
+    assert publish_calls[0]["facet"]["snapshot_reason"] == "post_merge_handoff"
+    assert publish_calls[0]["facet"]["storage_event"] == "merged_h5_output"
     assert {
         path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
     } == {
@@ -138,6 +143,11 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
     assert output_only_keys == ["usim_input_archive_2023"]
     assert len(output_only_meta) == 1
     assert output_only_meta[0]["child_selection"] == "include_only"
+    assert output_only_meta[0]["facet"]["artifact_family"] == "usim_input_archive"
+    assert output_only_meta[0]["facet"]["source_role"] == "usim_datastore_h5"
+    assert output_only_meta[0]["facet"]["snapshot_role"] == "usim_input_archive"
+    assert output_only_meta[0]["facet"]["snapshot_reason"] == "pre_merge_input"
+    assert output_only_meta[0]["facet"]["storage_event"] == "snapshot_move"
     assert {
         path: spec.key for path, spec in output_only_meta[0]["child_specs"].items()
     } == {

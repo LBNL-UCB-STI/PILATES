@@ -243,6 +243,76 @@ def _archive_log_method(key: str) -> Callable[..., None]:
     return logger.info
 
 
+def _emit_artifact_lifecycle_event(
+    event_type: str,
+    *,
+    require_existing_summary: bool = False,
+    **fields: Any,
+) -> None:
+    try:
+        if require_existing_summary:
+            local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
+            if not local_root:
+                return
+            summary_path = (
+                Path(local_root)
+                / ".workflow"
+                / "diagnostics"
+                / "artifact_lifecycle_audit_summary.json"
+            )
+            if not summary_path.exists():
+                return
+        from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
+
+        emit_artifact_lifecycle_audit_event(event_type=event_type, **fields)
+    except Exception:
+        logger.debug("Artifact lifecycle audit event failed", exc_info=True)
+
+
+def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
+    try:
+        run = cr.current_run()
+    except Exception:
+        run = None
+    try:
+        tracker = cr.current_tracker()
+    except Exception:
+        tracker = None
+    current_consist = getattr(tracker, "current_consist", None)
+    producing_run_id = (
+        getattr(run, "id", None)
+        or getattr(current_consist, "id", None)
+        or getattr(current_consist, "run_id", None)
+    )
+    return {
+        "artifact_id": getattr(artifact, "id", None),
+        "producing_run_id": producing_run_id,
+    }
+
+
+def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {}
+    facet = meta.get("facet")
+    if isinstance(facet, Mapping):
+        fields.update({str(key): value for key, value in facet.items()})
+    for key in (
+        "facet_schema_version",
+        "facet_index",
+        "h5_container",
+        "hash_tables",
+        "child_selection",
+        "h5_tables_used",
+        "h5_table_paths",
+        "h5_table_count",
+    ):
+        if key in meta:
+            fields[key] = meta[key]
+    child_specs = meta.get("child_specs")
+    if isinstance(child_specs, Mapping):
+        fields["h5_child_count"] = len(child_specs)
+    return fields
+
+
 def _copy_archive_payload(
     *,
     key: str,
@@ -262,6 +332,17 @@ def _copy_archive_payload(
                 _archive_inflight_signature.pop(dest, None)
             _archive_last_copied_signature[dest] = signature
     _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
+    _emit_artifact_lifecycle_event(
+        "archive_copy_completed",
+        key=key,
+        src=src,
+        path=src,
+        dest=dest,
+        is_dir=is_dir,
+        signature=signature,
+        storage_event="local_to_scratch_copy",
+        local_to_scratch_recovery_roots_written=0,
+    )
 
 
 def _archive_worker() -> None:
@@ -483,6 +564,18 @@ def archive_copy_now(
                     resolved,
                     key,
                 )
+                _emit_artifact_lifecycle_event(
+                    "archive_copy_checkpoint",
+                    require_existing_summary=True,
+                    key=key,
+                    src=resolved,
+                    path=resolved,
+                    dest=dest,
+                    is_dir=is_dir,
+                    signature=signature,
+                    storage_event="local_to_scratch_copy_already_present",
+                    local_to_scratch_recovery_roots_written=0,
+                )
                 return True
 
     _copy_archive_payload(
@@ -501,23 +594,52 @@ def flush_archive_queue(
     fail_on_timeout: bool = False,
 ) -> bool:
     if _archive_queue is None:
+        _emit_artifact_lifecycle_event(
+            "archive_copy_checkpoint",
+            require_existing_summary=True,
+            pending=0,
+            flushed=True,
+            local_to_scratch_recovery_roots_written=0,
+        )
         return True
     pending = _archive_queue.unfinished_tasks
     logger.info("[Archive] Flushing queue (pending=%s)", pending)
     if timeout is None:
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
+        _emit_artifact_lifecycle_event(
+            "archive_copy_checkpoint",
+            require_existing_summary=True,
+            pending=0,
+            flushed=True,
+            local_to_scratch_recovery_roots_written=0,
+        )
         return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
+            _emit_artifact_lifecycle_event(
+                "archive_copy_checkpoint",
+                require_existing_summary=True,
+                pending=0,
+                flushed=True,
+                local_to_scratch_recovery_roots_written=0,
+            )
             return True
         time.sleep(0.1)
     message = f"[Archive] Flush timed out (pending={_archive_queue.unfinished_tasks})"
     if fail_on_timeout:
         raise TimeoutError(message)
     logger.warning(message)
+    _emit_artifact_lifecycle_event(
+        "archive_copy_checkpoint",
+        require_existing_summary=True,
+        pending=_archive_queue.unfinished_tasks,
+        flushed=False,
+        timeout=timeout,
+        local_to_scratch_recovery_roots_written=0,
+    )
     return False
 
 
@@ -1344,6 +1466,17 @@ def _log_and_maybe_publish_artifact(
         )
         if isinstance(artifact, tuple):
             artifact = artifact[0] if artifact else None
+
+    if direction == "output":
+        _emit_artifact_lifecycle_event(
+            "artifact_logged",
+            key=key,
+            path=path,
+            direction=direction,
+            description=description,
+            **_artifact_lifecycle_ids(artifact),
+            **_artifact_lifecycle_fields_from_meta(meta),
+        )
 
     if enqueue_archive_copy:
         _enqueue_archive_copy(key, path)

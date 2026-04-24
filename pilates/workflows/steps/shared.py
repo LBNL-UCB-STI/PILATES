@@ -457,10 +457,25 @@ def _activitysim_output_facet_meta(
     iteration: int,
 ) -> Dict[str, Any]:
     family = None
+    snapshot_meta: Dict[str, Any] = {}
     if short_name.endswith("_asim_out"):
         family = short_name[: -len("_asim_out")]
     elif short_name.startswith("asim_input_") and short_name.endswith("_archived"):
         family = "asim_input_archived"
+        input_name = short_name.removeprefix("asim_input_").removesuffix("_archived")
+        source_role_map = {
+            "households_csv": ASIM_HOUSEHOLDS_IN,
+            "persons_csv": ASIM_PERSONS_IN,
+            "land_use_csv": ASIM_LAND_USE_IN,
+            "skims_omx": ASIM_OMX_SKIMS,
+            "skims_zarr": ZARR_SKIMS,
+        }
+        snapshot_meta = {
+            "source_role": source_role_map.get(input_name, input_name),
+            "snapshot_role": f"asim_input_{input_name}",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
+        }
     elif short_name == ZARR_SKIMS:
         family = "zarr_skims"
     if family is None:
@@ -468,6 +483,7 @@ def _activitysim_output_facet_meta(
     return {
         "facet": {
             "artifact_family": family,
+            **snapshot_meta,
             "year": year,
             "iteration": iteration,
         },
@@ -481,10 +497,23 @@ def _urbansim_output_facet_meta(
     *,
     forecast_year: int,
 ) -> Dict[str, Any]:
+    snapshot_meta: Dict[str, Any] = {}
     if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
         family = "usim_input_archive"
+        snapshot_meta = {
+            "source_role": USIM_DATASTORE_H5,
+            "snapshot_role": "usim_input_archive",
+            "snapshot_reason": "pre_merge_input",
+            "storage_event": "snapshot_move",
+        }
     elif short_name.startswith(USIM_INPUT_MERGED_PREFIX):
         family = "usim_input_merged"
+        snapshot_meta = {
+            "source_role": "usim_input_archive",
+            "snapshot_role": "usim_input_merged",
+            "snapshot_reason": "post_merge_handoff",
+            "storage_event": "merged_h5_output",
+        }
     elif short_name == USIM_FORECAST_OUTPUT:
         family = "usim_forecast_output"
     elif short_name == USIM_DATASTORE_H5:
@@ -496,6 +525,7 @@ def _urbansim_output_facet_meta(
     return {
         "facet": {
             "artifact_family": family,
+            **snapshot_meta,
             "year": forecast_year,
         },
         "facet_schema_version": "v1",
