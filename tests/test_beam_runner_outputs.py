@@ -82,7 +82,7 @@ def test_gather_outputs_includes_beam_log_out(tmp_path):
     assert record.file_path == str(beam_output_dir / "beamLog.out")
 
 
-def test_gather_outputs_includes_emissions_skims_parquet_fallback(tmp_path):
+def test_gather_outputs_includes_emissions_skims_parquet(tmp_path):
     beam_output_dir = tmp_path / "beam-output"
     _touch(beam_output_dir / "ITERS" / "it.0" / "0.skimsEmissions.parquet")
 
@@ -90,13 +90,13 @@ def test_gather_outputs_includes_emissions_skims_parquet_fallback(tmp_path):
     outputs = runner.gather_outputs(str(beam_output_dir))
     by_key = {record.short_name: record for record in outputs}
 
-    record = by_key["skims_emissions_2030_2"]
+    record = by_key["skims_emissions_parquet_2030_2"]
     assert record.file_path == str(
         beam_output_dir / "ITERS" / "it.0" / "0.skimsEmissions.parquet"
     )
 
 
-def test_gather_outputs_prefers_emissions_skims_csv_over_parquet(tmp_path):
+def test_gather_outputs_includes_both_emissions_skims_csv_and_parquet(tmp_path):
     beam_output_dir = tmp_path / "beam-output"
     csv_path = beam_output_dir / "ITERS" / "it.0" / "0.skimsEmissions.csv.gz"
     parquet_path = beam_output_dir / "ITERS" / "it.0" / "0.skimsEmissions.parquet"
@@ -107,8 +107,10 @@ def test_gather_outputs_prefers_emissions_skims_csv_over_parquet(tmp_path):
     outputs = runner.gather_outputs(str(beam_output_dir))
     by_key = {record.short_name: record for record in outputs}
 
-    record = by_key["skims_emissions_2030_2"]
-    assert record.file_path == str(csv_path)
+    csv_record = by_key["skims_emissions_2030_2"]
+    parquet_record = by_key["skims_emissions_parquet_2030_2"]
+    assert csv_record.file_path == str(csv_path)
+    assert parquet_record.file_path == str(parquet_path)
 
 
 def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
