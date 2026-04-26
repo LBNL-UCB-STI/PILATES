@@ -59,6 +59,24 @@ def _append_artifact_mapping_records(
         )
 
 
+def _find_iteration_file_with_fallbacks(
+    iteration_path: str,
+    iteration: int,
+    file_name: str,
+    extensions,
+) -> Optional[str]:
+    """
+    Find an iteration output while tolerating format migrations across BEAM builds.
+    """
+    if isinstance(extensions, str):
+        extensions = (extensions,)
+    for extension in extensions:
+        full_path = find_iteration_file(iteration_path, iteration, file_name, extension)
+        if full_path:
+            return full_path
+    return None
+
+
 def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     """
     Calculate a conservative thread count for FullSkimsCreatorApp.
@@ -319,8 +337,11 @@ class BeamRunner(GenericRunner):
             "skims_od_agg": ("skimsOD_Aggregated", ".csv.gz"),
             "skims_od_vehicle_type": ("skimsODVehicleType", ".csv.gz"),
             "skims_od_vehicle_type_agg": ("skimsODVehicleType_Aggregated", ".csv.gz"),
-            "skims_emissions": ("skimsEmissions", ".csv.gz"),
-            "skims_emissions_agg": ("skimsEmissions_Aggregated", ".csv.gz"),
+            "skims_emissions": ("skimsEmissions", (".csv.gz", ".parquet")),
+            "skims_emissions_agg": (
+                "skimsEmissions_Aggregated",
+                (".csv.gz", ".parquet"),
+            ),
             "skims_ridehail_agg": ("skimsRidehail_Aggregated", ".csv.gz"),
             "skims_parking": ("skimsParking", ".csv.gz"),
             "skims_parking_agg": ("skimsParking_Aggregated", ".csv.gz"),
@@ -371,7 +392,9 @@ class BeamRunner(GenericRunner):
                         path, it, "activitySimODSkims_current", ".zarr"
                     )
                 else:
-                    full_path = find_iteration_file(path, it, file_name, extension)
+                    full_path = _find_iteration_file_with_fallbacks(
+                        path, it, file_name, extension
+                    )
                 if full_path:
                     if it == last_iter:
                         dataset_name = f"{short_name}_{self.state.forecast_year}_{self.state.iteration}"
