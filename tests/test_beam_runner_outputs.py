@@ -70,6 +70,18 @@ def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
     assert facet.get("beam_sub_iteration") == 1
 
 
+def test_gather_outputs_includes_beam_log_out(tmp_path):
+    beam_output_dir = tmp_path / "beam-output"
+    _touch(beam_output_dir / "beamLog.out")
+
+    runner = BeamRunner("beam_runner", _StubState())
+    outputs = runner.gather_outputs(str(beam_output_dir))
+    by_key = {record.short_name: record for record in outputs}
+
+    record = by_key["beam_log_out_2030_2"]
+    assert record.file_path == str(beam_output_dir / "beamLog.out")
+
+
 def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     state = _StubState()
     runner = BeamRunner("beam_runner", state)

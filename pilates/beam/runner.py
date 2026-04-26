@@ -347,6 +347,7 @@ class BeamRunner(GenericRunner):
             "beam_persons_final": ("output_persons", ".csv.gz"),
             "beam_population_final": ("population", ".csv.gz"),
             BEAM_NETWORK_FINAL: ("network", ".csv.gz"),
+            "beam_log_out": ("beamLog", ".out"),
             "beam_output_plans_xml": ("output_plans", ".xml.gz"),
             "beam_output_experienced_plans_xml": (
                 "output_experienced_plans",
