@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import json
 import os
 import shutil
 from pathlib import Path
@@ -14,7 +13,6 @@ from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
     BeamConfigHoconError,
-    beam_config_debug_snapshot,
     beam_config_env_overrides,
     beam_primary_config_path,
     update_staged_beam_config_value,
@@ -445,20 +443,6 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)
-
-        try:
-            debug_snapshot = beam_config_debug_snapshot(
-                self.settings,
-                workspace=workspace,
-            )
-            logger.warning(
-                "[BEAM DEBUG][preprocess] staged config snapshot: %s",
-                json.dumps(debug_snapshot, sort_keys=True, default=str),
-            )
-        except Exception:
-            logger.exception(
-                "[BEAM DEBUG][preprocess] failed to capture staged config snapshot"
-            )
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store

@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 from datetime import datetime
@@ -6,7 +5,6 @@ from pathlib import Path
 
 from typing import List, Optional, Dict, Any, Mapping
 
-from pilates.beam.config_hocon import beam_config_debug_snapshot
 from pilates.config import PilatesConfig
 from pilates.beam.outputs import (
     BeamFullSkimOutputs,
@@ -500,19 +498,6 @@ class BeamRunner(GenericRunner):
             abs_beam_output,
             beam_config,
         )
-        try:
-            debug_snapshot = beam_config_debug_snapshot(
-                settings,
-                workspace=workspace,
-            )
-            logger.warning(
-                "[BEAM DEBUG][runner] staged config snapshot before launch: %s",
-                json.dumps(debug_snapshot, sort_keys=True, default=str),
-            )
-        except Exception:
-            logger.exception(
-                "[BEAM DEBUG][runner] failed to capture staged config snapshot"
-            )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
         java_opts = (
