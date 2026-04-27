@@ -158,6 +158,77 @@ def update_staged_beam_config_value(
     return True
 
 
+def beam_config_debug_snapshot(
+    settings: PilatesConfig,
+    *,
+    workspace: Any = None,
+    workspace_path: Optional[str | os.PathLike[str]] = None,
+    resolved_keys: Optional[list[str]] = None,
+) -> dict[str, Any]:
+    """
+    Return a compact debug snapshot for the staged BEAM config actually used.
+    """
+    config_path = beam_primary_config_path(
+        settings,
+        workspace=workspace,
+        workspace_path=workspace_path,
+    )
+    env_overrides = beam_config_env_overrides(
+        settings,
+        workspace=workspace,
+        workspace_path=workspace_path,
+    )
+    snapshot: dict[str, Any] = {
+        "config_path": str(config_path),
+        "config_exists": config_path.exists(),
+        "env_overrides": dict(env_overrides),
+    }
+    if not config_path.exists():
+        return snapshot
+
+    config_text = config_path.read_text(encoding="utf-8")
+    include_lines = [
+        line.strip()
+        for line in config_text.splitlines()
+        if line.strip().startswith("include ")
+    ]
+    managed_overrides = _parse_managed_overrides(config_text)
+    snapshot["include_lines"] = include_lines
+    snapshot["managed_override_keys"] = sorted(managed_overrides.keys())
+    snapshot["managed_overrides"] = {
+        key: str(value) if isinstance(value, _RawHoconValue) else value
+        for key, value in managed_overrides.items()
+    }
+
+    keys_to_resolve = resolved_keys or [
+        "beam.agentsim.agents.vehicles.vehicleTypesFilePath",
+        "beam.agentsim.agents.vehicles.vehiclesFilePath",
+        "beam.agentsim.agents.freight.vehicleTypesFilePath",
+        "beam.agentsim.agents.freight.carriersFilePath",
+        "beam.exchange.scenario.folder",
+        "beam.routing.r5.directory",
+        "beam.routing.r5.osmMapdbFile",
+        "beam.physsim.inputNetworkFilePath",
+    ]
+    resolved: dict[str, Any] = {}
+    missing_targets: dict[str, bool] = {}
+    for key in keys_to_resolve:
+        try:
+            value = resolve_beam_config_value(
+                config_path,
+                key=key,
+                env_overrides=env_overrides,
+            )
+        except BeamConfigHoconError as exc:
+            value = f"<resolution-error: {exc}>"
+        resolved[key] = value
+        if isinstance(value, str):
+            missing_targets[key] = Path(value).exists()
+    snapshot["resolved_values"] = resolved
+    snapshot["resolved_path_exists"] = missing_targets
+    return snapshot
+
+
 def _require_pyhocon():
     try:
         from pyhocon import ConfigFactory, HOCONConverter
