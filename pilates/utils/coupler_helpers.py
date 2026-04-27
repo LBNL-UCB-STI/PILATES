@@ -556,27 +556,30 @@ def archive_copy_now(
         return False
     resolved, dest, is_dir, signature = prepared
 
+    already_copied = False
     if signature is not None:
         with _archive_lock:
             if _archive_last_copied_signature.get(dest) == signature:
-                logger.debug(
-                    "[Archive] Skipping synchronous copy (already copied): %s (key=%s)",
-                    resolved,
-                    key,
-                )
-                _emit_artifact_lifecycle_event(
-                    "archive_copy_checkpoint",
-                    require_existing_summary=True,
-                    key=key,
-                    src=resolved,
-                    path=resolved,
-                    dest=dest,
-                    is_dir=is_dir,
-                    signature=signature,
-                    storage_event="local_to_scratch_copy_already_present",
-                    local_to_scratch_recovery_roots_written=0,
-                )
-                return True
+                already_copied = True
+    if already_copied:
+        logger.debug(
+            "[Archive] Skipping synchronous copy (already copied): %s (key=%s)",
+            resolved,
+            key,
+        )
+        _emit_artifact_lifecycle_event(
+            "archive_copy_checkpoint",
+            require_existing_summary=True,
+            key=key,
+            src=resolved,
+            path=resolved,
+            dest=dest,
+            is_dir=is_dir,
+            signature=signature,
+            storage_event="local_to_scratch_copy_already_present",
+            local_to_scratch_recovery_roots_written=0,
+        )
+        return True
 
     _copy_archive_payload(
         key=key,

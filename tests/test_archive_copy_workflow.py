@@ -694,6 +694,34 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, t
     assert archived.read_text() == "manifest"
 
 
+def test_archive_copy_now_emits_already_copied_checkpoint_outside_archive_lock(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "custom_mpo_model_data.h5"
+    _write_file(source, "h5")
+    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(source)) is True
+
+    events = []
+
+    def _record_checkpoint(event_type, **fields):
+        assert not ch._archive_lock.locked()
+        events.append((event_type, fields))
+
+    monkeypatch.setattr(ch, "_emit_artifact_lifecycle_event", _record_checkpoint)
+
+    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(source)) is True
+    assert events
+    event_type, fields = events[-1]
+    assert event_type == "archive_copy_checkpoint"
+    assert fields["storage_event"] == "local_to_scratch_copy_already_present"
+
+
 def test_flush_archive_queue_can_fail_on_timeout():
     ch._archive_queue = queue.Queue()
     ch._archive_queue.put(("pending",))
