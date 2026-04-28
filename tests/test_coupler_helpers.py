@@ -266,6 +266,52 @@ def test_log_output_only_logs_and_enqueues_archive_with_active_run(monkeypatch) 
     assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
 
 
+def test_log_output_only_handles_artifact_facet_event_type(monkeypatch) -> None:
+    """BEAM split-event facets use ``event_type``; lifecycle audit records do too."""
+    logged = {"called": False}
+    archived = []
+
+    monkeypatch.delenv(coupler_helpers._ARCHIVE_LOCAL_ENV, raising=False)
+    monkeypatch.setattr(coupler_helpers.cr, "current_run", lambda: object())
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_log_with_optional_h5_container",
+        lambda **_kwargs: logged.__setitem__("called", True) or NoopArtifact(),
+    )
+    monkeypatch.setattr(
+        coupler_helpers,
+        "_enqueue_archive_copy",
+        lambda key, path: archived.append((key, path)),
+    )
+
+    facet_fields = coupler_helpers._artifact_lifecycle_fields_from_meta(
+        {
+            "facet": {
+                "artifact_family": "beam_event_parquet",
+                "event_type": "actstart",
+            }
+        }
+    )
+
+    assert facet_fields["artifact_event_type"] == "actstart"
+    assert "event_type" not in facet_fields
+
+    coupler_helpers.log_output_only(
+        key="events_parquet_2019_0_type_actstart",
+        path="/tmp/1.events.actstart.parquet",
+        description="test",
+        facet={
+            "artifact_family": "beam_event_parquet",
+            "event_type": "actstart",
+        },
+    )
+
+    assert logged["called"] is True
+    assert archived == [
+        ("events_parquet_2019_0_type_actstart", "/tmp/1.events.actstart.parquet")
+    ]
+
+
 def test_log_output_only_logs_and_enqueues_archive_without_active_run(monkeypatch) -> None:
     logged = {"called": False}
     archived = []
