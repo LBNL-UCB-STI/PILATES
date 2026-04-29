@@ -162,9 +162,13 @@ def copy_vehicles_from_atlas(
         return None
 
     logger.info(
-        "Copying atlas vehicles2 file from %s to %s",
+        "Copying atlas vehicles2 file from %s to %s "
+        "(workflow_year=%s forecast_year=%s iteration=%s)",
         atlas_vehicle_file_loc,
         beam_vehicles_path,
+        getattr(state, "year", None),
+        getattr(state, "forecast_year", None),
+        getattr(state, "current_inner_iter", None),
     )
 
     df = _read_vehicle_table(atlas_vehicle_file_loc)
@@ -188,6 +192,7 @@ def validate_population_consistency(
     workspace: Any,
     settings: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    state: Any = None,
 ) -> None:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     file_format = settings.activitysim.file_format if settings.activitysim else "csv"
@@ -220,6 +225,9 @@ def validate_population_consistency(
             "BEAM staged vehicles reference households that are absent from staged "
             "households. This can cause deterministic household vehicle assignment to "
             "misbehave. "
+            f"workflow_year={getattr(state, 'year', None)} "
+            f"forecast_year={getattr(state, 'forecast_year', None)} "
+            f"iteration={getattr(state, 'current_inner_iter', None)} "
             f"missing_households={report['missing_vehicle_households']} "
             f"sample_missing_households={report['sample_missing_vehicle_households']} "
             f"households_path={households_path} vehicles_path={vehicles_path}"

@@ -353,7 +353,9 @@ def _resolve_activitysim_preprocess_runtime_inputs(
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
         resolution = None
     else:
-        step_year = getattr(state, "year", getattr(state, "forecast_year", None))
+        step_year = getattr(state, "forecast_year", None)
+        if step_year is None:
+            step_year = getattr(state, "year", None)
         resolution = build_binding_plan(
             step_name="activitysim_preprocess",
             coupler=coupler,
@@ -1086,7 +1088,14 @@ def make_activitysim_preprocess_step(
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
             input_key = USIM_POPULATION_SOURCE_H5
-            input_desc = f"UrbanSim population-source datastore for ActivitySim year {state.year}"
+            population_year = getattr(state, "forecast_year", None)
+            if population_year is None:
+                population_year = getattr(state, "year", None)
+            input_desc = (
+                "UrbanSim population-source datastore for ActivitySim "
+                f"population year {population_year} "
+                f"(workflow year {getattr(state, 'year', None)})"
+            )
             table_config = (
                 (USIM_POPULATION_HOUSEHOLDS_TABLE, "households"),
                 (USIM_POPULATION_PERSONS_TABLE, "persons"),

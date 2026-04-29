@@ -62,6 +62,18 @@ _ACTIVITYSIM_PILOT_H5_ROLE_KEYS = (
 )
 
 
+def _activitysim_population_year(state: WorkflowState) -> int:
+    population_year = getattr(state, "forecast_year", None)
+    if population_year is None:
+        population_year = getattr(state, "year", None)
+    if population_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year or WorkflowState.year must be set before "
+            "ActivitySim population input resolution."
+        )
+    return int(population_year)
+
+
 def _resolve_activitysim_postprocess_h5_role_inputs(
     *,
     settings: PilatesConfig,
@@ -112,6 +124,9 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             explicit_inputs[USIM_POPULATION_SOURCE_H5] = population_value
 
     if USIM_DATASTORE_CURRENT_H5 in role_keys:
+        # The postprocessor needs two explicit H5 roles: the forecast-year
+        # population source used to build ActivitySim inputs, and the current
+        # datastore being updated for legacy postprocess semantics.
         current_binding = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=None,
@@ -318,6 +333,7 @@ def _run_activity_demand_phase(
     settings = runtime_context.settings
     state = runtime_context.state
     workspace = runtime_context.workspace
+    population_year = _activitysim_population_year(state)
 
     formatted_print("ACTIVITY DEMAND MODEL")
     stage_runner = StageRunner(
@@ -409,7 +425,7 @@ def _run_activity_demand_phase(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=inputs.year,
+            year=population_year,
             surface=runtime_surface,
         )
 
@@ -559,7 +575,7 @@ def _run_activity_demand_phase(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=inputs.year,
+            year=population_year,
             surface=runtime_surface,
         )
         if compile_binding.missing_required:
@@ -639,7 +655,7 @@ def _run_activity_demand_phase(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                year=inputs.year,
+                year=population_year,
                 surface=runtime_surface,
             ),
             year=state.forecast_year,

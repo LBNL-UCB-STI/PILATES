@@ -687,6 +687,7 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace=workspace,
             settings=self.settings,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            state=self.state,
         )
 
     @staticmethod

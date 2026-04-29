@@ -433,6 +433,43 @@ def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths
     assert captured["usim_population_blocks_table"] == "/2025/blocks"
 
 
+def test_activitysim_preprocess_runtime_inputs_prefers_forecast_year(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    population_h5 = tmp_path / "model_data_2021.h5"
+    population_h5.write_text("population")
+    captured_years = []
+
+    def _fake_build_binding_plan(**kwargs):
+        captured_years.append(kwargs["year"])
+        return BindingPlan(
+            inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
+            source_by_key={USIM_POPULATION_SOURCE_H5: "fallback"},
+        )
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        _fake_build_binding_plan,
+    )
+    monkeypatch.setattr(
+        steps_activitysim,
+        "resolved_value_for_key",
+        lambda *, resolved, key, coupler: (resolved.inputs or {}).get(key),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_preprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2019, forecast_year=2021),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        coupler=_dummy_coupler(),
+    )
+
+    assert captured_years == [2021]
+    assert runtime_inputs["population_source_h5_path"] == str(population_h5)
+
+
 def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(
     monkeypatch,
     tmp_path,
