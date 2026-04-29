@@ -20,7 +20,7 @@ run:
   # - local_workspace_root: mutable node-local workspace during execution
   # - recovery_archive_roots: colder NFS destinations for post-run promotion
   output_directory: /global/scratch/users/${USER}/pilates-outputs
-  output_run_name: consist-sfbay-usim-base-short-ess
+  output_run_name: consist-sfbay-usim-base-short-mandate
   local_workspace_root: /local/job${SLURM_JOB_ID}/pilates-workspace
   recovery_archive_roots:
     - /clusterfs/beem-core-data-nfs/pilates-outputs
@@ -311,8 +311,8 @@ atlas:
   num_processes: 8  # suggested <9 for hima
   beamac: 0 # 0 if use pre-processed accessibility RData, otherwise inline calc
   mod: 2 # 1 (static) or 2 (dynamic)
-  scenario: ess_cons # ess_cons; zev_mandate; baseline
-  adscen: ess_cons # ess_cons; zev_mandate; baseline
+  scenario: zev_mandate # ess_cons; zev_mandate; baseline
+  adscen: zev_mandate # ess_cons; zev_mandate; baseline
   rebfactor: 1 # whether to turn on rebate incentive, 0 = NO, 1 = YES
   taxfactor: 1 # whether to turn on tax credit incentive, 0 = NO, 1 = YES
   discIncent: 0 # whether to discount incentive dollars, 0 = NO (default), 1 = YES
