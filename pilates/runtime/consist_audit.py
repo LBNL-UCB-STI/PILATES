@@ -239,7 +239,14 @@ def _lifecycle_new_state() -> Dict[str, Any]:
 
 def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
     event_type = str(event.get("event_type", ""))
-    if event_type in {"run_context", "stage_boundary", "archive_copy_checkpoint", "final_shutdown", "promotion_status"}:
+    if event_type in {
+        "run_context",
+        "stage_boundary",
+        "archive_copy_checkpoint",
+        "final_shutdown",
+        "promotion_status",
+        "beam_restart_binding",
+    }:
         return True
     key = str(event.get("key") or "")
     if key.startswith("workflow_diagnostics_"):

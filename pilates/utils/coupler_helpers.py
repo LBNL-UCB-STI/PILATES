@@ -59,6 +59,25 @@ _published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
     "published_coupler_keys",
     default=None,
 )
+_ARTIFACT_LIFECYCLE_RESERVED_FIELDS = {
+    "event_type",
+    "key",
+    "path",
+    "src",
+    "dest",
+    "year",
+    "iteration",
+    "direction",
+    "description",
+    "artifact_id",
+    "producing_run_id",
+    "recorded_at",
+    "sanitized_lifecycle_fields",
+}
+_ARTIFACT_LIFECYCLE_SANITIZED_FIELDS = {
+    field: f"artifact_{field}" for field in _ARTIFACT_LIFECYCLE_RESERVED_FIELDS
+}
+_ARTIFACT_LIFECYCLE_SANITIZED_FIELDS["event_type"] = "artifact_event_type"
 
 
 def _is_noop_artifact(candidate: Any) -> bool:
@@ -292,13 +311,20 @@ def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
 
 def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
     fields: Dict[str, Any] = {}
+    sanitized_fields: Dict[str, str] = {}
+
+    def add_field(key: str, value: Any) -> None:
+        field_key = str(key)
+        sanitized_key = _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS.get(field_key)
+        if sanitized_key is not None:
+            sanitized_fields[field_key] = sanitized_key
+            field_key = sanitized_key
+        fields[field_key] = value
+
     facet = meta.get("facet")
     if isinstance(facet, Mapping):
         for key, value in facet.items():
-            field_key = str(key)
-            if field_key == "event_type":
-                field_key = "artifact_event_type"
-            fields[field_key] = value
+            add_field(str(key), value)
     for key in (
         "facet_schema_version",
         "facet_index",
@@ -310,10 +336,14 @@ def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, A
         "h5_table_count",
     ):
         if key in meta:
-            fields[key] = meta[key]
+            add_field(key, meta[key])
     child_specs = meta.get("child_specs")
     if isinstance(child_specs, Mapping):
         fields["h5_child_count"] = len(child_specs)
+    if sanitized_fields:
+        fields["sanitized_lifecycle_fields"] = {
+            key: sanitized_fields[key] for key in sorted(sanitized_fields)
+        }
     return fields
 
 

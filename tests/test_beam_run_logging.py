@@ -103,6 +103,17 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
     ]
 
 
+def test_beam_run_snapshot_dir_uses_forecast_year(tmp_path):
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam" / "output")
+    )
+    state = SimpleNamespace(year=2019, forecast_year=2021, iteration=0)
+
+    assert steps_beam._beam_run_snapshot_dir(workspace=workspace, state=state) == (
+        tmp_path / "beam" / "output" / "inputs-year-2021-iteration-0"
+    )
+
+
 def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
     monkeypatch, tmp_path
 ):

@@ -254,6 +254,22 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         adapter = _adapter(ctx)
         if adapter is not None:
             resolved["adapter"] = adapter
+            if model.startswith("beam_"):
+                identity_inputs = resolved.get("identity_inputs")
+                if identity_inputs:
+                    filtered_identity_inputs = [
+                        item
+                        for item in identity_inputs
+                        if not (
+                            isinstance(item, tuple)
+                            and item
+                            and str(item[0]).startswith("beam_conf")
+                        )
+                    ]
+                    if filtered_identity_inputs:
+                        resolved["identity_inputs"] = filtered_identity_inputs
+                    else:
+                        resolved.pop("identity_inputs", None)
         if cache is not None:
             cache[model] = resolved
         return resolved

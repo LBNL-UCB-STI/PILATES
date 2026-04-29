@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
@@ -10,7 +11,10 @@ from pilates.runtime.context import (
     ensure_workflow_runtime_context,
 )
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.coupler_helpers import (
+    _emit_artifact_lifecycle_event,
+    artifact_to_existing_path,
+)
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.binding import (
     BindingPlan,
@@ -44,6 +48,9 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
+
+
+_FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
 
 
 @dataclass
@@ -90,6 +97,185 @@ def _full_skim_run_schedule(settings: PilatesConfig) -> str:
     if skim_cfg is None:
         return "disabled"
     return getattr(skim_cfg, "run_schedule", "standalone")
+
+
+def _stringify_mapping_values(mapping: Optional[Mapping[str, Any]]) -> Dict[str, str]:
+    return {str(key): str(value) for key, value in dict(mapping or {}).items()}
+
+
+def _mapping_from_runtime_attr(owner: Any, name: str) -> Optional[Mapping[str, Any]]:
+    value = getattr(owner, name, None)
+    if callable(value):
+        try:
+            value = value()
+        except TypeError:
+            return None
+    if isinstance(value, Mapping):
+        return value
+    return None
+
+
+def _beam_restart_identity_context(
+    *,
+    scenario: Optional[Any] = None,
+    state: Optional[Any] = None,
+) -> Dict[str, Any]:
+    """
+    Read optional original-vs-resumed cache identity diagnostics from runtime state.
+
+    Consist already exposes cache-miss and identity summaries on run metadata.
+    When a restart harness or scenario wrapper has captured those summaries,
+    include them here instead of inventing a new Consist API.
+    """
+    context: Dict[str, Any] = {}
+    for owner in (scenario, state):
+        if owner is None:
+            continue
+        for attr_name in (
+            "beam_restart_binding_context",
+            "beam_restart_identity_context",
+        ):
+            attr_context = _mapping_from_runtime_attr(owner, attr_name)
+            if attr_context:
+                context.update(attr_context)
+        for attr_name, context_key in (
+            ("cache_miss_explanation", "cache_miss_explanation"),
+            ("latest_cache_miss_explanation", "cache_miss_explanation"),
+            ("beam_cache_miss_explanation", "cache_miss_explanation"),
+            ("identity_summary", "identity_summary"),
+            ("latest_identity_summary", "identity_summary"),
+            ("beam_identity_summary", "identity_summary"),
+        ):
+            attr_context = _mapping_from_runtime_attr(owner, attr_name)
+            if attr_context and context_key not in context:
+                context[context_key] = attr_context
+    return context
+
+
+def beam_preprocess_binding_diagnostic_payload(
+    *,
+    binding: BindingPlan,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    scenario: Optional[Any] = None,
+    identity_context: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Summarize the resumed BEAM binding surface before cache hashes are trusted."""
+    beam_region_input_dir = None
+    beam_primary_config_file = None
+    try:
+        beam_region_input_dir = os.path.join(
+            workspace.get_beam_mutable_data_dir(),
+            settings.run.region,
+        )
+        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        if beam_config:
+            beam_primary_config_file = os.path.join(
+                beam_region_input_dir,
+                beam_config,
+            )
+    except Exception:
+        pass
+
+    required_local_inputs = {
+        "beam_region_input_dir": beam_region_input_dir,
+        "beam_primary_config_file": beam_primary_config_file,
+    }
+    missing_local_inputs = sorted(
+        key
+        for key, path in required_local_inputs.items()
+        if path and not os.path.exists(path)
+    )
+    missing_restart_inputs = sorted(
+        set(binding.missing_required or []) | set(missing_local_inputs)
+    )
+    resolved_identity_context = dict(
+        identity_context
+        or _beam_restart_identity_context(scenario=scenario, state=state)
+    )
+    cache_miss_explanation = resolved_identity_context.get("cache_miss_explanation")
+    identity_summary = resolved_identity_context.get("identity_summary")
+    if not isinstance(cache_miss_explanation, Mapping):
+        cache_miss_explanation = None
+    if not isinstance(identity_summary, Mapping):
+        identity_summary = None
+    drift_components: Dict[str, Any] = {}
+    if cache_miss_explanation:
+        for key in (
+            "mismatched_components",
+            "config_keys_changed",
+            "adapter_identity_changed",
+            "identity_inputs_changed",
+            "input_keys_changed",
+            "missing_input_keys",
+        ):
+            value = cache_miss_explanation.get(key)
+            if value:
+                drift_components[key] = value
+    if missing_restart_inputs:
+        drift_classification = "missing_restart_inputs"
+    elif drift_components:
+        drift_classification = "content_or_config_drift"
+    elif cache_miss_explanation:
+        drift_classification = "cache_miss_without_binding_gap"
+    else:
+        drift_classification = "binding_surface_complete"
+    return {
+        "key": "beam_restart_binding",
+        "artifact_family": "beam_restart_diagnostic",
+        "diagnostic": "beam_restart_binding",
+        "restart_run": bool(getattr(state, "is_restart_run", False)),
+        "workflow_year": getattr(state, "year", getattr(state, "current_year", None)),
+        "forecast_year": getattr(state, "forecast_year", None),
+        "iteration": getattr(
+            state,
+            "iteration",
+            getattr(state, "current_inner_iter", None),
+        ),
+        "input_keys": sorted(binding.input_keys or []),
+        "optional_input_keys": sorted(binding.optional_input_keys or []),
+        "bound_input_keys": sorted((binding.inputs or {}).keys()),
+        "missing_required": sorted(binding.missing_required or []),
+        "missing_restart_inputs": missing_restart_inputs,
+        "source_by_key": dict(sorted((binding.source_by_key or {}).items())),
+        "coupler_key_by_key": dict(sorted((binding.coupler_key_by_key or {}).items())),
+        "required_local_inputs": _stringify_mapping_values(required_local_inputs),
+        "missing_local_inputs": missing_local_inputs,
+        "identity_summary": dict(identity_summary or {}),
+        "cache_miss_explanation": dict(cache_miss_explanation or {}),
+        "cache_miss_reason": (
+            cache_miss_explanation.get("reason") if cache_miss_explanation else None
+        ),
+        "identity_drift_components": drift_components,
+        "drift_classification": drift_classification,
+    }
+
+
+def _emit_beam_preprocess_binding_diagnostic(
+    *,
+    binding: BindingPlan,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    scenario: Optional[Any] = None,
+) -> None:
+    if not bool(getattr(state, "is_restart_run", False)):
+        return
+    payload = beam_preprocess_binding_diagnostic_payload(
+        binding=binding,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        scenario=scenario,
+    )
+    logger.info(
+        "[BEAM][restart] preprocess binding diagnostic: classification=%s missing_restart_inputs=%s bound_input_keys=%s",
+        payload["drift_classification"],
+        payload["missing_restart_inputs"],
+        payload["bound_input_keys"],
+    )
+    _emit_artifact_lifecycle_event("beam_restart_binding", **payload)
 
 
 def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
@@ -283,6 +469,20 @@ def _make_beam_stage_runner(
     )
 
 
+def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
+    """Inject a controlled restart-canary failure after BEAM run completion."""
+    if os.environ.get(_FAIL_AFTER_BEAM_RUN_ENV) != "1":
+        return
+
+    message = (
+        "Injected failure after completed beam_run for restart canary "
+        f"({_FAIL_AFTER_BEAM_RUN_ENV}=1, year={year}, iteration={iteration}). "
+        "Unset the environment variable before restarting from run_state.yaml."
+    )
+    logger.error(message)
+    raise RuntimeError(message)
+
+
 def _run_beam_preprocess_step(
     *,
     stage_runner: StageRunner,
@@ -370,6 +570,7 @@ def _run_beam_steps(
     upstream_run = outputs_holder.beam_run
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
+    _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
         upstream_keys=[
             short_name for short_name, _, _ in upstream_run._iter_record_items()
@@ -542,6 +743,13 @@ def _run_traffic_assignment_phase(
         activity_demand_outputs=inputs.activity_demand_outputs,
         previous_beam_outputs=previous_beam_outputs,
         surface=surface,
+    )
+    _emit_beam_preprocess_binding_diagnostic(
+        binding=beam_preprocess_binding,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        scenario=scenario,
     )
     beam_preprocess_inputs = dict(beam_preprocess_binding.inputs or {})
     beam_run_input_keys = _derive_beam_run_input_keys(

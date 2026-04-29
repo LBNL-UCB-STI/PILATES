@@ -759,12 +759,19 @@ def _recover_activitysim_postprocess_outputs(
     else:
         return None
 
+    archived_input_year = getattr(state, "forecast_year", None)
+    if archived_input_year is None:
+        archived_input_year = getattr(state, "year", None)
     inputs_dir = Path(
         _existing_local_path(
-            asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}",
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}",
             workspace,
         )
-        or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
+        or (
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}"
+        )
     )
     if inputs_dir.exists():
         archived_inputs = {

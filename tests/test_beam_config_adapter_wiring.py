@@ -232,6 +232,42 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
     assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 
 
+def test_beam_run_metadata_filters_adapter_covered_identity_inputs(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    workspace, settings = _setup_config(tmp_path)
+    state = _make_state()
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [
+                ("beam_conf/main.conf", Path("/tmp/main.conf")),
+                ("beam_conf_dir", Path("/tmp/beam")),
+                ("external_marker", Path("/tmp/external")),
+            ],
+        },
+    )
+
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+    )
+
+    assert meta.adapter(ctx) is not None
+    assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
+
+
 @pytest.mark.parametrize(
     "factory,expected_inputs,expected_outputs,expected_cache_hydration",
     [
@@ -319,7 +355,7 @@ def test_beam_run_metadata_adapter_is_none_when_primary_config_missing(
 def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from pilates.utils import consist_runtime as cr
-    import pilates.workflows.steps.beam as steps_module
+    from pilates.generic.model_factory import ModelFactory
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
@@ -331,7 +367,7 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
     monkeypatch.setattr(cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path))
     monkeypatch.setattr(cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path))
     monkeypatch.setattr(
-        steps_module.ModelFactory,
+        ModelFactory,
         "get_preprocessor",
         lambda self, *args, **kwargs: preprocessor,
     )
@@ -405,10 +441,10 @@ def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):
     for path in (plans, households, persons):
         path.write_text("x")
 
-    import pilates.workflows.steps.beam as steps_module
+    from pilates.generic.model_factory import ModelFactory
 
     monkeypatch.setattr(
-        steps_module.ModelFactory,
+        ModelFactory,
         "get_preprocessor",
         lambda self, *args, **kwargs: CapturingPreprocessor(),
     )

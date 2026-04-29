@@ -194,9 +194,12 @@ def _beam_run_snapshot_dir(
     workspace: Workspace,
     state: WorkflowState,
 ) -> Path:
+    snapshot_year = getattr(state, "forecast_year", None)
+    if snapshot_year is None:
+        snapshot_year = getattr(state, "year", None)
     return (
         Path(workspace.get_beam_output_dir())
-        / f"inputs-year-{state.year}-iteration-{state.iteration}"
+        / f"inputs-year-{snapshot_year}-iteration-{state.iteration}"
     )
 
 
@@ -534,6 +537,9 @@ def _archive_beam_run_inputs(
 ) -> None:
     snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_year = getattr(state, "forecast_year", None)
+    if snapshot_year is None:
+        snapshot_year = getattr(state, "year", None)
 
     config_reference_snapshot = _archive_beam_config_references(
         settings=settings,
@@ -550,7 +556,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
@@ -579,7 +585,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=archive_key,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
