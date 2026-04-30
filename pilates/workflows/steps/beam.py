@@ -841,10 +841,12 @@ def _recover_beam_preprocess_outputs(
     prepared_inputs: Dict[str, Path] = {}
     if step_inputs:
         allowed_keys = {
+            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
             LINKSTATS_WARMSTART,
+            "vehicles_beam_in",
         }
         for key, value in step_inputs.items():
             if key not in allowed_keys:

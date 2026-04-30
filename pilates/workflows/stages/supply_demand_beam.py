@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
@@ -10,12 +12,17 @@ from pilates.runtime.context import (
     WorkflowRuntimeContext,
     ensure_workflow_runtime_context,
 )
+from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
     artifact_to_existing_path,
+    set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
+from pilates.beam.outputs import BeamRunOutputs
+from pilates.workflows.tracker_outputs import load_tracker_run_outputs
 from pilates.workflows.binding import (
     BindingPlan,
     beam_preprocess_binding_plan,
@@ -33,10 +40,12 @@ from pilates.workflows.steps import (
     make_beam_run_step,
 )
 from pilates.workflows.artifact_keys import (
+    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
+    ATLAS_VEHICLES2_OUTPUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -51,6 +60,10 @@ if TYPE_CHECKING:
 
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
+_BEAM_VEHICLES_IN = "vehicles_beam_in"
+_STEP_RUN_ID_TARGET_RE = re.compile(
+    r"__step_func__y(?P<year>\d+)__i(?P<iteration>-?\d+)__phase_(?P<phase>[A-Za-z0-9_]+?)(?:_[0-9a-f]{6,})?$"
+)
 
 
 @dataclass
@@ -278,6 +291,36 @@ def _emit_beam_preprocess_binding_diagnostic(
     _emit_artifact_lifecycle_event("beam_restart_binding", **payload)
 
 
+def _raise_if_restart_beam_config_missing(
+    *,
+    binding: BindingPlan,
+    state: WorkflowState,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> None:
+    if not bool(getattr(state, "is_restart_run", False)):
+        return
+
+    try:
+        from pilates.beam.config_hocon import beam_primary_config_path
+
+        expected_path = Path(beam_primary_config_path(settings, workspace=workspace))
+        expected = str(expected_path)
+    except Exception:
+        expected_path = None
+        expected = "<unresolved>"
+    if expected_path is not None and expected_path.exists():
+        return
+
+    config_value = (binding.inputs or {}).get(BEAM_CONFIG_FILE)
+    config_hint = f" Resolved binding value: {config_value}." if config_value else ""
+    raise RuntimeError(
+        "BEAM restart cannot continue because beam_config_file is missing. "
+        f"Expected primary config at {expected}. This must be restored or "
+        f"bootstrapped before BEAM can run.{config_hint}"
+    )
+
+
 def _should_run_full_skim(settings: PilatesConfig, iteration: int) -> bool:
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
@@ -378,6 +421,488 @@ def _collect_previous_beam_outputs(
     return promoted_outputs or None
 
 
+def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
+    run_info_path = getattr(state, "run_info_path", None)
+    if not run_info_path:
+        return None
+    try:
+        return Path(run_info_path).expanduser().resolve().parent
+    except Exception:
+        return None
+
+
+def _current_run_prefix(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Optional[str]:
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is not None:
+        return archive_run_dir.name
+    full_path = getattr(workspace, "full_path", None)
+    if not full_path:
+        return None
+    return Path(full_path).name
+
+
+def _run_id_matches_current_archive(
+    run: Any,
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> bool:
+    prefix = _current_run_prefix(state=state, workspace=workspace)
+    if not prefix:
+        return True
+    run_id = str(getattr(run, "id", "") or "")
+    if run_id == prefix or run_id.startswith(f"{prefix}__"):
+        return True
+    run_name = str(getattr(run, "name", "") or "")
+    return run_name == prefix or run_name.startswith(f"{prefix}__")
+
+
+def _candidate_direct_attr(run: Any, name: str) -> Any:
+    if isinstance(run, Mapping) and name in run:
+        return run.get(name)
+    return getattr(run, name, None)
+
+
+def _nested_mapping_values(run: Any) -> Iterable[Mapping[str, Any]]:
+    for container_name in (
+        "meta",
+        "metadata",
+        "facet",
+        "facets",
+        "step_facet",
+        "run_facet",
+    ):
+        value = _candidate_direct_attr(run, container_name)
+        if isinstance(value, Mapping):
+            yield value
+
+
+def _candidate_attr(run: Any, *names: str) -> Any:
+    for name in names:
+        value = _candidate_direct_attr(run, name)
+        if value not in (None, ""):
+            return value
+    for values in _nested_mapping_values(run):
+        for name in names:
+            value = values.get(name)
+            if value not in (None, ""):
+                return value
+    return None
+
+
+def _run_id_proven_target_value(run: Any, key: str) -> Any:
+    run_id = str(_candidate_direct_attr(run, "id") or "")
+    if not run_id:
+        return None
+    match = _STEP_RUN_ID_TARGET_RE.search(run_id)
+    if match is None:
+        return None
+    if key in {"year", "iteration", "phase"}:
+        return match.group(key)
+    return None
+
+
+def _candidate_value_matches(actual: Any, expected: Any) -> bool:
+    if expected in (None, ""):
+        return True
+    if actual in (None, ""):
+        return False
+    try:
+        return int(actual) == int(expected)
+    except (TypeError, ValueError):
+        return str(actual).strip().lower() == str(expected).strip().lower()
+
+
+def _run_matches_completed_beam_target(run: Any, target: Mapping[str, Any]) -> bool:
+    aliases = {
+        "model": ("model", "model_name"),
+        "stage": ("stage", "stage_name"),
+        "phase": ("phase",),
+        "status": ("status",),
+        "year": ("year",),
+        "iteration": ("iteration",),
+        "cache_epoch": ("cache_epoch",),
+    }
+    for key, names in aliases.items():
+        actual = _candidate_attr(run, *names)
+        if actual in (None, ""):
+            actual = _run_id_proven_target_value(run, key)
+        if not _candidate_value_matches(actual, target.get(key)):
+            return False
+    return True
+
+
+def _run_timestamp_value(run: Any) -> Optional[str]:
+    for name in (
+        "completed_at",
+        "ended_at",
+        "end_time",
+        "updated_at",
+        "created_at",
+        "started_at",
+        "start_time",
+        "recorded_at",
+    ):
+        value = _candidate_attr(run, name)
+        if value not in (None, ""):
+            return str(value)
+    return None
+
+
+def _select_completed_beam_candidate(
+    candidates: Iterable[Any],
+    *,
+    target: Mapping[str, Any],
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Optional[Any]:
+    valid = [
+        run
+        for run in candidates
+        if _run_id_matches_current_archive(run, state=state, workspace=workspace)
+        and _run_matches_completed_beam_target(run, target)
+    ]
+    if not valid:
+        return None
+    timestamped = [
+        (timestamp, index, run)
+        for index, run in enumerate(valid)
+        if (timestamp := _run_timestamp_value(run)) is not None
+    ]
+    if timestamped:
+        timestamped.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return timestamped[0][2]
+    return valid[0]
+
+
+def _find_completed_beam_run_for_restart(
+    *,
+    tracker: Any,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    year: int,
+    iteration: int,
+) -> Optional[Any]:
+    target: Dict[str, Any] = {
+        "model": "beam_run",
+        "stage": "beam",
+        "phase": "run",
+        "status": "completed",
+        "year": year,
+        "iteration": iteration,
+        "cache_epoch": resolve_cache_epoch(settings),
+    }
+
+    find_runs = getattr(tracker, "find_runs", None)
+    if callable(find_runs):
+        try:
+            candidates = list(find_runs(limit=100, **target) or [])
+            selection_target = target
+        except TypeError:
+            legacy_target = dict(target)
+            legacy_target.pop("cache_epoch", None)
+            candidates = list(find_runs(limit=100, **legacy_target) or [])
+            selection_target = legacy_target
+        selected = _select_completed_beam_candidate(
+            candidates,
+            target=selection_target,
+            state=state,
+            workspace=workspace,
+        )
+        if selected is not None:
+            return selected
+        if candidates:
+            logger.info(
+                "[BEAM][restart] ignored %d completed beam_run candidate(s) outside current run scope or target attrs prefix=%s",
+                len(candidates),
+                _current_run_prefix(state=state, workspace=workspace),
+            )
+        return None
+
+    find_latest_run = getattr(tracker, "find_latest_run", None)
+    if not callable(find_latest_run):
+        return None
+    try:
+        run = find_latest_run(**target)
+        selection_target = target
+    except TypeError:
+        legacy_target = dict(target)
+        legacy_target.pop("cache_epoch", None)
+        try:
+            run = find_latest_run(**legacy_target)
+            selection_target = legacy_target
+        except Exception:
+            return None
+    except Exception:
+        return None
+    return _select_completed_beam_candidate(
+        [run] if run is not None else [],
+        target=selection_target,
+        state=state,
+        workspace=workspace,
+    )
+
+
+def _output_path_from_hydration_item(item: Any) -> Optional[Path]:
+    path = getattr(item, "path", None)
+    if path is not None and bool(getattr(item, "resolvable", True)):
+        return Path(path)
+    artifact = getattr(item, "artifact", None)
+    as_path = getattr(artifact, "as_path", None)
+    if callable(as_path):
+        try:
+            resolved = as_path()
+        except Exception:
+            resolved = None
+        if resolved is not None:
+            return Path(resolved)
+    return None
+
+
+def _hydrate_completed_beam_run_outputs(
+    *,
+    tracker: Any,
+    run_id: str,
+    workspace: Workspace,
+    state: WorkflowState,
+    year: int,
+    iteration: int,
+) -> Optional[BeamRunOutputs]:
+    tracker_outputs = load_tracker_run_outputs(
+        run_id,
+        tracker=tracker,
+        logger=logger,
+        log_context="completed BEAM run restart recovery",
+    )
+    keys = list(tracker_outputs.keys())
+    if not keys:
+        logger.info(
+            "[BEAM][restart] completed beam_run run_id=%s has no linked outputs to hydrate",
+            run_id,
+        )
+        return None
+
+    critical_keys = _build_beam_postprocess_input_keys(
+        upstream_keys=keys,
+        year=year,
+        iteration=iteration,
+        include_zarr_skims=False,
+    )
+    if not critical_keys:
+        logger.info(
+            "[BEAM][restart] completed beam_run run_id=%s has no postprocess-critical outputs to hydrate",
+            run_id,
+        )
+        return None
+    publication_keys = [
+        key
+        for key in (LINKSTATS, BEAM_PLANS_OUT)
+        if key in tracker_outputs
+    ]
+    required_keys = list(dict.fromkeys([*critical_keys, *publication_keys]))
+
+    target_root = os.path.realpath(str(workspace.full_path))
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    source_root = os.path.realpath(str(archive_run_dir)) if archive_run_dir else None
+    raw_outputs: Dict[str, Path] = {}
+    hydration_complete: Optional[bool] = None
+    hydration_summary: Optional[str] = None
+
+    hydrate_run_outputs = getattr(tracker, "hydrate_run_outputs", None)
+    if callable(hydrate_run_outputs):
+        try:
+            hydrated = hydrate_run_outputs(
+                run_id=run_id,
+                target_root=target_root,
+                source_root=source_root,
+                preserve_existing=True,
+                keys=keys,
+            )
+        except Exception:
+            logger.debug(
+                "[BEAM][restart] hydrate_run_outputs failed for run_id=%s",
+                run_id,
+                exc_info=True,
+            )
+            hydrated = None
+        if hydrated is not None:
+            hydration_complete = bool(getattr(hydrated, "complete", True))
+            hydration_summary = str(getattr(hydrated, "summary", ""))
+            for key, item in hydrated.items():
+                path = _output_path_from_hydration_item(item)
+                if path is not None and path.exists():
+                    raw_outputs[str(key)] = path
+
+    if not raw_outputs:
+        materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
+        if callable(materialize_run_outputs):
+            try:
+                materialize_run_outputs(
+                    run_id=run_id,
+                    target_root=target_root,
+                    source_root=source_root,
+                    preserve_existing=True,
+                    keys=keys,
+                )
+            except Exception:
+                logger.debug(
+                    "[BEAM][restart] materialize_run_outputs failed for run_id=%s",
+                    run_id,
+                    exc_info=True,
+                )
+        for key, value in tracker_outputs.items():
+            path = artifact_to_existing_path(
+                value,
+                workspace=workspace,
+                materialize_from_archive=True,
+            )
+            if path is not None:
+                raw_outputs[str(key)] = Path(path)
+
+    if not raw_outputs:
+        logger.info(
+            "[BEAM][restart] completed beam_run run_id=%s could not hydrate usable output paths",
+            run_id,
+        )
+        return None
+
+    missing_required = [key for key in required_keys if key not in raw_outputs]
+    if missing_required:
+        logger.warning(
+            "[BEAM][restart] completed beam_run run_id=%s hydration missing required keys=%s summary=%s; will not skip BEAM",
+            run_id,
+            missing_required,
+            hydration_summary,
+        )
+        return None
+    if hydration_complete is False:
+        logger.warning(
+            "[BEAM][restart] completed beam_run run_id=%s hydration was partial but all postprocess-critical keys resolved summary=%s",
+            run_id,
+            hydration_summary,
+        )
+
+    return BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()),
+        raw_outputs=raw_outputs,
+    )
+
+
+def _publish_recovered_beam_run_outputs(
+    *,
+    outputs: BeamRunOutputs,
+    coupler: CouplerProtocol,
+) -> None:
+    for key, path, _description in outputs._iter_record_items():
+        set_coupler_from_artifact(coupler, key, None, fallback=str(path))
+        if key == LINKSTATS:
+            set_coupler_from_artifact(
+                coupler,
+                LINKSTATS_WARMSTART,
+                None,
+                fallback=str(path),
+            )
+
+
+def _restored_beam_parent_years(
+    *,
+    state: WorkflowState,
+    run_year: int,
+) -> list[int]:
+    years: list[int] = []
+    for value in (run_year, getattr(state, "forecast_year", None)):
+        try:
+            year = int(value)
+        except (TypeError, ValueError):
+            continue
+        if year not in years:
+            years.append(year)
+    return years
+
+
+def _try_restore_completed_beam_run_for_restart(
+    *,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+) -> Optional[BeamRunOutputs]:
+    if not bool(getattr(state, "is_restart_run", False)):
+        return None
+    if outputs_holder.beam_run is not None:
+        return outputs_holder.beam_run
+
+    tracker = cr.current_tracker()
+    if tracker is None:
+        return None
+    run = _find_completed_beam_run_for_restart(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+        iteration=iteration,
+    )
+    if run is None:
+        return None
+
+    run_id = str(getattr(run, "id", "") or "")
+    if not run_id:
+        return None
+    outputs = _hydrate_completed_beam_run_outputs(
+        tracker=tracker,
+        run_id=run_id,
+        workspace=workspace,
+        state=state,
+        year=year,
+        iteration=iteration,
+    )
+    if outputs is None:
+        return None
+
+    outputs_holder.beam_run = outputs
+    _publish_recovered_beam_run_outputs(outputs=outputs, coupler=coupler)
+    remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
+    if callable(remember_restored_run_id):
+        for parent_year in _restored_beam_parent_years(state=state, run_year=year):
+            remember_restored_run_id(
+                model_name="beam_run",
+                year=parent_year,
+                iteration=iteration,
+                run_id=run_id,
+            )
+    restored_keys = sorted(outputs.raw_outputs.keys())
+    logger.info(
+        "[BEAM][restart] restored completed beam_run from Consist run_id=%s hydrated_keys=%s",
+        run_id,
+        restored_keys,
+    )
+    _emit_artifact_lifecycle_event(
+        "beam_restart_binding",
+        key="beam_restart_binding",
+        artifact_family="beam_restart_diagnostic",
+        diagnostic="beam_restart_binding",
+        restart_run=True,
+        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
+        forecast_year=getattr(state, "forecast_year", None),
+        iteration=iteration,
+        recovery_mode="consist_completed_run_hydration",
+        recovered_run_id=run_id,
+        hydrated_output_keys=restored_keys,
+        drift_classification="completed_beam_run_recovered",
+    )
+    return outputs
+
+
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
@@ -392,6 +917,7 @@ def _derive_beam_run_input_keys(
     """
     _ = activity_demand_outputs
     run_input_keys = [
+        BEAM_CONFIG_FILE,
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
@@ -436,10 +962,13 @@ def _finalize_beam_run_input_keys(
         preprocess_outputs.prepared_inputs if preprocess_outputs is not None else {}
     )
     has_warmstart = LINKSTATS_WARMSTART in prepared_inputs
+    has_vehicles = _BEAM_VEHICLES_IN in prepared_inputs
     if has_warmstart and LINKSTATS_WARMSTART not in finalized_keys:
         finalized_keys.append(LINKSTATS_WARMSTART)
     if not has_warmstart and LINKSTATS_WARMSTART in finalized_keys:
         finalized_keys = [key for key in finalized_keys if key != LINKSTATS_WARMSTART]
+    if has_vehicles and _BEAM_VEHICLES_IN not in finalized_keys:
+        finalized_keys.append(_BEAM_VEHICLES_IN)
     return finalized_keys
 
 
@@ -534,43 +1063,85 @@ def _run_beam_steps(
         runtime_kwargs_extra=runtime_kwargs_extra,
         context=context,
     )
-    _run_beam_preprocess_step(
-        stage_runner=stage_runner,
+    recovered_run = _try_restore_completed_beam_run_for_restart(
+        scenario=scenario,
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
         coupler=coupler,
         outputs_holder=outputs_holder,
         year=year,
-        beam_preprocess_binding=beam_preprocess_binding,
+        iteration=iteration,
     )
-    beam_run_input_keys = _finalize_beam_run_input_keys(
-        beam_run_input_keys=beam_run_input_keys,
-        outputs_holder=outputs_holder,
-    )
-
-    stage_runner.run_step(
-        step=StepRef(
-            name="beam_run",
-            step_func=make_beam_run_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            binding=build_key_only_binding_plan(
-                step_name="beam_run",
-                input_keys=beam_run_input_keys,
-                optional_input_keys=[LINKSTATS_WARMSTART],
-                coupler=coupler,
-                settings=context.settings,
-                state=context.state,
-                workspace=context.workspace,
-                year=year,
-            ),
-            year=year,
+    if recovered_run is None:
+        _raise_if_restart_beam_config_missing(
+            binding=beam_preprocess_binding,
+            state=context.state,
+            settings=context.settings,
+            workspace=context.workspace,
         )
-    )
+        _run_beam_preprocess_step(
+            stage_runner=stage_runner,
+            coupler=coupler,
+            outputs_holder=outputs_holder,
+            year=year,
+            beam_preprocess_binding=beam_preprocess_binding,
+        )
+        config_value = (beam_preprocess_binding.inputs or {}).get(BEAM_CONFIG_FILE)
+        if config_value is not None:
+            set_coupler_from_artifact(
+                coupler,
+                BEAM_CONFIG_FILE,
+                None,
+                fallback=str(config_value),
+            )
+        vehicles_value = (beam_preprocess_binding.inputs or {}).get(
+            ATLAS_VEHICLES2_OUTPUT
+        )
+        if vehicles_value is not None:
+            set_coupler_from_artifact(
+                coupler,
+                _BEAM_VEHICLES_IN,
+                None,
+                fallback=str(vehicles_value),
+            )
+            set_coupler_from_artifact(
+                coupler,
+                ATLAS_VEHICLES2_OUTPUT,
+                None,
+                fallback=str(vehicles_value),
+            )
+        beam_run_input_keys = _finalize_beam_run_input_keys(
+            beam_run_input_keys=beam_run_input_keys,
+            outputs_holder=outputs_holder,
+        )
+
+        stage_runner.run_step(
+            step=StepRef(
+                name="beam_run",
+                step_func=make_beam_run_step(
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                ),
+                binding=build_key_only_binding_plan(
+                    step_name="beam_run",
+                    input_keys=beam_run_input_keys,
+                    optional_input_keys=[LINKSTATS_WARMSTART, _BEAM_VEHICLES_IN],
+                    coupler=coupler,
+                    settings=context.settings,
+                    state=context.state,
+                    workspace=context.workspace,
+                    year=year,
+                ),
+                year=year,
+            )
+        )
 
     upstream_run = outputs_holder.beam_run
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
-    _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
+    if recovered_run is None:
+        _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
         upstream_keys=[
             short_name for short_name, _, _ in upstream_run._iter_record_items()
@@ -764,6 +1335,12 @@ def _run_traffic_assignment_phase(
     }
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
+        _raise_if_restart_beam_config_missing(
+            binding=beam_preprocess_binding,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+        )
         standalone_runner = _make_beam_stage_runner(
             scenario=scenario,
             coupler=coupler,

@@ -858,6 +858,34 @@ def _beam_preprocess_atlas_inputs(
     return None
 
 
+def _beam_preprocess_config_input(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    try:
+        from pilates.beam.config_hocon import beam_primary_config_path
+
+        local_path = beam_primary_config_path(settings, workspace=workspace)
+    except Exception:
+        return None
+
+    archive_path = _archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=local_path,
+    )
+    selected = _first_existing_path(local_path, archive_path)
+    if selected is None:
+        return None
+    return {BEAM_CONFIG_FILE: str(selected)}
+
+
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
@@ -865,6 +893,7 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "beam_preprocess_exchange_inputs": _beam_preprocess_exchange_inputs,
     "beam_preprocess_warmstart_inputs": _beam_preprocess_warmstart_inputs,
     "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
+    "beam_preprocess_config_input": _beam_preprocess_config_input,
 }
 
 
@@ -973,6 +1002,8 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=BEAM_CONFIG_FILE,
                 required=True,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_config_input",
             ),
         ),
     }
