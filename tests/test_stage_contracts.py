@@ -2197,6 +2197,123 @@ def test_completed_beam_run_hydration_requires_linked_publication_keys(
     assert recovered is None
 
 
+def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
+    stage_env,
+    monkeypatch,
+    tmp_path,
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    events = tmp_path / "0.events.parquet"
+    linkstats = tmp_path / "0.linkstats.csv.gz"
+    for path in (events, linkstats):
+        _write_file(path)
+    missing_skims = tmp_path / "missing.skims.zarr"
+    run_id = (
+        f"{Path(workspace.full_path).name}"
+        f"__step_func__y{state.forecast_year}__i0__phase_run_x"
+    )
+    outputs = {
+        f"events_parquet_{state.forecast_year}_0": str(events),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(missing_skims),
+        LINKSTATS: str(linkstats),
+    }
+
+    class _Hydrated(dict):
+        @property
+        def complete(self):
+            return False
+
+        @property
+        def summary(self):
+            return "materialized_fs=2 missing_source=1"
+
+    class _Tracker:
+        def find_runs(self, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id=run_id,
+                    model_name="beam_run",
+                    stage="beam",
+                    phase="run",
+                    status="completed",
+                    year=state.forecast_year,
+                    iteration=0,
+                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
+                )
+            ]
+
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **_kwargs):
+            return _Hydrated(
+                {
+                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
+                        path=events,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
+                        path=missing_skims,
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                    LINKSTATS: SimpleNamespace(
+                        path=linkstats,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                }
+            )
+
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())
+
+    activity_outputs = {
+        "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
+        "households_asim_out": str(tmp_path / "households.parquet"),
+        "persons_asim_out": str(tmp_path / "persons.parquet"),
+    }
+    for path in activity_outputs.values():
+        _write_file(Path(path))
+
+    with pytest.raises(RuntimeError, match="could not hydrate the required outputs"):
+        _run_traffic_assignment_phase(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            inputs=TrafficAssignmentPhaseInputs(
+                year=state.forecast_year,
+                iteration=0,
+                activity_demand_outputs=activity_outputs,
+                previous_beam_outputs=None,
+            ),
+            outputs_holder=StepOutputsHolder(),
+        )
+
+    assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
+    assert not [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
+
+
 def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     stage_env,
     monkeypatch,

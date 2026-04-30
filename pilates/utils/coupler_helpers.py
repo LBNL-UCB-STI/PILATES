@@ -37,6 +37,7 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "beam_region_input_dir",
     "zarr_skims",
     "zarr_skims_*",
+    "raw_od_skims_zarr_*",
     "asim_input_skims_zarr_archived",
     ASIM_SHARROW_CACHE_DIR,
     "activitysim_bootstrap_data_root",

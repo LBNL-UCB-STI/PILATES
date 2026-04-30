@@ -524,6 +524,45 @@ def test_archive_copy_allows_zarr_directories(monkeypatch, tmp_path):
     assert archived.read_text() == "zarr"
 
 
+def test_archive_copy_allows_beam_raw_od_zarr_directories(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    directory = (
+        local_root
+        / "beam"
+        / "beam_output"
+        / "sfbay"
+        / "year-2017-iteration-0"
+        / "ITERS"
+        / "it.1"
+        / "1.activitySimODSkims_current.zarr"
+    )
+    _write_file(directory / "0" / "values", "zarr")
+
+    ch._enqueue_archive_copy("raw_od_skims_zarr_2019_0", str(directory))
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    archived = (
+        archive_root
+        / "beam"
+        / "beam_output"
+        / "sfbay"
+        / "year-2017-iteration-0"
+        / "ITERS"
+        / "it.1"
+        / "1.activitySimODSkims_current.zarr"
+        / "0"
+        / "values"
+    )
+    assert archived.exists()
+    assert archived.read_text() == "zarr"
+
+
 def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tmp_path):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"

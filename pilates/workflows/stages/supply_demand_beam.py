@@ -738,6 +738,17 @@ def _hydrate_completed_beam_run_outputs(
                 if path is not None and path.exists():
                     raw_outputs[str(key)] = path
 
+    for key, value in tracker_outputs.items():
+        if str(key) in raw_outputs:
+            continue
+        path = artifact_to_existing_path(
+            value,
+            workspace=workspace,
+            materialize_from_archive=True,
+        )
+        if path is not None:
+            raw_outputs[str(key)] = Path(path)
+
     if not raw_outputs:
         materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
         if callable(materialize_run_outputs):
@@ -756,6 +767,8 @@ def _hydrate_completed_beam_run_outputs(
                     exc_info=True,
                 )
         for key, value in tracker_outputs.items():
+            if str(key) in raw_outputs:
+                continue
             path = artifact_to_existing_path(
                 value,
                 workspace=workspace,
@@ -774,7 +787,7 @@ def _hydrate_completed_beam_run_outputs(
     missing_required = [key for key in required_keys if key not in raw_outputs]
     if missing_required:
         logger.warning(
-            "[BEAM][restart] completed beam_run run_id=%s hydration missing required keys=%s summary=%s; will not skip BEAM",
+            "[BEAM][restart] completed beam_run run_id=%s hydration missing required keys=%s summary=%s",
             run_id,
             missing_required,
             hydration_summary,
@@ -867,7 +880,12 @@ def _try_restore_completed_beam_run_for_restart(
         iteration=iteration,
     )
     if outputs is None:
-        return None
+        raise RuntimeError(
+            "BEAM restart found a completed same-run beam_run but could not "
+            "hydrate the required outputs for postprocess. Refusing to rerun "
+            f"BEAM from restart because the completed run is authoritative. "
+            f"run_id={run_id}"
+        )
 
     outputs_holder.beam_run = outputs
     _publish_recovered_beam_run_outputs(outputs=outputs, coupler=coupler)
