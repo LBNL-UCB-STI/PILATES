@@ -19,6 +19,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
@@ -30,6 +31,12 @@ from pilates.workflows.steps.beam import (
     make_beam_run_step,
 )
 from pilates.workflows.steps.shared import StepOutputsHolder
+
+
+def _policy_value(policy, key):
+    if isinstance(policy, dict):
+        return policy[key]
+    return getattr(policy, key)
 
 
 class DummyCoupler:
@@ -228,6 +235,40 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
         settings,
         workspace=workspace,
     )
+    assert adapter.path_aliases == {
+        "workspace": Path(workspace.full_path),
+        "beam_input": Path(workspace.get_beam_mutable_data_dir()),
+        "beam_output": Path(workspace.get_beam_output_dir()),
+        "activitysim_output": Path(workspace.get_asim_output_dir()),
+        "beam_region_input": Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region,
+    }
+    scenario_policy = adapter.reference_policies["beam.exchange.scenario.folder"]
+    assert _policy_value(scenario_policy, "identity_policy") == "delegated_to_artifacts"
+    assert _policy_value(scenario_policy, "required") is True
+    assert _policy_value(scenario_policy, "delegated_artifact_keys") == (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        BEAM_VEHICLES_IN,
+    )
+    vehicles_policy = adapter.reference_policies[
+        "beam.agentsim.agents.vehicles.vehiclesFilePath"
+    ]
+    assert _policy_value(vehicles_policy, "identity_policy") == "delegated_to_artifacts"
+    assert _policy_value(vehicles_policy, "delegated_artifact_keys") == (
+        BEAM_VEHICLES_IN,
+    )
+    warmstart_policy = adapter.reference_policies[
+        "beam.warmStart.initialLinkstatsFilePath"
+    ]
+    assert _policy_value(warmstart_policy, "identity_policy") == (
+        "delegated_to_artifacts"
+    )
+    assert _policy_value(warmstart_policy, "required") is False
+    assert _policy_value(warmstart_policy, "delegated_artifact_keys") == (
+        LINKSTATS_WARMSTART,
+    )
     assert resolved_config["model"] == "beam_run"
     assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
 
@@ -266,6 +307,82 @@ def test_beam_run_metadata_filters_adapter_covered_identity_inputs(
 
     assert meta.adapter(ctx) is not None
     assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
+
+
+def test_beam_adapter_identity_is_stable_across_workspace_roots(monkeypatch, tmp_path):
+    consist = pytest.importorskip("consist")
+    _wire_common(monkeypatch)
+
+    def build_case(root: Path):
+        workspace, settings = _setup_config(root)
+        config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+        population_dir = config_root / "urbansim"
+        population_dir.mkdir(parents=True, exist_ok=True)
+        (population_dir / "vehicles.csv.gz").write_text("vehicle_id\n1\n")
+        (config_root / settings.beam.config).write_text(
+            "\n".join(
+                [
+                    f'beam.inputDirectory = "{config_root}"',
+                    f'beam.exchange.scenario.folder = "{population_dir}"',
+                    (
+                        "beam.agentsim.agents.vehicles.vehiclesFilePath = "
+                        f'"{population_dir / "vehicles.csv.gz"}"'
+                    ),
+                    'beam.warmStart.initialLinkstatsFilePath = ""',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        step_fn = make_beam_run_step(
+            coupler=DummyCoupler(),
+            outputs_holder=StepOutputsHolder(),
+        )
+        meta = step_fn.__consist_step__
+        ctx = _make_step_context(
+            step_fn=step_fn,
+            model=meta.model,
+            settings=settings,
+            workspace=workspace,
+            state=_make_state(),
+        )
+        return meta.adapter(ctx)
+
+    tracker = consist.Tracker(
+        run_dir=tmp_path / "tracker-run",
+        db_path=str(tmp_path / "tracker.duckdb"),
+        allow_external_paths=True,
+    )
+    try:
+        adapter_a = build_case(tmp_path / "case_a")
+        adapter_b = build_case(tmp_path / "case_b")
+        canonical_a = adapter_a.discover(adapter_a.root_dirs, identity=tracker.identity)
+        canonical_b = adapter_b.discover(adapter_b.root_dirs, identity=tracker.identity)
+        result_a = adapter_a.canonicalize(
+            canonical_a,
+            tracker=tracker,
+            plan_only=True,
+        )
+        result_b = adapter_b.canonicalize(
+            canonical_b,
+            tracker=tracker,
+            plan_only=True,
+        )
+    finally:
+        tracker.db.engine.dispose()
+
+    assert result_a.identity.identity_hash == result_b.identity.identity_hash
+    scenario_ref = next(
+        ref
+        for ref in result_a.identity.references
+        if ref.config_key == "beam.exchange.scenario.folder"
+    )
+    assert scenario_ref.identity_policy == "delegated_to_artifacts"
+    assert scenario_ref.delegated_artifact_keys == (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        BEAM_VEHICLES_IN,
+    )
 
 
 @pytest.mark.parametrize(

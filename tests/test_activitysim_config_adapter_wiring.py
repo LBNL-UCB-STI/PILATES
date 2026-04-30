@@ -224,6 +224,77 @@ def test_activitysim_run_metadata_adapter_includes_overlay_config_roots_when_pre
     ]
 
 
+def test_activitysim_run_metadata_filters_adapter_covered_identity_inputs(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    settings = _make_settings()
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [
+                ("asim_mutable_configs", Path("/tmp/asim/configs")),
+                (
+                    "asim_mutable_configs/settings.yaml",
+                    Path("/tmp/asim/configs/settings.yaml"),
+                ),
+                ("external_marker", Path("/tmp/external")),
+            ],
+        },
+    )
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    assert meta.adapter(ctx) is not None
+    assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
+
+
+def test_activitysim_run_metadata_keeps_identity_inputs_when_adapter_missing(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
+    settings = _make_settings()
+    identity_inputs = [("asim_mutable_configs", Path("/tmp/asim/configs"))]
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": list(identity_inputs),
+        },
+    )
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    assert meta.adapter(ctx) is None
+    assert meta.identity_inputs(ctx) == identity_inputs
+
+
 def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
     monkeypatch, tmp_path
 ):

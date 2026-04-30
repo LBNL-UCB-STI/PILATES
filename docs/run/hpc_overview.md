@@ -17,7 +17,7 @@ summary: Generic HPC execution posture for PILATES and how it differs from local
 - `job_runner.sh` creates a per-job settings file when `${BEAM_MEMORY}` templating is present.
 - `job.sh` bootstraps a Python virtual environment inside the job.
 - `job.sh` installs PILATES dependencies from `hpc/requirements-hpc.txt` when that file exists, or from `requirements.txt` otherwise.
-- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.1`.
+- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.3`.
 
 ## Most Important Difference From Local Runs
 
