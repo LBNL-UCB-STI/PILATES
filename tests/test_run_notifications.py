@@ -179,6 +179,29 @@ def test_run_notification_settings_parse_provider_values() -> None:
     assert settings.max_error_chars == 80
 
 
+def test_run_notification_context_reads_user_and_slurm_env() -> None:
+    context = RunNotificationContext.from_env(
+        env={
+            "USER": "zaneedell",
+            "SLURM_JOB_ID": "22337428",
+            "SLURM_JOB_NAME": "NGSWDCQD",
+            "SLURM_JOB_PARTITION": "lr7",
+            "SLURM_JOB_NODELIST": "n0114.lr7",
+            "HOSTNAME": "submit-host",
+        },
+        run_name="pilates-run",
+        scenario_id="base",
+    )
+
+    assert context.run_name == "pilates-run"
+    assert context.scenario_id == "base"
+    assert context.submit_user == "zaneedell"
+    assert context.slurm_job_id == "22337428"
+    assert context.slurm_job_name == "NGSWDCQD"
+    assert context.slurm_partition == "lr7"
+    assert context.slurm_node_list == "n0114.lr7"
+
+
 def test_notifier_filters_to_scenario_headers_and_child_runs() -> None:
     backend = FakeBackend()
     notifier = run_notifications.ConsistRunNotifier(
@@ -219,6 +242,11 @@ def test_notifier_message_includes_run_metadata_outputs_and_archive() -> None:
             scenario_id="sfbay-baseline",
             seed=42,
             archive_run_dir="/global/scratch/run",
+            submit_user="zaneedell",
+            slurm_job_id="22337428",
+            slurm_job_name="NGSWDCQD",
+            slurm_partition="lr7",
+            slurm_node_list="n0114.lr7",
         ),
     )
     run = _run(
@@ -243,6 +271,10 @@ def test_notifier_message_includes_run_metadata_outputs_and_archive() -> None:
     assert "duration: 2m 5s" in message.markdown_text
     assert "archive: `/global/scratch/run`" in message.markdown_text
     assert "scenario_id: `sfbay-baseline`" in message.markdown_text
+    assert "user: `zaneedell`" in message.markdown_text
+    assert "slurm_job: `22337428 (NGSWDCQD)`" in message.markdown_text
+    assert "partition: `lr7`" in message.markdown_text
+    assert "nodes: `n0114.lr7`" in message.markdown_text
 
 
 def test_notifier_truncates_long_failure_errors() -> None:

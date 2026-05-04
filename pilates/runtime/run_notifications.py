@@ -133,6 +133,44 @@ class RunNotificationContext:
     archive_run_dir: Optional[str] = None
     local_run_dir: Optional[str] = None
     settings_file: Optional[str] = None
+    submit_user: Optional[str] = None
+    slurm_job_id: Optional[str] = None
+    slurm_job_name: Optional[str] = None
+    slurm_partition: Optional[str] = None
+    slurm_node_list: Optional[str] = None
+    hostname: Optional[str] = None
+
+    @classmethod
+    def from_env(
+        cls,
+        *,
+        env: Optional[Mapping[str, str]] = None,
+        run_name: Optional[str] = None,
+        scenario_id: Optional[str] = None,
+        seed: Optional[int] = None,
+        archive_run_dir: Optional[str] = None,
+        local_run_dir: Optional[str] = None,
+        settings_file: Optional[str] = None,
+    ) -> "RunNotificationContext":
+        values = os.environ if env is None else env
+        return cls(
+            run_name=run_name,
+            scenario_id=scenario_id,
+            seed=seed,
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
+            settings_file=settings_file,
+            submit_user=_first_env_value(values, ("SLURM_JOB_USER", "USER", "LOGNAME")),
+            slurm_job_id=_first_env_value(values, ("SLURM_JOB_ID", "SLURM_JOBID")),
+            slurm_job_name=_first_env_value(values, ("SLURM_JOB_NAME",)),
+            slurm_partition=_first_env_value(
+                values, ("SLURM_JOB_PARTITION", "SLURM_JOB_PARTITION_NAME")
+            ),
+            slurm_node_list=_first_env_value(
+                values, ("SLURM_JOB_NODELIST", "SLURM_NODELIST")
+            ),
+            hostname=_first_env_value(values, ("SLURMD_NODENAME", "HOSTNAME")),
+        )
 
 
 @dataclass(frozen=True)
@@ -332,6 +370,16 @@ class ConsistRunNotifier:
             lines.append(f"scenario_id: `{self.context.scenario_id}`")
         if self.context.seed is not None:
             lines.append(f"seed: `{self.context.seed}`")
+        if self.context.submit_user:
+            lines.append(f"user: `{self.context.submit_user}`")
+        slurm_job = _format_slurm_job(self.context)
+        if slurm_job:
+            lines.append(f"slurm_job: `{slurm_job}`")
+        if self.context.slurm_partition:
+            lines.append(f"partition: `{self.context.slurm_partition}`")
+        node_label = _node_label(self.context)
+        if node_label:
+            lines.append(f"nodes: `{node_label}`")
         if self.context.archive_run_dir:
             lines.append(f"archive: `{self.context.archive_run_dir}`")
         return tuple(lines)
@@ -503,8 +551,28 @@ def _clean_optional(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+def _first_env_value(env: Mapping[str, str], keys: Sequence[str]) -> Optional[str]:
+    for key in keys:
+        if key not in env:
+            continue
+        cleaned = _clean_optional(env[key])
+        if cleaned:
+            return cleaned
+    return None
+
+
 def _is_scenario_header(run: Run) -> bool:
     return "scenario_header" in run.tags
+
+
+def _format_slurm_job(context: RunNotificationContext) -> Optional[str]:
+    if context.slurm_job_id and context.slurm_job_name:
+        return f"{context.slurm_job_id} ({context.slurm_job_name})"
+    return context.slurm_job_id or context.slurm_job_name
+
+
+def _node_label(context: RunNotificationContext) -> Optional[str]:
+    return context.slurm_node_list or context.hostname
 
 
 def _cache_status(run: Run, *, event: str) -> Optional[str]:

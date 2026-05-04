@@ -8,6 +8,7 @@ and provenance tracking.
 
 import os
 import logging
+import warnings
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
@@ -357,10 +358,24 @@ class DatabaseConfig(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_deprecated_use_consist(cls, data):
+        if isinstance(data, dict) and "use_consist" in data:
+            warnings.warn(
+                "shared.database.use_consist is deprecated and ignored; "
+                "Consist is mandatory in PILATES. Use run.consist_hashing_strategy "
+                "or lineage/detail settings for performance tuning instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return data
+
     @model_validator(mode="after")
     def _coalesce_snapshot_path(self):
         if self.snapshot_path and not self.shapshot_path:
             self.shapshot_path = self.snapshot_path
+        self.use_consist = True
         return self
 
     @field_validator("path")

@@ -431,6 +431,8 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
         return None
 
 
+# TODO(consist): replace this matcher block with tracker.find_matching_run(...)
+# once docs-internal/consist_feature_request_run_matching_query.md lands upstream.
 def _current_run_prefix(
     *,
     state: WorkflowState,

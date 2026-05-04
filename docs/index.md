@@ -41,6 +41,12 @@ hide:
 - **Inspect archived outputs:** [Analysis Overview](analysis/overview.md), then [Opening Archives](analysis/opening_archives.md).
 - **Understand Consist itself:** [Consist documentation](https://lbnl-ucb-sti.github.io/consist/latest/), then [Consist in PILATES](workflow/consist_in_pilates.md).
 
+New contributors should use this order:
+
+1. [Getting Started](start-here/getting_started.md) for local setup and a first runnable scenario.
+2. [Architecture](workflow/architecture.md) and [Consist in PILATES](workflow/consist_in_pilates.md) for the Consist-first runtime model.
+3. [Adding a Model](extend/adding_a_model.md) for the hands-on contributor path.
+
 If you want the shortest first-run path, use this order:
 
 1. [Getting Started](start-here/getting_started.md)

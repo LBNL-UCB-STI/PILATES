@@ -245,7 +245,6 @@ shared:
     enabled: true
     type: duckdb
     path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_seattle.duckdb
-    use_consist: true
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION

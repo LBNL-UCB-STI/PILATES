@@ -503,7 +503,7 @@ def _prepare_run_context(
         )
     register_consist_run_notification_hooks(
         tracker,
-        context=RunNotificationContext(
+        context=RunNotificationContext.from_env(
             run_name=run_name,
             scenario_id=scenario_id,
             seed=run_seed,
