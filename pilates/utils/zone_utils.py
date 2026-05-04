@@ -11,6 +11,7 @@ import logging
 import os
 import inspect
 from pathlib import Path
+from typing import TYPE_CHECKING, Optional
 import pandas as pd
 import geopandas as gpd
 import numpy as np
@@ -20,6 +21,9 @@ import zarr
 
 from pilates.config import PilatesConfig
 from pilates.utils.path_utils import find_project_root
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 # Lazy imports of geog functions are performed inside the functions that need them to avoid circular imports.
 
@@ -56,7 +60,7 @@ def _get_primary_zone_source_config(zone_config):
 
 
 def get_zone_source_candidates(
-    settings: PilatesConfig, workspace: "Workspace" = None
+    settings: PilatesConfig, workspace: Optional["Workspace"] = None
 ) -> list[tuple[str, dict]]:
     geography_config = settings.shared.geography
     zone_config = geography_config.zones
@@ -83,11 +87,7 @@ def get_zone_source_candidates(
         configured = source_config.get("source_file")
         if not configured:
             continue
-        if (
-            workspace is not None
-            and activitysim_config is not None
-            and hasattr(workspace, "get_asim_mutable_data_dir")
-        ):
+        if workspace is not None and activitysim_config is not None:
             mutable_candidate = os.path.join(
                 workspace.get_asim_mutable_data_dir(),
                 os.path.basename(configured),

@@ -117,9 +117,12 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             year=state.forecast_year,
             surface=None,
         )
-        population_value = (population_binding.inputs or {}).get(
-            USIM_POPULATION_SOURCE_H5
+        population_inputs = (
+            population_binding.inputs
+            if population_binding.inputs is not None
+            else {}
         )
+        population_value = population_inputs.get(USIM_POPULATION_SOURCE_H5)
         if population_value is not None:
             explicit_inputs[USIM_POPULATION_SOURCE_H5] = population_value
 
@@ -156,7 +159,8 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             year=state.year,
             surface=None,
         )
-        current_value = (current_binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5)
+        current_inputs = current_binding.inputs if current_binding.inputs is not None else {}
+        current_value = current_inputs.get(USIM_DATASTORE_CURRENT_H5)
         if current_value is not None:
             explicit_inputs[USIM_DATASTORE_CURRENT_H5] = current_value
 

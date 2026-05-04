@@ -114,7 +114,7 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
                 os.path.join(beam_iter_output_dir, "output_network.xml.gz"),
                 os.path.join(mep_output_data_dir, "output_network.xml.gz"),
             )
-        except:
+        except FileNotFoundError:
             logger.error(
                 "Missing expected beam output file {0}".format(
                     os.path.join(beam_iter_output_dir, "output_network.xml.gz")
@@ -127,7 +127,7 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
             shutil.copy(
                 linkstats_path, os.path.join(mep_output_data_dir, "linkstats.csv.gz")
             )
-        except:
+        except FileNotFoundError:
             logger.error("Missing expected beam output file {0}".format(linkstats_path))
         parkingStats = os.path.join(
             beam_iter_output_dir, "ITERS", "it.0", "0.parkingStats.csv"
@@ -136,7 +136,7 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
             shutil.copy(
                 parkingStats, os.path.join(mep_output_data_dir, "parkingStats.csv")
             )
-        except:
+        except FileNotFoundError:
             logger.error("Missing expected beam output file {0}".format(parkingStats))
         rideHailWaitStats = os.path.join(
             beam_iter_output_dir, "ITERS", "it.0", "0.rideHailWaitingStats.csv"
@@ -146,7 +146,7 @@ def copy_outputs_to_mep(settings, year, iter, workspace: Workspace):
                 rideHailWaitStats,
                 os.path.join(mep_output_data_dir, "rideHailWaitingStats.csv"),
             )
-        except:
+        except FileNotFoundError:
             logger.error(
                 "Missing expected beam output file {0}".format(rideHailWaitStats)
             )

@@ -245,19 +245,33 @@ class BindingPlan:
     metadata: Optional[Dict[str, Any]] = None
 
     def stepref_inputs(self) -> Optional[Dict[str, Any]]:
-        return dict(self.inputs or {}) or None
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        return inputs if inputs else None
 
     def stepref_input_keys(self) -> Optional[list[str]]:
-        return list(self.input_keys or []) or None
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        return input_keys if input_keys else None
 
     def stepref_optional_input_keys(self) -> Optional[list[str]]:
-        return list(self.optional_input_keys or []) or None
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
+        return optional_input_keys if optional_input_keys else None
 
     def to_binding_result(self) -> BindingResult:
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
         return BindingResult(
-            inputs=dict(self.inputs or {}) or None,
-            input_keys=list(self.input_keys or []) or None,
-            optional_input_keys=list(self.optional_input_keys or []) or None,
+            inputs=inputs if inputs else None,
+            input_keys=input_keys if input_keys else None,
+            optional_input_keys=optional_input_keys if optional_input_keys else None,
             metadata=dict(self.metadata) if self.metadata else None,
         )
 

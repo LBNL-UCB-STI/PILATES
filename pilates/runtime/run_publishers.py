@@ -537,7 +537,7 @@ def _event_table_row(event: RunEvent) -> str:
         for part in (
             f"year {event.year}" if event.year is not None else "",
             f"iter {event.iteration}" if event.iteration is not None else "",
-            event.phase or "",
+            event.phase if event.phase is not None else "",
         )
         if part
     )
@@ -551,10 +551,10 @@ def _event_table_row(event: RunEvent) -> str:
         f"<td><code>{escape(event.model)}</code><br><small>{escape(event.display_id)}</small></td>"
         f"<td>{escape(when)}</td>"
         f"<td>{escape(event.status)}</td>"
-        f"<td>{escape(event.result or '')}</td>"
+        f"<td>{escape(event.result if event.result is not None else '')}</td>"
         f"<td>{escape(duration)}</td>"
         f"<td>{escape(outputs)}</td>"
-        f"<td>{escape(event.error or '')}</td>"
+        f"<td>{escape(event.error if event.error is not None else '')}</td>"
         "</tr>"
     )
 

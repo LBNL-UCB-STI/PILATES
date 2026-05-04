@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -25,6 +25,9 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 
 class BeamDataHelper:
@@ -773,8 +776,8 @@ def copy_initial_asim_files(
     *,
     asim_file_paths: Dict[str, Tuple[Optional[str], Optional[FileRecord]]],
     file_format: str,
-    workspace: Any,
-    resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    workspace: "Workspace",
+    resolve_beam_exchange_scenario_folder_fn: Callable[["Workspace"], str],
     copy_with_compression_asim_file_to_beam_fn: Callable[..., List[FileRecord]],
 ) -> List[FileRecord]:
     record_list: List[FileRecord] = []
@@ -821,7 +824,7 @@ def merge_replanned_asim_files(
         "households", (None, None)
     )
 
-    def get_data(path: str, table_type: str, source: str) -> pd.DataFrame:
+    def get_data(path: Optional[str], table_type: str, source: str) -> pd.DataFrame:
         if path is None:
             raise FileNotFoundError(f"{source} file for table '{table_type}' not found.")
         if not os.path.exists(path):

@@ -349,9 +349,10 @@ def find_beam_iterations(beam_output_dir):
 
 
 def find_iteration_file(
-    iteration_path: str, iteration: int, file: str, file_type: str = ""
+    iteration_path: str, iteration: int, file: str, file_type: Optional[str] = None
 ) -> Optional[str]:
-    path = os.path.join(iteration_path, f"{iteration}.{file}{file_type}")
+    suffix = file_type if file_type is not None else ""
+    path = os.path.join(iteration_path, f"{iteration}.{file}{suffix}")
     if os.path.exists(path):
         logger.debug(f"Found file at {path}")
         return path

@@ -99,7 +99,7 @@ def _map_host_path_to_container(
 
 
 def _select_latest_linkstats_path(
-    records: RecordStore,
+    records: Optional[RecordStore],
     abs_beam_input: str,
     abs_beam_output: str,
 ) -> Optional[str]:

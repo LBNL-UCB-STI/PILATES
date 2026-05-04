@@ -736,8 +736,11 @@ def emit_consist_audit_event(
             )
             current_state = _new_state(event, attempt_number)
             _AUDIT_STATE_BY_ROOT[root_key] = current_state
-        assert current_state is not None
-        attempt_dir = _attempt_dir(paths["diagnostics_dir"], str(current_state["attempt_id"]))
+        if current_state is None:
+            raise RuntimeError("Consist audit state was not initialized.")
+        attempt_dir = _attempt_dir(
+            paths["diagnostics_dir"], str(current_state["attempt_id"])
+        )
         attempt_paths = {
             "diagnostics_dir": attempt_dir,
             "events": attempt_dir / "consist_restart_audit.jsonl",

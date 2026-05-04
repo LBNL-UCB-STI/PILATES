@@ -213,7 +213,10 @@ def _all_output_artifacts(tracker: Any) -> list[Any]:
     seen_artifact_ids: set[str] = set()
     for run in tracker.find_runs(limit=100_000):
         run_artifacts = tracker.get_artifacts_for_run(str(run.id))
-        for artifact in list((run_artifacts.outputs or {}).values()):
+        run_outputs = (
+            run_artifacts.outputs if run_artifacts.outputs is not None else {}
+        )
+        for artifact in list(run_outputs.values()):
             artifact_id = str(getattr(artifact, "id", ""))
             if artifact_id and artifact_id in seen_artifact_ids:
                 continue

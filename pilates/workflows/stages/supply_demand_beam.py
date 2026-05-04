@@ -200,12 +200,14 @@ def beam_preprocess_binding_diagnostic_payload(
         for key, path in required_local_inputs.items()
         if path and not os.path.exists(path)
     )
-    missing_restart_inputs = sorted(
-        set(binding.missing_required or []) | set(missing_local_inputs)
+    missing_required = (
+        binding.missing_required if binding.missing_required is not None else []
     )
+    missing_restart_inputs = sorted(set(missing_required) | set(missing_local_inputs))
     resolved_identity_context = dict(
         identity_context
-        or _beam_restart_identity_context(scenario=scenario, state=state)
+        if identity_context is not None
+        else _beam_restart_identity_context(scenario=scenario, state=state)
     )
     cache_miss_explanation = resolved_identity_context.get("cache_miss_explanation")
     identity_summary = resolved_identity_context.get("identity_summary")
@@ -246,13 +248,37 @@ def beam_preprocess_binding_diagnostic_payload(
             "iteration",
             getattr(state, "current_inner_iter", None),
         ),
-        "input_keys": sorted(binding.input_keys or []),
-        "optional_input_keys": sorted(binding.optional_input_keys or []),
-        "bound_input_keys": sorted((binding.inputs or {}).keys()),
-        "missing_required": sorted(binding.missing_required or []),
+        "input_keys": sorted(
+            binding.input_keys if binding.input_keys is not None else []
+        ),
+        "optional_input_keys": sorted(
+            binding.optional_input_keys
+            if binding.optional_input_keys is not None
+            else []
+        ),
+        "bound_input_keys": sorted(
+            (binding.inputs if binding.inputs is not None else {}).keys()
+        ),
+        "missing_required": sorted(missing_required),
         "missing_restart_inputs": missing_restart_inputs,
-        "source_by_key": dict(sorted((binding.source_by_key or {}).items())),
-        "coupler_key_by_key": dict(sorted((binding.coupler_key_by_key or {}).items())),
+        "source_by_key": dict(
+            sorted(
+                (
+                    binding.source_by_key
+                    if binding.source_by_key is not None
+                    else {}
+                ).items()
+            )
+        ),
+        "coupler_key_by_key": dict(
+            sorted(
+                (
+                    binding.coupler_key_by_key
+                    if binding.coupler_key_by_key is not None
+                    else {}
+                ).items()
+            )
+        ),
         "required_local_inputs": _stringify_mapping_values(required_local_inputs),
         "missing_local_inputs": missing_local_inputs,
         "identity_summary": dict(identity_summary or {}),
@@ -312,7 +338,8 @@ def _raise_if_restart_beam_config_missing(
     if expected_path is not None and expected_path.exists():
         return
 
-    config_value = (binding.inputs or {}).get(BEAM_CONFIG_FILE)
+    binding_inputs = binding.inputs if binding.inputs is not None else {}
+    config_value = binding_inputs.get(BEAM_CONFIG_FILE)
     config_hint = f" Resolved binding value: {config_value}." if config_value else ""
     raise RuntimeError(
         "BEAM restart cannot continue because beam_config_file is missing. "
@@ -1107,7 +1134,12 @@ def _run_beam_steps(
             year=year,
             beam_preprocess_binding=beam_preprocess_binding,
         )
-        config_value = (beam_preprocess_binding.inputs or {}).get(BEAM_CONFIG_FILE)
+        beam_preprocess_inputs = (
+            beam_preprocess_binding.inputs
+            if beam_preprocess_binding.inputs is not None
+            else {}
+        )
+        config_value = beam_preprocess_inputs.get(BEAM_CONFIG_FILE)
         if config_value is not None:
             set_coupler_from_artifact(
                 coupler,
@@ -1115,9 +1147,7 @@ def _run_beam_steps(
                 None,
                 fallback=str(config_value),
             )
-        vehicles_value = (beam_preprocess_binding.inputs or {}).get(
-            ATLAS_VEHICLES2_OUTPUT
-        )
+        vehicles_value = beam_preprocess_inputs.get(ATLAS_VEHICLES2_OUTPUT)
         if vehicles_value is not None:
             set_coupler_from_artifact(
                 coupler,
@@ -1342,7 +1372,11 @@ def _run_traffic_assignment_phase(
         workspace=workspace,
         scenario=scenario,
     )
-    beam_preprocess_inputs = dict(beam_preprocess_binding.inputs or {})
+    beam_preprocess_inputs = (
+        dict(beam_preprocess_binding.inputs)
+        if beam_preprocess_binding.inputs is not None
+        else {}
+    )
     beam_run_input_keys = _derive_beam_run_input_keys(
         beam_preprocess_inputs=beam_preprocess_inputs,
         activity_demand_outputs=inputs.activity_demand_outputs,
