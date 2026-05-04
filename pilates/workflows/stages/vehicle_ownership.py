@@ -10,12 +10,17 @@ from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
-from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
+from pilates.utils.coupler_helpers import (
+    archive_copy_destination,
+    archive_copy_now,
+    flush_archive_queue,
+)
 from pilates.atlas.inputs import (
     build_atlas_inputs,
     atlas_static_input_keys_for_interval,
 )
 from pilates.utils.input_logging import log_inputs
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.binding import _archive_fallback_path
 from pilates.workflows.atlas_state import AtlasSubState
@@ -44,6 +49,26 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     pass
+
+
+def _validate_population_h5_for_activitysim_year(
+    *,
+    path: Union[str, os.PathLike],
+    year: int,
+    context: str,
+) -> None:
+    resolved = resolve_usim_population_table_paths(
+        h5_path=os.fspath(path),
+        year=year,
+        require_exact_year=True,
+    )
+    logger.info(
+        "Validated ActivitySim population H5 for %s: path=%s year=%s tables=%s",
+        context,
+        os.fspath(path),
+        year,
+        resolved,
+    )
 
 
 def _atlas_subyear_manifest_path(
@@ -504,6 +529,27 @@ def run_vehicle_ownership_stage(
                         USIM_POPULATION_SOURCE_H5,
                         str(atlas_postprocess_outputs.usim_datastore_h5),
                     )
+                if not atlas_state.is_start_year():
+                    _validate_population_h5_for_activitysim_year(
+                        path=atlas_postprocess_outputs.usim_datastore_h5,
+                        year=atlas_year,
+                        context=f"ATLAS postprocess local output y{atlas_year}",
+                    )
+                    archive_dest = archive_copy_destination(
+                        key=USIM_POPULATION_SOURCE_H5,
+                        path=atlas_postprocess_outputs.usim_datastore_h5,
+                    )
+                    archive_copy_now(
+                        key=USIM_POPULATION_SOURCE_H5,
+                        path=atlas_postprocess_outputs.usim_datastore_h5,
+                        force=True,
+                    )
+                    if archive_dest is not None and os.path.exists(archive_dest):
+                        _validate_population_h5_for_activitysim_year(
+                            path=archive_dest,
+                            year=atlas_year,
+                            context=f"ATLAS postprocess archived output y{atlas_year}",
+                        )
 
             atlas_input_root = workspace.get_atlas_mutable_input_dir()
             atlas_year_input_dir = os.path.join(atlas_input_root, f"year{atlas_year}")

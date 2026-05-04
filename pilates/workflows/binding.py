@@ -89,6 +89,18 @@ def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
         return False
 
 
+def _requires_exact_activitysim_population_year(state: Any) -> bool:
+    if not _workflow_stage_enabled(state, "land_use"):
+        return False
+    is_start_year = getattr(state, "is_start_year", None)
+    if not callable(is_start_year):
+        return False
+    try:
+        return not bool(is_start_year())
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class ArtifactBindingRule:
     """
@@ -722,9 +734,14 @@ def _activitysim_population_source(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
                             year=_target_population_year(),
+                            require_exact_year=(
+                                _requires_exact_activitysim_population_year(state)
+                            ),
                         )
                     )
                 except Exception as exc:
+                    if _requires_exact_activitysim_population_year(state):
+                        raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "
                         "for %s: %s",

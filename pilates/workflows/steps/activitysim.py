@@ -24,6 +24,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -349,6 +350,16 @@ def _resolve_activitysim_preprocess_runtime_inputs(
     step_inputs: Optional[Mapping[str, Any]] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Any]:
+    def _requires_exact_population_year() -> bool:
+        land_use_enabled = get_setting(settings, "run.models.land_use") is not None
+        is_start_year = getattr(state, "is_start_year", None)
+        if not land_use_enabled or not callable(is_start_year):
+            return False
+        try:
+            return not bool(is_start_year())
+        except Exception:
+            return False
+
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
         resolution = None
@@ -407,8 +418,11 @@ def _resolve_activitysim_preprocess_runtime_inputs(
                 h5_path=population_source_h5_path,
                 year=target_year,
                 provided_paths=provided_table_paths,
+                require_exact_year=_requires_exact_population_year(),
             )
         except Exception as exc:
+            if _requires_exact_population_year():
+                raise
             logger.debug(
                 "Skipping ActivitySim population table resolution for %s: %s",
                 population_source_h5_path,

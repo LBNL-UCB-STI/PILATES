@@ -733,6 +733,45 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, t
     assert archived.read_text() == "manifest"
 
 
+def test_archive_copy_destination_returns_preserved_relative_path(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "model_data_2021.h5"
+    _write_file(source, "h5")
+
+    assert ch.archive_copy_destination(
+        key="usim_population_source_h5",
+        path=str(source),
+    ) == str(archive_root / "urbansim" / "data" / "model_data_2021.h5")
+
+
+def test_archive_copy_now_force_recopies_matching_signature(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "model_data_2021.h5"
+    archived = archive_root / "urbansim" / "data" / "model_data_2021.h5"
+    _write_file(source, "fresh")
+    _write_file(archived, "stale")
+
+    signature = ch._archive_path_signature(str(source), is_dir=False)
+    ch._archive_last_copied_signature[str(archived)] = signature
+
+    assert ch.archive_copy_now(
+        key="usim_population_source_h5",
+        path=str(source),
+        force=True,
+    ) is True
+    assert archived.read_text() == "fresh"
+
+
 def test_archive_copy_now_emits_already_copied_checkpoint_outside_archive_lock(
     monkeypatch, tmp_path
 ):

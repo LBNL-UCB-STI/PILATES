@@ -2,10 +2,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import pandas as pd
 
 from pilates.atlas.postprocessor import resolve_atlas_usim_datastore_path
 from pilates.workflows.stages.vehicle_ownership import (
     _validate_atlas_subyear_usim_datastore,
+    _validate_population_h5_for_activitysim_year,
     select_atlas_usim_input_path,
 )
 
@@ -160,6 +162,37 @@ def test_select_atlas_usim_input_path_can_prefer_current_over_forecast(tmp_path)
     )
 
     assert selected == str(current)
+
+
+def test_validate_population_h5_for_activitysim_year_rejects_root_only_forecast_h5(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pytest.raises(KeyError, match="require_exact_year=True"):
+        _validate_population_h5_for_activitysim_year(
+            path=h5_path,
+            year=2021,
+            context="test",
+        )
+
+
+def test_validate_population_h5_for_activitysim_year_accepts_year_scoped_tables(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    _validate_population_h5_for_activitysim_year(
+        path=h5_path,
+        year=2021,
+        context="test",
+    )
 
 
 def test_validate_atlas_subyear_usim_datastore_allows_forecast_year_output():

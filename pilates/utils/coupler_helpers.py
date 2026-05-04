@@ -580,6 +580,7 @@ def archive_copy_now(
     key: str,
     path: Optional[Union[str, os.PathLike]],
     workspace: Optional["Workspace"] = None,
+    force: bool = False,
 ) -> bool:
     """
     Synchronously mirror a restart-critical artifact into the archive run dir.
@@ -592,7 +593,7 @@ def archive_copy_now(
     resolved, dest, is_dir, signature = prepared
 
     already_copied = False
-    if signature is not None:
+    if signature is not None and not force:
         with _archive_lock:
             if _archive_last_copied_signature.get(dest) == signature:
                 already_copied = True
@@ -624,6 +625,22 @@ def archive_copy_now(
         signature=signature,
     )
     return True
+
+
+def archive_copy_destination(
+    *,
+    key: str,
+    path: Optional[Union[str, os.PathLike]],
+    workspace: Optional["Workspace"] = None,
+) -> Optional[str]:
+    """
+    Return the archive destination path that would be used for a copy request.
+    """
+    prepared = _resolve_archive_copy_target(key=key, path=path, workspace=workspace)
+    if prepared is None:
+        return None
+    _resolved, dest, _is_dir, _signature = prepared
+    return dest
 
 
 def flush_archive_queue(

@@ -25,6 +25,7 @@ from types import SimpleNamespace
 import pytest
 import yaml
 from consist.types import BindingResult
+import pandas as pd
 
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
@@ -171,6 +172,13 @@ def _write_file(path: Path, content: str = "x") -> None:
             handle.create_dataset("dummy", data=[1])
         return
     path.write_text(content)
+
+
+def _write_population_h5(path: Path, year: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.HDFStore(path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{year}/{table_name}", pd.DataFrame({"value": [1]}))
 
 
 def _build_settings(tmp_path: Path):
@@ -892,6 +900,11 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
     )
     monkeypatch.setattr(
         vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        vo_stage,
         "flush_archive_queue",
         lambda timeout=None, fail_on_timeout=False: flush_calls.append(timeout),
     )
@@ -918,6 +931,11 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
             and str(call["path"]).endswith("vehicles_output.RData")
             for call in archive_now_calls
         )
+    assert sum(
+        1
+        for call in archive_now_calls
+        if call["key"] == USIM_POPULATION_SOURCE_H5 and call.get("force") is True
+    ) == 2
 
 
 def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
@@ -988,6 +1006,11 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(
         vo_stage,
         "flush_archive_queue",
@@ -1591,7 +1614,7 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
         year=forecast_year
     )
     _write_file(current_h5)
-    _write_file(forecast_h5)
+    _write_population_h5(forecast_h5, forecast_year)
 
     state = stage_env["state"]
     state.current_year = current_year
@@ -1600,10 +1623,10 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
 
-    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, str(current_h5))
+    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, str(forecast_h5))
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, str(current_h5))
     usim_inputs = {
-        USIM_POPULATION_SOURCE_H5: str(current_h5),
+        USIM_POPULATION_SOURCE_H5: str(forecast_h5),
         USIM_DATASTORE_CURRENT_H5: str(current_h5),
     }
 
