@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from typing import Dict, Mapping, Optional
 
 import pandas as pd
@@ -10,6 +11,8 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
 )
+
+logger = logging.getLogger(__name__)
 
 
 POPULATION_TABLE_BY_KEY: Dict[str, str] = {
@@ -123,6 +126,19 @@ def reconcile_usim_population_table_paths(
         for semantic_key, table_name in POPULATION_TABLE_BY_KEY.items():
             provided_path = normalized_provided.get(semantic_key)
             if provided_path and provided_path in store:
+                if year is not None:
+                    exact_year_path = f"/{year}/{table_name}"
+                    if provided_path != exact_year_path and exact_year_path in store:
+                        logger.warning(
+                            "Ignoring stale pre-resolved UrbanSim population table "
+                            "path for %s: provided=%s selected=%s year=%s",
+                            semantic_key,
+                            provided_path,
+                            exact_year_path,
+                            year,
+                        )
+                        resolved[semantic_key] = exact_year_path
+                        continue
                 resolved[semantic_key] = provided_path
                 continue
             resolved[semantic_key] = resolve_usim_h5_table_key(

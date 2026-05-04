@@ -437,14 +437,43 @@ def beam_preprocess_binding_plan(
         workspace=workspace,
         surface=surface,
     )
+    # When BEAM is consuming the ActivitySim outputs from the current phase,
+    # keep the ATLAS vehicles2 selection anchored to that same local year before
+    # considering older coupler state from a restart/recovery path.
+    prefer_current_atlas_inputs = bool(
+        resolved_profile.activity_demand_enabled
+        and activity_demand_outputs is not None
+        and atlas_inputs
+    )
+    if prefer_current_atlas_inputs:
+        for key, value in atlas_inputs.items():
+            explicit_inputs.setdefault(key, value)
+
     get_value = getattr(coupler, "get", None)
+    restored_atlas_vehicle = None
     if callable(get_value):
         restored_atlas_vehicle = artifact_to_path(
             get_value(ATLAS_VEHICLES2_OUTPUT), workspace
         )
+        current_atlas_vehicle = (
+            atlas_inputs.get(ATLAS_VEHICLES2_OUTPUT) if atlas_inputs else None
+        )
+        if (
+            prefer_current_atlas_inputs
+            and restored_atlas_vehicle
+            and current_atlas_vehicle
+            and os.fspath(restored_atlas_vehicle) != os.fspath(current_atlas_vehicle)
+        ):
+            logger.warning(
+                "BEAM preprocess is using current ActivitySim-year ATLAS vehicles2 "
+                "instead of an existing coupler %s value: selected=%s ignored=%s",
+                ATLAS_VEHICLES2_OUTPUT,
+                current_atlas_vehicle,
+                restored_atlas_vehicle,
+            )
         if restored_atlas_vehicle:
             explicit_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, restored_atlas_vehicle)
-    if atlas_inputs:
+    if atlas_inputs and not prefer_current_atlas_inputs:
         for key, value in atlas_inputs.items():
             explicit_inputs.setdefault(key, value)
 

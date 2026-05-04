@@ -77,9 +77,7 @@ def _adapter_covered_identity_input(item: Any, *, model: str) -> bool:
     if model.startswith("beam_"):
         return key.startswith("beam_conf")
     if model.startswith("activitysim_"):
-        return key == "asim_mutable_configs" or key.startswith(
-            "asim_mutable_configs/"
-        )
+        return key == "asim_mutable_configs" or key.startswith("asim_mutable_configs/")
     return False
 
 
@@ -202,7 +200,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             return None
 
         try:
-            from consist.integrations.beam import BeamConfigAdapter
+            from consist.integrations.beam import BeamConfigAdapter, BeamReferencePolicy
         except Exception:
             return None
 
@@ -250,6 +248,69 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 )
         path_aliases["beam_region_input"] = config_root
 
+        reference_policies = {
+            "beam.exchange.scenario.folder": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_population_input_root",
+                required=True,
+                reason="population_inputs_declared_as_step_artifacts",
+                delegated_artifact_keys=(
+                    BEAM_PLANS_IN,
+                    BEAM_HOUSEHOLDS_IN,
+                    BEAM_PERSONS_IN,
+                    BEAM_VEHICLES_IN,
+                ),
+            ),
+            "beam.agentsim.agents.vehicles.vehiclesFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_vehicle_input",
+                required=True,
+                reason="vehicles_declared_as_step_artifact",
+                delegated_artifact_keys=(BEAM_VEHICLES_IN,),
+            ),
+            "beam.warmStart.initialLinkstatsFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_linkstats_warmstart",
+                required=False,
+                reason="warmstart_declared_as_optional_step_artifact",
+                delegated_artifact_keys=(LINKSTATS_WARMSTART,),
+            ),
+        }
+        dormant_matsim_keys = (
+            "matsim.conversion.populationFile",
+            "matsim.conversion.matsimNetworkFile",
+            "matsim.conversion.scenarioDirectory",
+            "matsim.conversion.shapeConfig.shapeFile",
+            "matsim.conversion.vehiclesFile",
+            "matsim.conversion.osmFile",
+        )
+        for key in dormant_matsim_keys:
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="ignored",
+                required=False,
+                reason="dormant_matsim_example_config",
+            )
+        reference_policies[
+            "beam.agentsim.agents.rideHail.managers[1].initialization.filePath"
+        ] = BeamReferencePolicy(
+            identity_policy="ignored",
+            required=False,
+            reason="optional_ridehail_fleet_ignored_in_pilates",
+        )
+        runtime_output_keys = (
+            "beam.router.skim.activity-sim-skimmer.fileBaseName",
+            "beam.router.skim.drive-time-skimmer.fileBaseName",
+            "beam.router.skim.origin-destination-skimmer.fileBaseName",
+            "beam.router.skim.taz-skimmer.fileBaseName",
+            "beam.router.skim.transit-crowding-skimmer.fileBaseName",
+        )
+        for key in runtime_output_keys:
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+                reason="runtime_output_prefix_not_identity_input",
+            )
+
         return BeamConfigAdapter(
             root_dirs=[config_root],
             primary_config=primary_config,
@@ -258,34 +319,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 config_root=config_root,
             ),
             path_aliases=path_aliases,
-            reference_policies={
-                "beam.exchange.scenario.folder": {
-                    "identity_policy": "delegated_to_artifacts",
-                    "role": "beam_population_input_root",
-                    "required": True,
-                    "reason": "population_inputs_declared_as_step_artifacts",
-                    "delegated_artifact_keys": (
-                        BEAM_PLANS_IN,
-                        BEAM_HOUSEHOLDS_IN,
-                        BEAM_PERSONS_IN,
-                        BEAM_VEHICLES_IN,
-                    ),
-                },
-                "beam.agentsim.agents.vehicles.vehiclesFilePath": {
-                    "identity_policy": "delegated_to_artifacts",
-                    "role": "beam_vehicle_input",
-                    "required": True,
-                    "reason": "vehicles_declared_as_step_artifact",
-                    "delegated_artifact_keys": (BEAM_VEHICLES_IN,),
-                },
-                "beam.warmStart.initialLinkstatsFilePath": {
-                    "identity_policy": "delegated_to_artifacts",
-                    "role": "beam_linkstats_warmstart",
-                    "required": False,
-                    "reason": "warmstart_declared_as_optional_step_artifact",
-                    "delegated_artifact_keys": (LINKSTATS_WARMSTART,),
-                },
-            },
+            reference_policies=reference_policies,
         )
 
     def _adapter(ctx: StepContext) -> Any:

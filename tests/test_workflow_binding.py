@@ -243,7 +243,7 @@ def test_beam_preprocess_binding_plan_prefers_coupler_exchange_inputs_over_defau
     assert plan.source_by_key[BEAM_PLANS_IN] == "explicit"
 
 
-def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_input_from_coupler(
+def test_beam_preprocess_binding_plan_prefers_current_atlas_vehicle_with_activity_outputs(
     monkeypatch,
 ):
     from pilates.workflows import binding as binding_module
@@ -279,6 +279,52 @@ def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_input_from_
         year=2030,
         activity_demand_outputs={},
         previous_beam_outputs=None,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == "/tmp/current-vehicles2.csv"
+    assert plan.source_by_key[ATLAS_VEHICLES2_OUTPUT] == "explicit"
+
+
+def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_without_activity_outputs(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: {
+            BEAM_PLANS_IN: "/tmp/default-plans.parquet",
+            BEAM_HOUSEHOLDS_IN: "/tmp/default-households.parquet",
+            BEAM_PERSONS_IN: "/tmp/default-persons.parquet",
+        },
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: {ATLAS_VEHICLES2_OUTPUT: "/tmp/current-vehicles2.csv"},
+    )
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({ATLAS_VEHICLES2_OUTPUT: "/tmp/restored-vehicles.csv.gz"}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand="activitysim")),
+            vehicle_ownership_model_enabled=True,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs={},
         surface=_surface_stub(
             activity_demand_enabled=True,
             vehicle_ownership_model_enabled=True,

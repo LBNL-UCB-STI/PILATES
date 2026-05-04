@@ -29,6 +29,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_INPUT_PLANS_ARCHIVED,
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_INPUT_VEHICLES_ARCHIVED,
+    BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -940,7 +941,12 @@ def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
 
     settings, state, workspace = _beam_step_runtime(ctx)
-    return BeamRunner.runtime_expected_inputs(settings, state, workspace)
+    inputs = dict(BeamRunner.runtime_expected_inputs(settings, state, workspace))
+    # The BEAM input directory is a container mount, not a semantic cache input
+    # for beam_run. Population inputs in that tree are logged as explicit
+    # artifacts and the static network remains covered by the BEAM config adapter.
+    inputs.pop(BEAM_MUTABLE_DATA_DIR, None)
+    return inputs
 
 
 def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
