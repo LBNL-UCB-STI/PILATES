@@ -578,6 +578,40 @@ def test_artifact_lifecycle_summary_defers_usim_h5_snapshots_explicitly(
     ]
 
 
+def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "input_data_for_2030_outputs.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_input_archive_2030",
+        path=str(source),
+        artifact_family="usim_input_archive",
+        artifact_year=2030,
+        source_role="usim_datastore_h5",
+        snapshot_role="usim_input_archive",
+        snapshot_reason="pre_merge_input",
+        storage_event="snapshot_move",
+        sanitized_lifecycle_fields={"year": "artifact_year"},
+        h5_container=True,
+    )
+    assert ch.archive_copy_now(key="usim_input_archive_2030", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["snapshot_artifacts_logged"] == 1
+    assert summary["snapshot_artifacts_missing_required_facets"] == 0
+    assert "missing_required_snapshot_facets" not in summary[
+        "blocking_reasons_by_family"
+    ]["usim_input_archive"]
+
+
 def test_artifact_lifecycle_summary_blocks_copy_only_promotions(
     monkeypatch, tmp_path
 ):
