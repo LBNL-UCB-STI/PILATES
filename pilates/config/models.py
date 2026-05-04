@@ -2,8 +2,7 @@
 Pydantic models for PILATES configuration.
 
 This module defines the structure and validation for PILATES configuration files.
-The models use the new hierarchical structure designed for better config hashing
-and provenance tracking.
+Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
 """
 
 import os
@@ -701,7 +700,7 @@ class PostprocessingConfig(BaseModel):
             "memory": self.memory,
             "discard_plans_every_year": self.discard_plans_every_year,
             "max_plans_memory": self.max_plans_memory,
-            "simulated_hwy_paths": list(self.simulated_hwy_paths or []),
+            "simulated_hwy_paths": list(self.simulated_hwy_paths),
         }
 
 
