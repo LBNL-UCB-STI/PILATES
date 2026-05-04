@@ -239,6 +239,68 @@ By default, notifications include the scenario header and child Consist
 `scenario.run(...)` steps. Internal setup traces are skipped unless
 `PILATES_RUN_NOTIFICATIONS_INCLUDE_INTERNAL=1` is set.
 
+## Run Publishing
+
+PILATES also writes structured run event outputs for lightweight inspection.
+This is separate from chat notifications. By default, every run archive gets:
+
+```text
+.pilates/run_events.jsonl
+.pilates/run_summary.html
+```
+
+`run_events.jsonl` is the durable machine-readable event stream. The HTML file
+is a small static table that can be opened directly in a browser or copied to a
+shared location.
+
+These local publishers are controlled by `hpc/run-notifications.env`:
+
+```bash
+export PILATES_RUN_EVENT_LOG=1
+export PILATES_RUN_SUMMARY_HTML=1
+```
+
+### Optional Google Sheet
+
+If a run coordinator provides a Google Sheet webhook URL, PILATES can also post
+each scenario/step event as a row. This is intentionally webhook-based so HPC
+jobs do not need Google OAuth credentials or a new Python dependency.
+
+To create the webhook, copy
+`hpc/google-sheet-run-publisher.apps-script.js.template` into a Google Sheet's
+Apps Script project and deploy it as a web app. The deployed web app URL is the
+value for `PILATES_GSHEET_WEBHOOK_URL`.
+
+Set these in `hpc/run-notifications.env`:
+
+```bash
+export PILATES_GSHEET_PUBLISH=1
+export PILATES_GSHEET_WEBHOOK_URL="https://script.google.com/macros/s/.../exec"
+export PILATES_GSHEET_SECRET="optional-shared-secret"
+```
+
+On submission, `job_runner.sh` prints a non-secret status line:
+
+```text
+Run publishing: archive_jsonl enabled=1; summary_html enabled=1; google_sheet enabled=1 webhook=set
+```
+
+The Sheet webhook receives a JSON payload with:
+
+- `kind`: `pilates_run_event`
+- `row`: a flat row suitable for appending to a sheet
+- `event`: the full structured event record
+- `secret`: optional shared secret when configured
+
+Suggested Sheet columns for `row` are:
+
+```text
+event_time, event_type, run_kind, run_name, display_id, model, status, result,
+scenario_id, year, iteration, stage, phase, submit_user, slurm_job_id,
+slurm_job_name, slurm_partition, node, duration_seconds, output_count,
+archive_run_dir, error
+```
+
 ## Legacy Config Migration
 
 If the passed settings file is in legacy format (does not contain `run:`, `shared:`, and `infrastructure:`), `job.sh` runs:

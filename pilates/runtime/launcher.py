@@ -70,6 +70,7 @@ from pilates.runtime.run_notifications import (
     RunNotificationContext,
     register_consist_run_notification_hooks,
 )
+from pilates.runtime.run_publishers import register_consist_run_publishers
 from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.coupler_schema import build_coupler_schema
@@ -501,17 +502,16 @@ def _prepare_run_context(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
-    register_consist_run_notification_hooks(
-        tracker,
-        context=RunNotificationContext.from_env(
-            run_name=run_name,
-            scenario_id=scenario_id,
-            seed=run_seed,
-            archive_run_dir=archive_run_dir,
-            local_run_dir=local_run_dir,
-            settings_file=settings.settings_file,
-        ),
+    run_event_context = RunNotificationContext.from_env(
+        run_name=run_name,
+        scenario_id=scenario_id,
+        seed=run_seed,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        settings_file=settings.settings_file,
     )
+    register_consist_run_notification_hooks(tracker, context=run_event_context)
+    register_consist_run_publishers(tracker, context=run_event_context)
     snapshot_manager = ConsistDbSnapshotManager(
         settings=settings,
         tracker=tracker,

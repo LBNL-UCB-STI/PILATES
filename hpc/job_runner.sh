@@ -111,8 +111,12 @@ JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RA
 print_notification_status() {
     local gchat_enabled="${PILATES_GCHAT_NOTIFICATIONS:-0}"
     local slack_enabled="${PILATES_SLACK_NOTIFICATIONS:-0}"
+    local gsheet_enabled="${PILATES_GSHEET_PUBLISH:-0}"
     local gchat_webhook_status="missing"
     local slack_webhook_status="missing"
+    local gsheet_webhook_status="missing"
+    local event_log_enabled="${PILATES_RUN_EVENT_LOG:-1}"
+    local summary_html_enabled="${PILATES_RUN_SUMMARY_HTML:-1}"
 
     if [ -n "${PILATES_GCHAT_WEBHOOK_URL:-}" ]; then
         gchat_webhook_status="set"
@@ -120,8 +124,12 @@ print_notification_status() {
     if [ -n "${PILATES_SLACK_WEBHOOK_URL:-}" ]; then
         slack_webhook_status="set"
     fi
+    if [ -n "${PILATES_GSHEET_WEBHOOK_URL:-}" ]; then
+        gsheet_webhook_status="set"
+    fi
 
     echo "Run notifications: google_chat enabled=$gchat_enabled webhook=$gchat_webhook_status; slack enabled=$slack_enabled webhook=$slack_webhook_status"
+    echo "Run publishing: archive_jsonl enabled=$event_log_enabled; summary_html enabled=$summary_html_enabled; google_sheet enabled=$gsheet_enabled webhook=$gsheet_webhook_status"
 }
 
 if [ -f "$RUN_NOTIFICATIONS_ENV" ]; then
