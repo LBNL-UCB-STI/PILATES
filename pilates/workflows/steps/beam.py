@@ -1,3 +1,15 @@
+"""BEAM workflow steps demonstrating the PILATES-Consist integration pattern.
+
+The binding rules in `pilates.workflows.binding` declare BEAM's required
+inputs, including exact-rewind snapshot artifacts for ActivitySim outputs,
+vehicles, warm starts, and configuration references. The step factories in this
+module convert those bindings into model execution, publish current-role
+outputs through the Consist coupler, and log output-only diagnostic families
+without expanding the handoff surface. Recovery roots remain storage metadata:
+snapshot artifacts describe semantic model boundaries, while archive promotion
+and future Consist recovery policy decide where the bytes can be restored from.
+"""
+
 from __future__ import annotations
 
 import json
@@ -37,6 +49,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -195,9 +208,7 @@ def _beam_run_snapshot_dir(
     workspace: Workspace,
     state: WorkflowState,
 ) -> Path:
-    snapshot_year = getattr(state, "forecast_year", None)
-    if snapshot_year is None:
-        snapshot_year = getattr(state, "year", None)
+    snapshot_year = resolve_forecast_year(state)
     return (
         Path(workspace.get_beam_output_dir())
         / f"inputs-year-{snapshot_year}-iteration-{state.iteration}"
@@ -538,9 +549,7 @@ def _archive_beam_run_inputs(
 ) -> None:
     snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
-    snapshot_year = getattr(state, "forecast_year", None)
-    if snapshot_year is None:
-        snapshot_year = getattr(state, "year", None)
+    snapshot_year = resolve_forecast_year(state)
 
     config_reference_snapshot = _archive_beam_config_references(
         settings=settings,

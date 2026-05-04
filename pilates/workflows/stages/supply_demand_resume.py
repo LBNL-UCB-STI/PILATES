@@ -28,6 +28,7 @@ from pilates.workflows.outputs_base import (
     iter_step_output_items,
     step_output_handoff_mapping,
 )
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
@@ -352,9 +353,7 @@ def _restore_activity_demand_outputs_for_resume(
         run_year, run_iteration = _parse_run_id_epoch(run_id)
         remember_restored_run_id(
             model_name="activitysim_run",
-            year=run_year
-            if run_year is not None
-            else getattr(state, "forecast_year", None) or getattr(state, "year", None),
+            year=run_year if run_year is not None else resolve_forecast_year(state),
             iteration=run_iteration
             if run_iteration is not None
             else getattr(state, "current_inner_iter", None),

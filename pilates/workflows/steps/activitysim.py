@@ -38,6 +38,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for ActivitySim.
@@ -364,9 +365,7 @@ def _resolve_activitysim_preprocess_runtime_inputs(
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
         resolution = None
     else:
-        step_year = getattr(state, "forecast_year", None)
-        if step_year is None:
-            step_year = getattr(state, "year", None)
+        step_year = resolve_forecast_year(state)
         resolution = build_binding_plan(
             step_name="activitysim_preprocess",
             coupler=coupler,
@@ -773,9 +772,7 @@ def _recover_activitysim_postprocess_outputs(
     else:
         return None
 
-    archived_input_year = getattr(state, "forecast_year", None)
-    if archived_input_year is None:
-        archived_input_year = getattr(state, "year", None)
+    archived_input_year = resolve_forecast_year(state)
     inputs_dir = Path(
         _existing_local_path(
             asim_output_dir
@@ -1109,9 +1106,7 @@ def make_activitysim_preprocess_step(
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
             input_key = USIM_POPULATION_SOURCE_H5
-            population_year = getattr(state, "forecast_year", None)
-            if population_year is None:
-                population_year = getattr(state, "year", None)
+            population_year = resolve_forecast_year(state)
             input_desc = (
                 "UrbanSim population-source datastore for ActivitySim "
                 f"population year {population_year} "
