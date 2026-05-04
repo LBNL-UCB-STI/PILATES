@@ -398,9 +398,11 @@ def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
     assert summary["blocker_counts_by_reason"]["artifact_logging_after_copying"] == 1
     assert summary["blocker_counts_by_reason"]["shallow_directory_signature"] == 1
     assert summary["blocker_counts_by_reason"]["h5_parent_child_policy"] == 1
+    assert summary["phase2_blocker_counts_by_reason"]["h5_parent_child_policy"] == 1
+    assert summary["unknown_event_keys"] == []
 
 
-def test_artifact_lifecycle_summary_resets_event_log_on_run_context(
+def test_artifact_lifecycle_summary_preserves_attempts_on_run_context(
     monkeypatch, tmp_path
 ):
     local_root = tmp_path / "local" / "run"
@@ -432,9 +434,148 @@ def test_artifact_lifecycle_summary_resets_event_log_on_run_context(
         / "artifact_lifecycle_audit.jsonl"
     )
     events = events_path.read_text(encoding="utf-8").splitlines()
-    assert len(events) == 1
-    assert "second" in events[0]
-    assert "beam_input_plans_archived" not in events[0]
+    assert len(events) == 3
+    assert "first" in events[0]
+    assert "beam_input_plans_archived" in events[1]
+    assert "second" in events[2]
+
+    attempt_dirs = sorted(
+        (
+            local_root
+            / ".workflow"
+            / "diagnostics"
+            / "attempts"
+        ).glob("attempt_*")
+    )
+    assert len(attempt_dirs) == 2
+    assert len(
+        (
+            attempt_dirs[0] / "artifact_lifecycle_audit.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ) == 2
+    assert len(
+        (
+            attempt_dirs[1] / "artifact_lifecycle_audit.jsonl"
+        ).read_text(encoding="utf-8").splitlines()
+    ) == 1
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["phase2_recommendation_basis"] == "aggregate_attempts"
+    assert len(summary["attempt_summaries"]) == 2
+    assert summary["latest_attempt_summary"]["attempt_number"] == 2
+    assert "beam_input_archived" in summary["families_seen"]
+
+
+def test_artifact_lifecycle_summary_loads_existing_aggregate_on_new_process(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+
+    workspace = DummyWorkspace(local_root)
+    source = local_root / "beam" / "input" / "plans.csv.gz"
+    _write_file(source, "plans")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="artifact_logged",
+        key="beam_input_plans_archived",
+        path=str(source),
+        artifact_family="beam_input_archived",
+        source_role="plans_beam_in",
+        snapshot_role="beam_input_plans",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=0,
+    )
+    consist_audit.reset_consist_audit_state()
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="restart",
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert "beam_input_archived" in summary["families_seen"]
+    assert len(summary["attempt_summaries"]) == 2
+    assert summary["attempt_summaries"][0]["event_counts"]["artifact_logged"] == 1
+    assert summary["attempt_summaries"][1]["event_counts"]["run_context"] == 1
+
+
+def test_artifact_lifecycle_summary_classifies_unknown_keys(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+
+    source = local_root / "mystery" / "artifact.txt"
+    _write_file(source, "mystery")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="beam_input_mystery",
+        path=str(source),
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert "unknown" in summary["blocked_families_for_phase2"]
+    assert summary["unknown_event_keys"] == ["beam_input_mystery"]
+    assert summary["blocker_counts_by_reason"]["unclassified_family"] == 1
+
+
+def test_artifact_lifecycle_summary_keeps_atlas_observe_only_diagnostic(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "atlas" / "atlas_output" / "vehicles2_2030.csv"
+    _write_file(source, "vehicles")
+    assert ch.archive_copy_now(key="atlas_vehicles2_output", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert "atlas_observe_only" in summary["blocked_families_for_phase2"]
+    assert summary["blocking_reasons_by_family"]["atlas_observe_only"] == [
+        "deferred_policy"
+    ]
+    assert "artifact_not_logged" not in summary["phase2_blocker_counts_by_reason"]
+    assert summary["diagnostic_blocking_reasons_by_family"]["atlas_observe_only"] == [
+        "artifact_not_logged"
+    ]
+
+
+def test_artifact_lifecycle_summary_defers_usim_h5_snapshots_explicitly(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "usim_input_merged_2030.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_input_merged_2030",
+        path=str(source),
+        artifact_family="usim_input_merged",
+        source_role="usim_input_archive",
+        snapshot_role="usim_input_merged",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+    )
+    assert ch.archive_copy_now(key="usim_input_merged_2030", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["blocking_reasons_by_family"]["usim_input_merged"] == [
+        "h5_parent_child_policy"
+    ]
+    assert "artifact_not_logged" not in summary["blocking_reasons_by_family"][
+        "usim_input_merged"
+    ]
 
 
 def test_artifact_lifecycle_summary_blocks_copy_only_promotions(

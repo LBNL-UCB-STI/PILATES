@@ -54,6 +54,26 @@ _LIFECYCLE_ATLAS_PREFIXES = (
     "modeaccessibility",
     "vehicle_type_mapping_",
 )
+_LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES = {
+    "beam_input_archived",
+}
+_LIFECYCLE_H5_POLICY_FAMILIES = {
+    "usim_datastore_h5",
+    "usim_datastore_base_h5",
+    "usim_datastore_current_h5",
+    "usim_forecast_output",
+    "usim_input_archive",
+    "usim_input_merged",
+    "usim_population_source_h5",
+    "usim_year_output_h5",
+}
+_LIFECYCLE_DIRECTORY_POLICY_FAMILIES = {
+    "asim_sharrow_cache_dir",
+    "zarr_skims",
+}
+_LIFECYCLE_OBSERVE_ONLY_FAMILIES = {
+    "atlas_observe_only",
+}
 
 
 def _json_safe(value: Any) -> Any:
@@ -233,8 +253,89 @@ def _archive_path_for_local(path: Optional[str]) -> Optional[str]:
 def _lifecycle_new_state() -> Dict[str, Any]:
     return {
         "events": [],
+        "attempts": [],
+        "current_attempt": None,
         "last_event_at": None,
     }
+
+
+def _lifecycle_new_attempt(
+    event: Mapping[str, Any],
+    attempt_number: int,
+) -> Dict[str, Any]:
+    attempt_id = event.get("lifecycle_attempt_id") or _attempt_id_for_event(
+        event,
+        attempt_number,
+    )
+    return {
+        "attempt_id": attempt_id,
+        "attempt_number": attempt_number,
+        "attempt_started_at": event.get("recorded_at"),
+        "events": [],
+        "last_event_at": None,
+    }
+
+
+def _lifecycle_state_from_existing(paths: Mapping[str, Path]) -> Dict[str, Any]:
+    state = _lifecycle_new_state()
+    events_path = paths["events"]
+    if not events_path.exists():
+        return state
+    imported_events: list[Mapping[str, Any]] = []
+    try:
+        with events_path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                event = json.loads(line)
+                if isinstance(event, Mapping):
+                    imported_events.append(event)
+    except Exception:
+        return state
+    if not imported_events:
+        return state
+    state["events"].extend(imported_events)
+    state["last_event_at"] = imported_events[-1].get("recorded_at")
+    attempts_root = paths["diagnostics_dir"] / "attempts"
+    for attempt_number, attempt_events_path in enumerate(
+        sorted(attempts_root.glob(f"*/{_LIFECYCLE_EVENTS_NAME}")),
+        start=1,
+    ):
+        attempt_events: list[Mapping[str, Any]] = []
+        try:
+            with attempt_events_path.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    event = json.loads(line)
+                    if isinstance(event, Mapping):
+                        attempt_events.append(event)
+        except Exception:
+            continue
+        if not attempt_events:
+            continue
+        state["attempts"].append(
+            {
+                "attempt_id": attempt_events_path.parent.name,
+                "attempt_number": attempt_number,
+                "attempt_started_at": attempt_events[0].get("recorded_at"),
+                "events": attempt_events,
+                "last_event_at": attempt_events[-1].get("recorded_at"),
+            }
+        )
+    if not state["attempts"]:
+        imported_attempt = {
+            "attempt_id": "imported_existing_lifecycle_events",
+            "attempt_number": 1,
+            "attempt_started_at": imported_events[0].get("recorded_at"),
+            "events": imported_events,
+            "last_event_at": imported_events[-1].get("recorded_at"),
+        }
+        state["attempts"].append(imported_attempt)
+    state["current_attempt"] = state["attempts"][-1]
+    return state
 
 
 def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
@@ -262,6 +363,12 @@ def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
         "usim_input_archive",
         "usim_input_merged",
         "usim_datastore_h5",
+        "usim_datastore_base_h5",
+        "usim_datastore_current_h5",
+        "usim_forecast_output",
+        "usim_population_source_h5",
+        "usim_year_output_h5",
+        "zarr_skims",
     }:
         return True
     if key.startswith(_LIFECYCLE_ATLAS_PREFIXES):
@@ -270,6 +377,8 @@ def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
 
 
 def _lifecycle_family(event: Mapping[str, Any]) -> str:
+    if str(event.get("event_type")) == "promotion_status":
+        return "post_run_promotion"
     artifact_family = str(event.get("artifact_family") or "")
     if artifact_family:
         return artifact_family
@@ -282,9 +391,23 @@ def _lifecycle_family(event: Mapping[str, Any]) -> str:
         return "usim_input_archive"
     if key.startswith("usim_input_merged_"):
         return "usim_input_merged"
+    if key.startswith("usim_year_output_h5_"):
+        return "usim_year_output_h5"
+    if key in _LIFECYCLE_SCOPED_KEYS:
+        return key
+    if key == "atlas_preprocess_output":
+        return "atlas_observe_only"
     if key.startswith(_LIFECYCLE_ATLAS_PREFIXES):
         return "atlas_observe_only"
-    return key or "unknown"
+    return "unknown"
+
+
+def _lifecycle_event_has_artifact_identity(event: Mapping[str, Any]) -> bool:
+    if event.get("artifact_family"):
+        return True
+    if event.get("key"):
+        return True
+    return str(event.get("event_type")) == "promotion_status"
 
 
 def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
@@ -314,15 +437,25 @@ def _copy_match_key(event: Mapping[str, Any]) -> tuple[str, str]:
     return key, os.path.abspath(path) if path and "://" not in path else path
 
 
-def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
-    events = list(state.get("events") or [])
+def _lifecycle_core_summary_payload(
+    *,
+    events: list[Mapping[str, Any]],
+    generated_at: Any,
+    phase2_recommendation_basis: str,
+    attempt_id: Optional[str] = None,
+    attempt_number: Optional[int] = None,
+    attempt_started_at: Any = None,
+) -> Dict[str, Any]:
     logged: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
     copied: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
     families_seen: set[str] = set()
     safe_families: set[str] = set()
     blocked_families: set[str] = set()
     blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
+    diagnostic_blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
     blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
+    phase2_blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
+    unknown_event_keys: set[str] = set()
     snapshot_logged = 0
     missing_required = 0
     copy_only_promotions = 0
@@ -330,7 +463,15 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
 
     for index, event in enumerate(events):
         family = _lifecycle_family(event)
-        families_seen.add(family)
+        if _lifecycle_event_has_artifact_identity(event):
+            families_seen.add(family)
+            if family == "unknown":
+                unknown_key = str(event.get("key") or event.get("event_type") or "unknown")
+                unknown_event_keys.add(unknown_key)
+                blocked_families.add("unknown")
+                blocking_reasons_by_family["unknown"].add("unclassified_family")
+                blocker_counts_by_reason["unclassified_family"] += 1
+                phase2_blocker_counts_by_reason["unclassified_family"] += 1
         event_type = str(event.get("event_type"))
         if event_type == "artifact_logged":
             logged[_copy_match_key(event)] = (index, event)
@@ -341,6 +482,7 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
                     blocked_families.add(family)
                     blocking_reasons_by_family[family].add("missing_required_snapshot_facets")
                     blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
+                    phase2_blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
         elif event_type == "archive_copy_completed":
             copied[_copy_match_key(event)] = (index, event)
         elif event_type == "promotion_status":
@@ -355,6 +497,7 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
                 blocked_families.add("post_run_promotion")
                 blocking_reasons_by_family["post_run_promotion"].add("copy_only_promotion_metadata_unavailable")
                 blocker_counts_by_reason["copy_only_promotion_metadata_unavailable"] += 1
+                phase2_blocker_counts_by_reason["copy_only_promotion_metadata_unavailable"] += 1
             elif metadata_updated:
                 safe_families.add("post_run_promotion")
         if bool(event.get("local_to_scratch_recovery_roots_written")):
@@ -391,23 +534,45 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
         if path_kind == "directory":
             shallow_directory += 1
             reasons.append("shallow_directory_signature")
-        if path_kind == "h5":
+        if path_kind == "h5" or family in _LIFECYCLE_H5_POLICY_FAMILIES:
             h5_policy += 1
             reasons.append("h5_parent_child_policy")
+        if family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
+            reasons.append("shallow_directory_signature")
+        if family not in _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES and not reasons:
+            reasons.append("phase2_policy_deferred")
 
         if reasons:
             blocked_families.add(family)
             for reason in sorted(set(reasons)):
-                blocking_reasons_by_family[family].add(reason)
+                if family in _LIFECYCLE_OBSERVE_ONLY_FAMILIES:
+                    diagnostic_blocking_reasons_by_family[family].add(reason)
+                else:
+                    blocking_reasons_by_family[family].add(reason)
                 blocker_counts_by_reason[reason] += 1
+                if family not in _LIFECYCLE_OBSERVE_ONLY_FAMILIES:
+                    phase2_blocker_counts_by_reason[reason] += 1
         else:
-            eligible += 1
-            safe_families.add(family)
+            if family in _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES:
+                eligible += 1
+                safe_families.add(family)
+            else:
+                blocked_families.add(family)
+                blocking_reasons_by_family[family].add("phase2_policy_deferred")
+                blocker_counts_by_reason["phase2_policy_deferred"] += 1
+                phase2_blocker_counts_by_reason["phase2_policy_deferred"] += 1
 
     if "atlas_observe_only" in families_seen:
         blocked_families.add("atlas_observe_only")
         blocking_reasons_by_family["atlas_observe_only"].add("deferred_policy")
         blocker_counts_by_reason["deferred_policy"] += 1
+    for family in sorted(families_seen):
+        if family in _LIFECYCLE_H5_POLICY_FAMILIES:
+            blocked_families.add(family)
+            blocking_reasons_by_family[family].add("h5_parent_child_policy")
+        elif family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
+            blocked_families.add(family)
+            blocking_reasons_by_family[family].add("shallow_directory_signature")
 
     if safe_families and blocked_families:
         recommendation = "narrow"
@@ -419,13 +584,15 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
         recommendation = "defer"
         reason = "The audit cannot yet prove safe recovery-root registration."
 
-    return {
-        "generated_at": state.get("last_event_at"),
+    payload = {
+        "generated_at": generated_at,
+        "phase2_recommendation_basis": phase2_recommendation_basis,
         "event_counts": {
             event_type: sum(1 for event in events if event.get("event_type") == event_type)
             for event_type in sorted({str(event.get("event_type")) for event in events})
         },
         "families_seen": sorted(families_seen),
+        "unknown_event_keys": sorted(unknown_event_keys),
         "snapshot_artifacts_logged": snapshot_logged,
         "snapshot_artifacts_missing_required_facets": missing_required,
         "copied_artifacts_eligible_for_recovery_root_registration": eligible,
@@ -449,7 +616,49 @@ def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
             reason: blocker_counts_by_reason[reason]
             for reason in sorted(blocker_counts_by_reason)
         },
+        "phase2_blocker_counts_by_reason": {
+            reason: phase2_blocker_counts_by_reason[reason]
+            for reason in sorted(phase2_blocker_counts_by_reason)
+        },
+        "diagnostic_blocking_reasons_by_family": {
+            family: sorted(reasons)
+            for family, reasons in sorted(
+                diagnostic_blocking_reasons_by_family.items()
+            )
+        },
     }
+    if attempt_id is not None:
+        payload["attempt_id"] = attempt_id
+    if attempt_number is not None:
+        payload["attempt_number"] = attempt_number
+    if attempt_started_at is not None:
+        payload["attempt_started_at"] = attempt_started_at
+    return payload
+
+
+def _lifecycle_summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
+    events = list(state.get("events") or [])
+    payload = _lifecycle_core_summary_payload(
+        events=events,
+        generated_at=state.get("last_event_at"),
+        phase2_recommendation_basis="aggregate_attempts",
+    )
+    attempt_summaries = [
+        _lifecycle_core_summary_payload(
+            events=list(attempt.get("events") or []),
+            generated_at=attempt.get("last_event_at"),
+            phase2_recommendation_basis="attempt",
+            attempt_id=str(attempt.get("attempt_id")),
+            attempt_number=attempt.get("attempt_number"),
+            attempt_started_at=attempt.get("attempt_started_at"),
+        )
+        for attempt in list(state.get("attempts") or [])
+    ]
+    payload["attempt_summaries"] = attempt_summaries
+    payload["latest_attempt_summary"] = (
+        attempt_summaries[-1] if attempt_summaries else None
+    )
+    return payload
 
 
 def _update_summary_state(state: Dict[str, Any], event: Mapping[str, Any]) -> None:
@@ -567,6 +776,8 @@ def emit_consist_audit_event(
             local_run_dir=fields.get("local_run_dir"),
             archive_run_dir=fields.get("archive_run_dir"),
             restart_run=fields.get("restart_run"),
+            lifecycle_attempt_id=current_state.get("attempt_id"),
+            lifecycle_attempt_number=current_state.get("attempt_number"),
         )
     elif event_type in {"step_resolution", "output_hydration_check"}:
         emit_artifact_lifecycle_audit_event(
@@ -578,6 +789,8 @@ def emit_consist_audit_event(
             iteration=fields.get("iteration"),
             run_id=fields.get("run_id"),
             resolution_mode=fields.get("resolution_mode"),
+            lifecycle_attempt_id=current_state.get("attempt_id"),
+            lifecycle_attempt_number=current_state.get("attempt_number"),
         )
 
 
@@ -605,18 +818,59 @@ def emit_artifact_lifecycle_audit_event(
     try:
         with _AUDIT_LOCK:
             state = _LIFECYCLE_STATE_BY_ROOT.get(root_key)
-            if state is None or event_type == "run_context":
-                state = _lifecycle_new_state()
+            if state is None:
+                state = _lifecycle_state_from_existing(paths)
                 _LIFECYCLE_STATE_BY_ROOT[root_key] = state
+            current_attempt = state.get("current_attempt")
+            is_new_attempt = current_attempt is None or event_type == "run_context"
+            if is_new_attempt:
+                attempt_number = int(
+                    event.get("lifecycle_attempt_number")
+                    or len(list(state.get("attempts") or [])) + 1
+                )
+                current_attempt = _lifecycle_new_attempt(event, attempt_number)
+                state.setdefault("attempts", []).append(current_attempt)
+                state["current_attempt"] = current_attempt
             state["events"].append(event)
+            current_attempt["events"].append(event)
             state["last_event_at"] = event["recorded_at"]
+            current_attempt["last_event_at"] = event["recorded_at"]
             paths["diagnostics_dir"].mkdir(parents=True, exist_ok=True)
-            event_mode = "w" if event_type == "run_context" else "a"
-            with paths["events"].open(event_mode, encoding="utf-8") as handle:
+            attempt_dir = _attempt_dir(
+                paths["diagnostics_dir"],
+                str(current_attempt["attempt_id"]),
+            )
+            attempt_paths = {
+                "diagnostics_dir": attempt_dir,
+                "events": attempt_dir / _LIFECYCLE_EVENTS_NAME,
+                "summary": attempt_dir / _LIFECYCLE_SUMMARY_NAME,
+            }
+            attempt_paths["diagnostics_dir"].mkdir(parents=True, exist_ok=True)
+            with paths["events"].open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(event, sort_keys=True) + "\n")
+            attempt_event_mode = (
+                "w" if is_new_attempt and len(current_attempt["events"]) == 1 else "a"
+            )
+            with attempt_paths["events"].open(
+                attempt_event_mode,
+                encoding="utf-8",
+            ) as handle:
                 handle.write(json.dumps(event, sort_keys=True) + "\n")
             summary_payload = _lifecycle_summary_payload(state)
             paths["summary"].write_text(
                 json.dumps(summary_payload, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+            attempt_summary = _lifecycle_core_summary_payload(
+                events=list(current_attempt.get("events") or []),
+                generated_at=current_attempt.get("last_event_at"),
+                phase2_recommendation_basis="attempt",
+                attempt_id=str(current_attempt.get("attempt_id")),
+                attempt_number=current_attempt.get("attempt_number"),
+                attempt_started_at=current_attempt.get("attempt_started_at"),
+            )
+            attempt_paths["summary"].write_text(
+                json.dumps(attempt_summary, indent=2, sort_keys=True),
                 encoding="utf-8",
             )
         enqueue_archive_copy(
@@ -626,6 +880,14 @@ def emit_artifact_lifecycle_audit_event(
         enqueue_archive_copy(
             key="workflow_diagnostics_artifact_lifecycle_audit_summary",
             path=paths["summary"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_artifact_lifecycle_audit_attempt",
+            path=attempt_paths["events"],
+        )
+        enqueue_archive_copy(
+            key="workflow_diagnostics_artifact_lifecycle_audit_summary_attempt",
+            path=attempt_paths["summary"],
         )
     except Exception:
         # This audit is intentionally shadow-mode and must never alter workflow
