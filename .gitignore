@@ -116,3 +116,4 @@ pilates_conda_env_setup4hima.txt
 .singularity/
 
 pilates/database/schema/generated/
+hpc/run-notifications.env
