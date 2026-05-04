@@ -108,6 +108,22 @@ ACCOUNT="$account_arg"
 EXPECTED_EXECUTION_DURATION="${EXPECTED_EXECUTION_DURATION:-3-00:00:00}"
 JOB_LOG_FILE_PATH="/global/scratch/users/$USER/pilates_logs/log_${DATETIME}_${RANDOM_PART}.log"
 
+print_notification_status() {
+    local gchat_enabled="${PILATES_GCHAT_NOTIFICATIONS:-0}"
+    local slack_enabled="${PILATES_SLACK_NOTIFICATIONS:-0}"
+    local gchat_webhook_status="missing"
+    local slack_webhook_status="missing"
+
+    if [ -n "${PILATES_GCHAT_WEBHOOK_URL:-}" ]; then
+        gchat_webhook_status="set"
+    fi
+    if [ -n "${PILATES_SLACK_WEBHOOK_URL:-}" ]; then
+        slack_webhook_status="set"
+    fi
+
+    echo "Run notifications: google_chat enabled=$gchat_enabled webhook=$gchat_webhook_status; slack enabled=$slack_enabled webhook=$slack_webhook_status"
+}
+
 if [ -f "$RUN_NOTIFICATIONS_ENV" ]; then
     # Export assignments from the env file so sbatch --export=ALL passes them
     # through to job.sh and run.py.
@@ -119,7 +135,10 @@ if [ -f "$RUN_NOTIFICATIONS_ENV" ]; then
 elif [ "$RUN_NOTIFICATIONS_ENV" = "$PILATES_DIR/hpc/run-notifications.env" ] \
     && [ -f "$PILATES_DIR/hpc/run-notifications.env.template" ]; then
     echo "Run notifications disabled: copy hpc/run-notifications.env.template to hpc/run-notifications.env to enable."
+elif [ -n "${PILATES_RUN_NOTIFICATIONS_ENV:-}" ]; then
+    echo "Run notifications disabled: PILATES_RUN_NOTIFICATIONS_ENV points to a missing file: $RUN_NOTIFICATIONS_ENV"
 fi
+print_notification_status
 
 resolve_path() {
     local path_arg="$1"

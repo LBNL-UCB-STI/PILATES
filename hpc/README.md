@@ -160,16 +160,13 @@ cp hpc/run-notifications.env.template hpc/run-notifications.env
 $EDITOR hpc/run-notifications.env
 ```
 
-In `hpc/run-notifications.env`, change the Google Chat section so it has the
-real webhook URL and notifications enabled:
+In `hpc/run-notifications.env`, paste the full Google Chat webhook URL between
+the quotes and change `PILATES_GCHAT_NOTIFICATIONS` from `0` to `1`:
 
 ```bash
-export PILATES_GCHAT_NOTIFICATIONS="${PILATES_GCHAT_NOTIFICATIONS:-1}"
-export PILATES_GCHAT_WEBHOOK_URL="${PILATES_GCHAT_WEBHOOK_URL:-https://chat.googleapis.com/v1/spaces/...}"
+export PILATES_GCHAT_NOTIFICATIONS=1
+export PILATES_GCHAT_WEBHOOK_URL="https://chat.googleapis.com/v1/spaces/..."
 ```
-
-Replace the example URL with the full webhook URL provided by the run
-coordinator.
 
 Then submit normally:
 
@@ -182,6 +179,33 @@ accidentally committed. `job_runner.sh` automatically loads that file when it
 exists before submitting. It then uses `sbatch --export=ALL,...`, so
 notification variables from that file are passed through to `job.sh` and then to
 `run.py`.
+
+On submission, `job_runner.sh` prints a non-secret status line. For Google Chat,
+it should look like:
+
+```text
+Loaded run notification environment: /global/scratch/users/<user>/sources/PILATES/hpc/run-notifications.env
+Run notifications: google_chat enabled=1 webhook=set; slack enabled=0 webhook=missing
+```
+
+Inside the Slurm log, PILATES should later print:
+
+```text
+PILATES run notifications enabled for: google_chat
+```
+
+If the Slurm log instead says both `PILATES_SLACK_NOTIFICATIONS` and
+`PILATES_GCHAT_NOTIFICATIONS` are not enabled, the job did not receive the env
+values. Check that `hpc/run-notifications.env` exists in the same checkout shown
+by `PILATES_DIR`, and that the edited file says `PILATES_GCHAT_NOTIFICATIONS=1`
+and has a non-empty webhook URL:
+
+```bash
+cd /global/scratch/users/$USER/sources/PILATES
+source hpc/run-notifications.env
+echo "gchat enabled=${PILATES_GCHAT_NOTIFICATIONS:-0}"
+test -n "${PILATES_GCHAT_WEBHOOK_URL:-}" && echo "gchat webhook=set" || echo "gchat webhook=missing"
+```
 
 Treat webhook URLs as secrets. Do not commit them to `job.sh`, scenario YAML, or
 other repo-tracked config. If a webhook URL is accidentally shared, ask the
