@@ -194,7 +194,7 @@ class RunNotificationMessage:
     @property
     def plain_text(self) -> str:
         body = "\n".join(f"- {_strip_backticks(line)}" for line in self.lines)
-        return f"{self.title}\n{body}"
+        return f"*{self.title}*\n{body}"
 
 
 @dataclass(frozen=True)
@@ -344,45 +344,68 @@ class ConsistRunNotifier:
         event: str,
         output_count: Optional[int] = None,
     ) -> tuple[str, ...]:
-        lines = [
-            f"run_id: `{_string_value(run.id, '<unknown>')}`",
-            f"model: `{_string_value(run.model_name, '<unknown>')}`",
-        ]
-        for label, value in (
-            ("year", run.year),
-            ("iteration", run.iteration),
-            ("stage", run.stage),
-            ("phase", run.phase),
-        ):
-            if value is not None:
-                lines.append(f"{label}: `{value}`")
-
+        is_scenario = _is_scenario_header(run)
+        lines = (
+            self._scenario_lines(run, event=event)
+            if is_scenario
+            else self._step_lines(run, event=event)
+        )
         cache_status = _cache_status(run, event=event)
         if cache_status:
-            lines.append(f"cache: {cache_status}")
+            lines.append(f"Result: {cache_status}")
         duration = run.duration_seconds
         if duration is not None:
-            lines.append(f"duration: {_format_duration(duration)}")
+            lines.append(f"Duration: {_format_duration(duration)}")
         if output_count is not None:
-            lines.append(f"outputs: {output_count}")
+            lines.append(f"Outputs: {output_count}")
 
+        if not is_scenario:
+            return tuple(lines)
+
+        if self.context.run_name and self.context.run_name != _string_value(
+            run.id, ""
+        ):
+            lines.append(f"Consist run: `{_string_value(run.id, '<unknown>')}`")
         if self.context.scenario_id:
-            lines.append(f"scenario_id: `{self.context.scenario_id}`")
+            lines.append(f"Scenario: `{self.context.scenario_id}`")
         if self.context.seed is not None:
-            lines.append(f"seed: `{self.context.seed}`")
+            lines.append(f"Seed: `{self.context.seed}`")
         if self.context.submit_user:
-            lines.append(f"user: `{self.context.submit_user}`")
+            lines.append(f"User: `{self.context.submit_user}`")
         slurm_job = _format_slurm_job(self.context)
         if slurm_job:
-            lines.append(f"slurm_job: `{slurm_job}`")
-        if self.context.slurm_partition:
-            lines.append(f"partition: `{self.context.slurm_partition}`")
+            lines.append(f"Slurm job: `{slurm_job}`")
+        cluster_parts = _cluster_parts(self.context)
+        if cluster_parts:
+            lines.append(f"Cluster: {' | '.join(f'`{part}`' for part in cluster_parts)}")
         node_label = _node_label(self.context)
-        if node_label:
-            lines.append(f"nodes: `{node_label}`")
+        if node_label and not cluster_parts:
+            lines.append(f"Nodes: `{node_label}`")
         if self.context.archive_run_dir:
-            lines.append(f"archive: `{self.context.archive_run_dir}`")
+            lines.append(f"Archive: `{self.context.archive_run_dir}`")
         return tuple(lines)
+
+    def _scenario_lines(self, run: Run, *, event: str) -> list[str]:
+        del event
+        return [
+            f"Run: `{self.context.run_name or _string_value(run.id, '<unknown>')}`",
+            f"Model: `{_string_value(run.model_name, '<unknown>')}`",
+        ]
+
+    def _step_lines(self, run: Run, *, event: str) -> list[str]:
+        del event
+        lines = [
+            f"Step: `{_string_value(run.model_name, '<unknown>')}`",
+        ]
+        timing_parts = _step_timing_parts(run)
+        if timing_parts:
+            lines.append(f"When: {' | '.join(f'`{part}`' for part in timing_parts)}")
+        if run.stage is not None:
+            lines.append(f"Stage: `{run.stage}`")
+        display_id = _display_run_id(run, context=self.context)
+        if display_id:
+            lines.append(f"ID: `{display_id}`")
+        return lines
 
     def _build_message(
         self,
@@ -394,7 +417,7 @@ class ConsistRunNotifier:
         run_id = _string_value(run.id, "<unknown>")
         return RunNotificationMessage(
             title=title,
-            run_id=run_id,
+            run_id=_display_run_id(run, context=self.context) or run_id,
             lines=tuple(lines),
             thread_key=_thread_key(context=self.context, run=run),
         )
@@ -571,18 +594,54 @@ def _format_slurm_job(context: RunNotificationContext) -> Optional[str]:
     return context.slurm_job_id or context.slurm_job_name
 
 
+def _cluster_parts(context: RunNotificationContext) -> tuple[str, ...]:
+    parts: list[str] = []
+    if context.slurm_partition:
+        parts.append(context.slurm_partition)
+    node_label = _node_label(context)
+    if node_label:
+        parts.append(node_label)
+    return tuple(parts)
+
+
 def _node_label(context: RunNotificationContext) -> Optional[str]:
     return context.slurm_node_list or context.hostname
+
+
+def _step_timing_parts(run: Run) -> tuple[str, ...]:
+    parts: list[str] = []
+    if run.year is not None:
+        parts.append(f"year {run.year}")
+    if run.iteration is not None:
+        parts.append(f"iter {run.iteration}")
+    if run.phase is not None:
+        parts.append(str(run.phase))
+    return tuple(parts)
+
+
+def _display_run_id(run: Run, *, context: RunNotificationContext) -> str:
+    run_id = _string_value(run.id, "")
+    if not run_id:
+        return ""
+    if _is_scenario_header(run):
+        return context.run_name or run_id
+
+    display_id = run_id
+    if context.run_name and display_id.startswith(context.run_name):
+        display_id = display_id[len(context.run_name) :].lstrip("_")
+    if display_id.startswith("step_func__"):
+        display_id = display_id[len("step_func__") :]
+    display_id = display_id.replace("__phase_", "__")
+    display_id = display_id.replace("__", " | ")
+    return display_id or run_id
 
 
 def _cache_status(run: Run, *, event: str) -> Optional[str]:
     meta: Mapping[str, object] = run.meta
     if bool(meta.get("cache_hit")):
-        return "hit"
+        return "cache hit"
     if event == "complete":
         return "executed"
-    if event == "start":
-        return "pending"
     return None
 
 

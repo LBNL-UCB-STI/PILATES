@@ -232,7 +232,46 @@ def test_notifier_verbose_mode_includes_internal_runs() -> None:
     assert backend.messages[0].fallback_text == "PILATES step started: workspace_setup"
 
 
-def test_notifier_message_includes_run_metadata_outputs_and_archive() -> None:
+def test_notifier_scenario_message_includes_run_user_job_and_archive() -> None:
+    backend = FakeBackend()
+    notifier = run_notifications.ConsistRunNotifier(
+        settings=_enabled_settings(),
+        backends=[backend],
+        context=RunNotificationContext(
+            run_name="pilates-run--sfbay--baseline",
+            scenario_id="sfbay-baseline",
+            seed=42,
+            archive_run_dir="/global/scratch/run",
+            submit_user="zaneedell",
+            slurm_job_id="22337428",
+            slurm_job_name="NGSWDCQD",
+            slurm_partition="lr7",
+            slurm_node_list="n0114.lr7",
+        ),
+    )
+
+    notifier.on_run_start(
+        _run(
+            "pilates-run--sfbay--baseline",
+            model_name="pilates_orchestrator",
+            tags=["scenario_header"],
+            meta={"cache_hit": False},
+        )
+    )
+
+    text = backend.messages[0].markdown_text
+    assert "Run: `pilates-run--sfbay--baseline`" in text
+    assert "Model: `pilates_orchestrator`" in text
+    assert "Result:" not in text
+    assert "Scenario: `sfbay-baseline`" in text
+    assert "Seed: `42`" in text
+    assert "User: `zaneedell`" in text
+    assert "Slurm job: `22337428 (NGSWDCQD)`" in text
+    assert "Cluster: `lr7` | `n0114.lr7`" in text
+    assert "Archive: `/global/scratch/run`" in text
+
+
+def test_notifier_step_message_is_compact_and_scannable() -> None:
     backend = FakeBackend()
     notifier = run_notifications.ConsistRunNotifier(
         settings=_enabled_settings(),
@@ -250,7 +289,7 @@ def test_notifier_message_includes_run_metadata_outputs_and_archive() -> None:
         ),
     )
     run = _run(
-        "beam_run__y2020__i0",
+        "pilates-run--sfbay--baseline__step_func__y2020__i0__phase_traffic_assignment_abcdef0",
         model_name="beam_run",
         parent_run_id="scenario",
         year=2020,
@@ -264,17 +303,36 @@ def test_notifier_message_includes_run_metadata_outputs_and_archive() -> None:
     notifier.on_run_complete(run, outputs=[_artifact("a"), _artifact("b")])
 
     message = backend.messages[0]
-    assert message.fallback_text == "PILATES step completed: beam_run__y2020__i0"
+    assert (
+        message.fallback_text
+        == "PILATES step completed: y2020 | i0 | traffic_assignment_abcdef0"
+    )
     assert message.thread_key == "pilates-run--sfbay--baseline"
-    assert "cache: hit" in message.markdown_text
-    assert "outputs: 2" in message.markdown_text
-    assert "duration: 2m 5s" in message.markdown_text
-    assert "archive: `/global/scratch/run`" in message.markdown_text
-    assert "scenario_id: `sfbay-baseline`" in message.markdown_text
-    assert "user: `zaneedell`" in message.markdown_text
-    assert "slurm_job: `22337428 (NGSWDCQD)`" in message.markdown_text
-    assert "partition: `lr7`" in message.markdown_text
-    assert "nodes: `n0114.lr7`" in message.markdown_text
+    assert "Step: `beam_run`" in message.markdown_text
+    assert "When: `year 2020` | `iter 0` | `traffic_assignment`" in message.markdown_text
+    assert "Stage: `supply_demand`" in message.markdown_text
+    assert "ID: `y2020 | i0 | traffic_assignment_abcdef0`" in message.markdown_text
+    assert "Result: cache hit" in message.markdown_text
+    assert "Outputs: 2" in message.markdown_text
+    assert "Duration: 2m 5s" in message.markdown_text
+    assert "Archive:" not in message.markdown_text
+    assert "Slurm job:" not in message.markdown_text
+
+
+def test_notifier_complete_message_marks_executed_result() -> None:
+    backend = FakeBackend()
+    notifier = run_notifications.ConsistRunNotifier(
+        settings=_enabled_settings(),
+        backends=[backend],
+        context=RunNotificationContext(run_name="pilates-run"),
+    )
+
+    notifier.on_run_complete(
+        _run("pilates-run__step_func__y2020__i0", parent_run_id="scenario"),
+        outputs=[],
+    )
+
+    assert "Result: executed" in backend.messages[0].markdown_text
 
 
 def test_notifier_truncates_long_failure_errors() -> None:
@@ -361,11 +419,11 @@ def test_register_consist_run_notification_hooks_with_real_consist_scenario(tmp_
     messages = [message.fallback_text for message in backend.messages]
     assert messages[0] == "PILATES run started: smoke_scenario"
     assert any(
-        message.startswith("PILATES step started: smoke_scenario_smoke_step")
+        message.startswith("PILATES step started: smoke_step")
         for message in messages
     )
     assert any(
-        message.startswith("PILATES step completed: smoke_scenario_smoke_step")
+        message.startswith("PILATES step completed: smoke_step")
         for message in messages
     )
     assert messages[-1] == "PILATES run completed: smoke_scenario"
@@ -419,6 +477,6 @@ def test_google_chat_backend_posts_threaded_payload(monkeypatch) -> None:
     )
     assert timeout == 4.0
     assert payload == {
-        "text": "PILATES run started\n- run_id: run-a",
+        "text": "*PILATES run started*\n- run_id: run-a",
         "thread": {"threadKey": "run-a"},
     }
