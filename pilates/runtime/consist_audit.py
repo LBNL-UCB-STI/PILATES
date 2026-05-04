@@ -432,6 +432,8 @@ def _lifecycle_missing_required_facets(event: Mapping[str, Any]) -> list[str]:
         value = event.get(field)
         if value in (None, "") and field == "year":
             value = event.get("artifact_year")
+        if value in (None, "") and field == "iteration":
+            value = event.get("artifact_iteration")
         if value in (None, ""):
             missing.append(field)
     return missing

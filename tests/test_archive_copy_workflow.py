@@ -612,6 +612,52 @@ def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     ]["usim_input_archive"]
 
 
+def test_artifact_lifecycle_summary_accepts_sanitized_artifact_iteration(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = (
+        local_root
+        / "activitysim"
+        / "output"
+        / "inputs-year-2030-iteration-0"
+        / "households.csv"
+    )
+    _write_file(source, "household_id\n1\n")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="asim_input_households_csv_archived",
+        path=str(source),
+        artifact_family="asim_input_archived",
+        artifact_year=2030,
+        artifact_iteration=0,
+        source_role="households_asim_in",
+        snapshot_role="asim_input_households_csv",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        sanitized_lifecycle_fields={
+            "iteration": "artifact_iteration",
+            "year": "artifact_year",
+        },
+    )
+    assert (
+        ch.archive_copy_now(key="asim_input_households_csv_archived", path=str(source))
+        is True
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["snapshot_artifacts_logged"] == 1
+    assert summary["snapshot_artifacts_missing_required_facets"] == 0
+    assert "missing_required_snapshot_facets" not in summary[
+        "blocking_reasons_by_family"
+    ].get("asim_input_archived", [])
+
+
 def test_artifact_lifecycle_summary_uses_first_log_for_copy_order(
     monkeypatch, tmp_path
 ):
