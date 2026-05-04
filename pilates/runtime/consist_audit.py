@@ -480,7 +480,7 @@ def _lifecycle_core_summary_payload(
                 phase2_blocker_counts_by_reason["unclassified_family"] += 1
         event_type = str(event.get("event_type"))
         if event_type == "artifact_logged":
-            logged[_copy_match_key(event)] = (index, event)
+            logged.setdefault(_copy_match_key(event), (index, event))
             if family in {"asim_input_archived", "beam_input_archived", "usim_input_archive", "usim_input_merged"}:
                 snapshot_logged += 1
                 if _lifecycle_missing_required_facets(event):

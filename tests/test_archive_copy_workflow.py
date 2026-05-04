@@ -612,6 +612,45 @@ def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     ]["usim_input_archive"]
 
 
+def test_artifact_lifecycle_summary_uses_first_log_for_copy_order(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "custom_mpo_model_data.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_datastore_h5",
+        path=str(source),
+        artifact_family="usim_datastore_h5",
+        artifact_year=2030,
+        h5_container=True,
+    )
+    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(source)) is True
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_datastore_h5",
+        path=str(source),
+        artifact_family="usim_datastore_h5",
+        artifact_year=2030,
+        h5_container=True,
+        snapshot_role="usim_input_merged",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["copied_artifacts_blocked_artifact_logging_after_copying"] == 0
+    assert summary["blocking_reasons_by_family"]["usim_datastore_h5"] == [
+        "h5_parent_child_policy"
+    ]
+
+
 def test_artifact_lifecycle_summary_blocks_copy_only_promotions(
     monkeypatch, tmp_path
 ):

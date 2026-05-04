@@ -12,7 +12,9 @@ def _write_h5(path, tables):
             store[key] = frame
 
 
-def test_create_next_iter_usim_data_enqueues_restart_h5s(monkeypatch, tmp_path):
+def test_create_next_iter_usim_data_returns_restart_h5s_without_archive_side_effects(
+    monkeypatch, tmp_path
+):
     mutable_dir = tmp_path / "urbansim" / "data"
     mutable_dir.mkdir(parents=True, exist_ok=True)
 
@@ -47,13 +49,6 @@ def test_create_next_iter_usim_data_enqueues_restart_h5s(monkeypatch, tmp_path):
         "read_datastore",
         lambda *_args, **_kwargs: (pd.HDFStore(str(output_path), "r"), "2023"),
     )
-    calls = []
-    monkeypatch.setattr(
-        usim_postprocessor,
-        "enqueue_archive_copy",
-        lambda **kwargs: calls.append(kwargs),
-    )
-
     records = usim_postprocessor.create_next_iter_usim_data(
         settings=settings,
         forecast_year=forecast_year,
@@ -63,7 +58,7 @@ def test_create_next_iter_usim_data_enqueues_restart_h5s(monkeypatch, tmp_path):
     assert records is not None
     assert f"usim_input_archive_{forecast_year}" in records
     assert f"usim_input_merged_{forecast_year}" in records
-    keys = {call["key"] for call in calls}
-    assert f"usim_year_output_h5_{forecast_year}" in keys
-    assert f"usim_input_archive_{forecast_year}" in keys
-    assert f"usim_input_merged_{forecast_year}" in keys
+    assert records[f"usim_input_archive_{forecast_year}"].name == (
+        f"input_data_for_{forecast_year}_outputs.h5"
+    )
+    assert records[f"usim_input_merged_{forecast_year}"] == input_path
