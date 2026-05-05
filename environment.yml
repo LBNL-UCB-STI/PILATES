@@ -76,7 +76,7 @@ dependencies:
     - pyhocon==0.3.61
 
     # Provenance tracking
-    - consist[ingest]>=0.1.3
+    - consist[ingest]>=0.1.4
     - openlineage-python
     - attrs>=20.0
     - httpx>=0.27.0
