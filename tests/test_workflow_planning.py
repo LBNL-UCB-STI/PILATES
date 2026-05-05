@@ -15,7 +15,7 @@ from pilates.workflows.planning import (
 from pilates.workflows.surface import build_enabled_workflow_surface
 
 
-SEATTLE_CONSIST_LOCAL = "scenarios/seattle/settings-seattle-consist-local.yaml"
+SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"
 
 
 def _build_plan(settings, *, include_postprocessing=False):
@@ -27,7 +27,7 @@ def _build_plan(settings, *, include_postprocessing=False):
 
 
 def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file():
-    plan = build_static_execution_plan_from_file(SEATTLE_CONSIST_LOCAL)
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     assert plan.metadata["years"] == [{"year": 2018, "forecast_year": 2018}]
     assert [step.step_name for step in plan.step_runs[:7]] == [
@@ -58,7 +58,7 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
 
 
 def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_steps():
-    settings = load_config(SEATTLE_CONSIST_LOCAL)
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.land_use_enabled = False
     settings.vehicle_ownership_model_enabled = False
     settings.activity_demand_enabled = True
@@ -314,7 +314,7 @@ def test_static_execution_plan_renders_mermaid_without_contract_gaps():
 
 
 def test_static_execution_plan_renders_html_wrapper():
-    plan = build_static_execution_plan_from_file(SEATTLE_CONSIST_LOCAL)
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     html = render_plan_html(plan)
 
@@ -335,7 +335,7 @@ def test_static_execution_plan_renders_html_wrapper():
 
 
 def test_renderers_can_hide_terminal_artifacts():
-    plan = build_static_execution_plan_from_file(SEATTLE_CONSIST_LOCAL)
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     html = render_plan_html(plan, hide_terminal_artifacts=True)
     mermaid = render_plan_mermaid(plan, hide_terminal_artifacts=True)
@@ -350,7 +350,7 @@ def test_renderers_can_hide_terminal_artifacts():
 def test_hide_terminal_artifacts_keeps_only_valid_edges():
     from pilates.workflows.lineage_render import _filtered_plan_for_render
 
-    plan = build_static_execution_plan_from_file(SEATTLE_CONSIST_LOCAL)
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
     filtered = _filtered_plan_for_render(plan, hide_terminal_artifacts=True)
     node_ids = {step.id for step in filtered.step_runs} | {
         artifact.id for artifact in filtered.artifacts
@@ -361,7 +361,7 @@ def test_hide_terminal_artifacts_keeps_only_valid_edges():
 
 
 def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_keys():
-    plan = build_static_execution_plan_from_file(SEATTLE_CONSIST_LOCAL)
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     zarr_instances = {
         artifact.instance_key
@@ -374,7 +374,7 @@ def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_key
 
 
 def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule():
-    settings = load_config(SEATTLE_CONSIST_LOCAL)
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.run.supply_demand_iters = 3
     settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="after_final_iteration")
 
@@ -390,7 +390,7 @@ def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule()
 
 
 def test_static_execution_plan_supports_beam_only_run():
-    settings = load_config(SEATTLE_CONSIST_LOCAL)
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.run.models.activity_demand = None
     settings.activity_demand_enabled = False
     settings.run.models.land_use = None

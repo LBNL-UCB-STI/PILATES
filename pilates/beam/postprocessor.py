@@ -2985,13 +2985,13 @@ def _merge_beam_skims_to_zarr(
             logger.warning(
                 "Correcting 'otaz' coordinates to be 0-based before final save."
             )
-            skims_ds.coords["otaz"].data[:] = expected_coords
+            skims_ds = skims_ds.assign_coords(otaz=expected_coords)
             otaz_corrected = True
         if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
             logger.warning(
                 "Correcting 'dtaz' coordinates to be 0-based before final save."
             )
-            skims_ds.coords["dtaz"].data[:] = expected_coords
+            skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
             dtaz_corrected = True
 
         skims_ds = zone_utils.normalize_dimension_coords_for_zarr(skims_ds)
