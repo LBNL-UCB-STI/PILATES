@@ -8,6 +8,7 @@ from typing import Callable, Dict, Mapping, Union, Optional, cast, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.runtime.archive_paths import archive_fallback_path
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import (
@@ -22,7 +23,6 @@ from pilates.atlas.inputs import (
 from pilates.utils.input_logging import log_inputs
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.binding import BindingPlan, build_binding_plan
-from pilates.workflows.binding import _archive_fallback_path
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import (
     ManifestConfig,
@@ -179,7 +179,7 @@ def select_atlas_usim_input_path(
         usim_dir,
         urbansim_settings.output_file_template.format(year=forecast_year),
     )
-    forecast_output_archive_path = _archive_fallback_path(
+    forecast_output_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=Path(forecast_output_path),

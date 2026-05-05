@@ -24,13 +24,20 @@ from pilates.workflows.coupler_namespace import (
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
 )
+from pilates.runtime.archive_paths import (
+    ARCHIVE_LOCAL_ENV as _ARCHIVE_LOCAL_ENV,
+    ARCHIVE_ROOT_ENV as _ARCHIVE_ROOT_ENV,
+    archive_roots as _archive_roots,
+    copy_archive_to_local as _copy_archive_to_local,
+    resolve_archive_path as _resolve_archive_path,
+    resolve_local_path as _resolve_local_path,
+    resolve_workspace_uri_path as _resolve_workspace_uri_path,
+)
 
 logger = logging.getLogger(__name__)
 _STEP_OUTPUT_WARNING_SIGNATURES: set[tuple[Any, ...]] = set()
 
 _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
-_ARCHIVE_LOCAL_ENV = "PILATES_LOCAL_RUN_DIR"
-_ARCHIVE_ROOT_ENV = "PILATES_ARCHIVE_RUN_DIR"
 _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "urbansim_bootstrap_data_root",
     "beam_mutable_data_dir",
@@ -112,60 +119,6 @@ def _archive_enabled() -> bool:
     return value.lower() in {"1", "true", "yes", "on"}
 
 
-def _archive_roots() -> Optional[tuple[str, str]]:
-    local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
-    archive_root = os.environ.get(_ARCHIVE_ROOT_ENV)
-    if not local_root or not archive_root:
-        return None
-    return os.path.abspath(local_root), os.path.abspath(archive_root)
-
-
-def _path_under_root(path: str, root: str) -> bool:
-    try:
-        return os.path.commonpath([path, root]) == root
-    except ValueError:
-        return False
-
-
-def _resolve_archive_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
-    abs_path = os.path.abspath(path)
-    if _path_under_root(abs_path, archive_root):
-        return None
-    if not _path_under_root(abs_path, local_root):
-        return None
-    rel_path = os.path.relpath(abs_path, local_root)
-    return os.path.join(archive_root, rel_path)
-
-
-def _resolve_local_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
-    abs_path = os.path.abspath(path)
-    if _path_under_root(abs_path, local_root):
-        return abs_path
-    if not _path_under_root(abs_path, archive_root):
-        return None
-    rel_path = os.path.relpath(abs_path, archive_root)
-    return os.path.join(local_root, rel_path)
-
-
-def _resolve_workspace_uri_path(
-    path: str,
-    workspace: Optional["Workspace"] = None,
-) -> Optional[str]:
-    if not isinstance(path, str):
-        return None
-    prefix = "workspace://"
-    if not path.startswith(prefix):
-        return path
-    rel_path = path[len(prefix) :].lstrip("/")
-    if workspace is not None and getattr(workspace, "full_path", None):
-        return os.path.join(str(workspace.full_path), rel_path)
-    roots = _archive_roots()
-    if roots is None:
-        return None
-    local_root, _archive_root = roots
-    return os.path.join(local_root, rel_path)
-
-
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
     container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
     if not isinstance(container_uri, str) or not container_uri.startswith("workspace://"):
@@ -178,28 +131,6 @@ def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
         return None
     rel_path = container_uri[len("workspace://") :].lstrip("/")
     return os.path.abspath(os.path.join(str(mount_root), rel_path))
-
-
-def _copy_archive_to_local(
-    *,
-    local_path: str,
-    archive_path: str,
-) -> Optional[str]:
-    try:
-        os.makedirs(os.path.dirname(local_path), exist_ok=True)
-        if os.path.isdir(archive_path):
-            shutil.copytree(archive_path, local_path, dirs_exist_ok=True)
-        else:
-            shutil.copy2(archive_path, local_path)
-        return local_path
-    except Exception as exc:
-        logger.warning(
-            "[Archive] Failed to materialize %s from archive %s: %s",
-            local_path,
-            archive_path,
-            exc,
-        )
-        return None
 
 
 def _archive_dir_allowed(key: str) -> bool:

@@ -31,6 +31,7 @@ from typing import (
 
 from consist.types import BindingResult
 
+from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
@@ -546,32 +547,6 @@ def urbansim_datastore_selection_rules(
     )
 
 
-def _archive_fallback_path(
-    *,
-    state: Any,
-    workspace: Any,
-    local_path: Path,
-) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
-    full_path = getattr(workspace, "full_path", None)
-    if not run_info_path or full_path is None:
-        return None
-    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
-    local_root = Path(full_path).expanduser().resolve()
-    try:
-        rel = local_path.expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
-def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
-    for path in paths:
-        if path is not None and path.exists():
-            return path
-    return None
-
-
 def _candidate_paths_metadata(
     *paths_by_semantic_key: tuple[str, Sequence[Optional[Path]]],
 ) -> Dict[str, list[str]]:
@@ -603,12 +578,12 @@ def _urbansim_datastore_candidates_for_year(
     input_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="input"
     )
-    input_archive_path = _archive_fallback_path(
+    input_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=input_path,
     )
-    base_path = _first_existing_path(input_path, input_archive_path)
+    base_path = first_existing_path(input_path, input_archive_path)
     candidate_paths = _candidate_paths_metadata(
         (USIM_DATASTORE_BASE_H5, (input_path, input_archive_path)),
     )
@@ -649,12 +624,12 @@ def _urbansim_datastore_candidates_for_year(
     output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="output", year=year
     )
-    output_archive_path = _archive_fallback_path(
+    output_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=output_path,
     )
-    current_path = _first_existing_path(output_path, output_archive_path)
+    current_path = first_existing_path(output_path, output_archive_path)
     candidate_paths.update(
         _candidate_paths_metadata(
             (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
@@ -935,12 +910,12 @@ def _beam_preprocess_config_input(
     except Exception:
         return None
 
-    archive_path = _archive_fallback_path(
+    archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=local_path,
     )
-    selected = _first_existing_path(local_path, archive_path)
+    selected = first_existing_path(local_path, archive_path)
     if selected is None:
         return None
     return {BEAM_CONFIG_FILE: str(selected)}
