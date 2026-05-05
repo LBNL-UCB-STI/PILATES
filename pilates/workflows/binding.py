@@ -1,9 +1,3 @@
-from __future__ import annotations
-
-import logging
-import os
-from pathlib import Path
-
 """
 Workflow binding-layer data structures.
 
@@ -16,17 +10,22 @@ derive their artifact universe from the catalog by reference so runtime binding
 does not become a second manually maintained semantic registry.
 """
 
+from __future__ import annotations
+
+import logging
+import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Dict,
     Iterable,
+    Literal,
     Mapping,
     Optional,
     Sequence,
-    Literal,
 )
 
 from consist.types import BindingResult

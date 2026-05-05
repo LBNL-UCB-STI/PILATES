@@ -1,0 +1,9 @@
+target-version = "py38"
+include = ["run.py", "workflow_state.py", "pilates/workflows/**/*.py"]
+
+[lint]
+select = ["E", "F"]
+ignore = ["E501"]
+
+[lint.per-file-ignores]
+"run.py" = ["E402"]

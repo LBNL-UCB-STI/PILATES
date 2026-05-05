@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pilates.workflows.planning import StaticExecutionPlan
 
@@ -157,7 +157,6 @@ def render_plan_html(
     if not gaps_html:
         gaps_html = "<li>No contract gaps reported.</li>"
 
-    step_by_id = {step.id: step for step in plan.step_runs}
     consumed_by_artifact_id: Dict[str, List[str]] = {}
     for edge in plan.edges:
         if edge.kind != "consumes":

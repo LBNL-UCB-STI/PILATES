@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
 from consist.types import H5ChildSpec
 
@@ -79,6 +79,9 @@ from pilates.workflows.input_resolution import (
 from pilates.workflows.tracker_outputs import merge_canonical_output_mappings
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 _ACTIVITYSIM_POPULATION_TABLE_KEYS = (
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -1105,7 +1108,6 @@ def make_activitysim_preprocess_step(
         )
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
-            input_key = USIM_POPULATION_SOURCE_H5
             population_year = resolve_forecast_year(state)
             input_desc = (
                 "UrbanSim population-source datastore for ActivitySim "
@@ -1469,7 +1471,6 @@ def make_activitysim_postprocess_step(
                 "WorkflowState.forecast_year must be set before ActivitySim postprocess."
             )
         asim_input_dir = workspace.get_asim_mutable_data_dir()
-        asim_output_dir = workspace.get_asim_output_dir()
         asim_input_sources = [
             (
                 ASIM_HOUSEHOLDS_IN,

@@ -32,6 +32,14 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      - name: Check Ruff formatting
+        run: |
+          python -m ruff format --check .
+
+      - name: Run Ruff lint
+        run: |
+          python -m ruff check .
+
       - name: Collect tests
         run: |
           python -m pytest --collect-only -q tests

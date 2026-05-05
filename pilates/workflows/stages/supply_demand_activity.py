@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Union
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import (
@@ -54,6 +54,9 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 _ACTIVITYSIM_PILOT_H5_ROLE_KEYS = (
     USIM_POPULATION_SOURCE_H5,
