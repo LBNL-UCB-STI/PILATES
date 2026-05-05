@@ -264,9 +264,7 @@ def beam_preprocess_binding_diagnostic_payload(
         "source_by_key": dict(
             sorted(
                 (
-                    binding.source_by_key
-                    if binding.source_by_key is not None
-                    else {}
+                    binding.source_by_key if binding.source_by_key is not None else {}
                 ).items()
             )
         ),
@@ -729,9 +727,7 @@ def _hydrate_completed_beam_run_outputs(
         )
         return None
     publication_keys = [
-        key
-        for key in (LINKSTATS, BEAM_PLANS_OUT)
-        if key in tracker_outputs
+        key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in tracker_outputs
     ]
     required_keys = list(dict.fromkeys([*critical_keys, *publication_keys]))
 

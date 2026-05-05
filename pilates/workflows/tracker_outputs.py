@@ -10,9 +10,7 @@ RunOutputValue = TypeVar("RunOutputValue")
 
 
 class TrackerRunOutputs(Protocol[RunOutputValue]):
-    def get_run_outputs(
-        self, run_id: str
-    ) -> Mapping[str, RunOutputValue] | None: ...
+    def get_run_outputs(self, run_id: str) -> Mapping[str, RunOutputValue] | None: ...
 
 
 def canonicalize_output_mapping(
