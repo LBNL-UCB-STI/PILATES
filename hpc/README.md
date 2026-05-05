@@ -27,7 +27,7 @@ Why:
 3. Submit from repo root:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 The command prints the Slurm log path.
@@ -37,7 +37,7 @@ The command prints the Slurm log path.
 Default `lr7`:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 By default this requests `240G` on `lr7`.
@@ -45,20 +45,25 @@ By default this requests `240G` on `lr7`.
 Use high-memory `lr7` mode (`480G`):
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> --high-mem
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> --high-mem
 ```
 
 Use `lr8`:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr8
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -p lr8
 ```
 
 Restart from an existing stage file:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -s current_stage_restart.yaml
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -s current_stage_restart.yaml
 ```
+
+Tracked scenario files are copy/edit starting points for the current cluster
+storage posture and model wiring. They are not turnkey machine-independent
+configs; review account-specific paths, data roots, output roots, and model
+selections before submitting.
 
 ## BEAM Memory Templating
 
@@ -71,7 +76,7 @@ Restart from an existing stage file:
 Override explicitly:
 
 ```bash
-BEAM_MEMORY=450g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr7
+BEAM_MEMORY=450g ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -p lr7
 ```
 
 `job_runner.sh` writes a per-job generated settings file (`settings_<jobid>.yaml`) and submits that file to `job.sh`.
@@ -107,11 +112,11 @@ rm -f /global/scratch/users/$USER/sources/PILATES/PILATES-env/.last_requirements
 Override examples:
 
 ```bash
-CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 ```bash
-CONSIST_PYPI_PACKAGE=consist==0.1.3 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+CONSIST_PYPI_PACKAGE=consist==0.1.3 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 ## Dependency Gates
@@ -131,11 +136,11 @@ When changing these, keep compatibility with the active Python module version an
 Examples:
 
 ```bash
-EXPECTED_EXECUTION_DURATION=2-00:00:00 ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+EXPECTED_EXECUTION_DURATION=2-00:00:00 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 ```bash
-MEMORY_LIMIT_GB=550 BEAM_MEMORY=420g ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account> -p lr7
+MEMORY_LIMIT_GB=550 BEAM_MEMORY=420g ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -p lr7
 ```
 
 `job.sh` also sets thread caps (`OMP_NUM_THREADS`, `MKL_NUM_THREADS`, etc.) from `PILATES_THREADS` (default `8`).
@@ -171,7 +176,7 @@ export PILATES_GCHAT_WEBHOOK_URL="https://chat.googleapis.com/v1/spaces/..."
 Then submit normally:
 
 ```bash
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 `hpc/run-notifications.env` is ignored by git so real webhook URLs are not
@@ -218,13 +223,13 @@ You can also export variables directly in your current shell; the defaults in
 ```bash
 export PILATES_SLACK_NOTIFICATIONS=1
 export PILATES_SLACK_WEBHOOK_URL="https://hooks.slack.com/services/..."
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 ```bash
 export PILATES_GCHAT_NOTIFICATIONS=1
 export PILATES_GCHAT_WEBHOOK_URL="https://chat.googleapis.com/v1/spaces/..."
-./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
 
 Optional controls:

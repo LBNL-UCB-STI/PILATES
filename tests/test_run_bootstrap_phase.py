@@ -1666,6 +1666,35 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     assert "run_state.yaml" in caplog.text
 
 
+def test_pre_scenario_failure_emits_registered_failure_hooks():
+    class FailureSink:
+        def __init__(self):
+            self.calls = []
+
+        def on_run_failed(self, run, error):
+            self.calls.append((run, error))
+
+    notifier = FailureSink()
+    publisher = FailureSink()
+    prepared = SimpleNamespace(
+        run_name="pilates-run--seattle--base",
+        run_notifier=notifier,
+        run_publisher=publisher,
+    )
+    error = RuntimeError("contract failed")
+
+    run_module._emit_pre_scenario_failure(prepared, error)
+
+    assert notifier.calls[0][1] is error
+    assert publisher.calls[0][1] is error
+    failure_run = notifier.calls[0][0]
+    assert failure_run.id == "pilates-run--seattle--base"
+    assert failure_run.model_name == "pilates_orchestrator"
+    assert failure_run.status == "failed"
+    assert "scenario_header" in failure_run.tags
+    assert failure_run.meta["launcher_failure"] is True
+
+
 def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     state = SimpleNamespace()

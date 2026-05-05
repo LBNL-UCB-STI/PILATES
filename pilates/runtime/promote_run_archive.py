@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 import json
 import logging
 import os
 from pathlib import Path
 import shutil
+import tempfile
 from typing import Any, Iterable, Optional, Sequence
 
 from pilates.config import PilatesConfig, load_config
@@ -36,6 +37,9 @@ class PromotionResult:
     verify_only: bool
     db_path: Optional[str]
     marker_path: Optional[str]
+    root_run_id: Optional[str] = None
+    scoped_run_ids: list[str] = field(default_factory=list)
+    merge_result: Optional[dict[str, Any]] = None
     roots: list[RootPromotionResult] = field(default_factory=list)
 
     @property
@@ -87,10 +91,7 @@ def _source_archive_run_dir(
 
     pattern = f"pilates-run--{run_cfg.region}--{run_cfg.output_run_name}--*"
     matches = sorted(
-        (
-            path for path in archive_root.glob(pattern)
-            if path.is_dir()
-        ),
+        (path for path in archive_root.glob(pattern) if path.is_dir()),
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -208,14 +209,171 @@ def _open_archive_tracker(
     return tracker
 
 
-def _all_output_artifacts(tracker: Any) -> list[Any]:
+def _json_safe(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if is_dataclass(value):
+        return _json_safe(asdict(value))
+    if isinstance(value, dict):
+        return {str(key): _json_safe(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _all_runs(tracker: Any) -> list[Any]:
+    return list(tracker.find_runs(limit=100_000))
+
+
+def _run_tags(run: Any) -> list[str]:
+    tags = getattr(run, "tags", None) or []
+    if isinstance(tags, str):
+        return [tags]
+    return [str(tag) for tag in tags]
+
+
+def _run_sort_key(run: Any) -> tuple[str, str]:
+    created_at = getattr(run, "created_at", None)
+    return (
+        str(created_at) if created_at is not None else "",
+        str(getattr(run, "id", "")),
+    )
+
+
+def _resolve_db_file_path(path: str | os.PathLike[str]) -> Path:
+    return Path(os.path.expandvars(os.fspath(path))).expanduser().resolve()
+
+
+def _validate_merge_conflict(conflict: str) -> str:
+    normalized = str(conflict).strip().lower()
+    if normalized not in {"error", "skip"}:
+        raise ValueError("merge_conflict must be one of: error, skip")
+    return normalized
+
+
+def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
+    try:
+        from consist.core.persistence import DatabaseManager
+    except Exception as exc:  # pragma: no cover - depends on optional consist install
+        raise RuntimeError(
+            "Could not import Consist DatabaseManager for main DB inspection."
+        ) from exc
+
+    resolved_main_db_path = _resolve_db_file_path(main_db_path)
+    if not resolved_main_db_path.exists():
+        raise FileNotFoundError(
+            f"Main Consist DB does not exist: {resolved_main_db_path}"
+        )
+
+    db = DatabaseManager(str(resolved_main_db_path))
+    try:
+        with db.engine.begin() as conn:
+            rows = conn.exec_driver_sql('SELECT id FROM "run"').fetchall()
+        return {str(row[0]) for row in rows}
+    finally:
+        db.engine.dispose()
+
+
+def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
+    children_by_parent: dict[str, list[str]] = {}
+    available_ids = {str(getattr(run, "id")) for run in runs}
+    if root_run_id not in available_ids:
+        raise ValueError(f"root run ID not found in archive DB: {root_run_id}")
+    for run in runs:
+        run_id = str(getattr(run, "id"))
+        parent_id = getattr(run, "parent_run_id", None)
+        if parent_id is None:
+            continue
+        children_by_parent.setdefault(str(parent_id), []).append(run_id)
+    for children in children_by_parent.values():
+        children.sort()
+
+    scoped: list[str] = []
+    seen: set[str] = set()
+    queue: list[str] = [root_run_id]
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        scoped.append(current)
+        queue.extend(
+            child for child in children_by_parent.get(current, []) if child not in seen
+        )
+    return scoped
+
+
+def _resolve_root_run_id(
+    tracker: Any,
+    *,
+    root_run_id: Optional[str] = None,
+    main_db_path: Optional[str | os.PathLike[str]] = None,
+) -> tuple[str, list[str]]:
+    runs = _all_runs(tracker)
+    if root_run_id:
+        resolved = str(root_run_id)
+        return resolved, _expand_run_subtree(resolved, runs)
+
+    inherited_run_ids = (
+        _existing_main_run_ids(main_db_path) if main_db_path is not None else set()
+    )
+    root_candidates = [
+        run
+        for run in runs
+        if getattr(run, "parent_run_id", None) is None
+        and str(getattr(run, "id")) not in inherited_run_ids
+    ]
+    pilates_candidates = [
+        run for run in root_candidates if "pilates_simulation" in set(_run_tags(run))
+    ]
+    if pilates_candidates:
+        root_candidates = pilates_candidates
+    else:
+        orchestrator_candidates = [
+            run
+            for run in root_candidates
+            if str(getattr(run, "model_name", "")) == "pilates_orchestrator"
+        ]
+        if orchestrator_candidates:
+            root_candidates = orchestrator_candidates
+
+    root_candidates = sorted(root_candidates, key=_run_sort_key, reverse=True)
+    if len(root_candidates) != 1:
+        rendered = [
+            {
+                "id": str(getattr(run, "id", "")),
+                "model": str(getattr(run, "model_name", "")),
+                "status": str(getattr(run, "status", "")),
+                "tags": _run_tags(run),
+                "created_at": str(getattr(run, "created_at", "")),
+            }
+            for run in root_candidates[:20]
+        ]
+        raise ValueError(
+            "Could not resolve exactly one promotion root run. "
+            "Pass --root-run-id explicitly. Candidates: "
+            + json.dumps(rendered, sort_keys=True)
+        )
+
+    resolved = str(getattr(root_candidates[0], "id"))
+    return resolved, _expand_run_subtree(resolved, runs)
+
+
+def _all_output_artifacts(
+    tracker: Any,
+    *,
+    run_ids: Optional[Iterable[str]] = None,
+) -> list[Any]:
     artifacts: list[Any] = []
     seen_artifact_ids: set[str] = set()
-    for run in tracker.find_runs(limit=100_000):
-        run_artifacts = tracker.get_artifacts_for_run(str(run.id))
-        run_outputs = (
-            run_artifacts.outputs if run_artifacts.outputs is not None else {}
-        )
+    selected_run_ids = (
+        list(run_ids)
+        if run_ids is not None
+        else [str(run.id) for run in _all_runs(tracker)]
+    )
+    for run_id in selected_run_ids:
+        run_artifacts = tracker.get_artifacts_for_run(str(run_id))
+        run_outputs = run_artifacts.outputs if run_artifacts.outputs is not None else {}
         for artifact in list(run_outputs.values()):
             artifact_id = str(getattr(artifact, "id", ""))
             if artifact_id and artifact_id in seen_artifact_ids:
@@ -226,9 +384,14 @@ def _all_output_artifacts(tracker: Any) -> list[Any]:
     return artifacts
 
 
-def _update_artifact_recovery_roots(tracker: Any, recovery_run_dir: Path) -> int:
+def _update_artifact_recovery_roots(
+    tracker: Any,
+    recovery_run_dir: Path,
+    *,
+    run_ids: Optional[Iterable[str]] = None,
+) -> int:
     updated = 0
-    for artifact in _all_output_artifacts(tracker):
+    for artifact in _all_output_artifacts(tracker, run_ids=run_ids):
         tracker.set_artifact_recovery_roots(
             artifact,
             [str(recovery_run_dir)],
@@ -260,7 +423,10 @@ def _write_promotion_marker(
     marker_path.parent.mkdir(parents=True, exist_ok=True)
     payload = result.to_dict()
     payload["generated_at_utc"] = datetime.now(timezone.utc).isoformat()
-    marker_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    marker_path.write_text(
+        json.dumps(_json_safe(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     return marker_path
 
 
@@ -285,12 +451,128 @@ def _dispose_tracker(tracker: Any) -> None:
         engine.dispose()
 
 
+def _merge_scoped_run_db(
+    *,
+    source_tracker: Any,
+    source_run_dir: Path,
+    root_run_id: str,
+    main_db_path: str | os.PathLike[str],
+    conflict: str,
+    include_data: bool,
+    dry_run: bool,
+    shard_path: Optional[str | os.PathLike[str]] = None,
+) -> dict[str, Any]:
+    conflict = _validate_merge_conflict(conflict)
+    resolved_main_db_path = _resolve_db_file_path(main_db_path)
+    if not resolved_main_db_path.exists():
+        raise FileNotFoundError(
+            f"Main Consist DB does not exist: {resolved_main_db_path}"
+        )
+
+    try:
+        from consist.core.maintenance import DatabaseMaintenance
+        from consist.core.persistence import DatabaseManager
+    except Exception as exc:  # pragma: no cover - depends on optional consist install
+        raise RuntimeError("Could not import Consist DB maintenance helpers.") from exc
+
+    source_db = getattr(source_tracker, "db", None)
+    if source_db is None:
+        raise RuntimeError("Source tracker has no database manager for DB merge.")
+
+    source_maintenance = DatabaseMaintenance(db=source_db, run_dir=source_run_dir)
+    shard_output = (
+        _resolve_db_file_path(shard_path)
+        if shard_path is not None
+        else source_run_dir
+        / ".consist"
+        / f"promotion-shard-{root_run_id.replace(os.sep, '_')}.duckdb"
+    )
+    if not dry_run:
+        shard_output.parent.mkdir(parents=True, exist_ok=True)
+        export_result = source_maintenance.export(
+            root_run_id,
+            shard_output,
+            include_data=include_data,
+            include_snapshots=False,
+            include_children=True,
+            dry_run=False,
+        )
+    else:
+        with tempfile.TemporaryDirectory(prefix="pilates-promotion-") as tmpdir:
+            preview_shard = Path(tmpdir) / "promotion-shard.duckdb"
+            export_result = source_maintenance.export(
+                root_run_id,
+                preview_shard,
+                include_data=include_data,
+                include_snapshots=False,
+                include_children=True,
+                dry_run=False,
+            )
+            target_db = DatabaseManager(str(resolved_main_db_path))
+            try:
+                target_maintenance = DatabaseMaintenance(
+                    db=target_db,
+                    run_dir=resolved_main_db_path.parent,
+                )
+                merge_result = target_maintenance.merge(
+                    preview_shard,
+                    conflict=conflict,
+                    include_snapshots=False,
+                    dry_run=True,
+                )
+            finally:
+                target_db.engine.dispose()
+            payload = {
+                "dry_run": True,
+                "main_db_path": str(resolved_main_db_path),
+                "root_run_id": root_run_id,
+                "shard_path": None,
+                "temporary_shard_path": str(preview_shard),
+                "temporary_shard_removed": True,
+                "export_result": asdict(export_result),
+                "merge_result": asdict(merge_result),
+            }
+            return _json_safe(payload)
+
+    target_db = DatabaseManager(str(resolved_main_db_path))
+    try:
+        target_maintenance = DatabaseMaintenance(
+            db=target_db,
+            run_dir=resolved_main_db_path.parent,
+        )
+        merge_result = target_maintenance.merge(
+            shard_output,
+            conflict=conflict,
+            include_snapshots=False,
+            dry_run=False,
+        )
+    finally:
+        target_db.engine.dispose()
+
+    return _json_safe(
+        {
+            "dry_run": False,
+            "main_db_path": str(resolved_main_db_path),
+            "root_run_id": root_run_id,
+            "shard_path": str(shard_output),
+            "export_result": asdict(export_result),
+            "merge_result": asdict(merge_result),
+        }
+    )
+
+
 def promote_run_to_recovery_roots(
     settings: PilatesConfig,
     archive_run_dir: Optional[str | os.PathLike[str]] = None,
     tracker: Any = None,
     roots: Optional[Iterable[str | os.PathLike[str]]] = None,
     verify: bool = True,
+    root_run_id: Optional[str] = None,
+    merge_main_db: Optional[str | os.PathLike[str]] = None,
+    merge_conflict: str = "error",
+    merge_include_data: bool = True,
+    merge_dry_run: bool = False,
+    merge_shard_path: Optional[str | os.PathLike[str]] = None,
     *,
     dry_run: bool = False,
     verify_only: bool = False,
@@ -299,6 +581,8 @@ def promote_run_to_recovery_roots(
     recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
+    if merge_main_db is not None:
+        merge_conflict = _validate_merge_conflict(merge_conflict)
 
     result = PromotionResult(
         source_run_dir=str(source_run_dir),
@@ -310,12 +594,46 @@ def promote_run_to_recovery_roots(
 
     opened_tracker = None
     working_tracker = tracker or cr.current_tracker()
-    if working_tracker is None and not dry_run and not verify_only and db_path is not None:
+    needs_tracker = (
+        not dry_run
+        and not verify_only
+        and db_path is not None
+        and (
+            merge_main_db is not None or root_run_id is not None or db_path is not None
+        )
+    )
+    if working_tracker is None and needs_tracker:
         opened_tracker = _open_archive_tracker(settings, archive_run_dir=source_run_dir)
         working_tracker = opened_tracker
+    if (
+        merge_main_db is not None
+        and not dry_run
+        and not verify_only
+        and working_tracker is None
+    ):
+        raise RuntimeError(
+            "Cannot merge into a main DB because no run-local Consist tracker "
+            "could be opened for the archive run."
+        )
 
     successful_destinations: list[Path] = []
     try:
+        scoped_run_ids: list[str] = []
+        resolved_root_run_id: Optional[str] = None
+        if working_tracker is not None and not dry_run and not verify_only:
+            resolved_root_run_id, scoped_run_ids = _resolve_root_run_id(
+                working_tracker,
+                root_run_id=root_run_id,
+                main_db_path=merge_main_db,
+            )
+            result.root_run_id = resolved_root_run_id
+            result.scoped_run_ids = scoped_run_ids
+            logger.info(
+                "Resolved promotion root run id %s with %d scoped run(s)",
+                resolved_root_run_id,
+                len(scoped_run_ids),
+            )
+
         for recovery_root in recovery_roots:
             destination_run_dir = recovery_root / source_run_dir.name
             entry = RootPromotionResult(
@@ -350,6 +668,7 @@ def promote_run_to_recovery_roots(
                     _update_artifact_recovery_roots(
                         working_tracker,
                         destination_run_dir,
+                        run_ids=scoped_run_ids or None,
                     )
                     entry.artifact_metadata_updated = True
 
@@ -369,8 +688,35 @@ def promote_run_to_recovery_roots(
                     recovery_root,
                 )
 
+        if (
+            merge_main_db is not None
+            and not dry_run
+            and not verify_only
+            and working_tracker is not None
+            and resolved_root_run_id is not None
+        ):
+            if result.success:
+                result.merge_result = _merge_scoped_run_db(
+                    source_tracker=working_tracker,
+                    source_run_dir=source_run_dir,
+                    root_run_id=resolved_root_run_id,
+                    main_db_path=merge_main_db,
+                    conflict=merge_conflict,
+                    include_data=merge_include_data,
+                    dry_run=merge_dry_run,
+                    shard_path=merge_shard_path,
+                )
+            else:
+                result.merge_result = {
+                    "skipped": True,
+                    "reason": "archive promotion did not complete for all roots",
+                }
+
         if not dry_run and not verify_only:
-            marker_path = _write_promotion_marker(source_run_dir=source_run_dir, result=result)
+            marker_path = _write_promotion_marker(
+                source_run_dir=source_run_dir,
+                result=result,
+            )
             result.marker_path = str(marker_path)
             if successful_destinations:
                 _sync_marker_to_destinations(
@@ -430,6 +776,54 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Verify existing promoted copies without copying files or updating DB metadata.",
     )
+    parser.add_argument(
+        "--root-run-id",
+        help=(
+            "Root run ID to promote and, when --merge-main-db is set, export before "
+            "merge. When omitted, the helper resolves exactly one non-inherited "
+            "root run from the run-local DB."
+        ),
+    )
+    parser.add_argument(
+        "--merge-main-db",
+        help=(
+            "Optional central Consist DB to merge into after archive promotion. "
+            "The helper exports only the resolved root run subtree from the "
+            "run-local DB before merging."
+        ),
+    )
+    parser.add_argument(
+        "--merge-conflict",
+        choices=("error", "skip"),
+        default="error",
+        help="Conflict policy passed to Consist DB merge after filtered export.",
+    )
+    parser.add_argument(
+        "--merge-dry-run",
+        action="store_true",
+        help=(
+            "Export the resolved root run subtree to a temporary shard and dry-run "
+            "the merge without mutating the main DB."
+        ),
+    )
+    parser.add_argument(
+        "--merge-shard-path",
+        help=(
+            "Optional path for the filtered export shard used for a real merge. "
+            "Defaults to .consist/promotion-shard-<root-run-id>.duckdb inside "
+            "the source run directory."
+        ),
+    )
+    parser.add_argument(
+        "--no-merge-include-data",
+        action="store_false",
+        dest="merge_include_data",
+        default=True,
+        help=(
+            "Do not include run-scoped Consist global-table data in the filtered "
+            "export shard."
+        ),
+    )
     return parser
 
 
@@ -437,18 +831,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
 
     settings = load_config(args.config)
     result = promote_run_to_recovery_roots(
         settings,
         archive_run_dir=args.run_dir,
         roots=args.root,
+        root_run_id=args.root_run_id,
+        merge_main_db=args.merge_main_db,
+        merge_conflict=args.merge_conflict,
+        merge_include_data=bool(args.merge_include_data),
+        merge_dry_run=bool(args.merge_dry_run),
+        merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
         verify_only=bool(args.verify_only),
     )
 
-    print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    print(json.dumps(_json_safe(result.to_dict()), indent=2, sort_keys=True))
     return 0 if not result.failed_roots else 1
 
 

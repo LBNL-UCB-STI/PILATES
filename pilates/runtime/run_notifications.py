@@ -301,8 +301,6 @@ class ConsistRunNotifier:
         )
 
     def on_run_failed(self, run: Run, error: Exception) -> None:
-        if not self._should_notify(run):
-            return
         label = self._run_label(run)
         error_text = self._truncate(str(error) or type(error).__name__)
         self._send(

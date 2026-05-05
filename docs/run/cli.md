@@ -36,10 +36,14 @@ Use the first for a fresh run and the second when you are resuming or replaying 
 ## Practical Invocation
 
 ```bash
-python run.py -c scenarios/seattle/settings-seattle-newconfig-local.yaml
-python run.py -c scenarios/seattle/settings-seattle-newconfig-local.yaml -S /path/to/run_state.yaml
-python run.py -c scenarios/seattle/settings-seattle-newconfig-local.yaml --allow-rewind-resume
+python run.py -c scenarios/sfbay/settings-sfbay-newconfig-local.yaml
+python run.py -c scenarios/sfbay/settings-sfbay-newconfig-local.yaml -S /path/to/run_state.yaml
+python run.py -c scenarios/sfbay/settings-sfbay-newconfig-local.yaml --allow-rewind-resume
 ```
+
+The tracked scenario files under `scenarios/` are copy/edit starting points.
+They are not turnkey machine-independent configs; check local paths, data roots,
+workspace roots, and model selections before using one for a real run.
 
 ## HPC Submission
 

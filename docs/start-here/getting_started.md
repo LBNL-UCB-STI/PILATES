@@ -21,7 +21,7 @@ switch to workflow or troubleshooting docs only when you need more detail.
 
 For most readers, the shortest path is:
 
-1. copy an active local scenario template
+1. copy a tracked scenario file, such as `scenarios/sfbay/settings-sfbay-newconfig-local.yaml`
 2. fix the machine-specific paths in that copy
 3. run `python run.py -c <your-settings>.yaml`
 4. switch to troubleshooting only if startup, bootstrap, or validation fails
@@ -32,11 +32,16 @@ every workflow contract before checking those basics.
 
 ## What To Expect
 
-PILATES loads one YAML settings file, initializes the runtime flags from that file, restores or creates `WorkflowState`, and then builds the enabled workflow surface that the launcher uses to decide which stages and step contracts are active. The practical path is to copy an active scenario template, edit the file paths for your machine, and run `python run.py -c <your-settings>.yaml`.
+PILATES loads one YAML settings file, initializes the runtime flags from that file, restores or creates `WorkflowState`, and then builds the enabled workflow surface that the launcher uses to decide which stages and step contracts are active. The practical path is to copy an active scenario file, edit the file paths for your machine, and run `python run.py -c <your-settings>.yaml`.
+
+Tracked scenario files are templates in the operational sense: they are useful
+starting points to copy and edit. They still contain machine-specific paths,
+cluster storage assumptions, model selections, and data-root references, so do
+not treat them as turnkey configs that run unchanged on any machine.
 
 ## Start Points
 
-- Local users usually begin from one of the active templates under `scenarios/`.
+- Local users usually begin by copying the closest tracked scenario file under `scenarios/`.
 - HPC users should also read [HPC Overview](../run/hpc_overview.md) and [Lawrencium](../run/lawrencium.md).
 - If you only need the file layout and not the workflow details, jump to [Configuration Basics](configuration_basics.md).
 - If a run already stopped and you are deciding what to fix next, go directly to [Troubleshooting](../run/troubleshooting.md).

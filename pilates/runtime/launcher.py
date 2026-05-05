@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Sequence, cast
 
+from consist.models.run import Run
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.generic.initialization import (
@@ -67,14 +68,21 @@ from pilates.runtime.failure_hints import (
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
 from pilates.runtime.run_notifications import (
+    ConsistRunNotifier,
     RunNotificationContext,
     register_consist_run_notification_hooks,
 )
-from pilates.runtime.run_publishers import register_consist_run_publishers
+from pilates.runtime.run_publishers import (
+    ConsistRunPublisher,
+    register_consist_run_publishers,
+)
 from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.surface import EnabledWorkflowSurface, build_enabled_workflow_surface
+from pilates.workflows.surface import (
+    EnabledWorkflowSurface,
+    build_enabled_workflow_surface,
+)
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -132,6 +140,8 @@ class PreparedRunContext:
     local_state_path: str
     local_consist_db_path: Optional[str]
     archive_consist_db_path: Optional[str]
+    run_notifier: Optional[ConsistRunNotifier]
+    run_publisher: Optional[ConsistRunPublisher]
 
 
 def _resolve_scenario_id(settings: PilatesConfig) -> str:
@@ -288,6 +298,7 @@ def _build_scenario_runtime_contract(
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
         surface=surface,
     )
+
 
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
     return (
@@ -511,8 +522,14 @@ def _prepare_run_context(
         local_run_dir=local_run_dir,
         settings_file=settings.settings_file,
     )
-    register_consist_run_notification_hooks(tracker, context=run_event_context)
-    register_consist_run_publishers(tracker, context=run_event_context)
+    run_notifier = register_consist_run_notification_hooks(
+        tracker,
+        context=run_event_context,
+    )
+    run_publisher = register_consist_run_publishers(
+        tracker,
+        context=run_event_context,
+    )
     snapshot_manager = ConsistDbSnapshotManager(
         settings=settings,
         tracker=tracker,
@@ -569,6 +586,8 @@ def _prepare_run_context(
         local_state_path=local_state_path,
         local_consist_db_path=local_consist_db_path,
         archive_consist_db_path=archive_consist_db_path,
+        run_notifier=run_notifier,
+        run_publisher=run_publisher,
     )
 
 
@@ -630,11 +649,13 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
     bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
 
     if is_restart_run:
-        restart_missing_artifacts_after_bootstrap = _find_missing_restart_local_artifacts(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
+        restart_missing_artifacts_after_bootstrap = (
+            _find_missing_restart_local_artifacts(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                surface=surface,
+            )
         )
         restart_runtime.enforce_postbootstrap_missing_artifacts(
             restart_missing_artifacts_after_bootstrap,
@@ -642,6 +663,26 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
         )
 
     return bootstrap_result
+
+
+def _emit_pre_scenario_failure(
+    prepared: PreparedRunContext,
+    error: Exception,
+) -> None:
+    """Emit a synthetic scenario-level failure for launcher failures before scenario start."""
+    failure_run = Run(
+        id=prepared.run_name,
+        model_name="pilates_orchestrator",
+        tags=["scenario_header", "launcher_failure"],
+        status="failed",
+        description="PILATES launcher failed before entering the scenario context.",
+        phase="launcher",
+        meta={"launcher_failure": True},
+    )
+    if prepared.run_notifier is not None:
+        prepared.run_notifier.on_run_failed(failure_run, error)
+    if prepared.run_publisher is not None:
+        prepared.run_publisher.on_run_failed(failure_run, error)
 
 
 def main(
@@ -697,69 +738,76 @@ def main(
     local_consist_db_path = prepared.local_consist_db_path
     archive_consist_db_path = prepared.archive_consist_db_path
 
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="run_context",
-        scenario_id=scenario_id,
-        seed=run_seed,
-        settings_file=settings.settings_file,
-        run_name=run_name,
-        workspace_root=workspace.full_path,
-        local_run_dir=local_run_dir,
-        archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path if is_restart_run else None,
-        restart_run=is_restart_run,
-        data_initialized=bool(state.data_initialized),
-        bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
-    )
+    try:
+        emit_consist_audit_event(
+            workspace=workspace,
+            event_type="run_context",
+            scenario_id=scenario_id,
+            seed=run_seed,
+            settings_file=settings.settings_file,
+            run_name=run_name,
+            workspace_root=workspace.full_path,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            archive_state_path=archive_state_path if is_restart_run else None,
+            restart_run=is_restart_run,
+            data_initialized=bool(state.data_initialized),
+            bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(
+                settings
+            ),
+        )
 
-    # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
-    # Initialization runs before entering scenario step execution so bootstrap
-    # lifecycle can evolve independently from normal model steps.
-    _run_bootstrap_sequence(prepared)
+        # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
+        # Initialization runs before entering scenario step execution so bootstrap
+        # lifecycle can evolve independently from normal model steps.
+        _run_bootstrap_sequence(prepared)
 
-    # 6. START SCENARIO CONTEXT
-    # The scenario context is where all model execution happens. Each step runs inside
-    # scenario.run(), which handles:
-    #   - Caching checks (skip if inputs identical to previous run)
-    #   - Provenance logging (inputs, outputs, dependencies)
-    #   - Coupler coordination (step outputs → coupler → next step inputs)
-    # The coupler is a shared dict-like object for passing artifacts between steps.
-    scenario_contract = _build_scenario_runtime_contract(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        scenario_id=scenario_id,
-        seed=run_seed,
-        cache_epoch=cache_epoch,
-        surface=surface,
-    )
-    scenario_kwargs = scenario_contract["scenario_kwargs"]
-    schema_steps_all = scenario_contract["schema_steps_all"]
-    schema_steps_enabled = scenario_contract["schema_steps_enabled"]
-    coupler_schema = scenario_contract["coupler_schema"]
-    required_output_keys = scenario_contract["required_output_keys"]
+        # 6. START SCENARIO CONTEXT
+        # The scenario context is where all model execution happens. Each step runs inside
+        # scenario.run(), which handles:
+        #   - Caching checks (skip if inputs identical to previous run)
+        #   - Provenance logging (inputs, outputs, dependencies)
+        #   - Coupler coordination (step outputs → coupler → next step inputs)
+        # The coupler is a shared dict-like object for passing artifacts between steps.
+        scenario_contract = _build_scenario_runtime_contract(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            scenario_id=scenario_id,
+            seed=run_seed,
+            cache_epoch=cache_epoch,
+            surface=surface,
+        )
+        scenario_kwargs = scenario_contract["scenario_kwargs"]
+        schema_steps_all = scenario_contract["schema_steps_all"]
+        schema_steps_enabled = scenario_contract["schema_steps_enabled"]
+        coupler_schema = scenario_contract["coupler_schema"]
+        required_output_keys = scenario_contract["required_output_keys"]
 
-    preview_count = 25
-    logger.info(
-        "Scenario output contract: declared_keys=%d require_outputs=%d "
-        "(enabled_steps=%d/%d). Preview: %s",
-        len(coupler_schema),
-        len(required_output_keys),
-        len(schema_steps_enabled),
-        len(schema_steps_all),
-        required_output_keys[:preview_count],
-    )
-    logger.info(
-        "Scenario Consist defaults: step_tags=%s step_facet=%s",
-        scenario_kwargs.get("step_tags"),
-        scenario_kwargs.get("step_facet"),
-    )
-    scenario_tags = _merge_tag_list(
-        ["pilates_simulation"],
-        [f"scenario_id:{scenario_id}"]
-        + ([f"seed:{run_seed}"] if run_seed is not None else []),
-    )
+        preview_count = 25
+        logger.info(
+            "Scenario output contract: declared_keys=%d require_outputs=%d "
+            "(enabled_steps=%d/%d). Preview: %s",
+            len(coupler_schema),
+            len(required_output_keys),
+            len(schema_steps_enabled),
+            len(schema_steps_all),
+            required_output_keys[:preview_count],
+        )
+        logger.info(
+            "Scenario Consist defaults: step_tags=%s step_facet=%s",
+            scenario_kwargs.get("step_tags"),
+            scenario_kwargs.get("step_facet"),
+        )
+        scenario_tags = _merge_tag_list(
+            ["pilates_simulation"],
+            [f"scenario_id:{scenario_id}"]
+            + ([f"seed:{run_seed}"] if run_seed is not None else []),
+        )
+    except Exception as exc:
+        _emit_pre_scenario_failure(prepared, exc)
+        raise
+
     try:
         with cr.scenario(
             run_name,

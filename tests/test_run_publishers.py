@@ -192,6 +192,23 @@ def test_register_consist_run_publishers_writes_structured_events(tmp_path: Path
     assert complete.submit_user == "zaneedell"
 
 
+def test_run_publisher_always_reports_internal_failures(tmp_path: Path) -> None:
+    tracker = FakeTracker()
+    publisher = FakePublisher()
+    register_consist_run_publishers(
+        tracker,
+        settings=RunPublisherSettings(local_jsonl_enabled=False, summary_html_enabled=False),
+        publishers=[publisher],
+        context=_context(tmp_path),
+    )
+
+    tracker.emit_failed(_run("workspace_setup"), RuntimeError("boom"))
+
+    assert publisher.events[0].event_type == "failed"
+    assert publisher.events[0].run_id == "workspace_setup"
+    assert publisher.events[0].error == "boom"
+
+
 def test_local_jsonl_and_summary_html_publishers_write_archive_files(
     tmp_path: Path,
 ) -> None:

@@ -45,13 +45,17 @@ This keeps slower archival storage out of the hot path while preserving a comple
 
 ## Post-Run Promotion
 
-PILATES now supports a manual promotion helper for copying a completed archive run into one or more recovery roots and recording those promoted roots on the run's logged artifacts:
+PILATES supports a manual promotion helper for copying a completed archive run into one or more recovery roots and recording those promoted roots on the run's logged artifacts:
 
 ```bash
 python -m pilates.runtime.promote_run_archive -c path/to/settings.yaml
 ```
 
 Use `--run-dir` when you want to promote a specific completed archive directory, and `--root` to add or override recovery roots for a one-off promotion. The helper copies the full archive run directory, updates artifact `recovery_roots` in the run-local Consist DB, syncs the updated `.consist` state into the promoted copy, and writes a promotion marker at `.consist/recovery_promotion.json`.
+
+Read [Run Promotion](run_promotion.md) for the full post-run workflow,
+including NFS promotion, verification, and merging the completed run-local DB
+into a central main DB.
 
 ## Practical Environment Variables
 

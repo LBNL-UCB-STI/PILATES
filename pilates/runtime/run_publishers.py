@@ -275,8 +275,6 @@ class ConsistRunPublisher:
         self._publish(self._build_event("complete", run, outputs=outputs, error=None))
 
     def on_run_failed(self, run: Run, error: Exception) -> None:
-        if not self._should_publish(run):
-            return
         self._publish(self._build_event("failed", run, outputs=(), error=error))
 
     def _should_publish(self, run: Run) -> bool:

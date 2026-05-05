@@ -33,7 +33,7 @@ run:
 Notes:
 
 - `output_directory` is the durable archive root during the run, so put it on shared scratch.
-- `local_workspace_root` is the mutable workspace for BEAM, ActivitySim, UrbanSim, and ATLAS. The active templates use `/local/job${SLURM_JOB_ID}` because it expands safely in the config and maps cleanly to node-local storage on the current cluster path.
+- `local_workspace_root` is the mutable workspace for BEAM, ActivitySim, UrbanSim, and ATLAS. The active scenario files use `/local/job${SLURM_JOB_ID}` because it expands safely in the config and maps cleanly to node-local storage on the current cluster path.
 - `recovery_archive_roots` is optional but recommended when you want a post-run cold archive on NFS.
 - `enable_archive_copy: true` should remain enabled so logged outputs are mirrored from the node-local workspace into the active scratch archive during the run.
 
@@ -51,8 +51,13 @@ Notes:
 The normal path is:
 
 ```bash
-./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-newconfig-hpc.yaml -a <slurm_account>
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account>
 ```
+
+Use the tracked Seattle and SFBay scenario files as copy/edit starting points
+for a specific Lawrencium account and data layout. They encode the current
+storage posture and model wiring, but they are not turnkey machine-independent
+configs.
 
 `job_runner.sh`:
 
@@ -108,11 +113,17 @@ This split keeps the active run on the fast tiers while still preserving a compl
 - node-local storage handles high-churn mutable files
 - NFS stores the cold promoted archive and can satisfy historical artifact hydration later through Consist `recovery_roots`
 
-This v1 promotion flow preserves the run-local shard DB inside the promoted archive. A later shard-to-master merge can be layered on top of that, but the promoted run should remain a self-contained historical archive.
+This promotion flow preserves the run-local shard DB inside the promoted
+archive. If your project keeps a central main DB, merge the completed run-local
+DB into that main DB after the archive promotion has succeeded.
+
+For the complete operator sequence, including dry-run promotion, verification,
+and merging the completed run-local shard DB into a central main DB, use
+[Run Promotion](run_promotion.md).
 
 ## Region Data
 
-The active cluster settings templates point at the region-specific UrbanSim, ActivitySim, and BEAM trees already used by the active scenario configs. The archived Lawrencium note is only useful here as a migration source for missing concrete path examples.
+The active cluster scenario files point at the region-specific UrbanSim, ActivitySim, and BEAM trees already used by the active scenario configs. The archived Lawrencium note is only useful here as a migration source for missing concrete path examples.
 
 ## Adjacent Pages
 

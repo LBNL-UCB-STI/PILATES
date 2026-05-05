@@ -1,307 +1,123 @@
 # Zone ID Management
 
-This document describes the intended zone-ID contract in PILATES and the code
-paths that are supposed to enforce it.
+PILATES keeps model-facing zone data aligned to one canonical zone system for a
+run. That contract matters because ActivitySim land-use inputs, BEAM skims,
+UrbanSim skim lookups, and ATLAS accessibility calculations can all be wrong if
+two stages silently use different zone orderings.
 
-This topic is critical because a silent mismatch in zone ordering can corrupt:
+## Public Contract
 
-- ActivitySim land-use inputs
-- BEAM-generated skims
-- UrbanSim skim lookups
-- ATLAS accessibility calculations
-
-The goal is to make the zone contract explicit enough that developers know what
-must stay true and where to check it.
-
-## The Core Invariants
-
-PILATES is trying to maintain these invariants:
-
-1. There is one authoritative zone definition file for a run.
-2. That file defines the valid canonical zone IDs.
-3. All model-facing zone tables are derived from the same canonical ordering.
-4. Zarr skim coordinates used by ActivitySim should be 0-based contiguous
-   integers.
-5. The original canonical zone IDs should still be recoverable from skim
-   metadata, not inferred from the 0-based coordinate values.
-
-If any of these are violated, downstream model behavior can be subtly wrong
-even when the run does not crash.
-
-## Single Source Of Truth
-
-The authoritative source is the configured canonical zone geometry file:
+Every run should use one configured canonical zone geometry file:
 
 - `shared.geography.zones.source_file`
-
-Required companion fields:
-
 - `shared.geography.zones.canonical_id_col`
 - `shared.geography.zones.activitysim_index_col`
 
-Important nuance:
+`canonical_id_col` names the real zone identifier in the source geometry.
+`activitysim_index_col` names the downstream indexed zone field. Model adapters
+should load the canonical order from the shared utility instead of sorting or
+constructing zone IDs locally.
 
-- `canonical_id_col` is the column in the source geometry file that defines the
-  real zone identity.
-- `activitysim_index_col` is the name PILATES uses for that indexed zone field
-  downstream.
-- In the current code, `activitysim_index_col` is mostly a field name, not a
-  promise that the stored values themselves are already ActivitySim's internal
-  0-based index.
+The stable invariants are:
 
-## Authoritative Utility Functions
+1. the configured source file defines the valid canonical zone IDs
+2. canonical zone IDs are unique
+3. model-facing zone tables are derived from the same canonical ordering
+4. ActivitySim-facing Zarr skim coordinates are 0-based contiguous integers
+5. original canonical zone IDs remain recoverable from skim metadata
 
-The main shared utility module is:
+## Shared Utilities
 
-- `pilates/utils/zone_utils.py`
+The shared zone helpers live in `pilates/utils/zone_utils.py`.
 
-The important functions are:
+`load_canonical_zones(settings, workspace)` is the source-of-truth loader. It
+resolves the configured geometry file, checks that the canonical ID column
+exists, checks uniqueness, indexes by the canonical IDs, applies the configured
+index name, sorts by that index, and returns IDs as strings.
 
-### `load_canonical_zones(settings, workspace)`
+`get_block_to_zone_mapping(settings, year, workspace)` builds block-to-zone
+assignments against the canonical zones for preprocessors that aggregate or
+assign block-level data.
 
-This is the main source-of-truth loader.
+`ensure_0_based_and_flag_zarr_skims(skim_path, settings, workspace)` is the
+current ActivitySim skim preparation helper. It records the `preprocessed`
+metadata flag when it treats a Zarr skim cache as ready for downstream reuse.
+It is an operational guardrail, not a complete proof that every origin and
+destination coordinate is valid.
 
-Current behavior:
+## Model Flow
 
-- resolves the configured canonical zone source
-- reads the geometry file
-- checks that `canonical_id_col` exists
-- checks that the IDs are unique
-- sets the canonical ID column as the index
-- renames the index to `activitysim_index_col`
-- sorts by that index
-- casts the index to string
+ActivitySim preprocessing uses the canonical zones and block-to-zone mapping to
+align `land_use.csv`, households, persons, and jobs to the same zone system.
 
-Result:
+BEAM preprocessing writes a zone file from the canonical zones, and BEAM
+postprocessing verifies skim zone metadata before merging generated skims back
+into the shared ActivitySim cache.
 
-- downstream code gets a canonically ordered GeoDataFrame whose index values are
-  the canonical zone IDs, represented as strings
+UrbanSim and ATLAS consume the canonical zone definitions for skim and
+accessibility calculations rather than establishing independent zone orders.
 
-### `get_block_to_zone_mapping(settings, year, workspace)`
+## Current Safeguards
 
-This builds a block-to-zone mapping by spatial intersection against the
-canonical zones.
+The codebase has these safeguards in the active workflow:
 
-That mapping is used by preprocessors that need to aggregate or assign
-block-level data to the canonical zone system.
+- `load_canonical_zones(...)` fails if the configured canonical ID column is
+  missing or non-unique
+- ActivitySim and related preprocessors use the shared loader rather than
+  treating local table order as authoritative
+- BEAM skim postprocessing checks the original canonical ordering recorded in
+  skim metadata against the configured canonical zones
+- skim preparation records metadata on ActivitySim-facing Zarr caches so later
+  stages can tell whether PILATES has already processed the cache
+- `scripts/verify_zone_ids.py` provides an operator diagnostic for preserved
+  workspaces
 
-### `ensure_0_based_and_flag_zarr_skims(skim_path, settings, workspace)`
+These safeguards are intended to catch common drift and ordering problems. They
+do not remove the need to preserve canonical ordering when adding new model
+handoffs or skim-writing paths.
 
-This is the helper that tries to normalize `skims.zarr` files into the form
-expected by ActivitySim.
+## Developer Rules
 
-Intended role:
+When touching zone-sensitive code:
 
-- make `otaz` and `dtaz` use 0-based contiguous coordinates
-- add the `preprocessed=zero-based-contiguous` attribute
+1. call `load_canonical_zones(settings, workspace)` for authoritative order
+2. do not infer zone order from arbitrary file, dataframe, or database order
+3. do not add a second sort unless it is explicitly proven to preserve canonical
+   order
+4. preserve original zone IDs when converting skims to 0-based coordinates
+5. validate skim metadata before publishing or reusing skim artifacts
+6. keep new diagnostics additive and local to the handoff being checked
 
-Current caveat:
+## Troubleshooting
 
-- this helper is a normalizer, not a full correctness proof
-- see the review findings below for the current gaps in that logic
-
-## How The Contract Flows Through The Models
-
-### ActivitySim Inputs
-
-ActivitySim preprocessing uses the canonical zones in two main ways:
-
-1. it establishes authoritative zone order through `load_canonical_zones(...)`
-2. it builds a block-to-zone mapping through `get_block_to_zone_mapping(...)`
-
-That mapping is then used to assign zone IDs to:
-
-- blocks
-- households
-- persons
-- jobs
-
-The resulting `land_use.csv`, household table, and person table are supposed to
-be aligned to the same canonical zone system.
-
-Related code:
-
-- `pilates/activitysim/preprocessor.py`
-
-### ActivitySim Skims Cache
-
-During ActivitySim compilation and later iterative runs, PILATES works with
-`skims.zarr`.
-
-The intended contract is:
-
-- coordinate values in `otaz` and `dtaz` are 0-based contiguous integers
-- original canonical zone IDs are preserved in metadata such as
-  `original_zone_ids`
-
-Related code:
-
-- `pilates/activitysim/runner.py`
-- `pilates/utils/zone_utils.py`
-
-### BEAM Zone File
-
-BEAM preprocessing generates a canonically sorted zone geometry file for BEAM to
-consume.
-
-Related code:
-
-- `pilates/beam/preprocessor.py`
-
-The intended idea is that BEAM sees the same zone system as the rest of the
-workflow, and that any skim writer it uses preserves the original canonical
-ordering in metadata.
-
-### BEAM Skim Verification And Merge
-
-BEAM postprocessing is where the workflow attempts to verify and merge new skim
-artifacts back into the shared ActivitySim cache.
-
-Related code:
-
-- `pilates/beam/postprocessor.py`
-
-The intended checks are:
-
-- the skim artifact carries the original canonical zone ordering
-- that ordering matches `load_canonical_zones(...)`
-- the Zarr coordinates are 0-based contiguous before downstream reuse
-
-### UrbanSim And ATLAS
-
-UrbanSim and ATLAS also consume the canonical zone definitions rather than
-inventing their own zone order.
-
-Related code:
-
-- `pilates/urbansim/preprocessor.py`
-- `pilates/atlas/preprocessor.py`
-
-Those paths use `load_canonical_zones(...)` and/or `get_block_to_zone_mapping(...)`
-to align skim or accessibility calculations to the same zone system.
-
-## What Developers Should Do
-
-If you touch zone-sensitive code:
-
-1. load the canonical zone order from `load_canonical_zones(...)`
-2. do not invent a new zone ordering locally
-3. do not assume "sorted somehow" is good enough
-4. preserve original zone IDs when converting to 0-based skim coordinates
-5. add validation before publishing a new skim artifact
-
-For a preserved run workspace, use the operator diagnostic to check the emitted
-canonical zone table and compare it with the run-local UrbanSim datastore when
-one is present:
+If a preserved workspace has a root `canonical_zones.csv` with `zone_key` and
+`asim_id` columns, run the preserved-workspace diagnostic first:
 
 ```bash
 python scripts/verify_zone_ids.py /path/to/preserved/workspace
 ```
 
-## Current Safeguards
+If the canonical file lives somewhere else in the preserved workspace, pass it
+explicitly:
 
-The codebase currently has three important safeguards:
+```bash
+python scripts/verify_zone_ids.py /path/to/preserved/workspace \
+  --canonical path/within/workspace/canonical_zones.csv
+```
 
-1. `load_canonical_zones(...)`
-   validates that the canonical ID column exists and is unique
-2. `verify_skim_zone_order(...)` in the BEAM postprocessor
-   checks that BEAM skim metadata matches the canonical ordering
-3. `ensure_0_based_and_flag_zarr_skims(...)`
-   tries to normalize Zarr skim coordinates into ActivitySim-friendly form
+Use it when:
 
-These are useful, but they are not the same thing as a complete proof that the
-zone contract is enforced everywhere.
+- ActivitySim crashes or changes behavior around `land_use.csv`, households,
+  persons, jobs, or skim lookup
+- BEAM-generated skims merge successfully but downstream results look shifted
+- UrbanSim or ATLAS accessibility results appear inconsistent with the expected
+  geography
+- a run was restarted or rehydrated from archived inputs and the zone source is
+  uncertain
 
-## Review Findings
-
-These are the main code smells or inconsistencies I found while checking this
-doc against the implementation.
-
-### 1. `ensure_0_based_and_flag_zarr_skims(...)` can mark malformed coordinates as preprocessed
-
-File:
-
-- `pilates/utils/zone_utils.py`
-
-Issue:
-
-- the function treats "first `otaz` value is not 1" as evidence that the skims
-  are already 0-based
-- it then adds `preprocessed=zero-based-contiguous` if missing
-- it does not verify that the full coordinate sequence is actually
-  `0..N-1`
-- it does not validate `dtaz` independently before adding the flag
-
-Why this matters:
-
-- a malformed or partially shifted Zarr could be blessed as
-  `zero-based-contiguous` even when it is not
-- downstream code may then skip realignment because it trusts the flag
-
-### 2. BEAM zone-file preparation can re-sort away from canonical order
-
-File:
-
-- `pilates/beam/preprocessor.py`
-
-Issue:
-
-- `_prepare_beam_zone_shapefile(...)` starts from `load_canonical_zones(...)`
-  but then may sort again by `settings.beam.skim_zone_geoid_col`
-
-Why this matters:
-
-- if `skim_zone_geoid_col` is not the same ordering as the canonical ID index,
-  the exported BEAM zone file no longer reflects the canonical order described
-  in this doc
-- that is exactly the kind of subtle reorder that can propagate into skim output
-
-### 3. `verify_skim_zone_order(...)` validates `otaz` but not `dtaz`
-
-File:
-
-- `pilates/beam/postprocessor.py`
-
-Issue:
-
-- the current verification explicitly checks `otaz` coordinates against
-  `np.arange(len(canonical_order))`
-- it does not perform the same check for `dtaz`
-
-Why this matters:
-
-- the doc previously claimed both origin and destination coordinates were
-  verified
-- the code currently only proves that for `otaz`
-
-### 4. One postprocessing path appears to call `load_canonical_zones(...)` with the wrong signature
-
-File:
-
-- `pilates/postprocessing/postprocessor.py`
-
-Issue:
-
-- `_add_geometry_to_events(...)` calls `load_canonical_zones(settings)` without
-  the required `workspace` argument
-
-Why this matters:
-
-- if that path is exercised, it is likely to fail at runtime
-- even if it is dead or rarely used, it suggests not all downstream consumers
-  were updated when `load_canonical_zones(...)` became the required API
-
-## Practical Recommendation
-
-If this area is a persistent source of pain, the most valuable next hardening
-steps are:
-
-1. make `ensure_0_based_and_flag_zarr_skims(...)` validate full `otaz` and
-   `dtaz` sequences before setting the preprocessed flag
-2. remove or justify the second sort in `_prepare_beam_zone_shapefile(...)`
-3. make `verify_skim_zone_order(...)` validate `dtaz` as well as `otaz`
-4. add direct tests for malformed-but-not-1-based Zarr coordinates
-5. clean up the stale `load_canonical_zones(settings)` call
+If the diagnostic finds a mismatch, check the configured
+`shared.geography.zones.*` fields, the preserved canonical zone file, and the
+skim metadata before changing model-specific preprocessing code.
 
 ## Related Docs
 

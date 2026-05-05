@@ -16,6 +16,13 @@ still early in API hardening.
 The preferred notebook entry point is now `open_archive(...)`, which opens an
 archived PILATES run directory and exposes notebook-friendly discovery helpers.
 
+Starter notebooks:
+
+- `analysis/notebooks/local_duckdb_scratch_starter.ipynb`: copy the archive
+  Consist DB to local scratch, then open the archive with `db_path=...`.
+- `analysis/notebooks/archive_exploration_starter.ipynb`: inspect scenarios,
+  years, epochs, tables, and scenario comparisons after archive opening works.
+
 The intended first steps in a notebook are:
 
 1. open an archive,

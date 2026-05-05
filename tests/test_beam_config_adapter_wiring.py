@@ -353,6 +353,43 @@ def test_beam_run_metadata_filters_adapter_covered_identity_inputs(
     assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
 
 
+def test_beam_config_adapter_can_be_disabled_temporarily(monkeypatch, tmp_path):
+    pytest.importorskip("consist")
+
+    workspace, settings = _setup_config(tmp_path)
+    state = _make_state()
+    monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [
+                ("beam_conf/main.conf", Path("/tmp/main.conf")),
+                ("external_marker", Path("/tmp/external")),
+            ],
+        },
+    )
+
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+    )
+
+    assert meta.adapter(ctx) is None
+    assert meta.identity_inputs(ctx) == [
+        ("beam_conf/main.conf", Path("/tmp/main.conf")),
+        ("external_marker", Path("/tmp/external")),
+    ]
+
+
 def test_beam_adapter_identity_is_stable_across_workspace_roots(monkeypatch, tmp_path):
     consist = pytest.importorskip("consist")
     _wire_common(monkeypatch)

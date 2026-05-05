@@ -101,7 +101,7 @@ if [ -z "$account_arg" ]; then
     echo "Provide it explicitly on the command line with:" >&2
     echo "  ./hpc/job_runner.sh -c <settings.yaml> -a <slurm_account>" >&2
     echo "Example:" >&2
-    echo "  ./hpc/job_runner.sh -c settings-seattle-newconfig-hpc.yaml -a my_account" >&2
+    echo "  ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a my_account" >&2
     exit 2
 fi
 ACCOUNT="$account_arg"

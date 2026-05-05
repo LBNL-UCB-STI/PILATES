@@ -220,6 +220,19 @@ def test_notifier_filters_to_scenario_headers_and_child_runs() -> None:
     ]
 
 
+def test_notifier_always_reports_internal_failures() -> None:
+    backend = FakeBackend()
+    notifier = run_notifications.ConsistRunNotifier(
+        settings=_enabled_settings(),
+        backends=[backend],
+    )
+
+    notifier.on_run_failed(_run("workspace_setup"), RuntimeError("boom"))
+
+    assert backend.messages[0].fallback_text == "PILATES step failed: workspace_setup"
+    assert "error: boom" in backend.messages[0].markdown_text
+
+
 def test_notifier_verbose_mode_includes_internal_runs() -> None:
     backend = FakeBackend()
     notifier = run_notifications.ConsistRunNotifier(

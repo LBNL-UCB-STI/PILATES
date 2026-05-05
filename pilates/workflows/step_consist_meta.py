@@ -54,6 +54,7 @@ discovered until the workspace is created for each run.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -68,6 +69,8 @@ from pilates.workflows.artifact_keys import (
     BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
 )
+
+_DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
 
 def _adapter_covered_identity_input(item: Any, *, model: str) -> bool:
@@ -191,6 +194,14 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         return ActivitySimConfigAdapter(root_dirs=config_roots)
 
     def _beam_adapter(ctx: StepContext) -> Any:
+        if os.environ.get(_DISABLE_BEAM_CONFIG_ADAPTER_ENV, "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return None
+
         settings = _settings(ctx)
         if settings is None:
             return None
