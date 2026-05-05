@@ -46,6 +46,20 @@ Notes:
 - Make sure the modules used by `hpc/job.sh` are available on the cluster node.
 - Provide a Slurm account on the submission command line.
 
+Minimum submission controls:
+
+| Setting | Required? | Lawrencium default or behavior |
+| --- | --- | --- |
+| `-a`, `--account` | Yes | No default; the wrapper exits if it is missing. |
+| `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES`. Override if your checkout lives elsewhere. |
+| `-p` | No | `lr7`; use `lr8` for the current larger-node preset. |
+| `MEMORY_LIMIT_GB` | No | Overrides the partition memory preset passed to `sbatch --mem`. |
+| `BEAM_MEMORY` | No | Overrides the partition BEAM heap value substituted into `${BEAM_MEMORY}` settings templates. |
+| `PILATES_THREADS` | No | Defaults to `8` and caps Python-side native thread pools inside the job. |
+
+For the full required-versus-optional environment table and memory precedence,
+read [HPC Overview](hpc_overview.md).
+
 ## Current Submission Flow
 
 The normal path is:

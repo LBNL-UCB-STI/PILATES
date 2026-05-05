@@ -19,7 +19,7 @@ summary: Conceptual entrypoint for how the current PILATES runtime fits together
 Keep this split in mind:
 
 - **Launcher** owns run lifecycle: settings, state, storage roots, Consist tracker, bootstrap, scenario context, year loop, snapshots, and shutdown.
-- **Enabled workflow surface** is the shared projection of settings plus state that decides the active run shape.
+- **Enabled workflow surface** is the runtime projection that decides which stages and steps are active for the current run, given settings plus `WorkflowState`; the implementation lives in `pilates/workflows/surface.py`.
 - **Stages** own ordering and loop structure.
 - **Step factories** own typed execution boundaries.
 - **Typed outputs and the coupler** carry workflow-visible results forward.

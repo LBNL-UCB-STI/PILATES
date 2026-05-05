@@ -52,7 +52,12 @@ boundary.
 
 ### Enabled workflow surface
 
-`pilates/workflows/surface.py` turns initialized runtime flags, the static catalog, and the current `WorkflowState` into one run-shape projection. Planning, binding, schema filtering, restart preflight, and runtime output validation consume that surface instead of rebuilding their own model-enablement views.
+The enabled workflow surface is a runtime projection that decides which stages
+and steps are active for the current run, given settings-derived runtime flags
+plus `WorkflowState`. `pilates/workflows/surface.py` turns those inputs and the
+static catalog into one run-shape projection. Planning, binding, schema
+filtering, restart preflight, and runtime output validation consume that surface
+instead of rebuilding their own model-enablement views.
 
 ### Step factories
 

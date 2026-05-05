@@ -23,6 +23,15 @@ The stage model in `workflow_state.py` separates the simulation into:
 
 When activity demand is enabled, the supply-demand loop contains the substages `activity_demand` and `traffic_assignment`. When activity demand is disabled but land use is enabled, the runtime uses the direct-from-land-use activity-demand branch instead.
 
+`supply_demand_loop` is a meta-stage, not one flat model call. The top-level
+orchestrator is `pilates/workflows/stages/supply_demand.py`; the ActivitySim
+phase lives in `pilates/workflows/stages/supply_demand_activity.py`, the BEAM
+traffic-assignment phase lives in
+`pilates/workflows/stages/supply_demand_beam.py`, and restart/resume helpers
+live in `pilates/workflows/stages/supply_demand_resume.py`. If you are tracing
+why a run resumed in the middle of the loop, start with `supply_demand.py` for
+the iteration/substage state machine, then follow the phase-specific file.
+
 ## Stage and Step Boundaries
 
 - A stage owns orchestration across one region of the run lifecycle.

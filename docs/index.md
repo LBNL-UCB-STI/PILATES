@@ -8,8 +8,8 @@ hide:
 <section id="home-page" class="home-hero">
   <div class="home-hero__inner">
     <p class="home-hero__eyebrow">PILATES documentation</p>
-    <h1>Coupled land-use and transportation workflow docs.</h1>
-    <p class="tagline">For analysts, model developers, and policy teams working with UrbanSim, ATLAS, ActivitySim, BEAM, and archived Consist-backed runs.</p>
+    <h1>Notes on running PILATES.</h1>
+    <p class="tagline">PILATES couples UrbanSim, ATLAS, ActivitySim, and BEAM into a single multi-year run. These docs cover how to use it, how it is put together, and how to read the runs it leaves behind.</p>
     <div class="home-actions">
       <a class="md-button md-button--primary" href="start-here/getting_started/">Run a scenario</a>
       <a class="md-button" href="run/troubleshooting/">Diagnose a run</a>
@@ -17,16 +17,16 @@ hide:
     </div>
     <dl class="home-summary">
       <div class="home-summary__item">
-        <dt>Audience</dt>
-        <dd>Academic researchers, public agencies, model maintainers, and software engineers</dd>
+        <dt>Who this is for</dt>
+        <dd>Group members and collaborators working with the models, plus anyone curious about BEAM CORE and PILATES capabilities</dd>
       </div>
       <div class="home-summary__item">
-        <dt>Purpose</dt>
-        <dd>Run scenarios, understand workflow handoffs, debug restarts, and extend model boundaries</dd>
+        <dt>What it covers</dt>
+        <dd>Running scenarios, following the workflow, restarting cleanly, extending models, and opening archived runs</dd>
       </div>
       <div class="home-summary__item">
-        <dt>Runtime</dt>
-        <dd>Layered stages, typed step outputs, explicit artifact keys, and replay-first restart semantics</dd>
+        <dt>How it runs</dt>
+        <dd>Stages and steps with typed outputs, named artifacts, and Consist-backed replay on restart</dd>
       </div>
     </dl>
   </div>
@@ -63,25 +63,64 @@ If you want the shortest first-run path, use this order:
 
 ## What PILATES Does
 
-PILATES is a workflow runtime for coupled regional simulation. It keeps model
-adapters decoupled, coordinates their run order across years and inner
-iterations, and makes workflow boundaries explicit through typed outputs,
-artifact keys, and a Consist-backed execution contract.
+PILATES runs land-use and transportation models together over a sequence of
+years. Each model still operates as normal; PILATES handles the order they run
+in, the inputs they hand to each other, and the bookkeeping needed to restart
+a run or open an old one later.
 
-The current runtime mental model is intentionally simple:
+The runtime is intentionally small:
 
-- the launcher prepares runtime state, storage, bootstrap, and scenario context
-- the enabled workflow surface projects the active run shape from settings plus state
-- stages decide ordering and loop structure
-- step factories publish typed outputs and coupler-visible artifacts
+- the launcher sets up state, storage, bootstrap, and the scenario context
+- the enabled workflow surface decides which stages and steps are active for
+  the current run
+- stages handle ordering and the inner-iteration loop
+- step factories publish typed outputs that the next step can read by name
 
-Use these docs to:
+These docs cover the things that come up day-to-day:
 
-- run local and HPC scenarios under one runtime model
-- understand what each stage and artifact means logically, not just where code lives
-- extend the workflow with new model integrations and explicit step contracts
-- reopen archived runs for SQL, datasets, runset comparisons, and scenario analysis
-- decide whether a stopped run needs config repair, data repair, restart, or deeper model debugging
+- running scenarios locally or on the cluster with the same launcher
+- following what each stage and artifact actually means, not just where its
+  code lives
+- adding a new model or step without breaking the existing contracts
+- opening archived runs for SQL, datasets, and scenario comparisons
+- working out whether a stopped run needs a config tweak, a data fix, a
+  restart, or a closer look at the model itself
+
+## What We Use It For
+
+PILATES couples land-use, vehicle ownership, activity-based travel demand, and
+network assignment so they can co-evolve over multi-decade horizons. The kinds
+of questions we use it for include:
+
+- how population, employment, vehicle fleet, and travel behavior shift
+  together under different policy futures
+- electrification and fuel-price scenarios with feedback into household
+  ownership and activity patterns
+- accessibility and equity outcomes across zone systems and demographic
+  groups
+- joint calibration of land-use, demand, and assignment models against
+  regional observations
+- counterfactuals on fleet composition, pricing, infrastructure, and
+  land-use policy
+
+Current scenarios cover the SF Bay Area and the Seattle region. The runtime is
+region-agnostic, so adding a new MPO is a configuration and data exercise
+rather than a code rewrite.
+
+## Why Consist
+
+PILATES runs on top of [Consist](https://lbnl-ucb-sti.github.io/consist/latest/),
+an open-source cache-aware run tracker. Consist gives scenarios, steps, and
+artifacts durable identity, records lineage to a queryable database, and lets a
+step be skipped when its inputs match an earlier execution. That is the main
+reason PILATES is more than shell-script orchestration: multi-year land-use and
+transport coupling runs are long and expensive, so cache-aware restarts and
+archived-state recovery are part of the research method, not just operational
+plumbing. In practice, restarts pick up from archived state instead of being
+rebuilt by hand, repeated scenarios reuse earlier outputs where the identity
+matches, and old runs can be opened later without reconstructing what they were.
+See [Consist in PILATES](workflow/consist_in_pilates.md) for the boundary
+between what Consist owns and what PILATES owns.
 
 ## Choose A Reading Path
 

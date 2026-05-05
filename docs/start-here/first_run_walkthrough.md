@@ -34,6 +34,10 @@ root, workspace root, and enabled model choice in your copied file.
 - It uses `run.local_workspace_root` as the mutable workspace parent when that field is set; otherwise it uses the archive side.
 - It creates the run-specific archive directory and mutable workspace, then starts the scenario lifecycle.
 
+Bootstrap happens once before the year loop. On restart, bootstrap-owned
+invariants are replayed through the same cached path where possible, so later
+stages do not need a special "manual rebuild" path just because the run resumed.
+
 ## What Counts As Success
 
 A successful first run reaches the scenario lifecycle and leaves behind a run-specific archive directory plus the restart state needed for later replay or resume. If the run fails early, the launcher logs a restart command that reuses the same config file and, when available, the existing state file.
