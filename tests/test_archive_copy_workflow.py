@@ -823,6 +823,41 @@ def test_archive_copy_allows_beam_raw_od_zarr_directories(monkeypatch, tmp_path)
     assert archived.read_text() == "zarr"
 
 
+def test_archive_copy_allows_beam_config_reference_snapshot_directory(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    directory = (
+        local_root
+        / "beam"
+        / "beam_output"
+        / "inputs-year-2019-iteration-0"
+        / "beam_input_config_references_archived"
+    )
+    _write_file(directory / "scenario" / "network.csv", "network")
+
+    ch._enqueue_archive_copy("beam_input_config_references_archived", str(directory))
+    ch.flush_archive_queue(timeout=5)
+    ch.stop_archive_worker(timeout=5)
+
+    archived = (
+        archive_root
+        / "beam"
+        / "beam_output"
+        / "inputs-year-2019-iteration-0"
+        / "beam_input_config_references_archived"
+        / "scenario"
+        / "network.csv"
+    )
+    assert archived.exists()
+    assert archived.read_text() == "network"
+
+
 def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tmp_path):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"

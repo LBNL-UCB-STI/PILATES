@@ -35,6 +35,7 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "urbansim_bootstrap_data_root",
     "beam_mutable_data_dir",
     "beam_region_input_dir",
+    "beam_input_config_references_archived",
     "zarr_skims",
     "zarr_skims_*",
     "raw_od_skims_zarr_*",
