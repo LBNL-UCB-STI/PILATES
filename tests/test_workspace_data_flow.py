@@ -6,22 +6,22 @@ from pilates.workspace import Workspace
 
 
 def _make_settings():
-    return {
-        "urbansim": {"local_mutable_data_folder": "usim_mutable"},
-        "activitysim": {
-            "local_mutable_data_folder": "asim_mutable",
-            "local_mutable_configs_folder": "asim_configs",
-            "local_output_folder": "asim_output",
-        },
-        "beam": {
-            "local_mutable_data_folder": "beam_mutable",
-            "local_output_folder": "beam_output",
-        },
-        "atlas": {
-            "host_mutable_input_folder": "atlas_input",
-            "host_output_folder": "atlas_output",
-        },
-    }
+    return SimpleNamespace(
+        urbansim=SimpleNamespace(local_mutable_data_folder="usim_mutable"),
+        activitysim=SimpleNamespace(
+            local_mutable_data_folder="asim_mutable",
+            local_mutable_configs_folder="asim_configs",
+            local_output_folder="asim_output",
+        ),
+        beam=SimpleNamespace(
+            local_mutable_data_folder="beam_mutable",
+            local_output_folder="beam_output",
+        ),
+        atlas=SimpleNamespace(
+            host_mutable_input_folder="atlas_input",
+            host_output_folder="atlas_output",
+        ),
+    )
 
 
 def test_workspace_path_resolution(tmp_path):

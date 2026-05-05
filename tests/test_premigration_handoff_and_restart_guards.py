@@ -38,7 +38,7 @@ from pilates.workflows.orchestration import (
     run_manifested_steps,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
-from pilates.workflows.stages.supply_demand import _derive_beam_run_input_keys
+from pilates.workflows.stages.supply_demand_beam import _derive_beam_run_input_keys
 from pilates.workflows.stages import vehicle_ownership as vehicle_ownership_stage
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps.activitysim import make_activitysim_postprocess_step

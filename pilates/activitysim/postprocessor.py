@@ -98,7 +98,7 @@ def _forecast_usim_datastore_output_path(
             year=forecast_year,
         )
     except Exception:
-        return None
+        return _default_usim_datastore_output_path(settings, workspace)
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 

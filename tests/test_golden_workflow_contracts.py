@@ -114,6 +114,14 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     assert Path(land_use_datastore).resolve() == Path(
         usim_inputs[USIM_DATASTORE_BASE_H5]
     ).resolve()
+    base_usim_datastore = artifact_to_path(
+        coupler.get(USIM_DATASTORE_BASE_H5),
+        workspace,
+    )
+    assert base_usim_datastore is not None
+    assert Path(base_usim_datastore).resolve() == Path(
+        usim_inputs[USIM_DATASTORE_BASE_H5]
+    ).resolve()
 
     run_vehicle_ownership_stage(
         scenario=scenario,
@@ -168,14 +176,18 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     scenario_outputs = _artifact_map(tracker.get_artifacts_for_run(scenario_run.id).outputs)
     scenario_output_keys = set(scenario_outputs)
 
-    final_usim_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
+    final_usim_datastore = artifact_to_path(
+        coupler.get(USIM_DATASTORE_CURRENT_H5),
+        workspace,
+    )
     assert final_usim_datastore is not None
-    assert Path(final_usim_datastore).name == Path(
-        usim_inputs[USIM_DATASTORE_BASE_H5]
-    ).name
+    assert Path(final_usim_datastore).name == f"usim_{state.forecast_year}.h5"
     assert Path(final_usim_datastore).parent == Path(after_vehicle_ownership).parent
     assert Path(final_usim_datastore).resolve() == Path(
         scenario_outputs[USIM_DATASTORE_H5].path
+    ).resolve()
+    assert Path(final_usim_datastore).resolve() != Path(
+        base_usim_datastore
     ).resolve()
 
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= scenario_output_keys
