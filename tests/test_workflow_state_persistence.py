@@ -42,7 +42,6 @@ def _make_settings(tmp_path, start_year=2020, end_year=2021, travel_model_freq=1
                 "enabled": True,
                 "type": "duckdb",
                 "path": str(tmp_path / "db.duckdb"),
-                "use_consist": False,
             },
         },
         "urbansim": {

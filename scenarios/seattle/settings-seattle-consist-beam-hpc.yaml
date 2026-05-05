@@ -245,7 +245,6 @@ shared:
     enabled: true
     type: duckdb
     path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_seattle.duckdb
-    use_consist: true
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION
@@ -353,7 +352,7 @@ activitysim:
   replan_after: non_mandatory_tour_scheduling
   final_plans_folder: pilates/activitysim/output/final_plans
 beam:
-  config: seattle-pilates.conf
+  config: scenarios/network-calibration/beam-pilates-run--seattle--jdeq-calibration-FC08-0.conf
   sample: 1.0
   replanning_portion: 0.4
   memory: ${BEAM_MEMORY}

@@ -51,7 +51,10 @@ from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.runtime.consist_audit import (
+    emit_artifact_lifecycle_audit_event,
+    emit_consist_audit_event,
+)
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
     RUN_FAILURE_CONTEXT,
@@ -63,6 +66,11 @@ from pilates.runtime.failure_hints import (
 )
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
+from pilates.runtime.run_notifications import (
+    RunNotificationContext,
+    register_consist_run_notification_hooks,
+)
+from pilates.runtime.run_publishers import register_consist_run_publishers
 from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.coupler_schema import build_coupler_schema
@@ -89,6 +97,7 @@ logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
 )
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -494,6 +503,16 @@ def _prepare_run_context(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
+    run_event_context = RunNotificationContext.from_env(
+        run_name=run_name,
+        scenario_id=scenario_id,
+        seed=run_seed,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        settings_file=settings.settings_file,
+    )
+    register_consist_run_notification_hooks(tracker, context=run_event_context)
+    register_consist_run_publishers(tracker, context=run_event_context)
     snapshot_manager = ConsistDbSnapshotManager(
         settings=settings,
         tracker=tracker,
@@ -880,6 +899,14 @@ def main(
     finally:
         snapshot_ok = snapshot_manager.final_snapshot()
         flush_archive_queue(timeout=300)
+        emit_artifact_lifecycle_audit_event(
+            workspace=workspace,
+            event_type="final_shutdown",
+            snapshot_ok=snapshot_ok,
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
+            local_to_scratch_recovery_roots_written=0,
+        )
         stop_archive_worker(timeout=30)
         if not snapshot_ok:
             mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)

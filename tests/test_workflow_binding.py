@@ -3,6 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import consist
+import pandas as pd
 import pytest
 from consist import define_step
 
@@ -243,7 +244,7 @@ def test_beam_preprocess_binding_plan_prefers_coupler_exchange_inputs_over_defau
     assert plan.source_by_key[BEAM_PLANS_IN] == "explicit"
 
 
-def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_input_from_coupler(
+def test_beam_preprocess_binding_plan_prefers_current_atlas_vehicle_with_activity_outputs(
     monkeypatch,
 ):
     from pilates.workflows import binding as binding_module
@@ -279,6 +280,52 @@ def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_input_from_
         year=2030,
         activity_demand_outputs={},
         previous_beam_outputs=None,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == "/tmp/current-vehicles2.csv"
+    assert plan.source_by_key[ATLAS_VEHICLES2_OUTPUT] == "explicit"
+
+
+def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_without_activity_outputs(
+    monkeypatch,
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_exchange_inputs",
+        lambda **_: {
+            BEAM_PLANS_IN: "/tmp/default-plans.parquet",
+            BEAM_HOUSEHOLDS_IN: "/tmp/default-households.parquet",
+            BEAM_PERSONS_IN: "/tmp/default-persons.parquet",
+        },
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_atlas_inputs",
+        lambda **_: {ATLAS_VEHICLES2_OUTPUT: "/tmp/current-vehicles2.csv"},
+    )
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({ATLAS_VEHICLES2_OUTPUT: "/tmp/restored-vehicles.csv.gz"}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(activity_demand="activitysim")),
+            vehicle_ownership_model_enabled=True,
+        ),
+        state=SimpleNamespace(current_inner_iter=0, forecast_year=2030, year=2030),
+        workspace=SimpleNamespace(),
+        year=2030,
+        activity_demand_outputs=None,
+        previous_beam_outputs={},
         surface=_surface_stub(
             activity_demand_enabled=True,
             vehicle_ownership_model_enabled=True,
@@ -432,6 +479,33 @@ def test_activitysim_preprocess_binding_prefers_explicit_population_source_over_
 
     assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/base.h5"
     assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "explicit"
+
+
+def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_start_year(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    state = SimpleNamespace(
+        year=2021,
+        forecast_year=2021,
+        Stage=SimpleNamespace(land_use="land_use"),
+        is_enabled=lambda stage: stage == "land_use",
+        is_start_year=lambda: False,
+    )
+
+    with pytest.raises(KeyError, match="require_exact_year=True"):
+        build_binding_plan(
+            step_name="activitysim_preprocess",
+            fallback_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+            settings=SimpleNamespace(),
+            state=state,
+            workspace=SimpleNamespace(),
+            year=2021,
+        )
 
 
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(

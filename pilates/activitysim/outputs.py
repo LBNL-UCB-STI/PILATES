@@ -163,7 +163,9 @@ class _UrbanSimToActivitySimBoundaryValidator:
         outputs: "ActivitySimPreprocessOutputs",
         context: ValidationContext,
     ) -> list[ValidationResult]:
-        upstream = context.upstream_outputs or {}
+        upstream = (
+            context.upstream_outputs if context.upstream_outputs is not None else {}
+        )
         if "urbansim_postprocess" not in upstream and "urbansim_run" not in upstream:
             return []
 
@@ -270,7 +272,7 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
         input_hashes: Dict[str, str] = {}
         records_by_key = {
             getattr(record, "short_name", None): record
-            for record in (record_store.all_records() if record_store is not None else [])
+            for record in record_store.all_records()
         }
         for field_name, record_key in cls.record_keys.items():
             record = records_by_key.get(record_key)
@@ -377,7 +379,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
         """
         raw_outputs: Dict[str, Path] = {}
         raw_output_hashes: Dict[str, str] = {}
-        for record in record_store.all_records() if record_store is not None else []:
+        for record in record_store.all_records():
             key = getattr(record, "short_name", None)
             if not key:
                 continue
@@ -602,27 +604,27 @@ class ActivitySimPostprocessOutputs(StepOutputsBase):
         allowed_outputs = set(ASIM_OUTPUT_KEY_MAP.values()) | set(
             ASIM_OUTPUT_KEY_MAP.keys()
         )
-        if record_store is not None:
-            for record in record_store.all_records():
-                short_name = getattr(record, "short_name", "") or ""
-                canonical_short_name = resolve_artifact_key(short_name)
-                if (
-                    short_name.startswith("usim_input_")
-                    or canonical_short_name == USIM_DATASTORE_H5
-                ):
-                    usim_key = USIM_DATASTORE_H5
-                    usim_path = record.get_absolute_path(base_path=workspace.full_path)
-                    continue
-                normalized_name = normalize_asim_output_key(short_name)
-                if short_name.startswith("asim_input_") or normalized_name in allowed_outputs:
-                    record_path = record.get_absolute_path(
-                        base_path=workspace.full_path
-                    )
-                    if record_path:
-                        processed_outputs[normalized_name] = Path(record_path)
-                        content_hash = getattr(record, "content_hash", None)
-                        if content_hash:
-                            processed_output_hashes[normalized_name] = content_hash
+        for record in record_store.all_records():
+            short_name = getattr(record, "short_name", "") or ""
+            canonical_short_name = resolve_artifact_key(short_name)
+            if (
+                short_name.startswith("usim_input_")
+                or canonical_short_name == USIM_DATASTORE_H5
+            ):
+                usim_key = USIM_DATASTORE_H5
+                usim_path = record.get_absolute_path(base_path=workspace.full_path)
+                continue
+            normalized_name = normalize_asim_output_key(short_name)
+            if (
+                short_name.startswith("asim_input_")
+                or normalized_name in allowed_outputs
+            ):
+                record_path = record.get_absolute_path(base_path=workspace.full_path)
+                if record_path:
+                    processed_outputs[normalized_name] = Path(record_path)
+                    content_hash = getattr(record, "content_hash", None)
+                    if content_hash:
+                        processed_output_hashes[normalized_name] = content_hash
         return cls(
             usim_datastore_h5=Path(usim_path) if usim_path else None,
             asim_output_dir=Path(workspace.get_asim_output_dir()),

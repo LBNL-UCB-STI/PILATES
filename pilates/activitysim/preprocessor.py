@@ -3989,12 +3989,23 @@ def create_asim_data_from_h5(
         "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
         usim_store_path,
     )
+    def _requires_exact_population_year() -> bool:
+        land_use_enabled = get_setting(settings, "run.models.land_use") is not None
+        is_start_year = getattr(state, "is_start_year", None)
+        if not land_use_enabled or not callable(is_start_year):
+            return False
+        try:
+            return not bool(is_start_year())
+        except Exception:
+            return False
+
     target_year = getattr(state, "forecast_year", None)
     if target_year is None:
         target_year = getattr(state, "year", None)
     resolved_table_keys = reconcile_usim_population_table_paths(
         h5_path=usim_store_path,
         year=target_year,
+        require_exact_year=_requires_exact_population_year(),
         provided_paths=(
             None
             if resolved_h5_table_paths is None

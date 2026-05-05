@@ -1612,3 +1612,41 @@ def test_run_workflow_cache_hit_atlas_postprocess_replays_canonical_datastore_ke
     assert holder.atlas_postprocess is not None
     assert coupler.get(USIM_POPULATION_SOURCE_H5) is not None
     assert coupler.get(USIM_H5_UPDATED) is None
+
+
+def test_atlas_postprocess_runs_with_overwrite_cache_mode(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+    holder.atlas_run = object()
+    step_func = make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder)
+
+    seen_cache_modes = []
+
+    class RecordingScenario:
+        def run(self, **kwargs):
+            cache_options = kwargs.get("cache_options")
+            seen_cache_modes.append(getattr(cache_options, "cache_mode", None))
+            return SimpleNamespace(cache_hit=True, outputs={})
+
+    run_workflow(
+        stage_name="atlas_postprocess",
+        steps=[StepRef(name="atlas_postprocess", step_func=step_func)],
+        scenario=RecordingScenario(),
+        state=SimpleNamespace(
+            year=2017,
+            forecast_year=2018,
+            iteration=0,
+            is_start_year=lambda: False,
+        ),
+        settings=SimpleNamespace(
+            urbansim=SimpleNamespace(output_file_template="usim_{year}.h5"),
+        ),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert seen_cache_modes == ["overwrite"]

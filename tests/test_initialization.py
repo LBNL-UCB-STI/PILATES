@@ -109,7 +109,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
                 start_year=2020,
             ),
             shared=SimpleNamespace(
-                database=SimpleNamespace(use_consist=False),
+                database=SimpleNamespace(),
                 skims=SimpleNamespace(zone_type="block_group"),
                 geography=SimpleNamespace(
                     zones=SimpleNamespace(
@@ -168,7 +168,7 @@ def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatc
                 start_year=2020,
             ),
             shared=SimpleNamespace(
-                database=SimpleNamespace(use_consist=False),
+                database=SimpleNamespace(),
                 geography=SimpleNamespace(zones=None),
             ),
         )

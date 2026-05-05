@@ -9,6 +9,10 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
+from pilates.activitysim.postprocessor import (
+    ActivitysimPostprocessor,
+    create_usim_input_data,
+)
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.binding import BindingPlan
 from pilates.workflows.artifact_keys import (
@@ -33,6 +37,184 @@ def _dummy_coupler():
         update=lambda *args, **kwargs: None,
         set_from_artifact=lambda *args, **kwargs: None,
     )
+
+
+@pytest.mark.parametrize(
+    ("current_year", "forecast_year"),
+    [
+        (2021, 2023),
+        (2023, 2023),
+    ],
+)
+def test_activitysim_postprocess_archived_inputs_use_forecast_year_directory(
+    current_year,
+    forecast_year,
+    tmp_path,
+) -> None:
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        urbansim=SimpleNamespace(
+            input_file_template="model_data_{region_id}.h5",
+            output_file_template="model_data_{year}.h5",
+            region_mappings={"region_to_region_id": {"seattle": "06197001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        year=current_year,
+        current_year=current_year,
+        forecast_year=forecast_year,
+        iteration=0,
+        current_inner_iter=0,
+        full_settings=settings,
+        set_sub_stage_progress=lambda _stage: None,
+        is_enabled=lambda _stage: False,
+    )
+    asim_data_dir = tmp_path / "asim" / "data"
+    asim_output_dir = tmp_path / "asim" / "output"
+    usim_data_dir = tmp_path / "urbansim" / "data"
+    asim_data_dir.mkdir(parents=True)
+    asim_output_dir.mkdir(parents=True)
+    usim_data_dir.mkdir(parents=True)
+    for filename in ("households.csv", "persons.csv", "land_use.csv", "skims.omx"):
+        (asim_data_dir / filename).write_text(filename)
+
+    raw_households = tmp_path / "raw_households.parquet"
+    raw_households.write_text("raw")
+    workspace = SimpleNamespace(
+        get_asim_mutable_data_dir=lambda: str(asim_data_dir),
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_usim_mutable_data_dir=lambda: str(usim_data_dir),
+    )
+
+    expected_outputs = ActivitysimPostprocessor.expected_outputs(
+        settings,
+        state,
+        workspace,
+    )
+    assert (
+        Path(expected_outputs["asim_input_households_csv_archived"]).parent.name
+        == f"inputs-year-{forecast_year}-iteration-0"
+    )
+    assert (
+        Path(expected_outputs["households_asim_out"]).parent.name
+        == f"year-{current_year}-iteration-0"
+    )
+
+    outputs = ActivitysimPostprocessor("activitysim", state).postprocess(
+        ActivitySimRunOutputs(
+            output_dir=asim_output_dir,
+            raw_outputs={"households": raw_households},
+        ),
+        workspace,
+    )
+
+    archived_households = outputs.processed_outputs[
+        "asim_input_households_csv_archived"
+    ]
+    assert archived_households == (
+        asim_output_dir
+        / f"inputs-year-{forecast_year}-iteration-0"
+        / "households.csv"
+    )
+    assert archived_households.exists()
+    assert outputs.processed_outputs["households_asim_out"] == (
+        asim_output_dir / f"year-{current_year}-iteration-0" / "households.parquet"
+    )
+
+
+def test_activitysim_postprocess_recovery_uses_forecast_year_archived_inputs(
+    tmp_path,
+) -> None:
+    current_year = 2019
+    forecast_year = 2021
+    asim_output_dir = tmp_path / "activitysim" / "output"
+    iter_dir = asim_output_dir / f"year-{current_year}-iteration-0"
+    forecast_inputs_dir = asim_output_dir / f"inputs-year-{forecast_year}-iteration-0"
+    legacy_inputs_dir = asim_output_dir / f"inputs-year-{current_year}-iteration-0"
+    for name in ("persons.parquet", "households.parquet", "beam_plans.parquet"):
+        path = iter_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(name, encoding="utf-8")
+    for name in ("households.csv", "persons.csv", "land_use.csv"):
+        path = forecast_inputs_dir / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(f"forecast-{name}", encoding="utf-8")
+    legacy_inputs_dir.mkdir(parents=True, exist_ok=True)
+
+    recovered = steps_activitysim._recover_activitysim_postprocess_outputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(
+            year=current_year,
+            forecast_year=forecast_year,
+            iteration=0,
+            is_enabled=lambda _stage: False,
+        ),
+        workspace=SimpleNamespace(
+            get_asim_output_dir=lambda: str(asim_output_dir),
+            full_path=str(tmp_path),
+        ),
+        coupler=_dummy_coupler(),
+        outputs_holder=StepOutputsHolder(),
+        step_inputs={},
+        cached_outputs=None,
+        run_id=None,
+    )
+
+    assert recovered is not None
+    assert recovered.processed_outputs["asim_input_households_csv_archived"] == (
+        forecast_inputs_dir / "households.csv"
+    )
+    assert "asim_input_households_csv_archived" not in {
+        key
+        for key, path in recovered.processed_outputs.items()
+        if str(path).startswith(str(legacy_inputs_dir))
+    }
+
+
+def test_create_usim_input_data_writes_forecast_year_target(tmp_path) -> None:
+    current_year = 2019
+    forecast_year = 2021
+    usim_dir = tmp_path / "urbansim" / "data"
+    usim_dir.mkdir(parents=True)
+    current_h5 = usim_dir / f"model_data_{current_year}.h5"
+    forecast_h5 = usim_dir / f"model_data_{forecast_year}.h5"
+
+    with pd.HDFStore(current_h5, mode="w") as store:
+        store.put("/2019/blocks", pd.DataFrame({"block_id": [1]}))
+    with pd.HDFStore(forecast_h5, mode="w") as store:
+        store.put("/2021/households", pd.DataFrame({"household_id": [1]}))
+        store.put("/2021/persons", pd.DataFrame({"person_id": [10]}))
+        store.put("/2021/jobs", pd.DataFrame({"job_id": [100]}))
+
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5")
+    )
+    state = SimpleNamespace(forecast_year=forecast_year)
+
+    next_path, record = create_usim_input_data(
+        settings,
+        state,
+        asim_output_dict={
+            "households": pd.DataFrame({"household_id": [2]}),
+            "persons": pd.DataFrame({"person_id": [20]}),
+        },
+        tables_updated_by_asim=["households", "persons"],
+        asim_source_paths=[],
+        current_input_store_path=str(current_h5),
+        population_source_store_path=str(forecast_h5),
+        target_store_path=str(forecast_h5),
+    )
+
+    archive_h5 = usim_dir / "input_data_for_2021_outputs.h5"
+    assert Path(next_path) == forecast_h5
+    assert record.short_name == USIM_DATASTORE_H5
+    assert forecast_h5.exists()
+    assert archive_h5.exists()
+    assert current_h5.exists()
+    with pd.HDFStore(forecast_h5, mode="r") as store:
+        assert "/households" in store
+        assert "/persons" in store
+        assert "/jobs" in store
 
 
 def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
@@ -70,6 +252,11 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     assert len(calls) == 1
     assert calls[0][0] == "asim_input_skims_zarr_archived"
     assert calls[0][1]["content_hash"] == "abc123"
+    assert calls[0][1]["facet"]["artifact_family"] == "asim_input_archived"
+    assert calls[0][1]["facet"]["source_role"] == "zarr_skims"
+    assert calls[0][1]["facet"]["snapshot_role"] == "asim_input_skims_zarr"
+    assert calls[0][1]["facet"]["snapshot_reason"] == "exact_rewind"
+    assert calls[0][1]["facet"]["storage_event"] == "snapshot_copy"
 
 
 def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(
@@ -426,6 +613,43 @@ def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths
     assert captured["usim_population_persons_table"] == "/2025/persons"
     assert captured["usim_population_jobs_table"] == "/2025/jobs"
     assert captured["usim_population_blocks_table"] == "/2025/blocks"
+
+
+def test_activitysim_preprocess_runtime_inputs_prefers_forecast_year(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    population_h5 = tmp_path / "model_data_2021.h5"
+    population_h5.write_text("population")
+    captured_years = []
+
+    def _fake_build_binding_plan(**kwargs):
+        captured_years.append(kwargs["year"])
+        return BindingPlan(
+            inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
+            source_by_key={USIM_POPULATION_SOURCE_H5: "fallback"},
+        )
+
+    monkeypatch.setattr(
+        steps_activitysim,
+        "build_binding_plan",
+        _fake_build_binding_plan,
+    )
+    monkeypatch.setattr(
+        steps_activitysim,
+        "resolved_value_for_key",
+        lambda *, resolved, key, coupler: (resolved.inputs or {}).get(key),
+    )
+
+    runtime_inputs = steps_activitysim._resolve_activitysim_preprocess_runtime_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2019, forecast_year=2021),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        coupler=_dummy_coupler(),
+    )
+
+    assert captured_years == [2021]
+    assert runtime_inputs["population_source_h5_path"] == str(population_h5)
 
 
 def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(

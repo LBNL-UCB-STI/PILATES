@@ -1045,6 +1045,9 @@ def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(
     )
 
     call = scenario.calls[0]
+    assert call["output_paths"][USIM_DATASTORE_H5] == str(
+        tmp_path / "urbansim" / "data" / "forecast_2020.h5"
+    )
     assert "asim_input_skims_omx_archived" in call["output_paths"]
     assert "asim_input_skims_zarr_archived" in call["output_paths"]
     assert call["output_policy"] == OutputPolicyOptions(

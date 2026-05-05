@@ -16,6 +16,7 @@ points we can cover cheaply with lightweight fakes:
    warmstart artifacts instead of silently dropping them.
 """
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,6 +38,7 @@ from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.runtime import consist_audit
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
@@ -44,6 +46,8 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
     ASIM_SHARROW_CACHE_DIR,
+    ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -56,9 +60,16 @@ from pilates.workflows.artifact_keys import (
     USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
+from pilates.workflows.binding import BindingPlan
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.supply_demand_beam import (
+    _FAIL_AFTER_BEAM_RUN_ENV,
+    _emit_beam_preprocess_binding_diagnostic,
+    _maybe_fail_after_beam_run_for_canary,
+    beam_preprocess_binding_diagnostic_payload,
+)
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
 from tests.workflow_contract_harness import (
     CouplerStub,
@@ -68,6 +79,153 @@ from tests.workflow_contract_harness import (
     FakeScenario,
 )
 from workflow_state import WorkflowState
+
+
+def test_beam_restart_binding_diagnostic_classifies_complete_binding(tmp_path):
+    beam_root = tmp_path / "beam" / "input"
+    region_dir = beam_root / "sfbay"
+    region_dir.mkdir(parents=True)
+    config_path = region_dir / "beam.conf"
+    config_path.write_text("beam config", encoding="utf-8")
+    vehicles_path = tmp_path / "atlas" / "vehicles2_2021.csv"
+    vehicles_path.parent.mkdir(parents=True)
+    vehicles_path.write_text("vehicleId,householdId\n1,10\n", encoding="utf-8")
+
+    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(beam_root))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(config="beam.conf"),
+    )
+    state = SimpleNamespace(
+        is_restart_run=True,
+        year=2019,
+        forecast_year=2021,
+        iteration=0,
+    )
+    binding = BindingPlan(
+        step_name="beam_preprocess",
+        inputs={
+            BEAM_PLANS_IN: "/tmp/plans.parquet",
+            BEAM_HOUSEHOLDS_IN: "/tmp/households.parquet",
+            BEAM_PERSONS_IN: "/tmp/persons.parquet",
+            ATLAS_VEHICLES2_OUTPUT: str(vehicles_path),
+            BEAM_CONFIG_FILE: str(config_path),
+        },
+        input_keys=[
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_CONFIG_FILE,
+            ATLAS_VEHICLES2_OUTPUT,
+        ],
+        source_by_key={
+            ATLAS_VEHICLES2_OUTPUT: "coupler",
+            BEAM_CONFIG_FILE: "expected_inputs",
+        },
+        coupler_key_by_key={ATLAS_VEHICLES2_OUTPUT: ATLAS_VEHICLES2_OUTPUT},
+    )
+
+    payload = beam_preprocess_binding_diagnostic_payload(
+        binding=binding,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+    )
+
+    assert payload["drift_classification"] == "binding_surface_complete"
+    assert payload["missing_restart_inputs"] == []
+    assert ATLAS_VEHICLES2_OUTPUT in payload["bound_input_keys"]
+    assert payload["required_local_inputs"]["beam_primary_config_file"] == str(
+        config_path
+    )
+
+
+def test_beam_restart_canary_failpoint_requires_explicit_env(monkeypatch):
+    monkeypatch.delenv(_FAIL_AFTER_BEAM_RUN_ENV, raising=False)
+
+    _maybe_fail_after_beam_run_for_canary(year=2021, iteration=0)
+
+    monkeypatch.setenv(_FAIL_AFTER_BEAM_RUN_ENV, "1")
+    with pytest.raises(RuntimeError, match="Injected failure after completed beam_run"):
+        _maybe_fail_after_beam_run_for_canary(year=2021, iteration=0)
+
+
+def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):
+    beam_root = tmp_path / "beam" / "input"
+    region_dir = beam_root / "sfbay"
+    region_dir.mkdir(parents=True)
+    (region_dir / "beam.conf").write_text("beam config", encoding="utf-8")
+    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(beam_root))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(config="beam.conf"),
+    )
+    state = SimpleNamespace(is_restart_run=True, year=2019, forecast_year=2021, iteration=0)
+    binding = BindingPlan(
+        step_name="beam_preprocess",
+        inputs={BEAM_CONFIG_FILE: str(region_dir / "beam.conf")},
+        input_keys=[BEAM_CONFIG_FILE],
+    )
+
+    payload = beam_preprocess_binding_diagnostic_payload(
+        binding=binding,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        identity_context={
+            "identity_summary": {"adapter": {"hash": "abc"}},
+            "cache_miss_explanation": {
+                "reason": "config_and_inputs_changed",
+                "adapter_identity_changed": ["config_bundle_hash"],
+                "input_keys_changed": ["atlas_vehicles2_output"],
+            },
+        },
+    )
+
+    assert payload["drift_classification"] == "content_or_config_drift"
+    assert payload["cache_miss_reason"] == "config_and_inputs_changed"
+    assert payload["identity_summary"] == {"adapter": {"hash": "abc"}}
+    assert payload["identity_drift_components"] == {
+        "adapter_identity_changed": ["config_bundle_hash"],
+        "input_keys_changed": ["atlas_vehicles2_output"],
+    }
+
+
+def test_beam_restart_binding_diagnostic_persists_to_lifecycle_audit(
+    monkeypatch,
+    tmp_path,
+):
+    consist_audit.reset_consist_audit_state()
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path))
+    beam_root = tmp_path / "beam" / "input"
+    region_dir = beam_root / "sfbay"
+    region_dir.mkdir(parents=True)
+    (region_dir / "beam.conf").write_text("beam config", encoding="utf-8")
+    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(beam_root))
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        beam=SimpleNamespace(config="beam.conf"),
+    )
+    state = SimpleNamespace(is_restart_run=True, year=2019, forecast_year=2021, iteration=0)
+
+    _emit_beam_preprocess_binding_diagnostic(
+        binding=BindingPlan(
+            step_name="beam_preprocess",
+            inputs={BEAM_CONFIG_FILE: str(region_dir / "beam.conf")},
+            input_keys=[BEAM_CONFIG_FILE],
+        ),
+        state=state,
+        settings=settings,
+        workspace=workspace,
+    )
+
+    events_path = (
+        tmp_path / ".workflow" / "diagnostics" / "artifact_lifecycle_audit.jsonl"
+    )
+    event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[-1])
+    assert event["event_type"] == "beam_restart_binding"
+    assert event["key"] == "beam_restart_binding"
+    assert event["artifact_family"] == "beam_restart_diagnostic"
 
 
 def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):

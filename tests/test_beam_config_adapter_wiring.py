@@ -14,22 +14,35 @@ from pilates.beam.config_hocon import beam_config_env_overrides
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.beam.runner import BeamFullSkimRunner
-from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 from pilates.workflows.steps.beam import _archive_beam_config_references
 from pilates.workflows.steps.beam import (
+    _beam_run_inputs,
     make_beam_full_skim_step,
     make_beam_postprocess_step,
     make_beam_preprocess_step,
     make_beam_run_step,
 )
 from pilates.workflows.steps.shared import StepOutputsHolder
+
+
+def _policy_value(policy, key):
+    if isinstance(policy, dict):
+        return policy[key]
+    return getattr(policy, key)
+
+
+def _assert_policy(policy, *, identity_policy, required, reason):
+    assert _policy_value(policy, "identity_policy") == identity_policy
+    assert _policy_value(policy, "required") is required
+    assert _policy_value(policy, "reason") == reason
 
 
 class DummyCoupler:
@@ -179,10 +192,7 @@ def _beam_run_expected_inputs(settings, state, workspace):
         candidate = os.path.join(workspace.get_asim_output_dir(), "cache", "skims.zarr")
         if os.path.exists(candidate):
             zarr_path = candidate
-    expected = {
-        "beam_mutable_data_dir": workspace.get_beam_mutable_data_dir(),
-        "zarr_skims": zarr_path,
-    }
+    expected = {"zarr_skims": zarr_path}
     return {key: value for key, value in expected.items() if value is not None}
 
 
@@ -222,14 +232,319 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
         Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     ]
     assert adapter.primary_config == (
-        Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
     )
     assert adapter.env_overrides == beam_config_env_overrides(
         settings,
         workspace=workspace,
     )
+    assert adapter.path_aliases == {
+        "workspace": Path(workspace.full_path),
+        "beam_input": Path(workspace.get_beam_mutable_data_dir()),
+        "beam_output": Path(workspace.get_beam_output_dir()),
+        "activitysim_output": Path(workspace.get_asim_output_dir()),
+        "beam_region_input": Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region,
+    }
+    assert getattr(adapter, "allow_heuristic_refs", None) is False
+    scenario_policy = adapter.reference_policies["beam.exchange.scenario.folder"]
+    assert _policy_value(scenario_policy, "identity_policy") == "delegated_to_artifacts"
+    assert _policy_value(scenario_policy, "required") is True
+    assert _policy_value(scenario_policy, "delegated_artifact_keys") == (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        BEAM_VEHICLES_IN,
+    )
+    vehicles_policy = adapter.reference_policies[
+        "beam.agentsim.agents.vehicles.vehiclesFilePath"
+    ]
+    assert _policy_value(vehicles_policy, "identity_policy") == "delegated_to_artifacts"
+    assert _policy_value(vehicles_policy, "delegated_artifact_keys") == (
+        BEAM_VEHICLES_IN,
+    )
+    warmstart_policy = adapter.reference_policies[
+        "beam.warmStart.initialLinkstatsFilePath"
+    ]
+    assert _policy_value(warmstart_policy, "identity_policy") == (
+        "delegated_to_artifacts"
+    )
+    assert _policy_value(warmstart_policy, "required") is False
+    assert _policy_value(warmstart_policy, "delegated_artifact_keys") == (
+        LINKSTATS_WARMSTART,
+    )
+    for key in (
+        "matsim.conversion.populationFile",
+        "matsim.conversion.matsimNetworkFile",
+        "matsim.conversion.scenarioDirectory",
+        "matsim.conversion.shapeConfig.shapeFile",
+        "matsim.conversion.vehiclesFile",
+        "matsim.conversion.osmFile",
+    ):
+        _assert_policy(
+            adapter.reference_policies[key],
+            identity_policy="ignored",
+            required=False,
+            reason="dormant_matsim_example_config",
+        )
+    _assert_policy(
+        adapter.reference_policies[
+            "beam.agentsim.agents.rideHail.managers[1].initialization.filePath"
+        ],
+        identity_policy="ignored",
+        required=False,
+        reason="optional_ridehail_fleet_ignored_in_pilates",
+    )
+    assert "beam.exchange.scenario.fileFormat" not in adapter.reference_policies
+    assert "matsim.modules.controler.eventsFileFormat" not in adapter.reference_policies
+    assert "matsim.modules.controler.overwriteFiles" not in adapter.reference_policies
+    for key in (
+        "beam.router.skim.activity-sim-skimmer.fileBaseName",
+        "beam.router.skim.drive-time-skimmer.fileBaseName",
+        "beam.router.skim.origin-destination-skimmer.fileBaseName",
+        "beam.router.skim.taz-skimmer.fileBaseName",
+        "beam.router.skim.transit-crowding-skimmer.fileBaseName",
+    ):
+        _assert_policy(
+            adapter.reference_policies[key],
+            identity_policy="output_or_runtime_ignored",
+            required=False,
+            reason="runtime_output_prefix_not_identity_input",
+        )
     assert resolved_config["model"] == "beam_run"
     assert resolved_identity_inputs == [("shim", Path("/tmp/identity"))]
+
+
+def test_beam_run_metadata_filters_adapter_covered_identity_inputs(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    workspace, settings = _setup_config(tmp_path)
+    state = _make_state()
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [
+                ("beam_conf/main.conf", Path("/tmp/main.conf")),
+                ("beam_conf_dir", Path("/tmp/beam")),
+                ("external_marker", Path("/tmp/external")),
+            ],
+        },
+    )
+
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        settings=settings,
+        workspace=workspace,
+        state=state,
+    )
+
+    assert meta.adapter(ctx) is not None
+    assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
+
+
+def test_beam_adapter_identity_is_stable_across_workspace_roots(monkeypatch, tmp_path):
+    consist = pytest.importorskip("consist")
+    _wire_common(monkeypatch)
+
+    def build_case(root: Path):
+        workspace, settings = _setup_config(root)
+        config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+        population_dir = config_root / "urbansim"
+        population_dir.mkdir(parents=True, exist_ok=True)
+        (population_dir / "vehicles.csv.gz").write_text("vehicle_id\n1\n")
+        (config_root / settings.beam.config).write_text(
+            "\n".join(
+                [
+                    f'beam.inputDirectory = "{config_root}"',
+                    f'beam.exchange.scenario.folder = "{population_dir}"',
+                    (
+                        "beam.agentsim.agents.vehicles.vehiclesFilePath = "
+                        f'"{population_dir / "vehicles.csv.gz"}"'
+                    ),
+                    'beam.warmStart.initialLinkstatsFilePath = ""',
+                ]
+            ),
+            encoding="utf-8",
+        )
+        step_fn = make_beam_run_step(
+            coupler=DummyCoupler(),
+            outputs_holder=StepOutputsHolder(),
+        )
+        meta = step_fn.__consist_step__
+        ctx = _make_step_context(
+            step_fn=step_fn,
+            model=meta.model,
+            settings=settings,
+            workspace=workspace,
+            state=_make_state(),
+        )
+        return meta.adapter(ctx)
+
+    tracker = consist.Tracker(
+        run_dir=tmp_path / "tracker-run",
+        db_path=str(tmp_path / "tracker.duckdb"),
+        allow_external_paths=True,
+    )
+    try:
+        adapter_a = build_case(tmp_path / "case_a")
+        adapter_b = build_case(tmp_path / "case_b")
+        canonical_a = adapter_a.discover(adapter_a.root_dirs, identity=tracker.identity)
+        canonical_b = adapter_b.discover(adapter_b.root_dirs, identity=tracker.identity)
+        result_a = adapter_a.canonicalize(
+            canonical_a,
+            tracker=tracker,
+            plan_only=True,
+        )
+        result_b = adapter_b.canonicalize(
+            canonical_b,
+            tracker=tracker,
+            plan_only=True,
+        )
+    finally:
+        tracker.db.engine.dispose()
+
+    assert result_a.identity.identity_hash == result_b.identity.identity_hash
+    scenario_ref = next(
+        ref
+        for ref in result_a.identity.references
+        if ref.config_key == "beam.exchange.scenario.folder"
+    )
+    assert scenario_ref.identity_policy == "delegated_to_artifacts"
+    assert scenario_ref.delegated_artifact_keys == (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        BEAM_VEHICLES_IN,
+    )
+
+
+def test_beam_adapter_policies_suppress_dormant_runtime_and_scalar_noise(
+    monkeypatch,
+    tmp_path,
+):
+    consist = pytest.importorskip("consist")
+    _wire_common(monkeypatch)
+
+    workspace, settings = _setup_config(tmp_path)
+    config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    population_dir = config_root / "urbansim"
+    population_dir.mkdir(parents=True, exist_ok=True)
+    (population_dir / "vehicles.csv.gz").write_text("vehicle_id\n1\n")
+    (config_root / settings.beam.config).write_text(
+        "\n".join(
+            [
+                f'beam.inputDirectory = "{config_root}"',
+                f'beam.exchange.scenario.folder = "{population_dir}"',
+                'beam.exchange.scenario.fileFormat = "parquet"',
+                'beam.router.skim.activity-sim-skimmer.fileBaseName = "activitySimODSkims"',
+                'beam.router.skim.drive-time-skimmer.fileBaseName = "skimsTravelTimeObservedVsSimulated"',
+                'beam.router.skim.origin-destination-skimmer.fileBaseName = "skimsOD"',
+                'beam.router.skim.taz-skimmer.fileBaseName = "skimsTAZ"',
+                'beam.router.skim.transit-crowding-skimmer.fileBaseName = "skimsTransitCrowding"',
+                'matsim.conversion.populationFile = "Siouxfalls_population.xml"',
+                'matsim.conversion.matsimNetworkFile = "Siouxfalls_network_PT.xml"',
+                'matsim.conversion.scenarioDirectory = "test/intput/siouxfalls"',
+                'matsim.conversion.shapeConfig.shapeFile = "tz46_d00.shp"',
+                'matsim.conversion.vehiclesFile = "Siouxfalls_vehicles.xml"',
+                'matsim.conversion.osmFile = "south-dakota-latest.osm.pbf"',
+                'matsim.modules.controler.eventsFileFormat = "xml"',
+                'matsim.modules.controler.overwriteFiles = "overwriteExistingFiles"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    step_fn = make_beam_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        settings=settings,
+        workspace=workspace,
+        state=_make_state(),
+    )
+    adapter = meta.adapter(ctx)
+    tracker = consist.Tracker(
+        run_dir=tmp_path / "tracker-run",
+        db_path=str(tmp_path / "tracker.duckdb"),
+        allow_external_paths=True,
+    )
+    try:
+        canonical = adapter.discover(adapter.root_dirs, identity=tracker.identity)
+        result = adapter.canonicalize(canonical, tracker=tracker, plan_only=True)
+    finally:
+        tracker.db.engine.dispose()
+
+    refs_by_key = {ref.config_key: ref for ref in result.identity.references}
+    scalar_keys = {
+        "beam.exchange.scenario.fileFormat",
+        "matsim.modules.controler.eventsFileFormat",
+        "matsim.modules.controler.overwriteFiles",
+    }
+    assert refs_by_key.keys().isdisjoint(scalar_keys)
+
+    protected_keys = {
+        "beam.router.skim.activity-sim-skimmer.fileBaseName",
+        "beam.router.skim.drive-time-skimmer.fileBaseName",
+        "beam.router.skim.origin-destination-skimmer.fileBaseName",
+        "beam.router.skim.taz-skimmer.fileBaseName",
+        "beam.router.skim.transit-crowding-skimmer.fileBaseName",
+        "matsim.conversion.populationFile",
+        "matsim.conversion.matsimNetworkFile",
+        "matsim.conversion.scenarioDirectory",
+        "matsim.conversion.shapeConfig.shapeFile",
+        "matsim.conversion.vehiclesFile",
+        "matsim.conversion.osmFile",
+    }
+    for key in protected_keys:
+        ref = refs_by_key.get(key)
+        if ref is not None:
+            assert ref.status != "missing_required"
+            assert ref.required is False
+
+    scenario_ref = refs_by_key["beam.exchange.scenario.folder"]
+    assert scenario_ref.identity_policy == "delegated_to_artifacts"
+    assert scenario_ref.delegated_artifact_keys == (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        BEAM_VEHICLES_IN,
+    )
+
+
+def test_beam_run_identity_inputs_exclude_mutable_data_dir(tmp_path):
+    workspace, settings = _setup_config(tmp_path)
+    zarr_skims = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    zarr_skims.mkdir(parents=True)
+    ctx = _make_step_context(
+        step_fn=make_beam_run_step(
+            coupler=DummyCoupler(),
+            outputs_holder=StepOutputsHolder(),
+        ),
+        model="beam_run",
+        settings=settings,
+        workspace=workspace,
+        state=_make_state(),
+    )
+
+    inputs = _beam_run_inputs(ctx)
+
+    assert "beam_mutable_data_dir" not in inputs
+    assert inputs[ZARR_SKIMS] == str(zarr_skims)
 
 
 @pytest.mark.parametrize(
@@ -299,7 +614,11 @@ def test_beam_run_metadata_adapter_is_none_when_primary_config_missing(
 
     workspace, settings = _setup_config(tmp_path)
     _wire_common(monkeypatch)
-    (Path(workspace.get_beam_mutable_data_dir()) / settings.run.region / settings.beam.config).unlink()
+    (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    ).unlink()
 
     step_fn = make_beam_run_step(
         coupler=DummyCoupler(),
@@ -319,7 +638,7 @@ def test_beam_run_metadata_adapter_is_none_when_primary_config_missing(
 def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_path):
     pytest.importorskip("consist")
     from pilates.utils import consist_runtime as cr
-    import pilates.workflows.steps.beam as steps_module
+    from pilates.generic.model_factory import ModelFactory
 
     workspace, settings = _setup_config(tmp_path)
     state = _make_state()
@@ -328,10 +647,14 @@ def test_beam_preprocess_does_not_canonicalize_in_step_body(monkeypatch, tmp_pat
 
     monkeypatch.setattr(cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(cr, "current_run", lambda: None)
-    monkeypatch.setattr(cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path))
-    monkeypatch.setattr(cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path))
     monkeypatch.setattr(
-        steps_module.ModelFactory,
+        cr, "log_output", lambda path, **kwargs: SimpleNamespace(path=path)
+    )
+    monkeypatch.setattr(
+        cr, "log_input", lambda path, **kwargs: SimpleNamespace(path=path)
+    )
+    monkeypatch.setattr(
+        ModelFactory,
         "get_preprocessor",
         lambda self, *args, **kwargs: preprocessor,
     )
@@ -351,9 +674,7 @@ def test_beam_config_reference_archival_resolves_input_directory(
     tmp_path,
 ):
     workspace, settings = _setup_config(tmp_path)
-    config_root = (
-        Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-    )
+    config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     config_path = config_root / settings.beam.config
     config_root.mkdir(parents=True, exist_ok=True)
     (config_root / "sample.csv").write_text("value\n1\n", encoding="utf-8")
@@ -405,10 +726,10 @@ def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):
     for path in (plans, households, persons):
         path.write_text("x")
 
-    import pilates.workflows.steps.beam as steps_module
+    from pilates.generic.model_factory import ModelFactory
 
     monkeypatch.setattr(
-        steps_module.ModelFactory,
+        ModelFactory,
         "get_preprocessor",
         lambda self, *args, **kwargs: CapturingPreprocessor(),
     )

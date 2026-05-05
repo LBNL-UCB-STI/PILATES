@@ -814,7 +814,11 @@ class StageRunner:
         stage_name: Optional[str] = None,
         runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
     ) -> None:
-        merged_runtime_kwargs: Dict[str, Any] = dict(self.runtime_kwargs_extra or {})
+        merged_runtime_kwargs: Dict[str, Any] = (
+            dict(self.runtime_kwargs_extra)
+            if self.runtime_kwargs_extra is not None
+            else {}
+        )
         if runtime_kwargs_extra:
             merged_runtime_kwargs.update(runtime_kwargs_extra)
         runner = self.run_workflow_fn or run_workflow

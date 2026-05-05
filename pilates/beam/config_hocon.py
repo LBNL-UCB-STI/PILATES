@@ -269,7 +269,7 @@ def _inject_resolution_overrides(
 def _flatten_mapping(
     mapping: Mapping[str, Any],
     flattened: dict[str, Any],
-    prefix: str = "",
+    prefix: Optional[str] = None,
 ) -> None:
     for key, value in mapping.items():
         path = f"{prefix}.{key}" if prefix else str(key)

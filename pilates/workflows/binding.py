@@ -31,6 +31,7 @@ from typing import (
 
 from consist.types import BindingResult
 
+from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
@@ -85,6 +86,18 @@ def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
         return False
     try:
         return bool(is_enabled(stage_value))
+    except Exception:
+        return False
+
+
+def _requires_exact_activitysim_population_year(state: Any) -> bool:
+    if not _workflow_stage_enabled(state, "land_use"):
+        return False
+    is_start_year = getattr(state, "is_start_year", None)
+    if not callable(is_start_year):
+        return False
+    try:
+        return not bool(is_start_year())
     except Exception:
         return False
 
@@ -233,19 +246,33 @@ class BindingPlan:
     metadata: Optional[Dict[str, Any]] = None
 
     def stepref_inputs(self) -> Optional[Dict[str, Any]]:
-        return dict(self.inputs or {}) or None
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        return inputs if inputs else None
 
     def stepref_input_keys(self) -> Optional[list[str]]:
-        return list(self.input_keys or []) or None
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        return input_keys if input_keys else None
 
     def stepref_optional_input_keys(self) -> Optional[list[str]]:
-        return list(self.optional_input_keys or []) or None
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
+        return optional_input_keys if optional_input_keys else None
 
     def to_binding_result(self) -> BindingResult:
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
         return BindingResult(
-            inputs=dict(self.inputs or {}) or None,
-            input_keys=list(self.input_keys or []) or None,
-            optional_input_keys=list(self.optional_input_keys or []) or None,
+            inputs=inputs if inputs else None,
+            input_keys=input_keys if input_keys else None,
+            optional_input_keys=optional_input_keys if optional_input_keys else None,
             metadata=dict(self.metadata) if self.metadata else None,
         )
 
@@ -437,14 +464,43 @@ def beam_preprocess_binding_plan(
         workspace=workspace,
         surface=surface,
     )
+    # When BEAM is consuming the ActivitySim outputs from the current phase,
+    # keep the ATLAS vehicles2 selection anchored to that same local year before
+    # considering older coupler state from a restart/recovery path.
+    prefer_current_atlas_inputs = bool(
+        resolved_profile.activity_demand_enabled
+        and activity_demand_outputs is not None
+        and atlas_inputs
+    )
+    if prefer_current_atlas_inputs:
+        for key, value in atlas_inputs.items():
+            explicit_inputs.setdefault(key, value)
+
     get_value = getattr(coupler, "get", None)
+    restored_atlas_vehicle = None
     if callable(get_value):
         restored_atlas_vehicle = artifact_to_path(
             get_value(ATLAS_VEHICLES2_OUTPUT), workspace
         )
+        current_atlas_vehicle = (
+            atlas_inputs.get(ATLAS_VEHICLES2_OUTPUT) if atlas_inputs else None
+        )
+        if (
+            prefer_current_atlas_inputs
+            and restored_atlas_vehicle
+            and current_atlas_vehicle
+            and os.fspath(restored_atlas_vehicle) != os.fspath(current_atlas_vehicle)
+        ):
+            logger.warning(
+                "BEAM preprocess is using current ActivitySim-year ATLAS vehicles2 "
+                "instead of an existing coupler %s value: selected=%s ignored=%s",
+                ATLAS_VEHICLES2_OUTPUT,
+                current_atlas_vehicle,
+                restored_atlas_vehicle,
+            )
         if restored_atlas_vehicle:
             explicit_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, restored_atlas_vehicle)
-    if atlas_inputs:
+    if atlas_inputs and not prefer_current_atlas_inputs:
         for key, value in atlas_inputs.items():
             explicit_inputs.setdefault(key, value)
 
@@ -491,32 +547,6 @@ def urbansim_datastore_selection_rules(
     )
 
 
-def _archive_fallback_path(
-    *,
-    state: Any,
-    workspace: Any,
-    local_path: Path,
-) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
-    full_path = getattr(workspace, "full_path", None)
-    if not run_info_path or full_path is None:
-        return None
-    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
-    local_root = Path(full_path).expanduser().resolve()
-    try:
-        rel = local_path.expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
-def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
-    for path in paths:
-        if path is not None and path.exists():
-            return path
-    return None
-
-
 def _candidate_paths_metadata(
     *paths_by_semantic_key: tuple[str, Sequence[Optional[Path]]],
 ) -> Dict[str, list[str]]:
@@ -548,12 +578,12 @@ def _urbansim_datastore_candidates_for_year(
     input_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="input"
     )
-    input_archive_path = _archive_fallback_path(
+    input_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=input_path,
     )
-    base_path = _first_existing_path(input_path, input_archive_path)
+    base_path = first_existing_path(input_path, input_archive_path)
     candidate_paths = _candidate_paths_metadata(
         (USIM_DATASTORE_BASE_H5, (input_path, input_archive_path)),
     )
@@ -594,12 +624,12 @@ def _urbansim_datastore_candidates_for_year(
     output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="output", year=year
     )
-    output_archive_path = _archive_fallback_path(
+    output_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=output_path,
     )
-    current_path = _first_existing_path(output_path, output_archive_path)
+    current_path = first_existing_path(output_path, output_archive_path)
     candidate_paths.update(
         _candidate_paths_metadata(
             (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
@@ -693,9 +723,14 @@ def _activitysim_population_source(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
                             year=_target_population_year(),
+                            require_exact_year=(
+                                _requires_exact_activitysim_population_year(state)
+                            ),
                         )
                     )
                 except Exception as exc:
+                    if _requires_exact_activitysim_population_year(state):
+                        raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "
                         "for %s: %s",
@@ -858,6 +893,34 @@ def _beam_preprocess_atlas_inputs(
     return None
 
 
+def _beam_preprocess_config_input(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    try:
+        from pilates.beam.config_hocon import beam_primary_config_path
+
+        local_path = beam_primary_config_path(settings, workspace=workspace)
+    except Exception:
+        return None
+
+    archive_path = archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=local_path,
+    )
+    selected = first_existing_path(local_path, archive_path)
+    if selected is None:
+        return None
+    return {BEAM_CONFIG_FILE: str(selected)}
+
+
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
@@ -865,6 +928,7 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "beam_preprocess_exchange_inputs": _beam_preprocess_exchange_inputs,
     "beam_preprocess_warmstart_inputs": _beam_preprocess_warmstart_inputs,
     "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
+    "beam_preprocess_config_input": _beam_preprocess_config_input,
 }
 
 
@@ -973,6 +1037,8 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=BEAM_CONFIG_FILE,
                 required=True,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_config_input",
             ),
         ),
     }

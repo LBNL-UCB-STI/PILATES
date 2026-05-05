@@ -163,7 +163,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BeamPreprocessOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         prepared_inputs: Dict[str, Path] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
@@ -419,7 +419,7 @@ class BeamRunOutputs(StepOutputsBase):
         BeamRunOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         raw_outputs: Dict[str, Path] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
@@ -494,7 +494,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
         """
         Build outputs from a RecordStore.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         values: Dict[str, Any] = {}
         zarr_path = artifact_to_path(mapping.get(ZARR_SKIMS), workspace)
         if zarr_path is not None:
@@ -552,7 +552,7 @@ class BeamFullSkimOutputs(StepOutputsBase):
     def from_record_store(
         cls, record_store: RecordStore, workspace: "Workspace"
     ) -> "BeamFullSkimOutputs":
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
         if path is None:
             raise ValueError("Missing beam_full_skims in record store.")

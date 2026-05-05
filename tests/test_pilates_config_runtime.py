@@ -1,3 +1,5 @@
+import pytest
+
 from pilates.config import PilatesConfig
 
 
@@ -37,7 +39,6 @@ def _minimal_config() -> dict:
                 "enabled": True,
                 "type": "duckdb",
                 "path": "/tmp/test.duckdb",
-                "use_consist": False,
             },
         },
         "urbansim": {
@@ -86,6 +87,16 @@ def test_runtime_values_are_excluded_from_model_dump():
     assert "runtime" not in dumped
     assert "land_use_enabled" not in dumped
     assert "state_file_loc" not in dumped
+
+
+def test_deprecated_use_consist_warns_and_is_ignored():
+    config = _minimal_config()
+    config["shared"]["database"]["use_consist"] = False
+
+    with pytest.warns(DeprecationWarning, match="shared.database.use_consist"):
+        settings = PilatesConfig(**config)
+
+    assert settings.shared.database.use_consist is True
 
 
 def test_recovery_archive_roots_expand_environment_variables(monkeypatch):

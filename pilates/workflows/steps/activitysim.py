@@ -24,6 +24,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -37,6 +38,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for ActivitySim.
@@ -349,11 +351,21 @@ def _resolve_activitysim_preprocess_runtime_inputs(
     step_inputs: Optional[Mapping[str, Any]] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Any]:
+    def _requires_exact_population_year() -> bool:
+        land_use_enabled = get_setting(settings, "run.models.land_use") is not None
+        is_start_year = getattr(state, "is_start_year", None)
+        if not land_use_enabled or not callable(is_start_year):
+            return False
+        try:
+            return not bool(is_start_year())
+        except Exception:
+            return False
+
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
         resolution = None
     else:
-        step_year = getattr(state, "year", getattr(state, "forecast_year", None))
+        step_year = resolve_forecast_year(state)
         resolution = build_binding_plan(
             step_name="activitysim_preprocess",
             coupler=coupler,
@@ -405,8 +417,11 @@ def _resolve_activitysim_preprocess_runtime_inputs(
                 h5_path=population_source_h5_path,
                 year=target_year,
                 provided_paths=provided_table_paths,
+                require_exact_year=_requires_exact_population_year(),
             )
         except Exception as exc:
+            if _requires_exact_population_year():
+                raise
             logger.debug(
                 "Skipping ActivitySim population table resolution for %s: %s",
                 population_source_h5_path,
@@ -757,12 +772,17 @@ def _recover_activitysim_postprocess_outputs(
     else:
         return None
 
+    archived_input_year = resolve_forecast_year(state)
     inputs_dir = Path(
         _existing_local_path(
-            asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}",
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}",
             workspace,
         )
-        or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
+        or (
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}"
+        )
     )
     if inputs_dir.exists():
         archived_inputs = {
@@ -1086,7 +1106,12 @@ def make_activitysim_preprocess_step(
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
             input_key = USIM_POPULATION_SOURCE_H5
-            input_desc = f"UrbanSim population-source datastore for ActivitySim year {state.year}"
+            population_year = resolve_forecast_year(state)
+            input_desc = (
+                "UrbanSim population-source datastore for ActivitySim "
+                f"population year {population_year} "
+                f"(workflow year {getattr(state, 'year', None)})"
+            )
             table_config = (
                 (USIM_POPULATION_HOUSEHOLDS_TABLE, "households"),
                 (USIM_POPULATION_PERSONS_TABLE, "persons"),

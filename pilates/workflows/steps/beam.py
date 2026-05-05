@@ -1,3 +1,15 @@
+"""BEAM workflow steps demonstrating the PILATES-Consist integration pattern.
+
+The binding rules in `pilates.workflows.binding` declare BEAM's required
+inputs, including exact-rewind snapshot artifacts for ActivitySim outputs,
+vehicles, warm starts, and configuration references. The step factories in this
+module convert those bindings into model execution, publish current-role
+outputs through the Consist coupler, and log output-only diagnostic families
+without expanding the handoff surface. Recovery roots remain storage metadata:
+snapshot artifacts describe semantic model boundaries, while archive promotion
+and future Consist recovery policy decide where the bytes can be restored from.
+"""
+
 from __future__ import annotations
 
 import json
@@ -29,6 +41,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_INPUT_PLANS_ARCHIVED,
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_INPUT_VEHICLES_ARCHIVED,
+    BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -36,6 +49,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -174,15 +188,30 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     ),
 }
 
+_BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
+    BEAM_INPUT_PLANS_ARCHIVED: BEAM_PLANS_IN,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED: BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_PERSONS_ARCHIVED: BEAM_PERSONS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED: BEAM_CONFIG_FILE,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: "beam_config_references",
+    BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles_beam_in",
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: LINKSTATS_WARMSTART,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: "beam_plans_warmstart",
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
+        "beam_experienced_plans_warmstart"
+    ),
+}
+
 
 def _beam_run_snapshot_dir(
     *,
     workspace: Workspace,
     state: WorkflowState,
 ) -> Path:
+    snapshot_year = resolve_forecast_year(state)
     return (
         Path(workspace.get_beam_output_dir())
-        / f"inputs-year-{state.year}-iteration-{state.iteration}"
+        / f"inputs-year-{snapshot_year}-iteration-{state.iteration}"
     )
 
 
@@ -197,6 +226,13 @@ def _beam_input_archive_meta(
         "facet": {
             "artifact_family": "beam_input_archived",
             "input_name": input_name,
+            "source_role": _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP.get(
+                archive_key,
+                input_name,
+            ),
+            "snapshot_role": f"beam_input_{input_name}",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
             "year": year,
             "iteration": iteration,
         },
@@ -513,6 +549,7 @@ def _archive_beam_run_inputs(
 ) -> None:
     snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_year = resolve_forecast_year(state)
 
     config_reference_snapshot = _archive_beam_config_references(
         settings=settings,
@@ -529,7 +566,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
@@ -558,7 +595,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=archive_key,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
@@ -814,10 +851,12 @@ def _recover_beam_preprocess_outputs(
     prepared_inputs: Dict[str, Path] = {}
     if step_inputs:
         allowed_keys = {
+            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
             LINKSTATS_WARMSTART,
+            "vehicles_beam_in",
         }
         for key, value in step_inputs.items():
             if key not in allowed_keys:
@@ -911,7 +950,12 @@ def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
 
     settings, state, workspace = _beam_step_runtime(ctx)
-    return BeamRunner.runtime_expected_inputs(settings, state, workspace)
+    inputs = dict(BeamRunner.runtime_expected_inputs(settings, state, workspace))
+    # The BEAM input directory is a container mount, not a semantic cache input
+    # for beam_run. Population inputs in that tree are logged as explicit
+    # artifacts and the static network remains covered by the BEAM config adapter.
+    inputs.pop(BEAM_MUTABLE_DATA_DIR, None)
+    return inputs
 
 
 def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:

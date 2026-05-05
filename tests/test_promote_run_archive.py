@@ -49,7 +49,6 @@ def _minimal_config(tmp_path: Path, *, recovery_roots: list[str] | None = None) 
                     "enabled": True,
                     "type": "duckdb",
                     "path": str(tmp_path / "shared.duckdb"),
-                    "use_consist": True,
                 },
             },
             "infrastructure": {

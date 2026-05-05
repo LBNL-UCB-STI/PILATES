@@ -18,12 +18,14 @@ contract expectations explicit without running heavy model containers.
 
 import shutil
 import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import yaml
 from consist.types import BindingResult
+import pandas as pd
 
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
@@ -62,6 +64,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     BEAM_FULL_SKIMS,
     FINAL_SKIMS_OMX,
+    LINKSTATS,
     LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -83,7 +86,11 @@ from pilates.workflows.stages.supply_demand import (
     _run_traffic_assignment_phase,
     TrafficAssignmentPhaseInputs,
 )
-from pilates.workflows.stages.supply_demand_beam import _build_beam_postprocess_input_keys
+from pilates.workflows.stages.supply_demand_beam import (
+    _build_beam_postprocess_input_keys,
+    _find_completed_beam_run_for_restart,
+    _hydrate_completed_beam_run_outputs,
+)
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
     _restore_supply_demand_usim_inputs_for_resume,
@@ -165,6 +172,13 @@ def _write_file(path: Path, content: str = "x") -> None:
             handle.create_dataset("dummy", data=[1])
         return
     path.write_text(content)
+
+
+def _write_population_h5(path: Path, year: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.HDFStore(path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{year}/{table_name}", pd.DataFrame({"value": [1]}))
 
 
 def _build_settings(tmp_path: Path):
@@ -886,6 +900,11 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
     )
     monkeypatch.setattr(
         vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        vo_stage,
         "flush_archive_queue",
         lambda timeout=None, fail_on_timeout=False: flush_calls.append(timeout),
     )
@@ -912,6 +931,11 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
             and str(call["path"]).endswith("vehicles_output.RData")
             for call in archive_now_calls
         )
+    assert sum(
+        1
+        for call in archive_now_calls
+        if call["key"] == USIM_POPULATION_SOURCE_H5 and call.get("force") is True
+    ) == 2
 
 
 def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
@@ -926,6 +950,58 @@ def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
         state.year + 4,
         state.year + 6,
     ]
+
+
+def test_vehicle_ownership_atlas_postprocess_binding_includes_run_outputs(
+    stage_env, monkeypatch
+):
+    """ATLAS postprocess cache identity should include ATLAS raw outputs."""
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    forecast_usim_path = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / settings.urbansim.output_file_template.format(year=state.forecast_year)
+    )
+    _write_file(forecast_usim_path)
+    coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        vo_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+
+    run_vehicle_ownership_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    )
+
+    postprocess_call = next(
+        call for call in scenario.calls if call["model"] == "atlas_postprocess"
+    )
+    postprocess_binding = postprocess_call["binding"]
+    assert isinstance(postprocess_binding, BindingResult)
+    inputs = dict(postprocess_binding.inputs or {})
+    assert inputs[USIM_DATASTORE_CURRENT_H5] == str(forecast_usim_path)
+    assert f"householdv_{state.forecast_year}" in inputs
+    assert f"vehicles_{state.forecast_year}" in inputs
 
 
 def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
@@ -982,6 +1058,11 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
     monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(
         vo_stage,
         "flush_archive_queue",
@@ -1585,7 +1666,7 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
         year=forecast_year
     )
     _write_file(current_h5)
-    _write_file(forecast_h5)
+    _write_population_h5(forecast_h5, forecast_year)
 
     state = stage_env["state"]
     state.current_year = current_year
@@ -1594,10 +1675,10 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
 
-    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, str(current_h5))
+    stage_env["coupler"].set(USIM_POPULATION_SOURCE_H5, str(forecast_h5))
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, str(current_h5))
     usim_inputs = {
-        USIM_POPULATION_SOURCE_H5: str(current_h5),
+        USIM_POPULATION_SOURCE_H5: str(forecast_h5),
         USIM_DATASTORE_CURRENT_H5: str(current_h5),
     }
 
@@ -1937,6 +2018,668 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert BEAM_PLANS_IN in run_input_keys
     assert BEAM_HOUSEHOLDS_IN in run_input_keys
     assert BEAM_PERSONS_IN in run_input_keys
+
+
+def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
+    stage_env,
+    tmp_path,
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+    cache_epoch = getattr(settings.run, "cache_epoch", 2)
+
+    class _Tracker:
+        def __init__(self):
+            self.calls = []
+
+        def find_runs(self, **kwargs):
+            self.calls.append(kwargs)
+            return [
+                SimpleNamespace(id="other-run__step_func__y2018__i0__phase_run_x"),
+                SimpleNamespace(
+                    id=(
+                        f"{Path(workspace.full_path).name}"
+                        "__step_func__y9999__i0__phase_run_wrong"
+                    ),
+                    model="beam_run",
+                    stage="beam",
+                    phase="run",
+                    status="completed",
+                    year=state.forecast_year + 2,
+                    iteration=0,
+                    meta={"cache_epoch": cache_epoch},
+                    updated_at="2099-01-01T00:00:00",
+                ),
+                SimpleNamespace(
+                    id=(
+                        f"{Path(workspace.full_path).name}"
+                        "__step_func__y9999__i0__phase_run_unproven"
+                    ),
+                    updated_at="2099-01-02T00:00:00",
+                ),
+                SimpleNamespace(
+                    id=(
+                        f"{Path(workspace.full_path).name}"
+                        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
+                    ),
+                    meta={
+                        "model": "beam_run",
+                        "stage": "beam",
+                        "phase": "run",
+                        "cache_epoch": cache_epoch,
+                    },
+                    status="completed",
+                    year=state.forecast_year,
+                    iteration=0,
+                    updated_at="2026-01-01T00:00:00",
+                ),
+            ]
+
+    tracker = _Tracker()
+    run = _find_completed_beam_run_for_restart(
+        tracker=tracker,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert run is not None
+    assert str(run.id).startswith(f"{Path(workspace.full_path).name}__")
+    assert tracker.calls[0]["model"] == "beam_run"
+    assert tracker.calls[0]["stage"] == "beam"
+    assert tracker.calls[0]["phase"] == "run"
+    assert tracker.calls[0]["status"] == "completed"
+    assert tracker.calls[0]["iteration"] == 0
+
+
+def test_find_completed_beam_run_for_restart_rejects_unproven_same_prefix_candidate(
+    stage_env,
+    tmp_path,
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    class _Tracker:
+        def find_runs(self, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id=(
+                        f"{Path(workspace.full_path).name}"
+                        f"__step_func__y{state.forecast_year}__i0__phase_run_unproven"
+                    )
+                )
+            ]
+
+    run = _find_completed_beam_run_for_restart(
+        tracker=_Tracker(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert run is None
+
+
+def test_completed_beam_run_hydration_requires_postprocess_critical_keys(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    linkstats = tmp_path / "0.linkstats.csv.gz"
+    _write_file(linkstats)
+    run_id = f"{Path(workspace.full_path).name}__step_func__y2018__i0__phase_run_x"
+    outputs = {
+        LINKSTATS: str(linkstats),
+        f"events_parquet_{state.forecast_year}_0": str(tmp_path / "missing.events.parquet"),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(tmp_path / "missing.skims.zarr"),
+    }
+
+    class _Hydrated(dict):
+        @property
+        def complete(self):
+            return False
+
+        @property
+        def summary(self):
+            return "materialized_fs=1 missing_source=2"
+
+    class _Tracker:
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **_kwargs):
+            return _Hydrated(
+                {
+                    LINKSTATS: SimpleNamespace(
+                        path=linkstats,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
+                        path=tmp_path / "missing.events.parquet",
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
+                        path=tmp_path / "missing.skims.zarr",
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                }
+            )
+
+    recovered = _hydrate_completed_beam_run_outputs(
+        tracker=_Tracker(),
+        run_id=run_id,
+        workspace=workspace,
+        state=state,
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert recovered is None
+
+
+def test_completed_beam_run_hydration_requires_linked_publication_keys(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    events = tmp_path / "0.events.parquet"
+    skims = tmp_path / "0.skimsActivitySimOD.zarr"
+    for path in (events, skims):
+        _write_file(path)
+    run_id = f"{Path(workspace.full_path).name}__step_func__y2018__i0__phase_run_x"
+    outputs = {
+        f"events_parquet_{state.forecast_year}_0": str(events),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(skims),
+        LINKSTATS: str(tmp_path / "missing.linkstats.csv.gz"),
+        "beam_plans_out": str(tmp_path / "missing.plans.csv.gz"),
+    }
+
+    class _Hydrated(dict):
+        @property
+        def complete(self):
+            return False
+
+        @property
+        def summary(self):
+            return "materialized_fs=2 missing_source=2"
+
+    class _Tracker:
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **_kwargs):
+            return _Hydrated(
+                {
+                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
+                        path=events,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
+                        path=skims,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                    LINKSTATS: SimpleNamespace(
+                        path=tmp_path / "missing.linkstats.csv.gz",
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                    "beam_plans_out": SimpleNamespace(
+                        path=tmp_path / "missing.plans.csv.gz",
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                }
+            )
+
+    recovered = _hydrate_completed_beam_run_outputs(
+        tracker=_Tracker(),
+        run_id=run_id,
+        workspace=workspace,
+        state=state,
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert recovered is None
+
+
+def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
+    stage_env,
+    monkeypatch,
+    tmp_path,
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    events = tmp_path / "0.events.parquet"
+    linkstats = tmp_path / "0.linkstats.csv.gz"
+    for path in (events, linkstats):
+        _write_file(path)
+    missing_skims = tmp_path / "missing.skims.zarr"
+    run_id = (
+        f"{Path(workspace.full_path).name}"
+        f"__step_func__y{state.forecast_year}__i0__phase_run_x"
+    )
+    outputs = {
+        f"events_parquet_{state.forecast_year}_0": str(events),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(missing_skims),
+        LINKSTATS: str(linkstats),
+    }
+
+    class _Hydrated(dict):
+        @property
+        def complete(self):
+            return False
+
+        @property
+        def summary(self):
+            return "materialized_fs=2 missing_source=1"
+
+    class _Tracker:
+        def find_runs(self, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id=run_id,
+                    model_name="beam_run",
+                    stage="beam",
+                    phase="run",
+                    status="completed",
+                    year=state.forecast_year,
+                    iteration=0,
+                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
+                )
+            ]
+
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **_kwargs):
+            return _Hydrated(
+                {
+                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
+                        path=events,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
+                        path=missing_skims,
+                        status="missing_source",
+                        resolvable=False,
+                    ),
+                    LINKSTATS: SimpleNamespace(
+                        path=linkstats,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                    ),
+                }
+            )
+
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())
+
+    activity_outputs = {
+        "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
+        "households_asim_out": str(tmp_path / "households.parquet"),
+        "persons_asim_out": str(tmp_path / "persons.parquet"),
+    }
+    for path in activity_outputs.values():
+        _write_file(Path(path))
+
+    with pytest.raises(RuntimeError, match="could not hydrate the required outputs"):
+        _run_traffic_assignment_phase(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            inputs=TrafficAssignmentPhaseInputs(
+                year=state.forecast_year,
+                iteration=0,
+                activity_demand_outputs=activity_outputs,
+                previous_beam_outputs=None,
+            ),
+            outputs_holder=StepOutputsHolder(),
+        )
+
+    assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
+    assert not [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
+
+
+def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
+    stage_env,
+    monkeypatch,
+    tmp_path,
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+    scenario.restored_run_ids = []
+
+    def _remember_restored_run_id(**kwargs):
+        scenario.restored_run_ids.append(kwargs)
+
+    scenario.remember_restored_run_id = _remember_restored_run_id
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+    beam_config_path = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    )
+    beam_config_path.unlink()
+
+    beam_out = Path(workspace.get_beam_output_dir())
+    linkstats = beam_out / "0.linkstats.csv.gz"
+    events = beam_out / "0.events.parquet"
+    skims = beam_out / "0.skimsActivitySimOD.zarr"
+    plans = beam_out / "plans.csv.gz"
+    for path in (linkstats, events, skims, plans):
+        _write_file(path)
+
+    run_id = (
+        f"{Path(workspace.full_path).name}"
+        f"__step_func__y{state.forecast_year}__i0__phase_run_x"
+    )
+    outputs = {
+        "linkstats": str(linkstats),
+        f"events_parquet_{state.forecast_year}_0": str(events),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(skims),
+        f"beam_plans_out_{state.forecast_year}_0": str(plans),
+    }
+
+    class _Hydrated(dict):
+        pass
+
+    class _Tracker:
+        def __init__(self):
+            self.hydrate_calls = []
+
+        def find_runs(self, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id=run_id,
+                    model_name="beam_run",
+                    stage="beam",
+                    phase="run",
+                    status="completed",
+                    year=state.forecast_year,
+                    iteration=0,
+                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
+                )
+            ]
+
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **kwargs):
+            self.hydrate_calls.append(kwargs)
+            return _Hydrated(
+                {
+                    key: SimpleNamespace(path=Path(path), resolvable=True)
+                    for key, path in outputs.items()
+                }
+            )
+
+    tracker = _Tracker()
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
+
+    activity_outputs = {
+        "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
+        "households_asim_out": str(tmp_path / "households.parquet"),
+        "persons_asim_out": str(tmp_path / "persons.parquet"),
+    }
+    for path in activity_outputs.values():
+        _write_file(Path(path))
+
+    result = _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            activity_demand_outputs=activity_outputs,
+            previous_beam_outputs=None,
+        ),
+        outputs_holder=StepOutputsHolder(),
+    )
+
+    assert result.previous_beam_outputs is not None
+    assert tracker.hydrate_calls
+    assert tracker.hydrate_calls[0]["run_id"] == run_id
+    assert tracker.hydrate_calls[0]["target_root"] == os.path.realpath(
+        workspace.full_path
+    )
+    assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
+    assert not [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
+    assert [call for call in scenario.calls if call.get("model") == "beam_postprocess"]
+    assert scenario.restored_run_ids == [
+        {
+            "model_name": "beam_run",
+            "year": state.forecast_year,
+            "iteration": 0,
+            "run_id": run_id,
+        }
+    ]
+    assert coupler.get(LINKSTATS) == str(linkstats)
+    assert coupler.get(LINKSTATS_WARMSTART) == str(linkstats)
+
+
+def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
+    stage_env,
+    monkeypatch,
+    tmp_path,
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+    restored_run_ids = []
+    scenario.remember_restored_run_id = lambda **kwargs: restored_run_ids.append(kwargs)
+
+    state.current_year = 2017
+    state.forecast_year = 2019
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+    beam_config_path = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    )
+    beam_config_path.unlink()
+
+    beam_out = Path(workspace.get_beam_output_dir())
+    linkstats = beam_out / "0.linkstats.csv.gz"
+    events = beam_out / "0.events.parquet"
+    skims = beam_out / "0.skimsActivitySimOD.zarr"
+    plans = beam_out / "plans.csv.gz"
+    for path in (linkstats, events, skims, plans):
+        _write_file(path)
+
+    run_id = f"{Path(workspace.full_path).name}__step_func__y2017__i0__phase_run_x"
+    outputs = {
+        LINKSTATS: str(linkstats),
+        "events_parquet_2019_0": str(events),
+        "raw_od_skims_zarr_2019_0": str(skims),
+        "beam_plans_out_2019_0": str(plans),
+    }
+
+    class _Tracker:
+        def find_runs(self, **_kwargs):
+            return [
+                SimpleNamespace(
+                    id=run_id,
+                    model_name="beam_run",
+                    stage="beam",
+                    phase="run",
+                    status="completed",
+                    year=2017,
+                    iteration=0,
+                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
+                )
+            ]
+
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return dict(outputs)
+
+        def hydrate_run_outputs(self, **_kwargs):
+            return {
+                key: SimpleNamespace(path=Path(path), resolvable=True)
+                for key, path in outputs.items()
+            }
+
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())
+
+    activity_outputs = {
+        "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
+        "households_asim_out": str(tmp_path / "households.parquet"),
+        "persons_asim_out": str(tmp_path / "persons.parquet"),
+    }
+    for path in activity_outputs.values():
+        _write_file(Path(path))
+
+    _run_traffic_assignment_phase(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        inputs=TrafficAssignmentPhaseInputs(
+            year=2017,
+            iteration=0,
+            activity_demand_outputs=activity_outputs,
+            previous_beam_outputs=None,
+        ),
+        outputs_holder=StepOutputsHolder(),
+    )
+
+    assert [item["year"] for item in restored_run_ids] == [2017, 2019]
+    assert all(item["model_name"] == "beam_run" for item in restored_run_ids)
+    assert all(item["run_id"] == run_id for item in restored_run_ids)
+
+
+def test_traffic_assignment_restart_fails_before_rerun_when_beam_config_missing(
+    stage_env,
+    monkeypatch,
+    tmp_path,
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    state.set_run_info_path(str(tmp_path / "archive" / "run" / "run_state.yaml"))
+    beam_config_path = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / settings.run.region
+        / settings.beam.config
+    )
+    beam_config_path.unlink()
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: None)
+
+    activity_outputs = {
+        "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
+        "households_asim_out": str(tmp_path / "households.parquet"),
+        "persons_asim_out": str(tmp_path / "persons.parquet"),
+    }
+    for path in activity_outputs.values():
+        _write_file(Path(path))
+
+    with pytest.raises(RuntimeError, match="beam_config_file is missing"):
+        _run_traffic_assignment_phase(
+            scenario=scenario,
+            state=state,
+            settings=settings,
+            workspace=workspace,
+            coupler=coupler,
+            inputs=TrafficAssignmentPhaseInputs(
+                year=state.forecast_year,
+                iteration=0,
+                activity_demand_outputs=activity_outputs,
+                previous_beam_outputs=None,
+            ),
+            outputs_holder=StepOutputsHolder(),
+        )
+
+    assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
+    assert not [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
+    ]
 
 
 def test_supply_demand_stage_beam_only_clamps_outer_iterations(

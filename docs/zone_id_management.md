@@ -190,6 +190,14 @@ If you touch zone-sensitive code:
 4. preserve original zone IDs when converting to 0-based skim coordinates
 5. add validation before publishing a new skim artifact
 
+For a preserved run workspace, use the operator diagnostic to check the emitted
+canonical zone table and compare it with the run-local UrbanSim datastore when
+one is present:
+
+```bash
+python scripts/verify_zone_ids.py /path/to/preserved/workspace
+```
+
 ## Current Safeguards
 
 The codebase currently has three important safeguards:

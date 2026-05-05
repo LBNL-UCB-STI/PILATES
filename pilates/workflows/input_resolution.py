@@ -133,7 +133,7 @@ def selected_candidate_key(
     For plans built through the shared binding layer this reflects the matched
     preferred-key candidate, not necessarily the semantic workflow key.
     """
-    metadata = resolved.metadata or {}
+    metadata = resolved.metadata if resolved.metadata is not None else {}
     selected = metadata.get("selected_key_by_semantic_key", {}).get(key)
     if selected is not None:
         return str(selected)
@@ -183,7 +183,7 @@ def resolved_metadata_value_for_key(
     but should not participate in the generic Consist input envelope, such as
     internal HDF table selectors.
     """
-    metadata = resolved.metadata or {}
+    metadata = resolved.metadata if resolved.metadata is not None else {}
     values_by_key = metadata.get("resolved_values_by_semantic_key", {})
     if isinstance(values_by_key, Mapping):
         return values_by_key.get(key)

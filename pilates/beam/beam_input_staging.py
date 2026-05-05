@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -25,6 +25,9 @@ from pilates.workflows.artifact_keys import (
 )
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
 
 
 class BeamDataHelper:
@@ -162,9 +165,13 @@ def copy_vehicles_from_atlas(
         return None
 
     logger.info(
-        "Copying atlas vehicles2 file from %s to %s",
+        "Copying atlas vehicles2 file from %s to %s "
+        "(workflow_year=%s forecast_year=%s iteration=%s)",
         atlas_vehicle_file_loc,
         beam_vehicles_path,
+        getattr(state, "year", None),
+        getattr(state, "forecast_year", None),
+        getattr(state, "current_inner_iter", None),
     )
 
     df = _read_vehicle_table(atlas_vehicle_file_loc)
@@ -188,6 +195,7 @@ def validate_population_consistency(
     workspace: Any,
     settings: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    state: Any = None,
 ) -> None:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     file_format = settings.activitysim.file_format if settings.activitysim else "csv"
@@ -220,6 +228,9 @@ def validate_population_consistency(
             "BEAM staged vehicles reference households that are absent from staged "
             "households. This can cause deterministic household vehicle assignment to "
             "misbehave. "
+            f"workflow_year={getattr(state, 'year', None)} "
+            f"forecast_year={getattr(state, 'forecast_year', None)} "
+            f"iteration={getattr(state, 'current_inner_iter', None)} "
             f"missing_households={report['missing_vehicle_households']} "
             f"sample_missing_households={report['sample_missing_vehicle_households']} "
             f"households_path={households_path} vehicles_path={vehicles_path}"
@@ -765,8 +776,8 @@ def copy_initial_asim_files(
     *,
     asim_file_paths: Dict[str, Tuple[Optional[str], Optional[FileRecord]]],
     file_format: str,
-    workspace: Any,
-    resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    workspace: "Workspace",
+    resolve_beam_exchange_scenario_folder_fn: Callable[["Workspace"], str],
     copy_with_compression_asim_file_to_beam_fn: Callable[..., List[FileRecord]],
 ) -> List[FileRecord]:
     record_list: List[FileRecord] = []
@@ -813,7 +824,7 @@ def merge_replanned_asim_files(
         "households", (None, None)
     )
 
-    def get_data(path: str, table_type: str, source: str) -> pd.DataFrame:
+    def get_data(path: Optional[str], table_type: str, source: str) -> pd.DataFrame:
         if path is None:
             raise FileNotFoundError(f"{source} file for table '{table_type}' not found.")
         if not os.path.exists(path):

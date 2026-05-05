@@ -54,7 +54,9 @@ def _activitysim_archived_input_paths(
     state: WorkflowState,
     workspace: Workspace,
 ) -> Dict[str, str]:
-    year = getattr(state, "year", getattr(state, "current_year", None))
+    year = getattr(state, "forecast_year", None)
+    if year is None:
+        year = getattr(state, "year", getattr(state, "current_year", None))
     if year is None:
         return {}
     iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
@@ -78,6 +80,25 @@ def _default_usim_datastore_output_path(
         datastore_name = get_usim_datastore_fname(settings, io="input")
     except Exception:
         return None
+    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
+
+
+def _forecast_usim_datastore_output_path(
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Optional[str]:
+    forecast_year = getattr(state, "forecast_year", None)
+    if forecast_year is None:
+        return _default_usim_datastore_output_path(settings, workspace)
+    try:
+        datastore_name = get_usim_datastore_fname(
+            settings,
+            io="output",
+            year=forecast_year,
+        )
+    except Exception:
+        return _default_usim_datastore_output_path(settings, workspace)
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
@@ -551,6 +572,7 @@ def create_usim_input_data(
     asim_source_paths: list,
     current_input_store_path: str,
     population_source_store_path: Optional[str],
+    target_store_path: Optional[str] = None,
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -564,7 +586,8 @@ def create_usim_input_data(
     on to the next iteration if they were not found in the UrbanSim *outputs*.
     """
     forecast_year = state.forecast_year
-    input_store_path = current_input_store_path
+    input_store_path = target_store_path or current_input_store_path
+    os.makedirs(os.path.dirname(input_store_path), exist_ok=True)
     input_datastore_name = os.path.basename(input_store_path)
     archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
     archive_path = os.path.join(os.path.dirname(input_store_path), archive_fname)
@@ -573,7 +596,9 @@ def create_usim_input_data(
         population_source_store_path and os.path.exists(population_source_store_path)
     )
     source_store_path = (
-        input_store_path if fallback_to_current_input else population_source_store_path
+        current_input_store_path
+        if fallback_to_current_input
+        else population_source_store_path
     )
     source_store_label = (
         "current UrbanSim input datastore"
@@ -581,6 +606,7 @@ def create_usim_input_data(
         else "UrbanSim population-source datastore"
     )
 
+    archived_input_store_path: Optional[str] = None
     if os.path.exists(input_store_path):
         logger.info(
             "Moving urbansim inputs from the previous iteration to {0}".format(
@@ -588,12 +614,19 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
+        archived_input_store_path = archive_path
         if fallback_to_current_input or (
             source_store_path
             and os.path.abspath(source_store_path) == os.path.abspath(input_store_path)
         ):
             source_store_path = archive_path
-    elif not os.path.exists(archive_path):
+    elif os.path.exists(archive_path):
+        archived_input_store_path = archive_path
+    elif current_input_store_path and os.path.exists(current_input_store_path):
+        archived_input_store_path = current_input_store_path
+    elif source_store_path and os.path.exists(source_store_path):
+        archived_input_store_path = source_store_path
+    else:
         logger.warning(
             "No input data found at {0} or {1}. Cannot create next iteration inputs.".format(
                 input_store_path, archive_path
@@ -638,7 +671,7 @@ def create_usim_input_data(
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
     # load last iter UrbanSim input data
-    og_input_store = pd.HDFStore(archive_path, mode="r")
+    og_input_store = pd.HDFStore(archived_input_store_path, mode="r")
 
     # load last iter UrbanSim output/current data
     same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
@@ -658,7 +691,7 @@ def create_usim_input_data(
     )
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
-    new_input_store = pd.HDFStore(input_store_path)
+    new_input_store = pd.HDFStore(input_store_path, mode="w")
     assert len(new_input_store.keys()) == 0
 
     # Keep track of which tables have already been added (i.e. updated)
@@ -869,7 +902,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         """
         outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _default_usim_datastore_output_path(settings, workspace),
+            USIM_DATASTORE_H5: _forecast_usim_datastore_output_path(
+                settings,
+                state,
+                workspace,
+            ),
         }
         outputs.update(_activitysim_iteration_output_paths(state, workspace))
         outputs.update(_activitysim_archived_input_paths(state, workspace))
@@ -952,7 +989,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # Archive ActivitySim inputs for this iteration
         # This ensures Consist can find input files at stable paths for hybrid views
         inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
-            year, replanning_iteration_number
+            forecast_year, replanning_iteration_number
         )
         inputs_folder_path = os.path.join(
             workspace.get_asim_output_dir(), inputs_folder_name
@@ -1084,6 +1121,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
                 current_input_store_path=current_input_h5_path,
                 population_source_store_path=population_source_h5_path,
+                target_store_path=_forecast_usim_datastore_output_path(
+                    settings,
+                    self.state,
+                    workspace,
+                ),
             )
             if usim_record:
                 usim_datastore_h5 = next_usim_input_path

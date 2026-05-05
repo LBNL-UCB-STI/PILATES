@@ -11,6 +11,7 @@ import shutil
 from typing import Any, Iterable, Optional, Sequence
 
 from pilates.config import PilatesConfig, load_config
+from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
 
@@ -212,7 +213,10 @@ def _all_output_artifacts(tracker: Any) -> list[Any]:
     seen_artifact_ids: set[str] = set()
     for run in tracker.find_runs(limit=100_000):
         run_artifacts = tracker.get_artifacts_for_run(str(run.id))
-        for artifact in list((run_artifacts.outputs or {}).values()):
+        run_outputs = (
+            run_artifacts.outputs if run_artifacts.outputs is not None else {}
+        )
+        for artifact in list(run_outputs.values()):
             artifact_id = str(getattr(artifact, "id", ""))
             if artifact_id and artifact_id in seen_artifact_ids:
                 continue
@@ -373,6 +377,18 @@ def promote_run_to_recovery_roots(
                     source_run_dir=source_run_dir,
                     destinations=successful_destinations,
                 )
+        for entry in result.roots:
+            emit_artifact_lifecycle_audit_event(
+                run_dir=source_run_dir,
+                event_type="promotion_status",
+                recovery_root=entry.recovery_root,
+                destination_run_dir=entry.destination_run_dir,
+                status=entry.status,
+                copy_performed=entry.copy_performed,
+                verified=entry.verified,
+                artifact_metadata_updated=entry.artifact_metadata_updated,
+                db_path=str(db_path) if db_path is not None else None,
+            )
     finally:
         if opened_tracker is not None:
             _dispose_tracker(opened_tracker)

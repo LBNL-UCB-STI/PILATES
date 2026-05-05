@@ -1,4 +1,5 @@
 from pathlib import Path
+import subprocess
 
 import pytest
 import yaml
@@ -15,10 +16,29 @@ ACTIVE_SCENARIO_ROOTS = (
     REPO_ROOT / "scenarios/sfbay",
 )
 
+
+def _tracked_yaml_paths(root: Path) -> list[Path]:
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", str(root / "*.yaml")],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except Exception:
+        return sorted(root.glob("*.yaml"))
+    return sorted(
+        REPO_ROOT / line
+        for line in result.stdout.splitlines()
+        if line.strip()
+    )
+
+
 ACTIVE_SCENARIO_PATHS = sorted(
     path
     for root in ACTIVE_SCENARIO_ROOTS
-    for path in root.glob("*.yaml")
+    for path in _tracked_yaml_paths(root)
 )
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
@@ -119,8 +139,8 @@ def test_active_scenarios_pin_beam_images_and_explicit_warmstart_setting():
 
 
 def test_active_scenarios_use_expected_router_directories():
-    seattle_paths = sorted((REPO_ROOT / "scenarios/seattle").glob("*.yaml"))
-    sfbay_paths = sorted((REPO_ROOT / "scenarios/sfbay").glob("*.yaml"))
+    seattle_paths = _tracked_yaml_paths(REPO_ROOT / "scenarios/seattle")
+    sfbay_paths = _tracked_yaml_paths(REPO_ROOT / "scenarios/sfbay")
     breathe_path = REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml"
 
     for path in seattle_paths:

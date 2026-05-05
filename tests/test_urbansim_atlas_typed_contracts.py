@@ -490,7 +490,7 @@ def test_atlas_update_h5_vehicle_updates_nearest_year_scoped_households_table(
         household_v_csv_path=str(household_v_csv),
     )
 
-    assert updated is True
+    assert updated == "/2024/households"
     with pd.HDFStore(h5_path, mode="r") as store:
         assert "/2024/households" in store
         households = store["/2024/households"]

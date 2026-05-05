@@ -17,6 +17,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.runtime.archive_paths import first_existing_path
 from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
@@ -118,13 +119,6 @@ def _export_atlas_table_to_csv(
         index=True,
         index_label=expected_index_name,
     )
-
-
-def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
-    for path in paths:
-        if path and os.path.exists(path):
-            return path
-    return None
 
 
 def _resolve_existing_artifact_path(
@@ -701,7 +695,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             artifact_base_h5,
             workspace=workspace,
         )
-        preferred_h5 = _first_existing_path(
+        preferred_h5 = first_existing_path(
             base_h5_path if self.state.is_start_year() else current_h5_path,
             current_h5_path if self.state.is_start_year() else base_h5_path,
         )
