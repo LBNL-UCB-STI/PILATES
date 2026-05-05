@@ -17,7 +17,7 @@ summary: Generic HPC execution posture for PILATES and how it differs from local
 - `job_runner.sh` creates a per-job settings file when `${BEAM_MEMORY}` templating is present.
 - `job.sh` bootstraps a Python virtual environment inside the job.
 - `job.sh` installs PILATES dependencies from `hpc/requirements-hpc.txt` when that file exists, or from `requirements.txt` otherwise.
-- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.3`.
+- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.4`.
 
 ## Most Important Difference From Local Runs
 
@@ -63,19 +63,19 @@ The current wrapper scripts recognize the following controls. The Slurm account
 is required on the command line; the environment variables are optional unless
 your cluster layout differs from the defaults.
 
-| Setting | Required? | Default or source | What it controls |
-| --- | --- | --- | --- |
-| `-a`, `--account` | Yes | none | Slurm account passed to `sbatch --account`. |
-| `-p` | No | `lr7` | Partition preset. Current scripts support `lr7` and `lr8`. |
-| `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES` | Checkout used by `job_runner.sh` and `job.sh`. Override this first if the repo lives elsewhere. |
-| `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env` | Job-side Python virtual environment. |
+| Setting | Required? | Default or source                                                             | What it controls |
+| --- | --- |-------------------------------------------------------------------------------| --- |
+| `-a`, `--account` | Yes | none                                                                          | Slurm account passed to `sbatch --account`. |
+| `-p` | No | `lr7`                                                                         | Partition preset. Current scripts support `lr7` and `lr8`. |
+| `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES`                                 | Checkout used by `job_runner.sh` and `job.sh`. Override this first if the repo lives elsewhere. |
+| `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env`                                                    | Job-side Python virtual environment. |
 | `PILATES_REQUIREMENTS_FILE` | No | `$PILATES_DIR/hpc/requirements-hpc.txt`, then `$PILATES_DIR/requirements.txt` | Requirements file installed inside the job. |
-| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist` | Editable Consist checkout used when present. |
-| `CONSIST_PYPI_PACKAGE` | No | requirement pin when present, otherwise `consist==0.1.3` | Package spec used when editable Consist install is not available. |
-| `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00` | Slurm wall time. |
-| `MEMORY_LIMIT_GB` | No | partition preset | Slurm memory request. Explicit env value overrides partition and `--high-mem` defaults. |
-| `BEAM_MEMORY` | No | partition preset | Value substituted into settings templates containing `${BEAM_MEMORY}`. Explicit env value overrides partition and `--high-mem` defaults. |
-| `PILATES_THREADS` | No | `8` | Caps native Python/BLAS/OpenMP thread pools inside `job.sh`. |
+| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist`                                                     | Editable Consist checkout used when present. |
+| `CONSIST_PYPI_PACKAGE` | No | requirement pin when present, otherwise `consist==0.1.4`                      | Package spec used when editable Consist install is not available. |
+| `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00`                                                                  | Slurm wall time. |
+| `MEMORY_LIMIT_GB` | No | partition preset                                                              | Slurm memory request. Explicit env value overrides partition and `--high-mem` defaults. |
+| `BEAM_MEMORY` | No | partition preset                                                              | Value substituted into settings templates containing `${BEAM_MEMORY}`. Explicit env value overrides partition and `--high-mem` defaults. |
+| `PILATES_THREADS` | No | `8`                                                                           | Caps native Python/BLAS/OpenMP thread pools inside `job.sh`. |
 
 Memory precedence is: explicit `MEMORY_LIMIT_GB` / `BEAM_MEMORY` environment
 values first, then partition presets. On `lr7`, `--high-mem` changes only the
