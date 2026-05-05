@@ -952,6 +952,58 @@ def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
     ]
 
 
+def test_vehicle_ownership_atlas_postprocess_binding_includes_run_outputs(
+    stage_env, monkeypatch
+):
+    """ATLAS postprocess cache identity should include ATLAS raw outputs."""
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+
+    forecast_usim_path = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / settings.urbansim.output_file_template.format(year=state.forecast_year)
+    )
+    _write_file(forecast_usim_path)
+    coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
+    coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "_validate_population_h5_for_activitysim_year",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        vo_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+
+    run_vehicle_ownership_stage(
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+    )
+
+    postprocess_call = next(
+        call for call in scenario.calls if call["model"] == "atlas_postprocess"
+    )
+    postprocess_binding = postprocess_call["binding"]
+    assert isinstance(postprocess_binding, BindingResult)
+    inputs = dict(postprocess_binding.inputs or {})
+    assert inputs[USIM_DATASTORE_CURRENT_H5] == str(forecast_usim_path)
+    assert f"householdv_{state.forecast_year}" in inputs
+    assert f"vehicles_{state.forecast_year}" in inputs
+
+
 def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     stage_env, monkeypatch
 ):

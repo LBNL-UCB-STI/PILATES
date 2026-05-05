@@ -1179,6 +1179,7 @@ def make_atlas_postprocess_step(
             output_recoverer=_recover_atlas_postprocess_outputs,
             output_paths=AtlasPostprocessor.expected_outputs,
             input_binding="none",
+            cache_mode="overwrite",
             cache_hydration="metadata",
             step_logger=logger,
         ),

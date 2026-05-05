@@ -21,7 +21,7 @@ from pilates.atlas.inputs import (
 )
 from pilates.utils.input_logging import log_inputs
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
-from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.binding import _archive_fallback_path
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import (
@@ -88,6 +88,34 @@ def _atlas_subyear_manifest_path(
         / ".workflow"
         / "vehicle_ownership"
         / f"forecast_year_{forecast_year}_subyear_{atlas_year}.yaml"
+    )
+
+
+def _build_atlas_postprocess_binding(
+    *,
+    coupler: CouplerProtocol,
+    upstream_run: object,
+) -> BindingPlan:
+    inputs: Dict[str, object] = {}
+    get_value = getattr(coupler, "get", None)
+    if callable(get_value):
+        usim_current = get_value(USIM_DATASTORE_CURRENT_H5)
+        if usim_current is not None:
+            inputs[USIM_DATASTORE_CURRENT_H5] = usim_current
+
+    raw_outputs = getattr(upstream_run, "raw_outputs", None)
+    if isinstance(raw_outputs, Mapping):
+        for key, path in raw_outputs.items():
+            if key and path:
+                inputs[str(key)] = str(path)
+
+    return BindingPlan(
+        step_name="atlas_postprocess",
+        inputs=inputs,
+        metadata={
+            "source": "atlas_run_outputs",
+            "reason": "atlas_postprocess mutates UrbanSim H5 from ATLAS raw outputs",
+        },
     )
 
 
@@ -515,6 +543,10 @@ def run_vehicle_ownership_stage(
                     step_func=make_atlas_postprocess_step(
                         coupler=coupler,
                         outputs_holder=outputs_holder_atlas,
+                    ),
+                    binding=_build_atlas_postprocess_binding(
+                        coupler=coupler,
+                        upstream_run=upstream_run,
                     ),
                 )
             )
