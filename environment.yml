@@ -80,7 +80,7 @@ dependencies:
     - attrs>=20.0
     - httpx>=0.27.0
     - build>=1.2.2
-    - ruff==0.15.5
+    - ruff>=0.15.5
 
     # Local packages (install consist library in editable mode)
     # Note: Run separately after env creation: pip install -e ../consist
