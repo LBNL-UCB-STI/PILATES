@@ -1,6 +1,11 @@
 name: Deploy Docs
 
 on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "zensical.toml"
+      - ".github/workflows/pages.yml"
   push:
     branches: [main]
     paths:
@@ -42,15 +47,18 @@ jobs:
         run: zensical build
 
       - name: Configure GitHub Pages
+        if: github.event_name != 'pull_request'
         uses: actions/configure-pages@v5
 
       - name: Upload Pages artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./site
 
   deploy:
     name: Deploy docs site
+    if: github.event_name != 'pull_request'
     needs: build
     runs-on: ubuntu-latest
     environment:
