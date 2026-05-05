@@ -271,6 +271,13 @@ To create the webhook, copy
 Apps Script project and deploy it as a web app. The deployed web app URL is the
 value for `PILATES_GSHEET_WEBHOOK_URL`.
 
+For Lawrencium jobs, deploy the web app with access that accepts unauthenticated
+HTTP posts, typically `Anyone` / `Anyone with the link`, and use
+`PILATES_GSHEET_SECRET` as the write guard. `Anyone in your organization/domain`
+can still return HTTP 401 from HPC because the Slurm job is not signed into
+Google. The Sheet itself can remain private because the script executes as the
+deploying user.
+
 Set these in `hpc/run-notifications.env`:
 
 ```bash

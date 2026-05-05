@@ -324,7 +324,7 @@ class ConsistRunNotifier:
                 logger.warning(
                     "PILATES %s notification failed: %s",
                     backend.name,
-                    exc,
+                    _safe_request_error(exc),
                 )
 
     def _should_notify(self, run: Run) -> bool:
@@ -698,3 +698,15 @@ def _url_with_query_param(url: str, key: str, value: str) -> str:
             parts.fragment,
         )
     )
+
+
+def _safe_request_error(exc: Exception) -> str:
+    if isinstance(exc, requests.HTTPError):
+        response = exc.response
+        if response is not None:
+            reason = response.reason or "HTTP error"
+            return f"HTTP {response.status_code} {reason}"
+        return type(exc).__name__
+    if isinstance(exc, requests.RequestException):
+        return type(exc).__name__
+    return str(exc)

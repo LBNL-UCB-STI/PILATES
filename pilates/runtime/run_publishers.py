@@ -292,7 +292,7 @@ class ConsistRunPublisher:
                 logger.warning(
                     "PILATES %s run event publishing failed: %s",
                     publisher.name,
-                    exc,
+                    _safe_request_error(exc),
                 )
 
     def _build_event(
@@ -634,3 +634,15 @@ def _clean_optional(value: Optional[str]) -> Optional[str]:
         return None
     cleaned = value.strip()
     return cleaned or None
+
+
+def _safe_request_error(exc: Exception) -> str:
+    if isinstance(exc, requests.HTTPError):
+        response = exc.response
+        if response is not None:
+            reason = response.reason or "HTTP error"
+            return f"HTTP {response.status_code} {reason}"
+        return type(exc).__name__
+    if isinstance(exc, requests.RequestException):
+        return type(exc).__name__
+    return str(exc)
