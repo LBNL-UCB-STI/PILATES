@@ -270,6 +270,16 @@ def _emit_artifact_lifecycle_event(
     require_existing_summary: bool = False,
     **fields: Any,
 ) -> None:
+    """Emit a shadow-mode artifact lifecycle audit event.
+
+    When ``require_existing_summary`` is true, archive-copy events are dropped
+    until the lifecycle audit summary file exists. That preserves the Phase 1
+    audit ordering invariant: copied artifacts should not appear before the
+    corresponding artifact log has initialized the audit stream.
+
+    Lifecycle auditing is observability only and must not affect execution; all
+    exceptions are caught and logged at debug level.
+    """
     try:
         if require_existing_summary:
             local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
