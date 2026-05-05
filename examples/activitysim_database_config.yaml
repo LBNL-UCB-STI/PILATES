@@ -1,0 +1,51 @@
+# Example PILATES configuration for ActivitySim database input mode
+# This shows how to configure ActivitySim to read inputs from database instead of H5 files
+
+# Basic PILATES settings
+region: "sfbay"
+start_year: 2010
+end_year: 2020
+
+# Model configuration - UrbanSim is turned OFF to enable database input mode
+land_use_model: "off"  # NOT "urbansim" - this enables database mode
+travel_model: "beam"
+activity_demand_model: "activitysim"
+
+# Database configuration (required for database input mode)
+database:
+  enabled: true
+  type: duckdb
+  path: /path/to/pilates_data.duckdb
+
+# ActivitySim database input configuration
+activitysim_database:
+  enabled: true  # Enable database input mode for ActivitySim
+  
+  # Optional: Filter data by configuration hash
+  # Use this to ensure you get data from runs with matching configuration
+  config_hash: "abc123def456"  # Hash from specific UrbanSim run
+  
+  # Optional: Filter data by year
+  # Defaults to forecast_year if not specified
+  year: 2010
+
+# Standard ActivitySim settings (still required)
+asim_local_mutable_data_folder: "asim_input"
+asim_local_mutable_configs_folder: "asim_configs"
+household_sample_size: 0.1
+chunk_size: 0
+periods: ["EA", "AM", "MD", "PM", "EV"]
+
+# BEAM settings (still required for skims)
+beam_config: "beam-seattle.conf"
+beam_sample: 0.1
+skims_fname: "skims.omx"
+
+# Other required settings
+FIPS:
+  sfbay:
+    state: "06"
+    counties: ["001", "013", "041", "055", "075", "081", "085", "095", "097"]
+
+local_crs:
+  sfbay: "EPSG:2875"

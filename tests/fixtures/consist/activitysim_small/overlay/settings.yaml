@@ -1,0 +1,8 @@
+inherit_settings: true
+models:
+  - compute_accessibility
+  - atwork_subtour_scheduling
+  - trip_scheduling
+  - stop_frequency
+  - trip_purpose
+households_sample_size: 2000

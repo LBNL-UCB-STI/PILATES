@@ -1,0 +1,252 @@
+"""
+Workflow coupler schema for PILATES.
+
+This schema documents coupler keys that are explicitly set during the workflow.
+"""
+
+import os
+from typing import Any, Callable, Dict, Iterable, Optional
+
+from consist.utils import collect_step_schema
+
+from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.config.models import PilatesConfig
+from pilates.generic.records import sanitize_artifact_key
+from pilates.workflows.coupler_namespace import namespaced_alias_for_key
+
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    ASIM_SHARROW_CACHE_DIR,
+    ASIM_MUTABLE_DATA_DIR,
+    ATLAS_OUTPUT_DIR,
+    BEAM_EXPERIENCED_PLANS_XML,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_MUTABLE_DATA_DIR,
+    BEAM_PLANS_OUT,
+    BEAM_PLANS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+    BEAM_OUTPUT_PLANS_XML,
+    BEAM_FULL_SKIMS,
+    FINAL_SKIMS_OMX,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_H5_UPDATED,
+    USIM_POPULATION_SOURCE_H5,
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_PERSONS_TABLE,
+    USIM_POPULATION_JOBS_TABLE,
+    USIM_POPULATION_BLOCKS_TABLE,
+    USIM_INPUT_NEXT,
+    USIM_MUTABLE_DATA_DIR,
+    ZARR_SKIMS,
+)
+from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
+
+
+PILATES_COUPLER_SCHEMA: Dict[str, str] = {
+    USIM_DATASTORE_BASE_H5: (
+        "UrbanSim base datastore (H5): static/exogenous input for the run year."
+    ),
+    USIM_DATASTORE_CURRENT_H5: (
+        "UrbanSim current datastore (H5): latest mutable version produced by workflow steps."
+    ),
+    USIM_POPULATION_SOURCE_H5: (
+        "UrbanSim datastore (H5) selected as the population source for ActivitySim preprocess."
+    ),
+    USIM_POPULATION_HOUSEHOLDS_TABLE: (
+        "Resolved households table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_PERSONS_TABLE: (
+        "Resolved persons table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_JOBS_TABLE: (
+        "Resolved jobs table path inside the UrbanSim population-source H5."
+    ),
+    USIM_POPULATION_BLOCKS_TABLE: (
+        "Resolved blocks table path inside the UrbanSim population-source H5."
+    ),
+    USIM_H5_UPDATED: "UrbanSim datastore updated by ATLAS postprocess.",
+    USIM_INPUT_NEXT: "UrbanSim datastore for the next iteration produced by ActivitySim.",
+    USIM_MUTABLE_DATA_DIR: "UrbanSim mutable data directory in workspace.",
+    ASIM_MUTABLE_DATA_DIR: "ActivitySim mutable data directory from preprocess.",
+    ATLAS_OUTPUT_DIR: "ATLAS output directory for the current sub-year.",
+    BEAM_MUTABLE_DATA_DIR: "BEAM mutable data directory populated for the run.",
+    ASIM_LAND_USE_IN: "ActivitySim land use input table (from preprocess).",
+    ASIM_HOUSEHOLDS_IN: "ActivitySim households input table (from preprocess).",
+    ASIM_PERSONS_IN: "ActivitySim persons input table (from preprocess).",
+    ASIM_OMX_SKIMS: "ActivitySim compile input skims (OMX).",
+    ASIM_SHARROW_CACHE_DIR: (
+        "ActivitySim persisted compile cache directory (numba/sharrow) when enabled."
+    ),
+    ZARR_SKIMS: "Zarr skims produced by ActivitySim/BEAM.",
+    FINAL_SKIMS_OMX: "Final OMX skims produced by BEAM.",
+    BEAM_PLANS_IN: "BEAM plans input staged for the runner.",
+    BEAM_HOUSEHOLDS_IN: "BEAM households input staged for the runner.",
+    BEAM_PERSONS_IN: "BEAM persons input staged for the runner.",
+    "vehicles_beam_in": "BEAM vehicles input staged for the runner.",
+    LINKSTATS_WARMSTART: "BEAM warm-start linkstats input (initial or prior run).",
+    LINKSTATS: "BEAM linkstats output for downstream runs.",
+    BEAM_FULL_SKIMS: "BEAM full-skim background skims output.",
+    BEAM_PLANS_OUT: "BEAM plans output for downstream runs.",
+    "beam_plans_asim_out": (
+        "ActivitySim-to-BEAM plans handoff parquet used to stage BEAM plans input."
+    ),
+    "asim_input_households_csv_archived": (
+        "Archived ActivitySim preprocess households CSV restored on replay/restart."
+    ),
+    "asim_input_persons_csv_archived": (
+        "Archived ActivitySim preprocess persons CSV restored on replay/restart."
+    ),
+    "asim_input_land_use_csv_archived": (
+        "Archived ActivitySim preprocess land use CSV restored on replay/restart."
+    ),
+    "asim_input_skims_zarr_archived": (
+        "Archived ActivitySim preprocess Zarr skims restored on replay/restart."
+    ),
+    BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
+    BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",
+    BEAM_OUTPUT_EXPERIENCED_PLANS_XML: (
+        "BEAM output experienced plans XML (previous run warm-start source)."
+    ),
+    "hh_size": "UrbanSim household size input CSV.",
+    "income_rates": "UrbanSim income rates input CSV.",
+    "relmap": "UrbanSim relationship map input CSV.",
+    "geoid_to_zone": "UrbanSim block-to-zone mapping CSV prepared during preprocess.",
+    "schools": "UrbanSim schools input CSV.",
+    "school_districts": "UrbanSim school districts input CSV.",
+    "canonical_zones": "Canonical zones file copied into ActivitySim workspace.",
+    "clipped_geoms": "Clipped geometry inputs for ActivitySim if available.",
+}
+
+for key in ASIM_OPTIONAL_RUN_OUTPUT_KEYS:
+    PILATES_COUPLER_SCHEMA.setdefault(
+        key,
+        "Optional ActivitySim parquet output present only when enabled by model settings.",
+    )
+
+_NAMESPACED_INIT_KEYS = {
+    "urbansim": {
+        "usim_data_reference": "UrbanSim reference datastore input.",
+        "usim_datastore_base_h5": "UrbanSim base datastore in mutable workspace.",
+        "usim_datastore_current_h5": "UrbanSim current datastore in mutable workspace.",
+        "usim_datastore_h5": "UrbanSim datastore in mutable workspace.",
+        "omx_skims": "UrbanSim OMX skims input.",
+        "hh_size": "UrbanSim household size input CSV.",
+        "income_rates": "UrbanSim income rates input CSV.",
+        "relmap": "UrbanSim relationship map input CSV.",
+        "schools": "UrbanSim schools input CSV.",
+        "school_districts": "UrbanSim school districts input CSV.",
+    },
+    "activitysim": {
+        "omx_skims": "ActivitySim OMX skims input.",
+    },
+}
+
+for model_name, key_map in _NAMESPACED_INIT_KEYS.items():
+    for key, description in key_map.items():
+        namespaced_key = f"{model_name}/{key}"
+        if namespaced_key not in PILATES_COUPLER_SCHEMA:
+            PILATES_COUPLER_SCHEMA[namespaced_key] = description
+
+
+def _atlas_static_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
+    keys: Dict[str, str] = {}
+    if settings is None:
+        return keys
+    for relpath in atlas_static_input_relpaths(settings):
+        rel_no_ext, _ = os.path.splitext(relpath)
+        key = rel_no_ext.replace("\\", "/")
+        key = sanitize_artifact_key(key) or key
+        if key not in keys:
+            keys[key] = f"ATLAS static input file: {relpath}"
+    return keys
+
+
+_RUNTIME_YEAR_KEY_FAMILIES: Dict[str, str] = {
+    "householdv_{year}": "ATLAS household-vehicle ownership output for year {year}.",
+    "vehicles_{year}": "ATLAS vehicle ownership output for year {year}.",
+    "usim_input_archive_{year}": "Archived UrbanSim datastore snapshot for year {year}.",
+    "usim_input_merged_{year}": "Merged UrbanSim datastore snapshot for year {year}.",
+}
+
+
+def _runtime_year_candidates(settings: Optional[PilatesConfig]) -> tuple[int, ...]:
+    if settings is None:
+        return ()
+    run_cfg = getattr(settings, "run", None)
+    if run_cfg is None:
+        return ()
+    start_year = getattr(run_cfg, "start_year", None)
+    end_year = getattr(run_cfg, "end_year", None)
+    if start_year is None or end_year is None:
+        return ()
+    max_increment = max(
+        1,
+        int(getattr(run_cfg, "travel_model_freq", 1) or 1),
+        int(getattr(run_cfg, "vehicle_ownership_freq", 1) or 1),
+        int(getattr(run_cfg, "land_use_freq", 1) or 1),
+    )
+    return tuple(range(int(start_year), int(end_year) + max_increment + 1))
+
+
+def _runtime_year_key_map(settings: Optional[PilatesConfig]) -> Dict[str, str]:
+    keys: Dict[str, str] = {}
+    for year in _runtime_year_candidates(settings):
+        for family, description in _RUNTIME_YEAR_KEY_FAMILIES.items():
+            key = family.format(year=year)
+            keys[key] = description.format(year=year)
+    return keys
+
+
+def build_coupler_schema(
+    steps: Iterable[Callable[..., Any]],
+    settings: Optional[PilatesConfig] = None,
+    include_extras: bool = True,
+) -> Dict[str, str]:
+    """
+    Build the workflow coupler schema from step metadata plus static extras.
+
+    Parameters
+    ----------
+    steps : iterable of callables
+        Canonical workflow step functions decorated with ``@define_step``.
+    settings : Any, optional
+        Settings object used to resolve callable schema metadata.
+    include_extras : bool, default True
+        Whether to include static non-step keys (for example,
+        ``PILATES_COUPLER_SCHEMA`` entries, namespaced aliases, and ATLAS
+        static input keys) alongside step-declared outputs.
+
+    Returns
+    -------
+    dict
+        Coupler key -> description mapping. When ``include_extras=False``,
+        only keys declared by the provided steps are returned.
+    """
+    extras: Dict[str, str] = {}
+    if include_extras:
+        extras = dict(PILATES_COUPLER_SCHEMA)
+        extras.update(_runtime_year_key_map(settings))
+        for key, description in list(PILATES_COUPLER_SCHEMA.items()):
+            namespaced_key = namespaced_alias_for_key(key)
+            if not namespaced_key:
+                continue
+            extras.setdefault(
+                namespaced_key,
+                f"{description} (namespaced alias)",
+            )
+        extras.update(_atlas_static_key_map(settings))
+    try:
+        return collect_step_schema(
+            steps,
+            settings=settings,
+            extra_keys=extras or None,
+        )
+    except Exception:
+        return extras

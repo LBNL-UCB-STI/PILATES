@@ -1,0 +1,7 @@
+CONSTANTS:
+  STOP_CONST: 99
+  TRANSIT_MODES:
+    - WALK
+    - BIKE
+  nested:
+    inner: true

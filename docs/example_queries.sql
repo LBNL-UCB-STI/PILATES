@@ -1,0 +1,22 @@
+-- Deprecated: public SQL examples have moved to the Consist-first analysis
+-- surfaces.
+--
+-- Do not use this file as a recommended query path. Its previous contents
+-- referenced stale legacy schema tables that are no longer the public source
+-- of truth for PILATES run analysis.
+--
+-- Use these instead:
+--
+--   * analysis/README.md for the notebook-first `open_archive(...)` workflow
+--   * docs/analysis/sql_and_duckdb.md for current SQL entry points
+--   * docs/analysis/consist_analysis_cli.md for packaged CLI commands
+--
+-- Preferred API surfaces:
+--
+--   * `open_archive(...)`
+--   * `Archive.views(epoch)`
+--   * `Epoch.sql(...)` / `Epoch.query(...)`
+--   * `pilates-consist-analysis export-sql`
+--
+-- This stub remains only so old links fail softly and redirect readers to the
+-- maintained documentation.

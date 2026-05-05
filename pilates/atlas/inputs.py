@@ -1,0 +1,340 @@
+import os
+import re
+from typing import Any, Dict, Optional, Set, Tuple, TYPE_CHECKING
+
+from pilates.config.models import PilatesConfig
+from pilates.utils.consist_types import CouplerProtocol
+from pilates.generic.records import sanitize_artifact_key
+from pilates.workflows.artifact_keys import (
+    OMX_SKIMS,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
+from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.input_resolution import resolved_value_for_key
+from pilates.atlas.static_inputs import (
+    ATLAS_STATIC_INPUTS_COMMON,
+    ATLAS_STATIC_INPUTS_BY_SCENARIO,
+)
+
+if TYPE_CHECKING:
+    from pilates.workspace import Workspace
+    from pilates.workflows.surface import EnabledWorkflowSurface
+    from workflow_state import WorkflowState
+
+
+def build_atlas_inputs(
+    settings: PilatesConfig,
+    state: "WorkflowState",
+    workspace: "Workspace",
+    year: int,
+    coupler: CouplerProtocol,
+    usim_datastore_h5_path: Optional[str],
+    surface: Optional["EnabledWorkflowSurface"] = None,
+) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """
+    Build ATLAS input paths and per-key log descriptions for a sub-year.
+
+    Parameters
+    ----------
+    settings : PilatesConfig
+        Parsed simulation settings.
+    state : WorkflowState
+        Current workflow state.
+    workspace : Workspace
+        Workspace instance with paths.
+    year : int
+        ATLAS sub-year for labeling.
+    coupler : CouplerProtocol
+        Consist coupler or compatible interface.
+    usim_datastore_h5_path : str, optional
+        Fallback UrbanSim datastore path when coupler has no value.
+
+    Returns
+    -------
+    tuple of dict
+        (inputs, descriptions) where descriptions are per-key log strings.
+
+    Notes
+    -----
+    Input keys
+        - ``usim_datastore_h5``: UrbanSim current datastore used as the land
+          use input for ATLAS scenario generation.
+        - ``usim_datastore_base_h5``: UrbanSim base datastore for the run year.
+        - ``atlas_mutable_input_dir``: ATLAS mutable input directory (configs
+          and data mounted into the container).
+    Related outputs
+        - ATLAS produces ``atlas_output_dir`` and may update
+          ``usim_datastore_h5`` for subsequent model stages.
+        - TODO: Document ATLAS outputs that should flow into downstream models
+          or be logged as explicit expected outputs.
+    """
+    inputs: Dict[str, Any] = {}
+    descriptions: Dict[str, str] = {}
+
+    fallback_inputs = (
+        {
+            USIM_DATASTORE_CURRENT_H5: usim_datastore_h5_path,
+            USIM_DATASTORE_BASE_H5: usim_datastore_h5_path,
+        }
+        if usim_datastore_h5_path is not None
+        else None
+    )
+    atlas_resolution = build_binding_plan(
+        step_name="atlas_preprocess",
+        coupler=coupler,
+        fallback_inputs=fallback_inputs,
+        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=year,
+        surface=surface,
+    )
+    atlas_usim_input = resolved_value_for_key(
+        resolved=atlas_resolution,
+        key=USIM_DATASTORE_CURRENT_H5,
+        coupler=coupler,
+    )
+    atlas_base_input = resolved_value_for_key(
+        resolved=atlas_resolution,
+        key=USIM_DATASTORE_BASE_H5,
+        coupler=coupler,
+    )
+    if atlas_base_input is None:
+        atlas_base_input = atlas_usim_input
+
+    inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_input
+    inputs[USIM_DATASTORE_BASE_H5] = atlas_base_input
+
+    descriptions[USIM_DATASTORE_CURRENT_H5] = (
+        f"UrbanSim current datastore for ATLAS year {year}"
+    )
+    descriptions[USIM_DATASTORE_BASE_H5] = (
+        f"UrbanSim base datastore for ATLAS year {year}"
+    )
+
+    if getattr(getattr(settings, "atlas", None), "beamac", 0) > 0:
+        beam_skims_path = os.path.join(
+            workspace.get_beam_output_dir(),
+            settings.shared.skims.fname,
+        )
+        if os.path.exists(beam_skims_path):
+            inputs[OMX_SKIMS] = beam_skims_path
+            descriptions[OMX_SKIMS] = f"ATLAS OMX skims fallback for year {year}"
+
+    return inputs, descriptions
+
+
+_YEAR_SUFFIX = re.compile(r"_(\d{4})$")
+_ATLAS_SCENARIO_ALIASES = {
+    "baseline": "baseline",
+    "ess_cons": "ess_cons",
+    "ess_const_220_price": "ess_cons",
+    "zev_mandate": "zev_mandate",
+    "evmandforced2": "zev_mandate",
+}
+
+
+def _atlas_config_value(settings: Any, field_name: str) -> Optional[Any]:
+    atlas_cfg = getattr(settings, "atlas", None)
+    if atlas_cfg is None and isinstance(settings, dict):
+        atlas_cfg = settings.get("atlas")
+    if atlas_cfg is None:
+        return None
+    if isinstance(atlas_cfg, dict):
+        return atlas_cfg.get(field_name)
+    return getattr(atlas_cfg, field_name, None)
+
+
+def atlas_selected_scenario(settings: Any) -> Optional[str]:
+    """
+    Resolve the effective ATLAS scenario used for static input selection.
+
+    Prefer ``atlas.adscen`` because that is the scenario argument passed to the
+    ATLAS container. Fall back to ``atlas.scenario`` for configs that do not
+    populate ``adscen``.
+    """
+    adscen = _atlas_config_value(settings, "adscen")
+    scenario = _atlas_config_value(settings, "scenario")
+    raw_value = adscen if adscen not in (None, "") else scenario
+    if raw_value in (None, ""):
+        return None
+    return _ATLAS_SCENARIO_ALIASES.get(str(raw_value).strip().lower())
+
+
+def atlas_run_years(settings: PilatesConfig) -> Set[int]:
+    """
+    Determine ATLAS run years from global run configuration.
+
+    ATLAS sub-runs advance in biannual cadence between configured run bounds.
+    This is intentionally independent of ``run.vehicle_ownership_freq``, which
+    controls higher-level stage cadence, not ATLAS internal sub-year steps.
+    """
+    run_cfg = getattr(settings, "run", None)
+    if run_cfg is None:
+        return set()
+    start_year = getattr(run_cfg, "start_year", None)
+    end_year = getattr(run_cfg, "end_year", None)
+    if start_year is None or end_year is None:
+        return set()
+    return set(range(int(start_year), int(end_year) + 1, 2))
+
+
+def atlas_static_input_relpaths(settings: PilatesConfig) -> Tuple[str, ...]:
+    """
+    Deterministic static ATLAS input relpaths based on settings.
+
+    Rules align with `AtlasPreprocessor.copy_data_to_mutable_location()`:
+    - scenario-specific adopt folder selection by `settings.atlas.scenario`
+    - one selected `vehicle_type_mapping_*` file for known scenarios
+    - unknown/no scenario falls back to all mapping files
+    - year-stamped non-ADOPT files may be limited to configured ATLAS run years
+    """
+    scenario_key = atlas_selected_scenario(settings)
+
+    vehicle_type_mapping_by_scenario = {
+        "baseline": "vehicle_type_mapping_baseline.csv",
+        "ess_cons": "vehicle_type_mapping_ESS_const_220_price.csv",
+        "zev_mandate": "vehicle_type_mapping_evMandForced2.csv",
+    }
+    all_vehicle_mappings = [
+        relpath
+        for relpath in ATLAS_STATIC_INPUTS_COMMON
+        if relpath.startswith("vehicle_type_mapping_")
+    ]
+
+    relpaths = [
+        relpath
+        for relpath in ATLAS_STATIC_INPUTS_COMMON
+        if not relpath.startswith("vehicle_type_mapping_")
+    ]
+    selected_mapping = (
+        vehicle_type_mapping_by_scenario.get(scenario_key) if scenario_key else None
+    )
+    if selected_mapping is not None:
+        relpaths.append(selected_mapping)
+    else:
+        relpaths.extend(all_vehicle_mappings)
+
+    if scenario_key:
+        relpaths.extend(ATLAS_STATIC_INPUTS_BY_SCENARIO.get(scenario_key, []))
+    else:
+        for values in ATLAS_STATIC_INPUTS_BY_SCENARIO.values():
+            relpaths.extend(values)
+
+    run_years = atlas_run_years(settings)
+    if run_years:
+        filtered = []
+        for relpath in relpaths:
+            # ADOPT files are year-stamped snapshots that ATLAS may read from
+            # neighboring years (for example, outyear 2021 needs *_2019 files).
+            # Do not prune them by run-frequency year selection.
+            if relpath.replace("\\", "/").startswith("adopt/"):
+                filtered.append(relpath)
+                continue
+            # Non-ADOPT static files are foundational ATLAS inputs and should
+            # never be pruned by year suffix heuristics (for example
+            # accessbility_2015.RData is required in later-year runs).
+            filtered.append(relpath)
+        relpaths = filtered
+
+    # Preserve order while removing duplicates.
+    seen = set()
+    deduped = []
+    for relpath in relpaths:
+        if relpath in seen:
+            continue
+        seen.add(relpath)
+        deduped.append(relpath)
+    return tuple(deduped)
+
+
+def _atlas_static_input_key(relpath: str) -> str:
+    normalized_relpath = relpath.replace("\\", "/")
+    rel_no_ext = os.path.splitext(normalized_relpath)[0]
+    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
+
+
+def _iter_existing_atlas_static_inputs(
+    settings: PilatesConfig,
+    atlas_input_dir: str,
+):
+    for relpath in atlas_static_input_relpaths(settings):
+        normalized_relpath = relpath.replace("\\", "/")
+        path = os.path.join(atlas_input_dir, normalized_relpath)
+        if not os.path.exists(path):
+            continue
+        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
+
+
+def build_atlas_static_inputs_fallback(workspace: "Workspace") -> Dict[str, str]:
+    """
+    Enumerate static ATLAS inputs from the mutable input directory.
+
+    This fallback is used when Initialization was skipped and the in-memory
+    RecordStore of copied inputs is unavailable. It may include files produced
+    by prior ATLAS preprocess runs.
+    """
+    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
+    if not os.path.exists(atlas_input_dir):
+        return {}
+
+    inputs: Dict[str, str] = {}
+    for _relpath, key, path in _iter_existing_atlas_static_inputs(
+        workspace.settings,
+        atlas_input_dir,
+    ):
+        inputs.setdefault(key, path)
+    if inputs:
+        return inputs
+
+    for root, _, files in os.walk(atlas_input_dir):
+        for filename in sorted(files):
+            path = os.path.join(root, filename)
+            relpath = os.path.relpath(path, atlas_input_dir)
+            key = _atlas_static_input_key(relpath)
+            inputs.setdefault(key, path)
+    return inputs
+
+
+def atlas_static_input_keys(settings: PilatesConfig) -> Tuple[str, ...]:
+    relpaths = atlas_static_input_relpaths(settings)
+
+    keys = []
+    for relpath in relpaths:
+        rel_no_ext = relpath.rsplit(".", 1)[0]
+        candidate = rel_no_ext.replace("\\", "/")
+        key = sanitize_artifact_key(candidate) or candidate
+        keys.append(key)
+    return tuple(keys)
+
+
+def atlas_static_input_keys_for_interval(
+    settings: PilatesConfig,
+    *,
+    interval_start_year: int,
+    interval_end_year: int,
+) -> Tuple[str, ...]:
+    """
+    Return ATLAS static input keys with ADOPT year-stamped keys filtered to an interval.
+
+    Notes
+    -----
+    - Filtering is applied only to keys under ``adopt/`` with a trailing
+      ``_<year>`` suffix.
+    - Non-ADOPT keys (for example ``accessbility2017``) are preserved so shared
+      static resources remain available for all ATLAS runs.
+    """
+    lower = min(int(interval_start_year), int(interval_end_year))
+    upper = max(int(interval_start_year), int(interval_end_year))
+
+    filtered = []
+    for key in atlas_static_input_keys(settings):
+        normalized_key = key.replace("\\", "/")
+        if normalized_key.startswith("adopt/"):
+            match = _YEAR_SUFFIX.search(normalized_key)
+            if match and not (lower <= int(match.group(1)) <= upper):
+                continue
+        filtered.append(key)
+    return tuple(filtered)
