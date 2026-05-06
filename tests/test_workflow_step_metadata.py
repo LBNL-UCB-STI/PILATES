@@ -61,9 +61,6 @@ from pilates.urbansim.outputs import (
 from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
     FINAL_SKIMS_OMX,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
 

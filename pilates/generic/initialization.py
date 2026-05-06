@@ -16,7 +16,6 @@ from pilates.workflows._profile import ensure_runtime_flags_initialized
 
 import os
 import logging
-import shutil
 
 logger = logging.getLogger(__name__)
 

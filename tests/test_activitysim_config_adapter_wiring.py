@@ -8,9 +8,6 @@ from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_PERSONS_IN,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.steps import (

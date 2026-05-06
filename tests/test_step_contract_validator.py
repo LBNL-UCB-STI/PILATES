@@ -36,8 +36,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     LINKSTATS,
-    USIM_POPULATION_SOURCE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs

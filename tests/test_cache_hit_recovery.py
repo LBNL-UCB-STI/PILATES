@@ -1,4 +1,3 @@
-import gzip
 from pathlib import Path
 from types import SimpleNamespace
 import yaml

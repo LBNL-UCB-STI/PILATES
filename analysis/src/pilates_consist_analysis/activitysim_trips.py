@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import hashlib
 import inspect
 from pathlib import Path
-from typing import Any, Dict, Iterable, Mapping, Optional
+from typing import Any, Dict, Iterable, Optional
 
 import numpy as np
 import pandas as pd

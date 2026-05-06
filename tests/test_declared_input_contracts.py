@@ -4,7 +4,6 @@ import os
 import sys
 import types
 from pathlib import Path
-from types import SimpleNamespace
 from unittest import mock
 
 if "openmatrix" not in sys.modules:

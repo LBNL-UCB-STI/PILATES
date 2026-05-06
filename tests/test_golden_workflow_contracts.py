@@ -22,7 +22,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_INPUT_MERGED_PREFIX,
     ZARR_SKIMS,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
@@ -38,7 +37,6 @@ from tests.test_golden_stub_workflow import (
     EXPECTED_STAGE_MODELS,
     _artifact_map,
     _write_file,
-    golden_stub_env,
 )
 from tests.workflow_contract_harness import build_runtime_context
 

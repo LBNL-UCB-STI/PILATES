@@ -585,7 +585,9 @@ def test_activitysim_postprocess_cache_hit_recovers_from_cached_output_paths(tmp
     assert recovered.processed_outputs["households_asim_out"] == households
     assert recovered.processed_outputs["persons_asim_out"] == persons
     assert recovered.processed_outputs["beam_plans_asim_out"] == beam_plans
-    assert recovered.processed_outputs["asim_input_skims_zarr_archived"] == archived_zarr
+    assert (
+        recovered.processed_outputs["asim_input_skims_zarr_archived"] == archived_zarr
+    )
 
 
 def test_activitysim_run_cache_hit_recovers_from_cached_output_paths(tmp_path):

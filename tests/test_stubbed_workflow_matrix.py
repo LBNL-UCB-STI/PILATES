@@ -54,7 +54,6 @@ from tests.test_golden_stub_workflow import (
     DummyRunner,
     _write_file,
     _write_parquet,
-    golden_stub_env,
 )
 from workflow_state import WorkflowState
 

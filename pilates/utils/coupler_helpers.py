@@ -35,7 +35,6 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.runtime.archive_paths import (
     ARCHIVE_LOCAL_ENV as _ARCHIVE_LOCAL_ENV,
-    ARCHIVE_ROOT_ENV as _ARCHIVE_ROOT_ENV,
     archive_roots as _archive_roots,
     copy_archive_to_local as _copy_archive_to_local,
     resolve_archive_path as _resolve_archive_path,
@@ -186,7 +185,9 @@ def _copy_historical_artifact_to_current(
         source_path,
         local_path,
     )
-    materialized = _copy_archive_to_local(local_path=local_path, archive_path=source_path)
+    materialized = _copy_archive_to_local(
+        local_path=local_path, archive_path=source_path
+    )
     if materialized and os.path.exists(materialized):
         logger.info(
             "[Archive] Materialized historical cached artifact locally: %s",
@@ -219,7 +220,9 @@ def _resolve_historical_workspace_artifact_path(
         if isinstance(recovery_roots, Sequence):
             for root in recovery_roots:
                 if isinstance(root, (str, os.PathLike)):
-                    candidates.append(os.path.abspath(os.path.join(str(root), rel_path)))
+                    candidates.append(
+                        os.path.abspath(os.path.join(str(root), rel_path))
+                    )
 
     run_id = getattr(value, "run_id", None)
     if run_id:

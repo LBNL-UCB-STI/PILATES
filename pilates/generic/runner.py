@@ -6,7 +6,7 @@ import logging
 import os
 import shlex
 from collections.abc import Mapping, Sequence
-from typing import Optional, List, Union, Dict, Any, Generic, TypeVar
+from typing import Optional, List, Union, Any, Generic, TypeVar
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model

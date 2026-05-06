@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

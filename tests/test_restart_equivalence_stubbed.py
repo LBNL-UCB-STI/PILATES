@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import gzip
 import hashlib
 import json
@@ -39,7 +38,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import (
@@ -640,7 +638,6 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
             return RecordStore()
         return RecordStore()
 
-    from pilates.generic.model_factory import ModelFactory
     from pilates.workflows.steps import shared as shared_steps
 
     original_consist_step_meta = shared_steps.consist_step_meta

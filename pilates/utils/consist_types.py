@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import (
     Any,
-    Callable,
     ContextManager,
     Dict,
     Mapping,
@@ -13,7 +12,6 @@ from typing import (
 
 from consist.protocols import (
     ArtifactLike as ConsistArtifactLike,
-    RunResultLike,
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )

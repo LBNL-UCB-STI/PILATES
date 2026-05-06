@@ -39,7 +39,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
-    USIM_INPUT_NEXT,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
