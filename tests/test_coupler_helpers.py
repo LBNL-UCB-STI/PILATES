@@ -183,6 +183,52 @@ def test_log_and_set_output_reuses_matching_current_run_artifact(monkeypatch) ->
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
+def test_artifact_to_existing_path_materializes_historical_workspace_archive(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    current_local = tmp_path / "local" / "current-run"
+    current_archive = tmp_path / "archive" / "current-run"
+    cached_archive = tmp_path / "archive" / "cached-run"
+    rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
+    source = cached_archive / rel_path
+    source.parent.mkdir(parents=True)
+    source.write_text("households", encoding="utf-8")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(current_local))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(current_archive))
+    monkeypatch.setattr(
+        coupler_helpers.cr,
+        "current_tracker",
+        lambda: SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(
+                id=run_id,
+                parent_run_id="cached-run",
+                meta={
+                    "_physical_run_dir": str(tmp_path / "local" / "cached-run"),
+                },
+            )
+        ),
+    )
+
+    artifact = SimpleNamespace(
+        key="households_asim_out",
+        container_uri=f"workspace://{rel_path}",
+        run_id="cached-step-run",
+        meta={},
+    )
+
+    resolved = coupler_helpers.artifact_to_existing_path(
+        artifact,
+        workspace=SimpleNamespace(full_path=current_local),
+        materialize_from_archive=True,
+    )
+
+    expected_local = current_local / rel_path
+    assert resolved == str(expected_local)
+    assert expected_local.read_text(encoding="utf-8") == "households"
+
+
 def test_log_and_set_output_publishes_h5_container_artifact_not_tuple(
     monkeypatch,
 ) -> None:
