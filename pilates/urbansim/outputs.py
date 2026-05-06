@@ -69,7 +69,10 @@ class UrbanSimRunOutputs(StepOutputsBase):
             f"UrbanSim raw output: {USIM_DATASTORE_H5}",
         )
         for key, path in self.raw_outputs.items():
-            if key == USIM_FORECAST_OUTPUT or resolve_artifact_key(key) == USIM_DATASTORE_H5:
+            if (
+                key == USIM_FORECAST_OUTPUT
+                or resolve_artifact_key(key) == USIM_DATASTORE_H5
+            ):
                 continue
             yield key, path, f"UrbanSim raw output: {key}"
 

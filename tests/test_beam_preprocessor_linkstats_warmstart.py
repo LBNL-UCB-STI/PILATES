@@ -4,7 +4,11 @@ from unittest.mock import MagicMock
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.workflows.artifact_keys import BEAM_HOUSEHOLDS_IN, BEAM_PLANS_IN, LINKSTATS_WARMSTART
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
+)
 
 
 def _make_preprocessor():
@@ -50,7 +54,9 @@ def test_handle_linkstats_accepts_versioned_parquet_warmstart(tmp_path):
     preprocessor._handle_linkstats(workspace, previous_records, store)
 
     warmstart = [
-        rec for rec in store.all_records() if getattr(rec, "short_name", "") == "linkstats_warmstart"
+        rec
+        for rec in store.all_records()
+        if getattr(rec, "short_name", "") == "linkstats_warmstart"
     ]
     assert len(warmstart) == 1
     assert warmstart[0].file_path.endswith("beam_output/2.linkstats.parquet")

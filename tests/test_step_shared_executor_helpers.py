@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
@@ -468,7 +471,10 @@ def test_execute_beam_full_skim_materializes_warm_start_inputs(tmp_path: Path) -
 
     assert result is not None
     assert captured["input_outputs"] is holder.beam_preprocess
-    assert captured["input_outputs"].prepared_inputs["beam_plans"] == tmp_path / "plans.txt"
+    assert (
+        captured["input_outputs"].prepared_inputs["beam_plans"]
+        == tmp_path / "plans.txt"
+    )
     assert captured["previous_beam_outputs"] == {
         "linkstats_parquet_2018_0": warmstart_path
     }

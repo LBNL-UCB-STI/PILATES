@@ -148,18 +148,25 @@ def test_run_publisher_settings_parse_google_sheet_webhook() -> None:
     assert settings.summary_html_enabled is False
     assert settings.include_internal is True
     assert settings.google_sheet.enabled is True
-    assert settings.google_sheet.webhook_url == "https://script.google.com/macros/s/demo/exec"
+    assert (
+        settings.google_sheet.webhook_url
+        == "https://script.google.com/macros/s/demo/exec"
+    )
     assert settings.google_sheet.timeout_seconds == 0.25
     assert settings.google_sheet.secret == "token"
 
 
-def test_register_consist_run_publishers_writes_structured_events(tmp_path: Path) -> None:
+def test_register_consist_run_publishers_writes_structured_events(
+    tmp_path: Path,
+) -> None:
     tracker = FakeTracker()
     publisher = FakePublisher()
 
     registered = register_consist_run_publishers(
         tracker,
-        settings=RunPublisherSettings(local_jsonl_enabled=False, summary_html_enabled=False),
+        settings=RunPublisherSettings(
+            local_jsonl_enabled=False, summary_html_enabled=False
+        ),
         publishers=[publisher],
         context=_context(tmp_path),
     )
@@ -197,7 +204,9 @@ def test_run_publisher_always_reports_internal_failures(tmp_path: Path) -> None:
     publisher = FakePublisher()
     register_consist_run_publishers(
         tracker,
-        settings=RunPublisherSettings(local_jsonl_enabled=False, summary_html_enabled=False),
+        settings=RunPublisherSettings(
+            local_jsonl_enabled=False, summary_html_enabled=False
+        ),
         publishers=[publisher],
         context=_context(tmp_path),
     )
@@ -219,7 +228,9 @@ def test_local_jsonl_and_summary_html_publishers_write_archive_files(
 
     register_consist_run_publishers(
         tracker,
-        settings=RunPublisherSettings(local_jsonl_enabled=False, summary_html_enabled=False),
+        settings=RunPublisherSettings(
+            local_jsonl_enabled=False, summary_html_enabled=False
+        ),
         publishers=[
             LocalJsonlRunEventPublisher(event_log),
             SummaryHtmlRunEventPublisher(summary),

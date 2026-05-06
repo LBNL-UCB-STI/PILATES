@@ -10,7 +10,16 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+    Union,
+)
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
@@ -26,7 +35,6 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.runtime.archive_paths import (
     ARCHIVE_LOCAL_ENV as _ARCHIVE_LOCAL_ENV,
-    ARCHIVE_ROOT_ENV as _ARCHIVE_ROOT_ENV,
     archive_roots as _archive_roots,
     copy_archive_to_local as _copy_archive_to_local,
     resolve_archive_path as _resolve_archive_path,
@@ -53,9 +61,7 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "atlas_input_year_dir",
     "atlas_input_year_dir_*",
 )
-_archive_queue: Optional[
-    "queue.Queue[Optional[str]]"
-] = None
+_archive_queue: Optional["queue.Queue[Optional[str]]"] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
 _archive_pending_tasks: Dict[
@@ -121,7 +127,9 @@ def _archive_enabled() -> bool:
 
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
     container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
-    if not isinstance(container_uri, str) or not container_uri.startswith("workspace://"):
+    if not isinstance(container_uri, str) or not container_uri.startswith(
+        "workspace://"
+    ):
         return None
     meta = getattr(value, "meta", None)
     if not isinstance(meta, Mapping):
@@ -133,8 +141,151 @@ def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
     return os.path.abspath(os.path.join(str(mount_root), rel_path))
 
 
+def _workspace_uri_relative_path(value: Any) -> Optional[str]:
+    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
+    if not isinstance(container_uri, str) or not container_uri.startswith(
+        "workspace://"
+    ):
+        return None
+    rel_path = container_uri[len("workspace://") :].lstrip("/")
+    return rel_path or None
+
+
+def _current_workspace_path_for_relative(
+    rel_path: str,
+    workspace: Optional["Workspace"],
+) -> Optional[str]:
+    if workspace is not None and getattr(workspace, "full_path", None):
+        return os.path.abspath(os.path.join(str(workspace.full_path), rel_path))
+    roots = _archive_roots()
+    if roots is None:
+        return None
+    local_root, _archive_root = roots
+    return os.path.abspath(os.path.join(local_root, rel_path))
+
+
+def _copy_historical_artifact_to_current(
+    *,
+    source_path: str,
+    rel_path: str,
+    workspace: Optional["Workspace"],
+    materialize_from_archive: bool,
+) -> Optional[str]:
+    if not os.path.exists(source_path):
+        return None
+    if not materialize_from_archive:
+        return source_path
+    local_path = _current_workspace_path_for_relative(rel_path, workspace)
+    if not local_path:
+        return source_path
+    if os.path.abspath(local_path) == os.path.abspath(source_path):
+        return source_path
+    logger.info(
+        "[Archive] Local path missing; materializing historical cached artifact %s -> %s",
+        source_path,
+        local_path,
+    )
+    materialized = _copy_archive_to_local(
+        local_path=local_path, archive_path=source_path
+    )
+    if materialized and os.path.exists(materialized):
+        logger.info(
+            "[Archive] Materialized historical cached artifact locally: %s",
+            materialized,
+        )
+        return materialized
+    logger.warning(
+        "[Archive] Historical cached artifact materialization did not produce local path: %s",
+        local_path,
+    )
+    return source_path
+
+
+def _resolve_historical_workspace_artifact_path(
+    value: Any,
+    *,
+    workspace: Optional["Workspace"],
+    materialize_from_archive: bool,
+) -> Optional[str]:
+    rel_path = _workspace_uri_relative_path(value)
+    if not rel_path:
+        return None
+
+    candidates: list[str] = []
+    meta = getattr(value, "meta", None)
+    if isinstance(meta, Mapping):
+        recovery_roots = meta.get("recovery_roots")
+        if isinstance(recovery_roots, (str, os.PathLike)):
+            recovery_roots = [recovery_roots]
+        if isinstance(recovery_roots, Sequence):
+            for root in recovery_roots:
+                if isinstance(root, (str, os.PathLike)):
+                    candidates.append(
+                        os.path.abspath(os.path.join(str(root), rel_path))
+                    )
+
+    run_id = getattr(value, "run_id", None)
+    if run_id:
+        try:
+            tracker = cr.current_tracker()
+        except Exception:
+            tracker = None
+        run = None
+        if tracker is not None:
+            get_run = getattr(tracker, "get_run", None)
+            if callable(get_run):
+                try:
+                    run = get_run(str(run_id))
+                except Exception:
+                    run = None
+            if run is None:
+                db = getattr(tracker, "db", None)
+                db_get_run = getattr(db, "get_run", None)
+                if callable(db_get_run):
+                    try:
+                        run = db_get_run(str(run_id))
+                    except Exception:
+                        run = None
+
+        run_dir = None
+        run_meta = getattr(run, "meta", None)
+        if isinstance(run_meta, Mapping):
+            physical_run_dir = run_meta.get("_physical_run_dir")
+            if isinstance(physical_run_dir, str) and physical_run_dir:
+                run_dir = physical_run_dir
+        if run_dir:
+            candidates.append(os.path.abspath(os.path.join(run_dir, rel_path)))
+
+        roots = _archive_roots()
+        if roots is not None:
+            _local_root, archive_root = roots
+            archive_parent = os.path.dirname(os.path.abspath(archive_root))
+            sibling_names = []
+            if run_dir:
+                sibling_names.append(os.path.basename(os.path.abspath(run_dir)))
+            parent_run_id = getattr(run, "parent_run_id", None)
+            if isinstance(parent_run_id, str) and parent_run_id:
+                sibling_names.append(parent_run_id)
+            for sibling in dict.fromkeys(sibling_names):
+                candidates.append(
+                    os.path.abspath(os.path.join(archive_parent, sibling, rel_path))
+                )
+
+    for candidate in dict.fromkeys(candidates):
+        if os.path.exists(candidate):
+            return _copy_historical_artifact_to_current(
+                source_path=candidate,
+                rel_path=rel_path,
+                workspace=workspace,
+                materialize_from_archive=materialize_from_archive,
+            )
+    return None
+
+
 def _archive_dir_allowed(key: str) -> bool:
-    return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
+    return any(
+        fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS
+    )
 
 
 def _resolve_archive_copy_target(
@@ -156,7 +307,9 @@ def _resolve_archive_copy_target(
     if not resolved or "://" in resolved:
         return None
     if not os.path.exists(resolved):
-        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
+        logger.warning(
+            "[Archive] Output path does not exist: %s (key=%s)", resolved, key
+        )
         return None
 
     is_dir = os.path.isdir(resolved)
@@ -430,7 +583,9 @@ def _enqueue_archive_copy(
                 should_queue = True
     _ensure_archive_worker()
     if should_queue and _archive_queue is not None:
-        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key)
+        _archive_log_method(key)(
+            "[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key
+        )
         _archive_queue.put(dest)
     else:
         logger.debug(
@@ -798,7 +953,9 @@ def resolve_existing_path(
 
     local_path = _resolve_local_path(abs_path, local_root, archive_root)
     if local_path and os.path.exists(local_path):
-        logger.debug("[Archive] Resolved path already available locally: %s", local_path)
+        logger.debug(
+            "[Archive] Resolved path already available locally: %s", local_path
+        )
         return local_path
     logger.debug("[Archive] Unable to resolve existing path for: %s", abs_path)
     return None
@@ -826,6 +983,13 @@ def artifact_to_existing_path(
     source_workspace_path = _resolve_artifact_source_workspace_path(value)
     if source_workspace_path and os.path.exists(source_workspace_path):
         return source_workspace_path
+    historical_workspace_path = _resolve_historical_workspace_artifact_path(
+        value,
+        workspace=workspace,
+        materialize_from_archive=materialize_from_archive,
+    )
+    if historical_workspace_path:
+        return historical_workspace_path
     return None
 
 
@@ -1339,6 +1503,7 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
+
     def _is_internal_h5_table(table_name: str) -> bool:
         leaf = table_name.rsplit("/", 1)[-1]
         normalized_leaf = leaf.lower()
@@ -1347,12 +1512,10 @@ def _log_with_optional_h5_container(
         # (e.g. travel_data_axis1_level0).
         if re.fullmatch(r"(axis|block|level|label)\d+(?:_.*)?", normalized_leaf):
             return True
-        return bool(
-            re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf)
-        )
+        return bool(re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf))
 
     def _table_filter_to_callable(
-        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]
+        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]],
     ) -> Optional[Callable[[str], bool]]:
         if table_filter is None:
             return None
@@ -1367,9 +1530,7 @@ def _log_with_optional_h5_container(
 
     def _h5_table_filter_from_list(tables_used):
         normalized = {
-            name if name.startswith("/") else f"/{name}"
-            for name in tables_used
-            if name
+            name if name.startswith("/") else f"/{name}" for name in tables_used if name
         }
 
         def _filter(table_name: str) -> bool:
@@ -1401,8 +1562,10 @@ def _log_with_optional_h5_container(
         if requested_filter is None:
             table_filter = base_filter
         else:
+
             def table_filter(table_name: str) -> bool:
                 return base_filter(table_name) and requested_filter(table_name)
+
         return cr.log_h5_container(
             path,
             key=key,

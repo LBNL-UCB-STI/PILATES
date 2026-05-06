@@ -24,6 +24,7 @@ from pilates.runtime.cache_recovery import (
 from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,
     record_published_coupler_keys,
     resolve_existing_path,
@@ -1714,7 +1715,11 @@ def _update_coupler_from_mapping(
             key=canonical_key,
             workspace=workspace,
         )
-        path = artifact_to_path(value, workspace)
+        path = artifact_to_existing_path(
+            value,
+            workspace,
+            materialize_from_archive=True,
+        ) or artifact_to_path(value, workspace)
         if path is None:
             continue
         artifact = (

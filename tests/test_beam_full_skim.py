@@ -5,10 +5,8 @@ Tests verify that BeamRunner correctly detects full-skim configuration and
 constructs the appropriate command and environment for the BackgroundSkimsCreatorApp.
 """
 
-import pytest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
-from pathlib import Path
 
 
 class TestBeamFullSkimMode:
@@ -109,7 +107,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         # Verify run_container was called
@@ -164,7 +164,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
@@ -204,7 +206,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
@@ -239,7 +243,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
@@ -257,7 +263,12 @@ class TestBeamFullSkimMode:
     @patch("pilates.beam.runner.os.makedirs")
     @patch("pilates.beam.runner.os.path.exists")
     def test_normal_beam_run_without_full_skim(
-        self, mock_exists, mock_makedirs, mock_rename, mock_run_container, mock_get_setting
+        self,
+        mock_exists,
+        mock_makedirs,
+        mock_rename,
+        mock_run_container,
+        mock_get_setting,
     ):
         """Test that normal BEAM run works when full_skim is disabled."""
         mock_run_container.return_value = True
@@ -268,7 +279,9 @@ class TestBeamFullSkimMode:
         skim_cfg = self._make_skim_config(run_schedule="disabled")
         runner, workspace, store = self._setup_runner_test(skim_cfg)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             with patch.object(runner, "gather_outputs", return_value=[]):
                 runner._run(store, workspace)
 
@@ -311,7 +324,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs
@@ -346,7 +361,9 @@ class TestBeamFullSkimMode:
 
         runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
 
-        with patch.object(runner, "get_model_and_image", return_value=("beam", "beam:latest")):
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
             runner._run(store, workspace)
 
         call_kwargs = mock_run_container.call_args.kwargs

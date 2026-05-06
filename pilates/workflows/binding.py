@@ -32,7 +32,11 @@ from consist.types import BindingResult
 
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    artifact_to_path,
+    resolve_input_precedence,
+)
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
@@ -849,8 +853,12 @@ def _beam_preprocess_warmstart_inputs(
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
         value = get_value(LINKSTATS_WARMSTART)
-        warmstart_path = artifact_to_path(value, workspace)
-        if warmstart_path and os.path.exists(warmstart_path):
+        warmstart_path = artifact_to_existing_path(
+            value,
+            workspace,
+            materialize_from_archive=True,
+        )
+        if warmstart_path:
             return {LINKSTATS_WARMSTART: warmstart_path}
 
     warmstart_path = resolve_initial_linkstats_path(settings, workspace)

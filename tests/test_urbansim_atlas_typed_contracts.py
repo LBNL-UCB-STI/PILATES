@@ -43,7 +43,9 @@ class _StubWorkspace:
     pass
 
 
-def test_urbansim_run_executor_rejects_wrong_upstream_typed_output(tmp_path: Path) -> None:
+def test_urbansim_run_executor_rejects_wrong_upstream_typed_output(
+    tmp_path: Path,
+) -> None:
     state = _StubState()
     runner = UrbansimRunner("urbansim", state)
     holder = StepOutputsHolder(
@@ -132,7 +134,9 @@ def test_urbansim_preprocess_returns_typed_outputs_and_sets_progress(
     preprocessor = UrbansimPreprocessor("urbansim", state)
     expected = UrbanSimPreprocessOutputs(
         usim_mutable_data_dir=tmp_path / "usim-input",
-        prepared_inputs={"geoid_to_zone": tmp_path / "usim-input" / "geoid_to_zone.csv"},
+        prepared_inputs={
+            "geoid_to_zone": tmp_path / "usim-input" / "geoid_to_zone.csv"
+        },
     )
     seen = {}
 
@@ -200,7 +204,9 @@ def test_urbansim_preprocess_accepts_previous_records_compatibility(
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
 
-    outputs = preprocessor.preprocess(_StubWorkspace(), previous_records=previous_records)
+    outputs = preprocessor.preprocess(
+        _StubWorkspace(), previous_records=previous_records
+    )
 
     assert outputs is expected
     assert seen["previous_records"] is previous_records
@@ -226,7 +232,9 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
 
     monkeypatch.setattr(preprocessor, "_preprocess", _fake_preprocess)
 
-    outputs = preprocessor.preprocess(_StubWorkspace(), previous_records=previous_records)
+    outputs = preprocessor.preprocess(
+        _StubWorkspace(), previous_records=previous_records
+    )
 
     assert outputs is expected
     assert seen["previous_records"] is previous_records
@@ -301,7 +309,9 @@ def test_urbansim_atlas_steps_publish_replay_metadata(
     ) == expected_outputs_fn(settings, state, workspace)
 
 
-def test_atlas_runner_expected_outputs_only_include_runner_artifacts(tmp_path: Path) -> None:
+def test_atlas_runner_expected_outputs_only_include_runner_artifacts(
+    tmp_path: Path,
+) -> None:
     workspace = SimpleNamespace(
         get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
         get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
@@ -408,8 +418,12 @@ def test_atlas_runner_retries_container_exceptions(
         if len(attempts) == 1:
             raise RuntimeError("Container execution failed for atlas_container")
         atlas_output_dir.mkdir(parents=True, exist_ok=True)
-        (atlas_output_dir / "householdv_2030.csv").write_text("hh\n1\n", encoding="utf-8")
-        (atlas_output_dir / "vehicles_2030.csv").write_text("veh\n1\n", encoding="utf-8")
+        (atlas_output_dir / "householdv_2030.csv").write_text(
+            "hh\n1\n", encoding="utf-8"
+        )
+        (atlas_output_dir / "vehicles_2030.csv").write_text(
+            "veh\n1\n", encoding="utf-8"
+        )
         return True
 
     monkeypatch.setattr(AtlasRunner, "run_container", staticmethod(_fake_run_container))
@@ -417,11 +431,18 @@ def test_atlas_runner_retries_container_exceptions(
     outputs = runner._run(inputs, workspace)
 
     assert len(attempts) == 2
-    assert outputs.raw_outputs["householdv_2030"] == atlas_output_dir / "householdv_2030.csv"
-    assert outputs.raw_outputs["vehicles_2030"] == atlas_output_dir / "vehicles_2030.csv"
+    assert (
+        outputs.raw_outputs["householdv_2030"]
+        == atlas_output_dir / "householdv_2030.csv"
+    )
+    assert (
+        outputs.raw_outputs["vehicles_2030"] == atlas_output_dir / "vehicles_2030.csv"
+    )
 
 
-def test_atlas_postprocess_fails_closed_without_current_year_run_outputs(tmp_path: Path) -> None:
+def test_atlas_postprocess_fails_closed_without_current_year_run_outputs(
+    tmp_path: Path,
+) -> None:
     state = _StubState()
     state.full_settings = type(
         "Settings",
@@ -479,9 +500,9 @@ def test_atlas_update_h5_vehicle_updates_nearest_year_scoped_households_table(
     original.to_hdf(h5_path, key="/2024/households", mode="w")
 
     household_v_csv = tmp_path / "householdv_2029.csv"
-    pd.DataFrame(
-        {"household_id": [10, 20], "nvehicles": [2, 0]}
-    ).to_csv(household_v_csv, index=False)
+    pd.DataFrame({"household_id": [10, 20], "nvehicles": [2, 0]}).to_csv(
+        household_v_csv, index=False
+    )
 
     updated = postprocessor.atlas_update_h5_vehicle(
         settings=None,

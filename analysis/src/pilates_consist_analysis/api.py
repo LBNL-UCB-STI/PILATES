@@ -35,7 +35,13 @@ from .epoch_views import (
     epoch_views as build_epoch_views,
     resolve_artifact_families,
 )
-from .runset import RunSet, runset_from_query, runset_from_runs, runset_label, runs_to_frame
+from .runset import (
+    RunSet,
+    runset_from_query,
+    runset_from_runs,
+    runset_label,
+    runs_to_frame,
+)
 from .runtime import (
     assert_run_tagging_report,
     create_analysis_tracker,
@@ -64,7 +70,9 @@ class AnalysisSession:
         tracker: Optional[Any] = None,
         strict_tagging: bool = False,
         fail_on_tagging_issues: bool = False,
-        artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+        artifact_families: Optional[
+            Mapping[str, Mapping[str, Mapping[str, Any]]]
+        ] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
     ) -> None:
@@ -133,7 +141,9 @@ class AnalysisSession:
         hashing_strategy: str = "fast",
         strict_tagging: bool = False,
         fail_on_tagging_issues: bool = False,
-        artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+        artifact_families: Optional[
+            Mapping[str, Mapping[str, Mapping[str, Any]]]
+        ] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: str = ARTIFACT_FAMILIES_ENV_VAR,
     ) -> "AnalysisSession":
@@ -189,7 +199,9 @@ class AnalysisSession:
             run_name=name,
         )
 
-    def runset_from_ids(self, run_ids: Iterable[str], *, name: str = "runset") -> RunSet:
+    def runset_from_ids(
+        self, run_ids: Iterable[str], *, name: str = "runset"
+    ) -> RunSet:
         return runset_from_run_ids(self.tracker, list(run_ids), name=name)
 
     def epochs(
@@ -361,7 +373,9 @@ class AnalysisSession:
         return run_tagging_to_frame(self.tagging_report, strict=strict)
 
     def assert_run_tagging(self, strict: bool = False) -> pd.DataFrame:
-        assert_run_tagging_report(self.tagging_report, strict=strict, raise_on_issues=True)
+        assert_run_tagging_report(
+            self.tagging_report, strict=strict, raise_on_issues=True
+        )
         return run_tagging_to_frame(self.tagging_report, strict=strict)
 
     def assert_run_tagging_consistent(
@@ -392,7 +406,7 @@ class AnalysisSession:
         run_config: Optional[Mapping[str, Any]] = None,
         ingest_data: bool = True,
         profile_schema: bool = True,
-        ) -> dict[str, Any]:
+    ) -> dict[str, Any]:
         return ingest_artifacts_core(
             self.tracker,
             artifact_specs,
@@ -472,8 +486,12 @@ class AnalysisSession:
             metadata=metadata,
             limit=limit,
             use_converged=use_converged,
-            converged_group_by=list(converged_group_by) if converged_group_by is not None else None,
-            latest_group_by=list(latest_group_by) if latest_group_by is not None else None,
+            converged_group_by=list(converged_group_by)
+            if converged_group_by is not None
+            else None,
+            latest_group_by=list(latest_group_by)
+            if latest_group_by is not None
+            else None,
             include_data=include_data,
             include_snapshots=include_snapshots,
             include_children=include_children,
@@ -581,7 +599,9 @@ class AnalysisSession:
             config_prefix=config_prefix,
             config_include_equal=config_include_equal,
             align_on=align_on,
-            latest_group_by=list(latest_group_by) if latest_group_by is not None else None,
+            latest_group_by=list(latest_group_by)
+            if latest_group_by is not None
+            else None,
             use_converged=bool(use_converged),
             converged_group_by=list(converged_group_by)
             if converged_group_by is not None

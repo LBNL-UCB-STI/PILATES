@@ -114,7 +114,9 @@ def find_last_run_output_plans(
     return plans_path, experienced_path
 
 
-def _find_file(iteration_dir: Path, iteration_number: int, file_name: str) -> Optional[Path]:
+def _find_file(
+    iteration_dir: Path, iteration_number: int, file_name: str
+) -> Optional[Path]:
     file_path = iteration_dir / f"{iteration_number}.{file_name}"
     return file_path if file_path.exists() else None
 

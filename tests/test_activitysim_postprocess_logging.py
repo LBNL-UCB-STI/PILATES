@@ -112,9 +112,7 @@ def test_activitysim_postprocess_archived_inputs_use_forecast_year_directory(
         "asim_input_households_csv_archived"
     ]
     assert archived_households == (
-        asim_output_dir
-        / f"inputs-year-{forecast_year}-iteration-0"
-        / "households.csv"
+        asim_output_dir / f"inputs-year-{forecast_year}-iteration-0" / "households.csv"
     )
     assert archived_households.exists()
     assert outputs.processed_outputs["households_asim_out"] == (
@@ -233,12 +231,8 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
         asim_output_dir=tmp_path,
-        processed_outputs={
-            "asim_input_skims_zarr_archived": tmp_path / "skims.zarr"
-        },
-        processed_output_hashes={
-            "asim_input_skims_zarr_archived": "abc123"
-        },
+        processed_outputs={"asim_input_skims_zarr_archived": tmp_path / "skims.zarr"},
+        processed_output_hashes={"asim_input_skims_zarr_archived": "abc123"},
     )
 
     output_logger(
@@ -276,7 +270,9 @@ def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(
     monkeypatch.setattr(
         steps_activitysim,
         "build_standard_step",
-        lambda **kwargs: SimpleNamespace(pilates_input_logger=kwargs["spec"].input_logger),
+        lambda **kwargs: SimpleNamespace(
+            pilates_input_logger=kwargs["spec"].input_logger
+        ),
     )
 
     step_fn = steps.make_activitysim_preprocess_step(
@@ -405,7 +401,9 @@ def test_activitysim_postprocess_step_forwards_surface_to_runtime_resolution(
     monkeypatch.setattr(
         steps_activitysim,
         "build_standard_step",
-        lambda **kwargs: SimpleNamespace(pilates_input_logger=kwargs["spec"].input_logger),
+        lambda **kwargs: SimpleNamespace(
+            pilates_input_logger=kwargs["spec"].input_logger
+        ),
     )
 
     step_fn = steps.make_activitysim_postprocess_step(
@@ -516,7 +514,9 @@ def test_activitysim_postprocess_normalizes_legacy_usim_input_key(
     assert list(outputs.to_record_store().to_mapping()) == [USIM_DATASTORE_H5]
 
 
-def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_path) -> None:
+def test_activitysim_preprocess_logs_selected_usim_h5_tables(
+    monkeypatch, tmp_path
+) -> None:
     fake_preprocessor = SimpleNamespace(
         preprocess=lambda _workspace, **_kwargs: ActivitySimPreprocessOutputs(
             mutable_data_dir=asim_data_dir,
@@ -582,7 +582,9 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(monkeypatch, tmp_pa
     )
 
 
-def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths() -> None:
+def test_execute_activitysim_preprocess_forwards_resolved_population_table_paths() -> (
+    None
+):
     captured = {}
 
     class _Preprocessor:
@@ -700,10 +702,14 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     current_h5.write_text("current")
 
     captured_years = []
+    captured_rule_keys = []
 
     def _fake_build_binding_plan(**kwargs):
         year = kwargs["year"]
         captured_years.append(year)
+        captured_rule_keys.append(
+            tuple(rule.semantic_key for rule in kwargs.get("artifact_rules", ()))
+        )
         if year == forecast_year:
             return BindingPlan(
                 inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
@@ -740,11 +746,17 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     )
 
     assert captured_years == [forecast_year, current_year]
+    assert captured_rule_keys == [
+        (USIM_POPULATION_SOURCE_H5,),
+        (USIM_DATASTORE_CURRENT_H5,),
+    ]
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
     assert runtime_inputs["current_input_h5_path"] == str(current_h5)
 
 
-def test_activitysim_postprocess_logs_updated_usim_h5_tables(monkeypatch, tmp_path) -> None:
+def test_activitysim_postprocess_logs_updated_usim_h5_tables(
+    monkeypatch, tmp_path
+) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),
         outputs_holder=SimpleNamespace(),

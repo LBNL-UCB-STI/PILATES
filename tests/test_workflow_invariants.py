@@ -39,7 +39,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_OUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
-    USIM_INPUT_NEXT,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
@@ -136,7 +135,9 @@ def test_declared_step_outputs_are_present_in_coupler_schema():
             if key not in schema:
                 missing.append((meta.model, key))
             else:
-                assert schema[key], f"Schema entry for {key!r} should have a description"
+                assert schema[key], (
+                    f"Schema entry for {key!r} should have a description"
+                )
 
     assert not missing, f"Declared step outputs missing from coupler schema: {missing}"
 
@@ -192,7 +193,9 @@ def test_beam_run_output_logger_includes_phys_sim_facets(monkeypatch, tmp_path):
     meta = next(meta for logged_key, meta in calls if logged_key == key)
     assert meta["facet_schema_version"] == "v1"
     assert meta["facet_index"] is True
-    assert meta["facet"]["artifact_family"] == "linkstats_unmodified_phys_sim_iter_parquet"
+    assert (
+        meta["facet"]["artifact_family"] == "linkstats_unmodified_phys_sim_iter_parquet"
+    )
     assert meta["facet"]["phys_sim_iteration"] == 3
     assert meta["facet"]["beam_sub_iteration"] == 0
 
@@ -288,19 +291,19 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
     assert by_key[BEAM_PLANS_OUT][0] == str(plans_iter)
     assert by_key[BEAM_OUTPUT_PLANS_XML][0] == str(output_plans)
     assert by_key[BEAM_EXPERIENCED_PLANS_XML][0] == str(experienced_plans)
-    assert (
-        by_key[BEAM_OUTPUT_EXPERIENCED_PLANS_XML][0]
-        == str(output_experienced_plans)
-    )
+    assert by_key[BEAM_OUTPUT_EXPERIENCED_PLANS_XML][0] == str(output_experienced_plans)
     assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][0] == str(
         phys_sim
     )
     assert "linkstats_parquet_2018_0_sub1" not in by_key
     assert by_key[LINKSTATS][2]["facet"]["artifact_family"] == "linkstats"
     assert by_key[LINKSTATS][2]["facet"]["year"] == 2018
-    assert by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][2][
-        "facet"
-    ]["phys_sim_iteration"] == 3
+    assert (
+        by_key["linkstats_unmodified_parquet__y2018__i0__phys_sim_iter3"][2]["facet"][
+            "phys_sim_iteration"
+        ]
+        == 3
+    )
 
     log_only_keys = {key for key, _path, _description, _meta in log_only_calls}
     assert "linkstats_parquet_2018_0_sub1" in log_only_keys
@@ -591,7 +594,9 @@ def test_parent_link_proxy_leaves_parent_unset_when_no_safe_parent_exists():
 
         def run(self, **kwargs):
             self.calls.append(kwargs)
-            return SimpleNamespace(cache_hit=False, run=SimpleNamespace(id="beam-live-run"))
+            return SimpleNamespace(
+                cache_hit=False, run=SimpleNamespace(id="beam-live-run")
+            )
 
     underlying = _UnderlyingScenario()
     proxy = run_module._ScenarioParentLinkProxy(underlying)
@@ -900,18 +905,12 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
         "_rerun_postprocess",
     ]
     refreshed_manifest = yaml.safe_load(manifest_path.read_text())
-    assert (
-        refreshed_manifest["activitysim_run"]["outputs"]["raw_outputs"][
-            "households_asim_out_temp"
-        ]
-        == str(new_run_path)
-    )
-    assert (
-        refreshed_manifest["activitysim_postprocess"]["outputs"]["processed_outputs"][
-            "households_asim_out"
-        ]
-        == str(new_post_path)
-    )
+    assert refreshed_manifest["activitysim_run"]["outputs"]["raw_outputs"][
+        "households_asim_out_temp"
+    ] == str(new_run_path)
+    assert refreshed_manifest["activitysim_postprocess"]["outputs"][
+        "processed_outputs"
+    ]["households_asim_out"] == str(new_post_path)
 
 
 def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
@@ -1003,13 +1002,18 @@ def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
     assert holder.atlas_preprocess is not None
     assert holder.atlas_run is not None
     assert holder.atlas_preprocess.atlas_mutable_input_dir == current_atlas_input_dir
-    assert holder.atlas_preprocess.prepared_inputs["atlas_households_csv"] == current_households_csv
+    assert (
+        holder.atlas_preprocess.prepared_inputs["atlas_households_csv"]
+        == current_households_csv
+    )
     assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
     assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
     assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv
 
 
-def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(tmp_path):
+def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
+    tmp_path,
+):
     archive_root = tmp_path / "archive-run"
     current_root = tmp_path / "current-job" / "pilates-workspace" / "consist-run"
     workspace = _ManifestWorkspace(current_root)
@@ -1106,10 +1110,18 @@ def test_manifest_restore_reruns_atlas_stage_when_restart_subyear_grave_csv_miss
                 AtlasPreprocessOutputs(
                     atlas_mutable_input_dir=old_atlas_input_dir,
                     prepared_inputs={
-                        "atlas_households_csv": old_atlas_input_dir / "year2023" / "households.csv",
-                        "atlas_blocks_csv": old_atlas_input_dir / "year2023" / "blocks.csv",
-                        "atlas_persons_csv": old_atlas_input_dir / "year2023" / "persons.csv",
-                        "atlas_residential_csv": old_atlas_input_dir / "year2023" / "residential.csv",
+                        "atlas_households_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "households.csv",
+                        "atlas_blocks_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "blocks.csv",
+                        "atlas_persons_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "persons.csv",
+                        "atlas_residential_csv": old_atlas_input_dir
+                        / "year2023"
+                        / "residential.csv",
                         "atlas_jobs_csv": old_atlas_input_dir / "year2023" / "jobs.csv",
                     },
                 )
@@ -1148,10 +1160,16 @@ def test_manifest_restore_reruns_atlas_stage_when_restart_subyear_grave_csv_miss
         holder.atlas_preprocess = AtlasPreprocessOutputs(
             atlas_mutable_input_dir=current_atlas_input_dir,
             prepared_inputs={
-                "atlas_households_csv": current_atlas_input_dir / "year2023" / "households.csv",
+                "atlas_households_csv": current_atlas_input_dir
+                / "year2023"
+                / "households.csv",
                 "atlas_blocks_csv": current_atlas_input_dir / "year2023" / "blocks.csv",
-                "atlas_persons_csv": current_atlas_input_dir / "year2023" / "persons.csv",
-                "atlas_residential_csv": current_atlas_input_dir / "year2023" / "residential.csv",
+                "atlas_persons_csv": current_atlas_input_dir
+                / "year2023"
+                / "persons.csv",
+                "atlas_residential_csv": current_atlas_input_dir
+                / "year2023"
+                / "residential.csv",
                 "atlas_jobs_csv": current_atlas_input_dir / "year2023" / "jobs.csv",
                 "atlas_grave_csv": current_atlas_input_dir / "year2023" / "grave.csv",
             },

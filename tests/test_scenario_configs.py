@@ -29,16 +29,12 @@ def _tracked_yaml_paths(root: Path) -> list[Path]:
     except Exception:
         return sorted(root.glob("*.yaml"))
     return sorted(
-        REPO_ROOT / line
-        for line in result.stdout.splitlines()
-        if line.strip()
+        REPO_ROOT / line for line in result.stdout.splitlines() if line.strip()
     )
 
 
 ACTIVE_SCENARIO_PATHS = sorted(
-    path
-    for root in ACTIVE_SCENARIO_ROOTS
-    for path in _tracked_yaml_paths(root)
+    path for root in ACTIVE_SCENARIO_ROOTS for path in _tracked_yaml_paths(root)
 )
 
 SEATTLE_ROUTER_DIRECTORY = "r5/seattle-cbg120-ferry-weakConn-network"
@@ -52,19 +48,23 @@ EXPECTED_WARMSTART_PATHS = {
     REPO_ROOT / "scenarios/breathe/settings--sfbay--2018-Baseline.yaml": (
         "{router_directory}/init.linkstats.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC06-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC06-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
         "5.linkstats.FC06.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC07-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC07-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
         "4.linkstats.FC07.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--jdeq-calibration-FC08-0.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
         "5.linkstats.FC08.v1.csv.gz"
     ),
-    REPO_ROOT / "scenarios/seattle/pilates-run--seattle--fy26-task1--2018-Baseline.yaml": (
+    REPO_ROOT
+    / "scenarios/seattle/pilates-run--seattle--fy26-task1--2018-Baseline.yaml": (
         "r5/seattle-cbg120-ferry-weakConn-network/2018-baseline-linkstats/"
         "5.linkstats.FC07.v3.csv.gz"
     ),
@@ -121,6 +121,7 @@ def test_active_scenarios_load_via_runtime_config_loader():
         assert settings.beam is not None
         assert settings.beam.router_directory
 
+
 @pytest.mark.skip
 def test_active_scenarios_pin_beam_images_and_explicit_warmstart_setting():
     for path in ACTIVE_SCENARIO_PATHS:
@@ -154,6 +155,7 @@ def test_active_scenarios_use_expected_router_directories():
         assert settings.run.region == "sfbay"
         assert settings.beam is not None
         assert settings.beam.router_directory == SFBAY_ROUTER_DIRECTORY
+
 
 @pytest.mark.skip
 def test_active_scenarios_define_expected_zone_sources():
@@ -189,6 +191,7 @@ def test_active_scenarios_define_expected_zone_sources():
             == "pilates/beam/production/sfbay/shape/sfbay-tazs-epsg-26910.shp"
         )
         assert settings.shared.geography.alternative_zones.source_crs == "EPSG:26910"
+
 
 @pytest.mark.skip
 def test_active_scenarios_use_expected_warmstart_paths():

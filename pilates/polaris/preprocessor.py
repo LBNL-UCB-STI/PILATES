@@ -466,9 +466,9 @@ class Usim_Data:
 
             # check that person is in a valid household
             if p.household in self.hh_dict:
-                self.hh_dict[p.household].person_list[
-                    p.id
-                ] = p  # put person into the appropriate household member dictionary
+                self.hh_dict[p.household].person_list[p.id] = (
+                    p  # put person into the appropriate household member dictionary
+                )
 
         for h in self.hh_dict.values():
             h.set_marital_status_for_members()
@@ -511,9 +511,9 @@ class Polaris_Data:
             id = data["person"]
             p = Person(id, data, False)
             if p.household in self.hh_dict:
-                self.hh_dict[p.household].person_list[
-                    p.id
-                ] = p  # put person into the appropriate household member dictionary
+                self.hh_dict[p.household].person_list[p.id] = (
+                    p  # put person into the appropriate household member dictionary
+                )
         for row in cur.execute("Select * from Vehicle").fetchall():
             data = dict(row)
             v = Vehicle(data)

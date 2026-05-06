@@ -1,9 +1,21 @@
 target-version = "py38"
-include = ["run.py", "workflow_state.py", "pilates/workflows/**/*.py"]
+extend-exclude = [
+    "docs-internal",
+    "pilates/polaris",
+]
 
 [lint]
 select = ["E", "F"]
-ignore = ["E501"]
+ignore = [
+    "E402",  # local path bootstraps are common in examples and analysis tests
+    "E501",
+    "E712",
+    "E731",
+    "E741",
+    "F841",
+]
 
 [lint.per-file-ignores]
 "run.py" = ["E402"]
+"pilates/postprocessing/postprocessor.py" = ["F821"]
+"tests/test_beam_preprocessor.py" = ["F811"]

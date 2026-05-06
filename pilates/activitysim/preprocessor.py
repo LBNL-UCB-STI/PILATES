@@ -141,7 +141,9 @@ def _asim_mutable_configs_dir(workspace: "Workspace") -> str:
     get_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
     if callable(get_configs_dir):
         return get_configs_dir()
-    return os.path.join(getattr(workspace, "full_path", os.getcwd()), "activitysim", "configs")
+    return os.path.join(
+        getattr(workspace, "full_path", os.getcwd()), "activitysim", "configs"
+    )
 
 
 def zone_order(settings: PilatesConfig, workspace: "Workspace") -> np.ndarray:
@@ -562,9 +564,9 @@ def _raw_beam_skims_preprocess(
     # Validations: Ensure all origins and destinations in the skims are part of the canonical zones.
     origin_taz = skims_df.origin.unique()
     destination_taz = skims_df.destination.unique()
-    assert len(origin_taz) == len(
-        destination_taz
-    ), "Number of unique origins and destinations must be equal."
+    assert len(origin_taz) == len(destination_taz), (
+        "Number of unique origins and destinations must be equal."
+    )
 
     order = zone_order(settings, workspace)
 
@@ -670,9 +672,9 @@ def _create_skims_by_mode(
 
     logger.info("Splitting out transit skims.")
     transit_df = skims_df.loc[pd.IndexSlice[:, transit_paths, :, :], :]
-    assert (
-        len(transit_df) > 0
-    ), "No transit skims found after splitting by transit paths."
+    assert len(transit_df) > 0, (
+        "No transit skims found after splitting by transit paths."
+    )
 
     # Delete the original skims_df to free up memory
     del skims_df
@@ -787,12 +789,12 @@ def _build_od_matrix(
     num_zones = len(order)
 
     # Assertions to ensure the resulting matrix is consistent with the expected zone order and is square.
-    assert out.index.isin(
-        order
-    ).all(), "There are missing origins in the final OD matrix."
-    assert out.columns.isin(
-        order
-    ).all(), "There are missing destinations in the final OD matrix."
+    assert out.index.isin(order).all(), (
+        "There are missing origins in the final OD matrix."
+    )
+    assert out.columns.isin(order).all(), (
+        "There are missing destinations in the final OD matrix."
+    )
     assert (
         num_zones,
         num_zones,
@@ -844,9 +846,9 @@ def impute_distances(
         zones.geometry = zones.geometry.astype(str).apply(wkt.loads)
         zones = gpd.GeoDataFrame(zones, geometry="geometry", crs="EPSG:4326")
 
-    assert isinstance(
-        zones, gpd.geodataframe.GeoDataFrame
-    ), "Input 'zones' must be a GeoPandas dataframe or convertible to one."
+    assert isinstance(zones, gpd.geodataframe.GeoDataFrame), (
+        "Input 'zones' must be a GeoPandas dataframe or convertible to one."
+    )
 
     gdf = zones.copy()
 
@@ -868,9 +870,9 @@ def impute_distances(
 
     else:
         # Calculate distances for specific OD pairs.
-        assert len(origin) == len(
-            destination
-        ), 'Parameters "origin" and "destination" must have the same length.'
+        assert len(origin) == len(destination), (
+            'Parameters "origin" and "destination" must have the same length.'
+        )
         # Adjust origin/destination IDs (assuming 0-indexed input, 1-indexed zones).
         origin_idx = (origin + 1).astype(str)
         destination_idx = (destination + 1).astype(str)
@@ -1861,7 +1863,6 @@ def plot_skims(
     counter = 0
     for row in range(rows):
         for col in range(cols):
-
             zone_id = int(zone_ids[counter])
             name_ = name + "_zone_id_" + str(zone_id)
             zone_measure = skims[zone_id - 1, :]
@@ -2030,7 +2031,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 workspace.get_usim_mutable_data_dir(), usim_input_fname
             )
 
-        skims_fname = getattr(getattr(getattr(settings, "shared", None), "skims", None), "fname", None)
+        skims_fname = getattr(
+            getattr(getattr(settings, "shared", None), "skims", None), "fname", None
+        )
         final_skims_path = None
         if region and skims_fname:
             final_skims_path = os.path.join(
@@ -2056,14 +2059,18 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
         for key in ("usim_population_source_h5", FINAL_SKIMS_OMX):
             input_path = inputs.get(key)
-            inputs[key] = input_path if input_path and os.path.exists(input_path) else None
+            inputs[key] = (
+                input_path if input_path and os.path.exists(input_path) else None
+            )
         return inputs
 
     @staticmethod
     def expected_inputs(
         settings: PilatesConfig, state: "WorkflowState", workspace: "Workspace"
     ) -> Dict[str, Union[str, None]]:
-        return ActivitysimPreprocessor.runtime_expected_inputs(settings, state, workspace)
+        return ActivitysimPreprocessor.runtime_expected_inputs(
+            settings, state, workspace
+        )
 
     @staticmethod
     def expected_outputs(
@@ -2150,7 +2157,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         }
         if any(path is not None for path in resolved_table_paths.values()):
             preprocess_kwargs["resolved_h5_table_paths"] = {
-                key: value for key, value in resolved_table_paths.items() if value is not None
+                key: value
+                for key, value in resolved_table_paths.items()
+                if value is not None
             }
         record_store = self._preprocess(
             workspace,
@@ -2159,7 +2168,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         )
         records_by_key = {
             getattr(record, "short_name", None): record
-            for record in (record_store.all_records() if record_store is not None else [])
+            for record in (
+                record_store.all_records() if record_store is not None else []
+            )
         }
         output_values: Dict[str, Union[Path, Dict[str, str]]] = {
             "mutable_data_dir": Path(workspace.get_asim_mutable_data_dir())
@@ -2169,7 +2180,9 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             record = records_by_key.get(record_key)
             if record is None:
                 continue
-            record_path = artifact_to_path(getattr(record, "file_path", None), workspace)
+            record_path = artifact_to_path(
+                getattr(record, "file_path", None), workspace
+            )
             if record_path is not None:
                 output_values[field_name] = Path(record_path)
             content_hash = getattr(record, "content_hash", None)
@@ -2531,13 +2544,13 @@ def _get_college_enrollment(state_fips: str, county_codes: List[str]) -> pd.Data
     colleges.rename(columns={"longitude": "x", "latitude": "y"}, inplace=True)
 
     logger.info(
-        "Downloading college full-time enrollment data from " "educationdata.urban.org!"
+        "Downloading college full-time enrollment data from educationdata.urban.org!"
     )
     fte = _get_full_time_enrollment(state_fips, year)
     colleges["full_time_enrollment"] = fte.reindex(colleges.index)
 
     logger.info(
-        "Downloading college part-time enrollment data from " "educationdata.urban.org!"
+        "Downloading college part-time enrollment data from educationdata.urban.org!"
     )
     pte = _get_part_time_enrollment(state_fips)
     colleges["part_time_enrollment"] = pte.reindex(colleges.index)
@@ -2683,7 +2696,9 @@ def _log_land_use_table_schema(df: pd.DataFrame) -> None:
     if not logger.isEnabledFor(logging.DEBUG):
         return
 
-    logger.debug("Land use table schema before CSV write (%d columns):", len(df.columns))
+    logger.debug(
+        "Land use table schema before CSV write (%d columns):", len(df.columns)
+    )
     for start in range(0, len(df.columns), 8):
         parts: List[str] = []
         for pos, col in enumerate(df.columns[start : start + 8], start=start + 1):
@@ -2904,7 +2919,9 @@ def _copy_data_to_mutable_location(
     _copytree_if_needed(configs_source_dir, configs_dest_dir)
     _ensure_required_asim_config_dirs(
         configs_dest_dir=configs_dest_dir,
-        main_configs_dir=get_setting(settings, "activitysim.main_configs_dir", "configs"),
+        main_configs_dir=get_setting(
+            settings, "activitysim.main_configs_dir", "configs"
+        ),
     )
 
     # ActivitySim configs are captured via the config adapter; no artifact logging here.
@@ -2955,7 +2972,6 @@ def copy_beam_geoms(
     )
 
     if zone_id_col not in beam_geoms_file.columns:
-
         if zone_type == "block":
             logger.info("Mapping block IDs")
             beam_geoms_file["TAZ"] = (
@@ -3070,6 +3086,7 @@ def _update_persons_table(
         pd.DataFrame: DataFrame with updated and cleaned person attributes,
             ready for ActivitySim.
     """
+
     def _normalize_person_location_columns() -> None:
         """
         Phase 1 of the persons-schema migration: emit canonical ActivitySim
@@ -3094,14 +3111,20 @@ def _update_persons_table(
 
         for canonical_col, source_candidates in canonical_sources.items():
             source_col = next(
-                (candidate for candidate in source_candidates if candidate in persons.columns),
+                (
+                    candidate
+                    for candidate in source_candidates
+                    if candidate in persons.columns
+                ),
                 None,
             )
             if source_col is None:
                 persons[canonical_col] = -1
                 continue
             persons[canonical_col] = (
-                pd.to_numeric(persons[source_col], errors="coerce").fillna(-1).astype(int)
+                pd.to_numeric(persons[source_col], errors="coerce")
+                .fillna(-1)
+                .astype(int)
             )
 
         # Keep these aliases temporarily so older PILATES warm-start/postprocess
@@ -3250,7 +3273,9 @@ def _update_persons_table(
     persons["needs_school_reassignment"] = False
 
     def _rng_for(offset: int) -> np.random.Generator:
-        base_seed = get_setting(settings, "activitysim.random_seed", 0) if settings else 0
+        base_seed = (
+            get_setting(settings, "activitysim.random_seed", 0) if settings else 0
+        )
         if base_seed is None:
             base_seed = 0
         year = int(getattr(state, "year", 0) or 0)
@@ -3266,7 +3291,10 @@ def _update_persons_table(
         return np.random.default_rng(seed)
 
     def _mark_sampled_reassignments(
-        target_col: str, eligible_mask: pd.Series, share: float, rng: np.random.Generator
+        target_col: str,
+        eligible_mask: pd.Series,
+        share: float,
+        rng: np.random.Generator,
     ) -> None:
         clipped_share = min(max(float(share), 0.0), 1.0)
         if clipped_share <= 0.0:
@@ -3276,11 +3304,16 @@ def _update_persons_table(
         sample_size = min(sample_size, len(eligible_ids))
         if sample_size <= 0:
             return
-        sampled_ids = rng.choice(eligible_ids.to_numpy(), size=sample_size, replace=False)
+        sampled_ids = rng.choice(
+            eligible_ids.to_numpy(), size=sample_size, replace=False
+        )
         persons.loc[sampled_ids, target_col] = True
 
     valid_asim_zone_ids = pd.Index(
-        pd.to_numeric(blocks[asim_zone_id_col], errors="coerce").dropna().astype(int).unique()
+        pd.to_numeric(blocks[asim_zone_id_col], errors="coerce")
+        .dropna()
+        .astype(int)
+        .unique()
     )
 
     def _invalid_location_mask(location_ids: pd.Series) -> pd.Series:
@@ -3291,11 +3324,15 @@ def _update_persons_table(
             | ~numeric_location_ids.isin(valid_asim_zone_ids)
         )
 
-    workplace_share = get_setting(settings, "activitysim.workplace_reassignment_share", 0.0)
+    workplace_share = get_setting(
+        settings, "activitysim.workplace_reassignment_share", 0.0
+    )
     school_share = get_setting(settings, "activitysim.school_reassignment_share", 0.0)
 
     if "workplace_zone_id" in persons.columns:
-        workplace_location_invalid = _invalid_location_mask(persons["workplace_zone_id"])
+        workplace_location_invalid = _invalid_location_mask(
+            persons["workplace_zone_id"]
+        )
         invalid_work_mask = (persons["worker"] == 1) & workplace_location_invalid
         valid_work_mask = (persons["worker"] == 1) & ~workplace_location_invalid
         persons.loc[invalid_work_mask, "needs_workplace_reassignment"] = True
@@ -3444,7 +3481,6 @@ def _update_jobs_table(
     num_reassigned = len(blocks_to_reassign)
 
     if num_reassigned > 0:
-
         logger.info("Reassigning jobs out of blocks with no land area!")
         blocks_gdf = get_block_geoms(settings, workspace)
         blocks_gdf.set_index("GEOID", inplace=True)
@@ -3588,8 +3624,7 @@ def _update_blocks_table(
 
     else:
         logger.info(
-            "Blocks table already has zone IDs. Make sure skim zones "
-            "haven't changed."
+            "Blocks table already has zone IDs. Make sure skim zones haven't changed."
         )
 
     blocks[zone_id_col] = blocks[zone_id_col].astype(str)
@@ -3667,9 +3702,9 @@ def _create_land_use_table(
     assert zones.index.name == "TAZ"
     assert zones.index.inferred_type == "string", "zone_id dtype should be str"
     for table in [households, persons, jobs, blocks, schools, colleges]:
-        assert pd.api.types.is_string_dtype(
-            table[asim_zone_id_col]
-        ), "zone_id dtype in should be str"
+        assert pd.api.types.is_string_dtype(table[asim_zone_id_col]), (
+            "zone_id dtype in should be str"
+        )
 
     # create new column variables
     logger.info("Creating new columns in the land use table.")
@@ -3890,9 +3925,7 @@ def _detect_activitysim_h5_prefix(
 
     for prefix in candidate_prefixes:
         if all(
-            (
-                f"{prefix}/{table_name}" if prefix else table_name
-            ) in normalized_keys
+            (f"{prefix}/{table_name}" if prefix else table_name) in normalized_keys
             for table_name in required_tables
         ):
             return prefix
@@ -3989,6 +4022,7 @@ def create_asim_data_from_h5(
         "ActivitySim preprocess using bound UrbanSim datastore artifact: %s",
         usim_store_path,
     )
+
     def _requires_exact_population_year() -> bool:
         land_use_enabled = get_setting(settings, "run.models.land_use") is not None
         is_start_year = getattr(state, "is_start_year", None)
@@ -4010,7 +4044,9 @@ def create_asim_data_from_h5(
             None
             if resolved_h5_table_paths is None
             else {
-                USIM_POPULATION_HOUSEHOLDS_TABLE: resolved_h5_table_paths.get("households"),
+                USIM_POPULATION_HOUSEHOLDS_TABLE: resolved_h5_table_paths.get(
+                    "households"
+                ),
                 USIM_POPULATION_PERSONS_TABLE: resolved_h5_table_paths.get("persons"),
                 USIM_POPULATION_JOBS_TABLE: resolved_h5_table_paths.get("jobs"),
                 USIM_POPULATION_BLOCKS_TABLE: resolved_h5_table_paths.get("blocks"),
@@ -4098,7 +4134,9 @@ def create_asim_data_from_h5(
     return output_records
 
 
-def _activitysim_h5_table_path(prefix: Optional[Union[str, int]], table_name: str) -> str:
+def _activitysim_h5_table_path(
+    prefix: Optional[Union[str, int]], table_name: str
+) -> str:
     normalized_prefix = str(prefix).strip("/") if prefix not in (None, "") else ""
     if normalized_prefix:
         return f"/{normalized_prefix}/{table_name}"

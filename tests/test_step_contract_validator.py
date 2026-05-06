@@ -36,8 +36,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     LINKSTATS,
-    USIM_POPULATION_SOURCE_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs
@@ -155,7 +153,7 @@ def test_filter_schema_steps_for_enabled_models_supports_surface_subset():
                 activity_demand_enabled=True,
                 traffic_assignment_enabled=True,
                 replanning_enabled=False,
-            )
+            ),
         ),
         run=SimpleNamespace(models=SimpleNamespace()),
     )
@@ -168,7 +166,8 @@ def test_filter_schema_steps_for_enabled_models_supports_surface_subset():
     )
 
     filtered_names = {
-        getattr(getattr(step, "__consist_step__", None), "model", None) for step in filtered
+        getattr(getattr(step, "__consist_step__", None), "model", None)
+        for step in filtered
     }
     assert "activitysim_preprocess" in filtered_names
     assert "beam_preprocess" in filtered_names
@@ -187,12 +186,16 @@ def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(
         staticmethod(
             lambda *_args, **_kwargs: {
                 "atlas_output_dir": str(tmp_path / "atlas" / "output"),
-                "atlas_vehicles2_output": str(tmp_path / "atlas" / "output" / "vehicles2_2025.csv"),
+                "atlas_vehicles2_output": str(
+                    tmp_path / "atlas" / "output" / "vehicles2_2025.csv"
+                ),
             }
         ),
     )
 
-    with pytest.raises(RuntimeError, match="atlas_postprocess.*missing required catalog output keys"):
+    with pytest.raises(
+        RuntimeError, match="atlas_postprocess.*missing required catalog output keys"
+    ):
         step_shared.validate_workflow_step_contracts(
             declared_steps=_declared_schema_steps(),
             settings=settings,
@@ -211,14 +214,21 @@ def test_validate_workflow_step_contracts_flags_missing_required_input_provider_
         "declared_expected_inputs",
         staticmethod(
             lambda *_args, **_kwargs: {
-                ASIM_LAND_USE_IN: str(tmp_path / "activitysim" / "data" / "land_use.csv"),
-                ASIM_HOUSEHOLDS_IN: str(tmp_path / "activitysim" / "data" / "households.csv"),
+                ASIM_LAND_USE_IN: str(
+                    tmp_path / "activitysim" / "data" / "land_use.csv"
+                ),
+                ASIM_HOUSEHOLDS_IN: str(
+                    tmp_path / "activitysim" / "data" / "households.csv"
+                ),
                 ASIM_PERSONS_IN: str(tmp_path / "activitysim" / "data" / "persons.csv"),
             }
         ),
     )
 
-    with pytest.raises(RuntimeError, match="activitysim_run.*missing required catalog input keys.*zarr_skims"):
+    with pytest.raises(
+        RuntimeError,
+        match="activitysim_run.*missing required catalog input keys.*zarr_skims",
+    ):
         step_shared.validate_workflow_step_contracts(
             declared_steps=_declared_schema_steps(),
             settings=settings,
@@ -254,7 +264,9 @@ def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatc
 
 def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monkeypatch):
     """Dependencies referencing unknown steps fail validation."""
-    patched_deps = {key: dict(value) for key, value in step_shared.STEP_DEPENDENCIES.items()}
+    patched_deps = {
+        key: dict(value) for key, value in step_shared.STEP_DEPENDENCIES.items()
+    }
     beam_run_spec = dict(patched_deps["beam_run"])
     beam_run_spec["depends_on"] = ["not_a_real_step"]
     patched_deps["beam_run"] = beam_run_spec
@@ -285,6 +297,7 @@ def test_validate_step_ready_enforces_untracked_activitysim_compile_inputs():
 
 def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
     """New declared steps must be tracked or explicitly allowlisted."""
+
     @define_step(model="unexpected_new_step")
     def _extra_step(*args, **kwargs):
         return None
@@ -297,6 +310,7 @@ def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
 
 def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
     """Allowlist supports intentional transitional or non-tracked step models."""
+
     @define_step(model="intentional_untracked_step")
     def _extra_step(*args, **kwargs):
         return None

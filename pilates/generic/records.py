@@ -203,7 +203,9 @@ class RecordStore:
                 logger.warning("Record missing short_name and unique_id; skipping.")
                 continue
 
-            path = getattr(record, "container_uri", None) or getattr(record, "uri", None)
+            path = getattr(record, "container_uri", None) or getattr(
+                record, "uri", None
+            )
             if not path:
                 path = getattr(record, "file_path", None) or getattr(
                     record, "repo_path", None

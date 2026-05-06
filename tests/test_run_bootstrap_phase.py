@@ -130,7 +130,10 @@ class DummySnapshotTracker:
             "run_id": "run-test",
             "snapshot_ts_utc": "2026-02-24T00:00:00Z",
         }
-        (output_path.parent / snapshot_module.snapshot_meta_filename(output_path.name)).write_text(
+        (
+            output_path.parent
+            / snapshot_module.snapshot_meta_filename(output_path.name)
+        ).write_text(
             json.dumps(metadata),
             encoding="utf-8",
         )
@@ -462,7 +465,8 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
     surface = SimpleNamespace(
         is_bootstrap_owned_artifact_key=lambda key: (
             key.startswith("activitysim_config_settings_yaml_")
-            or key in {
+            or key
+            in {
                 "beam_mutable_data_dir",
                 "beam_region_input_dir",
                 "beam_primary_config_file",
@@ -496,7 +500,9 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
     assert output_paths["activitysim_config_settings_yaml_configs_sh_compile"].endswith(
         "activitysim/configs/configs_sh_compile/settings.yaml"
     )
-    assert output_paths["beam_primary_config_file"].endswith("beam/input/test/beam.conf")
+    assert output_paths["beam_primary_config_file"].endswith(
+        "beam/input/test/beam.conf"
+    )
 
 
 def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fallback_rerun(
@@ -562,16 +568,20 @@ def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
     def _run_step(_cache_options):
         return SimpleNamespace(
             cache_hit=False,
-            run=SimpleNamespace(id="step_run", meta={"cache_miss_explanation": explanation}),
+            run=SimpleNamespace(
+                id="step_run", meta={"cache_miss_explanation": explanation}
+            ),
         )
 
     with caplog.at_level(logging.DEBUG):
-        result, recovered_outputs, metadata = cache_recovery_module.run_with_cache_recovery(
-            stage_name="atlas",
-            step_name="atlas_run",
-            run_step=_run_step,
-            read_outputs=lambda: outputs,
-            recover_outputs=lambda _result: None,
+        result, recovered_outputs, metadata = (
+            cache_recovery_module.run_with_cache_recovery(
+                stage_name="atlas",
+                step_name="atlas_run",
+                run_step=_run_step,
+                read_outputs=lambda: outputs,
+                recover_outputs=lambda _result: None,
+            )
         )
 
     assert result.run.id == "step_run"
@@ -716,6 +726,7 @@ def test_run_bootstrap_phase_cache_hit_missing_replay_outputs_triggers_fallback_
         "materialization_run_id": "bootstrap_fallback",
     }
 
+
 def test_run_bootstrap_phase_cache_hit_hydrates_declared_output_paths_without_fallback(
     monkeypatch,
 ):
@@ -756,9 +767,7 @@ def test_run_bootstrap_phase_cache_disabled_uses_cache_off(monkeypatch):
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
     tracker = DummyTracker(
-        responses=[
-            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}
-        ]
+        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}]
     )
     workspace = DummyWorkspace()
 
@@ -790,9 +799,7 @@ def test_run_bootstrap_phase_cache_disabled_preserves_code_identity(monkeypatch)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
     tracker = DummyTracker(
-        responses=[
-            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}
-        ]
+        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}]
     )
 
     run_module.run_bootstrap_phase(
@@ -1091,9 +1098,7 @@ def test_seed_bootstrap_artifacts_to_coupler_uses_configured_warmstart_path(tmp_
             return self
 
     workspace = DummyWorkspace(full_path=str(tmp_path))
-    warmstart = (
-        tmp_path / "beam" / "input" / "sfbay" / "custom" / "warmstart.parquet"
-    )
+    warmstart = tmp_path / "beam" / "input" / "sfbay" / "custom" / "warmstart.parquet"
     warmstart.parent.mkdir(parents=True, exist_ok=True)
     warmstart.write_text("linkstats", encoding="utf-8")
 
@@ -1274,6 +1279,7 @@ def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
     )
 
     assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
+
 
 def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(
     tmp_path,
@@ -1642,7 +1648,9 @@ def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog
     monkeypatch.setattr(
         run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
     )
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
@@ -1720,9 +1728,13 @@ def test_restart_preflight_detects_missing_local_workspace_artifacts(tmp_path):
     }
 
 
-def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(tmp_path):
+def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
+    tmp_path,
+):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
-    state = SimpleNamespace(current_major_stage=WorkflowState.Stage.vehicle_ownership_model)
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model
+    )
 
     missing = run_module._find_missing_restart_local_artifacts(
         settings=_restart_settings(),
@@ -1740,7 +1752,9 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
 
 def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_path):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
-    state = SimpleNamespace(current_major_stage=WorkflowState.Stage.vehicle_ownership_model)
+    state = SimpleNamespace(
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model
+    )
 
     missing = run_module._find_missing_restart_local_artifacts(
         settings=_restart_settings(),
@@ -1750,7 +1764,9 @@ def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_pat
 
     paths = {item["path"] for item in missing}
     assert any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
-    assert any(path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths)
+    assert any(
+        path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths
+    )
 
 
 def test_restart_preflight_does_not_require_zarr_skims_when_resuming_compiled_supply_demand(
@@ -1808,9 +1824,7 @@ def test_restart_preflight_consumes_shared_policy_hook(tmp_path, monkeypatch):
             SimpleNamespace(
                 name="custom_restart_artifact",
                 semantic_keys=("custom_restart_artifact",),
-                resolve=lambda **_kwargs: {
-                    "custom_restart_artifact": str(policy_path)
-                },
+                resolve=lambda **_kwargs: {"custom_restart_artifact": str(policy_path)},
                 notes="test policy",
             ),
         ),
@@ -1837,19 +1851,18 @@ def test_build_atlas_static_inputs_fallback_uses_atlas_static_key_scheme(tmp_pat
     atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
     (atlas_input_dir / "psid_names.Rdat").parent.mkdir(parents=True, exist_ok=True)
     (atlas_input_dir / "psid_names.Rdat").write_text("psid", encoding="utf-8")
-    (
-        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
-    ).parent.mkdir(parents=True, exist_ok=True)
-    (
-        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
-    ).write_text("used", encoding="utf-8")
+    (atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv").parent.mkdir(
+        parents=True, exist_ok=True
+    )
+    (atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv").write_text(
+        "used", encoding="utf-8"
+    )
 
     fallback = build_atlas_static_inputs_fallback(workspace)
 
     assert fallback["psid_names"] == str(atlas_input_dir / "psid_names.Rdat")
-    assert (
-        fallback["adopt/baseline/used_vehicles_2017"]
-        == str(atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv")
+    assert fallback["adopt/baseline/used_vehicles_2017"] == str(
+        atlas_input_dir / "adopt" / "baseline" / "used_vehicles_2017.csv"
     )
     assert "atlas_static_psid_names.Rdat" not in fallback
 
@@ -1942,10 +1955,14 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
         "seed_local_consist_db_from_shared",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(
+        run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch"
+    )
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(run_module.cr, "create_tracker", _capture_create_tracker)
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
@@ -2044,12 +2061,16 @@ def test_main_restart_strict_defers_missing_artifact_failure_until_after_bootstr
         "seed_local_consist_db_from_shared",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(
+        run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch"
+    )
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(
         run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
     )
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     missing_before_bootstrap = [
@@ -2158,7 +2179,9 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
         is_restart_prebootstrap_deferred_artifact_key=lambda key: key == "deferred_key",
     )
 
-    monkeypatch.setattr(run_module, "build_enabled_workflow_surface", lambda *_args, **_kwargs: surface)
+    monkeypatch.setattr(
+        run_module, "build_enabled_workflow_surface", lambda *_args, **_kwargs: surface
+    )
     monkeypatch.setattr(run_module, "_log_local_storage_info", lambda: None)
     monkeypatch.setattr(
         run_module,
@@ -2175,12 +2198,16 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
         "seed_local_consist_db_from_shared",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(
+        run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch"
+    )
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(
         run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
     )
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
     monkeypatch.setattr(
@@ -2194,15 +2221,23 @@ def test_main_restart_preflight_uses_surface_deferred_artifact_classification(
     monkeypatch.setattr(
         run_module,
         "run_bootstrap_phase",
-        lambda **_kwargs: (_ for _ in ()).throw(StopAfterBootstrap("stop after classification")),
+        lambda **_kwargs: (_ for _ in ()).throw(
+            StopAfterBootstrap("stop after classification")
+        ),
     )
 
     with caplog.at_level("INFO"):
         with pytest.raises(StopAfterBootstrap, match="stop after classification"):
             run_module.main(settings=settings, state=state)
 
-    assert "missing local workspace inputs while data_initialized=True: blocking_key:/missing/blocking" in caplog.text
-    assert "deferring bootstrap-owned workspace inputs until bootstrap hydration: deferred_key:/missing/deferred" in caplog.text
+    assert (
+        "missing local workspace inputs while data_initialized=True: blocking_key:/missing/blocking"
+        in caplog.text
+    )
+    assert (
+        "deferring bootstrap-owned workspace inputs until bootstrap hydration: deferred_key:/missing/deferred"
+        in caplog.text
+    )
 
 
 def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
@@ -2262,16 +2297,22 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         "seed_local_consist_db_from_shared",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(
+        run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch"
+    )
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(
         run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
     )
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
 
-    missing = [{"key": "usim_datastore_base_h5", "path": "/missing/base.h5", "reason": "test"}]
+    missing = [
+        {"key": "usim_datastore_base_h5", "path": "/missing/base.h5", "reason": "test"}
+    ]
 
     monkeypatch.setattr(
         run_module,
@@ -2295,9 +2336,7 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         run_module.main()
 
 
-def test_main_restart_strict_fails_without_atlas_repair_paths(
-    tmp_path, monkeypatch
-):
+def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypatch):
 
     class SnapshotStub:
         def final_snapshot(self):
@@ -2341,9 +2380,7 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
     ):
         (year2021 / filename).write_text("prior\n", encoding="utf-8")
     (year2021 / "vehicles_output.RData").write_text("vehicles\n", encoding="utf-8")
-    (year2021 / "households_output.RData").write_text(
-        "households\n", encoding="utf-8"
-    )
+    (year2021 / "households_output.RData").write_text("households\n", encoding="utf-8")
 
     settings = SimpleNamespace(
         run=SimpleNamespace(
@@ -2437,15 +2474,21 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(
         "seed_local_consist_db_from_shared",
         lambda **_kwargs: False,
     )
-    monkeypatch.setattr(run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch")
+    monkeypatch.setattr(
+        run_module, "_resolve_cache_epoch", lambda _settings: "test-epoch"
+    )
     monkeypatch.setattr(run_module, "_get_consist_schemas", lambda: None)
     monkeypatch.setattr(
         run_module.cr, "create_tracker", lambda **_kwargs: TraceCapableTrackerStub()
     )
-    monkeypatch.setattr(run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub())
+    monkeypatch.setattr(
+        run_module, "ConsistDbSnapshotManager", lambda **_kwargs: SnapshotStub()
+    )
     monkeypatch.setattr(run_module, "Workspace", WorkspaceStub)
     monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
-    monkeypatch.setattr(run_module, "_find_missing_restart_local_artifacts", _atlas_only_missing)
+    monkeypatch.setattr(
+        run_module, "_find_missing_restart_local_artifacts", _atlas_only_missing
+    )
     monkeypatch.setattr(
         run_module,
         "run_bootstrap_phase",
@@ -2481,7 +2524,9 @@ def test_resolve_consist_db_paths_uses_local_run_dir_by_default():
     settings = SimpleNamespace(
         run=SimpleNamespace(),
         shared=SimpleNamespace(
-            database=SimpleNamespace(enabled=True, path="/global/scratch/provenance.duckdb")
+            database=SimpleNamespace(
+                enabled=True, path="/global/scratch/provenance.duckdb"
+            )
         ),
     )
 
@@ -2499,7 +2544,9 @@ def test_resolve_consist_db_paths_uses_configured_path_when_local_disabled():
     settings = SimpleNamespace(
         run=SimpleNamespace(consist_db_local_run=False),
         shared=SimpleNamespace(
-            database=SimpleNamespace(enabled=True, path="/global/scratch/provenance.duckdb")
+            database=SimpleNamespace(
+                enabled=True, path="/global/scratch/provenance.duckdb"
+            )
         ),
     )
 
@@ -2551,7 +2598,9 @@ def test_restore_local_consist_db_from_snapshot_hydrates_missing_local_db(tmp_pa
     latest_dir.mkdir(parents=True, exist_ok=True)
     (latest_dir / "provenance.duckdb").write_text("db", encoding="utf-8")
     (latest_dir / "provenance.duckdb.wal").write_text("wal", encoding="utf-8")
-    (latest_dir / snapshot_module.snapshot_meta_filename("provenance.duckdb")).write_text(
+    (
+        latest_dir / snapshot_module.snapshot_meta_filename("provenance.duckdb")
+    ).write_text(
         json.dumps({"snapshot_ts_utc": "2026-02-24T01:02:03Z"}),
         encoding="utf-8",
     )

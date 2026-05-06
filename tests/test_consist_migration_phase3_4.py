@@ -2,7 +2,7 @@ import types
 
 import consist
 import pytest
-from consist.types import CacheOptions, ExecutionOptions
+from consist.types import CacheOptions
 
 from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore

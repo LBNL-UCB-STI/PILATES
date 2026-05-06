@@ -66,7 +66,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 def _translation_dir(override: str | None) -> Path:
     if override:
         return Path(override).resolve()
-    return Path(__file__).resolve().parents[1] / "generated" / "polaris_population_translation"
+    return (
+        Path(__file__).resolve().parents[1]
+        / "generated"
+        / "polaris_population_translation"
+    )
 
 
 def _source_year_dir(source_dir: Path, year: int) -> Path:
@@ -79,7 +83,9 @@ def _repo_root() -> Path:
 
 def _atlas_lookup_paths(*, scenario: str, year: int) -> tuple[Path, Path]:
     atlas_input = _repo_root() / "pilates" / "atlas" / "atlas_input"
-    new_vehicles = atlas_input / "adopt" / scenario / f"new_vehicles_biannual_values_{year}.csv"
+    new_vehicles = (
+        atlas_input / "adopt" / scenario / f"new_vehicles_biannual_values_{year}.csv"
+    )
     used_vehicles = atlas_input / "adopt" / scenario / f"used_vehicles_{year}.csv"
     return new_vehicles, used_vehicles
 
@@ -125,11 +131,21 @@ def _placeholder_map(
 ) -> dict[str, str]:
     year_dir = _source_year_dir(source_dir, year)
     new_vehicles, used_vehicles = _atlas_lookup_paths(scenario=scenario, year=year)
-    households = _require_path(year_dir / "households.parquet", label=f"source households year {year}")
-    persons = _require_path(year_dir / "persons.parquet", label=f"source persons year {year}")
-    vehicles = _require_path(year_dir / "vehicles.parquet", label=f"source vehicles year {year}")
-    new_ref = _require_path(new_vehicles, label=f"ATLAS new_vehicles reference year {year}")
-    used_ref = _require_path(used_vehicles, label=f"ATLAS used_vehicles reference year {year}")
+    households = _require_path(
+        year_dir / "households.parquet", label=f"source households year {year}"
+    )
+    persons = _require_path(
+        year_dir / "persons.parquet", label=f"source persons year {year}"
+    )
+    vehicles = _require_path(
+        year_dir / "vehicles.parquet", label=f"source vehicles year {year}"
+    )
+    new_ref = _require_path(
+        new_vehicles, label=f"ATLAS new_vehicles reference year {year}"
+    )
+    used_ref = _require_path(
+        used_vehicles, label=f"ATLAS used_vehicles reference year {year}"
+    )
     resolved_output_dir = output_dir.resolve()
     resolved_output_dir.mkdir(parents=True, exist_ok=True)
     return {
@@ -180,9 +196,13 @@ def run_translation(
     conn = duckdb.connect()
     try:
         for filename in SQL_EXECUTION_ORDER:
-            sql_path = _require_path(translation_dir / filename, label=f"SQL step {filename}")
+            sql_path = _require_path(
+                translation_dir / filename, label=f"SQL step {filename}"
+            )
             logger.info("Running SQL step %s", sql_path.name)
-            conn.execute(_render_sql(sql_path.read_text(encoding="utf-8"), replacements))
+            conn.execute(
+                _render_sql(sql_path.read_text(encoding="utf-8"), replacements)
+            )
     finally:
         conn.close()
     logger.info("Copied translation SQL package to %s", copied_dir)
@@ -190,7 +210,9 @@ def run_translation(
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s - %(levelname)s - %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(name)s - %(levelname)s - %(message)s"
+    )
     run_translation(
         source_dir=Path(args.source_dir).resolve(),
         year=int(args.year),
@@ -198,7 +220,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=Path(args.output_dir).resolve(),
         translation_dir=_translation_dir(args.translation_dir),
     )
-    logger.info("Wrote POLARIS translation outputs to %s", Path(args.output_dir).resolve())
+    logger.info(
+        "Wrote POLARIS translation outputs to %s", Path(args.output_dir).resolve()
+    )
     return 0
 
 

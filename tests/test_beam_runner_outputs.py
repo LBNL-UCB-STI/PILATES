@@ -138,9 +138,7 @@ def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
 
     assert mapping["final_skims_omx"] == str(final_skims_omx)
     assert mapping["zarr_skims"] == str(zarr_skims)
-    assert (
-        mapping["events_parquet_2030_2_type_PathTraversal"] == str(split_event)
-    )
+    assert mapping["events_parquet_2030_2_type_PathTraversal"] == str(split_event)
     assert mapping["path_traversal_links_2030_2"] == str(split_links)
 
 

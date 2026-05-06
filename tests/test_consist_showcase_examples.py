@@ -20,13 +20,31 @@ def test_cache_hit_example_builds_boundary_overlap_summary():
     module = _load_example_module("examples/consist/cache_hit_inspection.py")
     baseline = pd.DataFrame(
         [
-            {"scenario_id": "baseline", "year": 2030, "iteration": 0, "model": "urbansim", "run_id": "u-1"},
-            {"scenario_id": "baseline", "year": 2030, "iteration": 0, "model": "beam", "run_id": "b-1"},
+            {
+                "scenario_id": "baseline",
+                "year": 2030,
+                "iteration": 0,
+                "model": "urbansim",
+                "run_id": "u-1",
+            },
+            {
+                "scenario_id": "baseline",
+                "year": 2030,
+                "iteration": 0,
+                "model": "beam",
+                "run_id": "b-1",
+            },
         ]
     )
     rerun = pd.DataFrame(
         [
-            {"scenario_id": "baseline", "year": 2030, "iteration": 0, "model": "urbansim", "run_id": "u-2"},
+            {
+                "scenario_id": "baseline",
+                "year": 2030,
+                "iteration": 0,
+                "model": "urbansim",
+                "run_id": "u-2",
+            },
         ]
     )
 
@@ -40,7 +58,9 @@ def test_cache_hit_example_builds_boundary_overlap_summary():
 
 def test_run_comparison_example_builds_selection_from_run_ids():
     module = _load_example_module("examples/consist/run_comparison.py")
-    archive = SimpleNamespace(compare=lambda left, right, **kwargs: (left, right, kwargs))
+    archive = SimpleNamespace(
+        compare=lambda left, right, **kwargs: (left, right, kwargs)
+    )
 
     left, right, kwargs = module.run_comparison(
         archive,

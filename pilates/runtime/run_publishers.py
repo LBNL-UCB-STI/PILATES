@@ -540,7 +540,9 @@ def _event_table_row(event: RunEvent) -> str:
         if part
     )
     outputs = "" if event.output_count is None else str(event.output_count)
-    duration = "" if event.duration_seconds is None else f"{event.duration_seconds:.1f}s"
+    duration = (
+        "" if event.duration_seconds is None else f"{event.duration_seconds:.1f}s"
+    )
     return (
         f'      <tr class="{escape(css_class)}">'
         f"<td>{escape(event.event_time)}</td>"

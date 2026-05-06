@@ -1,6 +1,10 @@
 from types import SimpleNamespace
 
-from pilates.utils.state_access import current_year, iteration_index, uses_input_datastore
+from pilates.utils.state_access import (
+    current_year,
+    iteration_index,
+    uses_input_datastore,
+)
 
 
 def test_current_year_prefers_current_year_alias():

@@ -191,7 +191,9 @@ def test_build_epoch_panel_groups_by_year_iteration_and_scenario():
     ]
     panel = build_epoch_panel(TrackerStub(runs), models=["urbansim", "beam"])
 
-    assert [(epoch.year, epoch.outer_iteration, epoch.scenario_id) for epoch in panel] == [
+    assert [
+        (epoch.year, epoch.outer_iteration, epoch.scenario_id) for epoch in panel
+    ] == [
         (2030, 0, "a"),
         (2030, 1, "a"),
         (2030, 1, "b"),
@@ -286,7 +288,10 @@ def test_converged_epochs_returns_latest_complete_epoch_per_year_and_scenario():
         models=["urbansim", "beam"],
     ).converged_epochs()
 
-    assert {(epoch.year, epoch.scenario_id): epoch.outer_iteration for epoch in converged_panel} == {
+    assert {
+        (epoch.year, epoch.scenario_id): epoch.outer_iteration
+        for epoch in converged_panel
+    } == {
         (2030, "a"): 1,
         (2030, "b"): 0,
         (2031, "a"): 0,
@@ -320,4 +325,3 @@ def test_epoch_raises_for_missing_or_ambiguous_year():
 
     with pytest.raises(ValueError, match="Multiple epochs found for year=2035"):
         panel.epoch(2035)
-

@@ -535,9 +535,9 @@ class TestBeamPostprocessor:
         )
 
         updated_ds = xr.open_zarr(initial_main_zarr)
-        assert (
-            "SOV_TRIPS" in updated_ds.data_vars
-        ), "SOV_TRIPS was not merged into the main Zarr file."
+        assert "SOV_TRIPS" in updated_ds.data_vars, (
+            "SOV_TRIPS was not merged into the main Zarr file."
+        )
         expected_data = np.ones(
             (len(TIME_PERIODS), NUM_ZONES, NUM_ZONES), dtype=np.float32
         )

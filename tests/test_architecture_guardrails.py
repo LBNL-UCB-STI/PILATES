@@ -60,12 +60,18 @@ def test_production_code_only_imports_profile_from_the_compat_shim() -> None:
         rel = _relative(path)
         tree = _parse(path)
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "pilates.workflows.profile":
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "pilates.workflows.profile"
+            ):
                 if rel not in ALLOWED_PROFILE_IMPORT_FILES:
                     violations.append(f"{rel}:{node.lineno}")
             elif isinstance(node, ast.Import):
                 for alias in node.names:
-                    if alias.name == "pilates.workflows.profile" and rel not in ALLOWED_PROFILE_IMPORT_FILES:
+                    if (
+                        alias.name == "pilates.workflows.profile"
+                        and rel not in ALLOWED_PROFILE_IMPORT_FILES
+                    ):
                         violations.append(f"{rel}:{node.lineno}")
 
     assert not violations, (
@@ -81,10 +87,15 @@ def test_production_code_does_not_call_build_workflow_profile() -> None:
         rel = _relative(path)
         tree = _parse(path)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and _call_name(node) == "build_workflow_profile":
+            if (
+                isinstance(node, ast.Call)
+                and _call_name(node) == "build_workflow_profile"
+            ):
                 violations.append(f"{rel}:{node.lineno}")
 
-    assert not violations, f"build_workflow_profile() should be gone from production code: {violations}"
+    assert not violations, (
+        f"build_workflow_profile() should be gone from production code: {violations}"
+    )
 
 
 def test_production_code_does_not_build_a_surface_only_to_read_profile() -> None:
@@ -115,7 +126,10 @@ def test_runtime_flag_initialization_only_happens_in_approved_modules() -> None:
         rel = _relative(path)
         tree = _parse(path)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and _call_name(node) == "ensure_runtime_flags_initialized":
+            if (
+                isinstance(node, ast.Call)
+                and _call_name(node) == "ensure_runtime_flags_initialized"
+            ):
                 call_sites.add(rel)
 
     assert call_sites == ALLOWED_RUNTIME_FLAG_CALL_FILES
@@ -132,7 +146,10 @@ def test_binding_plan_call_sites_pass_surface_explicitly() -> None:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
                 continue
-            if _call_name(node) not in {"build_binding_plan", "beam_preprocess_binding_plan"}:
+            if _call_name(node) not in {
+                "build_binding_plan",
+                "beam_preprocess_binding_plan",
+            }:
                 continue
             if not any(keyword.arg == "surface" for keyword in node.keywords):
                 violations.append(f"{rel}:{node.lineno}")

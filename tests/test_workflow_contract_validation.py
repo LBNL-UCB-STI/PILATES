@@ -163,7 +163,9 @@ def test_resolve_step_inputs_preserves_canonical_key_when_coupler_uses_namespace
     )
 
     assert resolved.input_keys == ["usim_datastore_h5"]
-    assert resolved.coupler_key_by_key["usim_datastore_h5"] == "urbansim/usim_datastore_h5"
+    assert (
+        resolved.coupler_key_by_key["usim_datastore_h5"] == "urbansim/usim_datastore_h5"
+    )
     assert resolved.source_by_key["usim_datastore_h5"] == "coupler"
 
 
@@ -453,7 +455,9 @@ def test_log_and_set_output_does_not_warn_for_declared_dynamic_output(caplog, tm
     )
 
 
-def test_log_and_set_output_does_not_warn_for_declared_optional_output(caplog, tmp_path):
+def test_log_and_set_output_does_not_warn_for_declared_optional_output(
+    caplog, tmp_path
+):
     coupler = _FakeCoupler()
     artifact_path = tmp_path / "artifact.txt"
     artifact_path.write_text("artifact", encoding="utf-8")

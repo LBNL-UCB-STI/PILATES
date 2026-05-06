@@ -78,12 +78,18 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
     main_path = _write_zeroed_main_from_mini(tmp_path, mini_path)
 
     monkeypatch.setattr(
-        pp, "verify_skim_zone_order", lambda settings, skim_file_path, workspace: list(range(5))
+        pp,
+        "verify_skim_zone_order",
+        lambda settings, skim_file_path, workspace: list(range(5)),
     )
     monkeypatch.setattr(
-        pp.zone_utils, "load_canonical_zones", lambda settings, workspace: pd.DataFrame(index=range(5))
+        pp.zone_utils,
+        "load_canonical_zones",
+        lambda settings, workspace: pd.DataFrame(index=range(5)),
     )
-    monkeypatch.setattr(pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None
+    )
 
     def _get_setting(settings, key, default=None):
         if key == "shared.skims.periods":
@@ -124,7 +130,9 @@ def test_merge_mini_skims_matches_expected(tmp_path, monkeypatch) -> None:
         actual.close()
 
 
-def test_merge_mini_skims_normalizes_beam_time_period_labels(tmp_path, monkeypatch) -> None:
+def test_merge_mini_skims_normalizes_beam_time_period_labels(
+    tmp_path, monkeypatch
+) -> None:
     mini_path = _copy_mini_skims(tmp_path)
     main_path = _write_zeroed_main_from_mini(tmp_path, mini_path)
     beam_like_path = tmp_path / "beam_like_skims.zarr"
@@ -143,12 +151,18 @@ def test_merge_mini_skims_normalizes_beam_time_period_labels(tmp_path, monkeypat
         src.close()
 
     monkeypatch.setattr(
-        pp, "verify_skim_zone_order", lambda settings, skim_file_path, workspace: list(range(5))
+        pp,
+        "verify_skim_zone_order",
+        lambda settings, skim_file_path, workspace: list(range(5)),
     )
     monkeypatch.setattr(
-        pp.zone_utils, "load_canonical_zones", lambda settings, workspace: pd.DataFrame(index=range(5))
+        pp.zone_utils,
+        "load_canonical_zones",
+        lambda settings, workspace: pd.DataFrame(index=range(5)),
     )
-    monkeypatch.setattr(pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        pp, "ensure_0_based_and_flag_zarr_skims", lambda *args, **kwargs: None
+    )
 
     def _get_setting(settings, key, default=None):
         if key == "shared.skims.periods":

@@ -1,7 +1,17 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+)
 
 from pilates.config import PilatesConfig
 from pilates.workflows.catalog import schema_step_names
@@ -151,7 +161,9 @@ class ScenarioParentLinkProxy:
             return self._activitysim_run_ids.get(key) or self._activitysim_step_ids.get(
                 key
             )
-        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
+        if (
+            model_norm == "activitysim" or model_norm.startswith("activitysim_")
+        ) and iteration > 0:
             return self._beam_run_ids.get((year, iteration - 1))
         return None
 
@@ -167,7 +179,9 @@ class ScenarioParentLinkProxy:
         model_norm = model_name.lower()
         if model_norm == "beam" or model_norm.startswith("beam_"):
             return True
-        if (model_norm == "activitysim" or model_norm.startswith("activitysim_")) and iteration > 0:
+        if (
+            model_norm == "activitysim" or model_norm.startswith("activitysim_")
+        ) and iteration > 0:
             return True
         return False
 
@@ -373,7 +387,9 @@ def filter_schema_steps_for_enabled_models(
     surface: "EnabledWorkflowSurface",
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
-    enabled_models = surface.enabled_schema_step_names(include_optional=include_optional)
+    enabled_models = surface.enabled_schema_step_names(
+        include_optional=include_optional
+    )
 
     filtered: List[Callable[..., Any]] = []
     for step_func in steps:

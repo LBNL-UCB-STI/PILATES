@@ -10,7 +10,14 @@ import logging
 import warnings
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -280,9 +287,7 @@ class ZoneSourceConfig(BaseModel):
         ...,
         description="The geographic resolution of zones (e.g., 'taz', 'block_group')",
     )
-    source_file: str = Field(
-        ..., description="Path to a zone geometry source file."
-    )
+    source_file: str = Field(..., description="Path to a zone geometry source file.")
     canonical_id_col: str = Field(
         ..., description="Column in source_file with the canonical zone ID."
     )

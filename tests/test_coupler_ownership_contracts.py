@@ -19,7 +19,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -103,8 +103,7 @@ def _find_direct_coupler_calls(path: Path) -> List[CouplerCall]:
 
 def _format_calls(calls: Iterable[CouplerCall]) -> str:
     return "\n".join(
-        f"- {call.path}:{call.lineno} uses coupler.{call.method}(...)"
-        for call in calls
+        f"- {call.path}:{call.lineno} uses coupler.{call.method}(...)" for call in calls
     )
 
 

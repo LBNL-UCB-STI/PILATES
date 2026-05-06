@@ -58,23 +58,27 @@ def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
 
 def get_land_use_model(settings: Any) -> Optional[str]:
     """Resolve the configured land-use model across legacy/new schemas."""
-    return get_setting(settings, "run.models.land_use", default=get_setting(
-        settings, "land_use_model"
-    ))
+    return get_setting(
+        settings, "run.models.land_use", default=get_setting(settings, "land_use_model")
+    )
 
 
 def get_vehicle_ownership_model(settings: Any) -> Optional[str]:
     """Resolve the configured vehicle-ownership model across legacy/new schemas."""
-    return get_setting(settings, "run.models.vehicle_ownership", default=get_setting(
-        settings, "vehicle_ownership_model"
-    ))
+    return get_setting(
+        settings,
+        "run.models.vehicle_ownership",
+        default=get_setting(settings, "vehicle_ownership_model"),
+    )
 
 
 def get_activity_demand_model(settings: Any) -> Optional[str]:
     """Resolve the configured activity-demand model across legacy/new schemas."""
-    return get_setting(settings, "run.models.activity_demand", default=get_setting(
-        settings, "activity_demand_model"
-    ))
+    return get_setting(
+        settings,
+        "run.models.activity_demand",
+        default=get_setting(settings, "activity_demand_model"),
+    )
 
 
 def get_traffic_assignment_model(settings: Any) -> Optional[str]:

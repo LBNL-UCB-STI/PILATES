@@ -63,7 +63,9 @@ def compute_equilibrium_metrics(deltas_df: pd.DataFrame) -> EquilibriumMetrics:
         existing_group_cols = [column for column in group_cols if column in df.columns]
         if existing_group_cols and "_phys_curr" in df.columns:
             decreasing_flags = []
-            for _, group in df.dropna(subset=["_tt_abs", "_phys_curr"]).groupby(existing_group_cols):
+            for _, group in df.dropna(subset=["_tt_abs", "_phys_curr"]).groupby(
+                existing_group_cols
+            ):
                 ordered = group.sort_values("_phys_curr")
                 prev = ordered["_tt_abs"].shift(1)
                 curr = ordered["_tt_abs"]
@@ -78,11 +80,19 @@ def compute_equilibrium_metrics(deltas_df: pd.DataFrame) -> EquilibriumMetrics:
     return EquilibriumMetrics(
         pair_count=int(len(deltas_df)),
         traveltime_delta_abs_mean=float(tt_abs.mean()) if not tt_abs.empty else 0.0,
-        traveltime_delta_abs_p90=float(tt_abs.quantile(0.90)) if not tt_abs.empty else 0.0,
+        traveltime_delta_abs_p90=float(tt_abs.quantile(0.90))
+        if not tt_abs.empty
+        else 0.0,
         volume_delta_abs_mean=float(vol_abs.mean()) if not vol_abs.empty else 0.0,
-        volume_delta_abs_p90=float(vol_abs.quantile(0.90)) if not vol_abs.empty else 0.0,
-        traveltime_temperature=float(tt_signed.std(ddof=0)) if not tt_signed.empty else 0.0,
-        volume_temperature=float(vol_signed.std(ddof=0)) if not vol_signed.empty else 0.0,
+        volume_delta_abs_p90=float(vol_abs.quantile(0.90))
+        if not vol_abs.empty
+        else 0.0,
+        traveltime_temperature=float(tt_signed.std(ddof=0))
+        if not tt_signed.empty
+        else 0.0,
+        volume_temperature=float(vol_signed.std(ddof=0))
+        if not vol_signed.empty
+        else 0.0,
         monotone_abs_delta_share=monotone_share,
     )
 
@@ -90,5 +100,7 @@ def compute_equilibrium_metrics(deltas_df: pd.DataFrame) -> EquilibriumMetrics:
 def write_equilibrium_metrics(metrics: EquilibriumMetrics, path: str | Path) -> Path:
     out = Path(path).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(metrics.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    out.write_text(
+        json.dumps(metrics.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+    )
     return out

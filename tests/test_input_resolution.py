@@ -152,7 +152,10 @@ def test_resolved_value_for_key_fetches_coupler_values():
         keys=["foo"],
         coupler=coupler,
     )
-    assert resolved_value_for_key(resolved=resolved, key="foo", coupler=coupler) == "from-coupler"
+    assert (
+        resolved_value_for_key(resolved=resolved, key="foo", coupler=coupler)
+        == "from-coupler"
+    )
 
 
 def test_resolve_step_inputs_prefers_namespaced_view_key_when_available():
@@ -163,8 +166,7 @@ def test_resolve_step_inputs_prefers_namespaced_view_key_when_available():
     assert resolved.input_keys == [LINKSTATS_WARMSTART]
     assert resolved.source_by_key[LINKSTATS_WARMSTART] == "coupler"
     assert (
-        resolved.coupler_key_by_key[LINKSTATS_WARMSTART]
-        == "beam/linkstats_warmstart"
+        resolved.coupler_key_by_key[LINKSTATS_WARMSTART] == "beam/linkstats_warmstart"
     )
     assert (
         resolved_value_for_key(

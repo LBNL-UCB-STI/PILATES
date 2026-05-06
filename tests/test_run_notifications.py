@@ -322,7 +322,9 @@ def test_notifier_step_message_is_compact_and_scannable() -> None:
     )
     assert message.thread_key == "pilates-run--sfbay--baseline"
     assert "Step: `beam_run`" in message.markdown_text
-    assert "When: `year 2020` | `iter 0` | `traffic_assignment`" in message.markdown_text
+    assert (
+        "When: `year 2020` | `iter 0` | `traffic_assignment`" in message.markdown_text
+    )
     assert "Stage: `supply_demand`" in message.markdown_text
     assert "ID: `y2020 | i0 | traffic_assignment_abcdef0`" in message.markdown_text
     assert "Result: cache hit" in message.markdown_text
@@ -401,7 +403,9 @@ def test_register_consist_run_notification_hooks_noops_when_disabled() -> None:
     assert tracker.start_hooks == []
 
 
-def test_register_consist_run_notification_hooks_with_real_consist_scenario(tmp_path) -> None:
+def test_register_consist_run_notification_hooks_with_real_consist_scenario(
+    tmp_path,
+) -> None:
     consist = pytest.importorskip("consist")
 
     backend = FakeBackend()
@@ -432,12 +436,10 @@ def test_register_consist_run_notification_hooks_with_real_consist_scenario(tmp_
     messages = [message.fallback_text for message in backend.messages]
     assert messages[0] == "PILATES run started: smoke_scenario"
     assert any(
-        message.startswith("PILATES step started: smoke_step")
-        for message in messages
+        message.startswith("PILATES step started: smoke_step") for message in messages
     )
     assert any(
-        message.startswith("PILATES step completed: smoke_step")
-        for message in messages
+        message.startswith("PILATES step completed: smoke_step") for message in messages
     )
     assert messages[-1] == "PILATES run completed: smoke_scenario"
 

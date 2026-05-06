@@ -200,14 +200,10 @@ def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
         "attempt_started_at": state.get("attempt_started_at"),
         "generated_at": state["last_event_at"],
         "event_counts": {
-            key: state["event_counts"][key]
-            for key in sorted(state["event_counts"])
+            key: state["event_counts"][key] for key in sorted(state["event_counts"])
         },
         "resolution_mode_counts_by_step": {
-            step_name: {
-                mode: counts[mode]
-                for mode in sorted(counts)
-            }
+            step_name: {mode: counts[mode] for mode in sorted(counts)}
             for step_name, counts in sorted(
                 state["resolution_mode_counts_by_step"].items()
             )
@@ -217,10 +213,7 @@ def _summary_payload(state: Mapping[str, Any]) -> Dict[str, Any]:
             for step_name in sorted(state["steps_with_incomplete_hydration"])
         },
         "steps_using_custom_recovery": {
-            step_name: {
-                mode: counts[mode]
-                for mode in sorted(counts)
-            }
+            step_name: {mode: counts[mode] for mode in sorted(counts)}
             for step_name, counts in sorted(
                 state["steps_using_custom_recovery"].items()
             )
@@ -233,7 +226,9 @@ def _path_under_root(path: Optional[str], root: Optional[str]) -> bool:
     if not path or not root:
         return False
     try:
-        return os.path.commonpath([os.path.abspath(path), os.path.abspath(root)]) == os.path.abspath(root)
+        return os.path.commonpath(
+            [os.path.abspath(path), os.path.abspath(root)]
+        ) == os.path.abspath(root)
     except ValueError:
         return False
 
@@ -411,7 +406,9 @@ def _lifecycle_event_has_artifact_identity(event: Mapping[str, Any]) -> bool:
 
 
 def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
-    if bool(event.get("h5_container")) or str(path or "").lower().endswith((".h5", ".hdf5")):
+    if bool(event.get("h5_container")) or str(path or "").lower().endswith(
+        (".h5", ".hdf5")
+    ):
         return "h5"
     if bool(event.get("is_dir")):
         return "directory"
@@ -422,7 +419,12 @@ def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
 
 def _lifecycle_missing_required_facets(event: Mapping[str, Any]) -> list[str]:
     family = _lifecycle_family(event)
-    if family not in {"asim_input_archived", "beam_input_archived", "usim_input_archive", "usim_input_merged"}:
+    if family not in {
+        "asim_input_archived",
+        "beam_input_archived",
+        "usim_input_archive",
+        "usim_input_merged",
+    }:
         return []
     required = set(_LIFECYCLE_REQUIRED_SNAPSHOT_FIELDS)
     if family in _LIFECYCLE_REQUIRED_ITERATION_FAMILIES:
@@ -474,7 +476,9 @@ def _lifecycle_core_summary_payload(
         if _lifecycle_event_has_artifact_identity(event):
             families_seen.add(family)
             if family == "unknown":
-                unknown_key = str(event.get("key") or event.get("event_type") or "unknown")
+                unknown_key = str(
+                    event.get("key") or event.get("event_type") or "unknown"
+                )
                 unknown_event_keys.add(unknown_key)
                 blocked_families.add("unknown")
                 blocking_reasons_by_family["unknown"].add("unclassified_family")
@@ -483,14 +487,23 @@ def _lifecycle_core_summary_payload(
         event_type = str(event.get("event_type"))
         if event_type == "artifact_logged":
             logged.setdefault(_copy_match_key(event), (index, event))
-            if family in {"asim_input_archived", "beam_input_archived", "usim_input_archive", "usim_input_merged"}:
+            if family in {
+                "asim_input_archived",
+                "beam_input_archived",
+                "usim_input_archive",
+                "usim_input_merged",
+            }:
                 snapshot_logged += 1
                 if _lifecycle_missing_required_facets(event):
                     missing_required += 1
                     blocked_families.add(family)
-                    blocking_reasons_by_family[family].add("missing_required_snapshot_facets")
+                    blocking_reasons_by_family[family].add(
+                        "missing_required_snapshot_facets"
+                    )
                     blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
-                    phase2_blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
+                    phase2_blocker_counts_by_reason[
+                        "missing_required_snapshot_facets"
+                    ] += 1
         elif event_type == "archive_copy_completed":
             copied[_copy_match_key(event)] = (index, event)
         elif event_type == "promotion_status":
@@ -503,9 +516,15 @@ def _lifecycle_core_summary_payload(
             if copy_only_promotion:
                 copy_only_promotions += 1
                 blocked_families.add("post_run_promotion")
-                blocking_reasons_by_family["post_run_promotion"].add("copy_only_promotion_metadata_unavailable")
-                blocker_counts_by_reason["copy_only_promotion_metadata_unavailable"] += 1
-                phase2_blocker_counts_by_reason["copy_only_promotion_metadata_unavailable"] += 1
+                blocking_reasons_by_family["post_run_promotion"].add(
+                    "copy_only_promotion_metadata_unavailable"
+                )
+                blocker_counts_by_reason[
+                    "copy_only_promotion_metadata_unavailable"
+                ] += 1
+                phase2_blocker_counts_by_reason[
+                    "copy_only_promotion_metadata_unavailable"
+                ] += 1
             elif metadata_updated:
                 safe_families.add("post_run_promotion")
         if bool(event.get("local_to_scratch_recovery_roots_written")):
@@ -596,7 +615,9 @@ def _lifecycle_core_summary_payload(
         "generated_at": generated_at,
         "phase2_recommendation_basis": phase2_recommendation_basis,
         "event_counts": {
-            event_type: sum(1 for event in events if event.get("event_type") == event_type)
+            event_type: sum(
+                1 for event in events if event.get("event_type") == event_type
+            )
             for event_type in sorted({str(event.get("event_type")) for event in events})
         },
         "families_seen": sorted(families_seen),
@@ -630,9 +651,7 @@ def _lifecycle_core_summary_payload(
         },
         "diagnostic_blocking_reasons_by_family": {
             family: sorted(reasons)
-            for family, reasons in sorted(
-                diagnostic_blocking_reasons_by_family.items()
-            )
+            for family, reasons in sorted(diagnostic_blocking_reasons_by_family.items())
         },
     }
     if attempt_id is not None:

@@ -10,6 +10,7 @@ import h5py
 import yaml
 
 from pilates.runtime.context import WorkflowRuntimeContext
+
 if "openmatrix" not in sys.modules:
     openmatrix_stub = types.ModuleType("openmatrix")
     openmatrix_stub.File = object
@@ -209,15 +210,18 @@ def test_recover_activitysim_postprocess_outputs_from_cache_hit_artifacts(tmp_pa
 
     assert outputs is not None
     assert holder.activitysim_postprocess is not None
-    assert holder.activitysim_postprocess.processed_outputs[
-        "households_asim_out"
-    ] == iter_dir / "households.parquet"
-    assert holder.activitysim_postprocess.processed_outputs[
-        "persons_asim_out"
-    ] == iter_dir / "persons.parquet"
-    assert holder.activitysim_postprocess.processed_outputs[
-        "beam_plans_asim_out"
-    ] == iter_dir / "beam_plans.parquet"
+    assert (
+        holder.activitysim_postprocess.processed_outputs["households_asim_out"]
+        == iter_dir / "households.parquet"
+    )
+    assert (
+        holder.activitysim_postprocess.processed_outputs["persons_asim_out"]
+        == iter_dir / "persons.parquet"
+    )
+    assert (
+        holder.activitysim_postprocess.processed_outputs["beam_plans_asim_out"]
+        == iter_dir / "beam_plans.parquet"
+    )
     assert holder.activitysim_postprocess.usim_datastore_h5 == usim_input
     assert artifact_to_path(coupler.get("households_asim_out")) == str(
         iter_dir / "households.parquet"
@@ -439,7 +443,9 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
     captured_run_inputs = {}
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
-        atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
+        atlas_run_step = next(
+            (step for step in steps if step.name == "atlas_run"), None
+        )
         if atlas_run_step is not None and atlas_run_step.binding is not None:
             captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
@@ -479,9 +485,7 @@ def test_vehicle_ownership_stage_uses_local_static_fallback_inputs(
     assert atlas_run_inputs["modeaccessibility"] == str(fallback_static)
 
 
-def test_vehicle_ownership_stage_uses_static_fallback_inputs(
-    tmp_path, monkeypatch
-):
+def test_vehicle_ownership_stage_uses_static_fallback_inputs(tmp_path, monkeypatch):
     settings = _vehicle_ownership_settings()
     workspace = _VehicleOwnershipWorkspace(tmp_path)
     current_h5 = _write_file(
@@ -489,9 +493,7 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
         contents="current",
     )
     fallback_psid = _write_file(tmp_path / "atlas-fallback" / "psid_names.Rdat")
-    fallback_mode = _write_file(
-        tmp_path / "atlas-fallback" / "modeaccessibility.csv"
-    )
+    fallback_mode = _write_file(tmp_path / "atlas-fallback" / "modeaccessibility.csv")
     state = _WorkflowStateStub(
         year=2020,
         forecast_year=2020,
@@ -529,7 +531,9 @@ def test_vehicle_ownership_stage_uses_static_fallback_inputs(
     captured_run_inputs = {}
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
-        atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
+        atlas_run_step = next(
+            (step for step in steps if step.name == "atlas_run"), None
+        )
         if atlas_run_step is not None and atlas_run_step.binding is not None:
             captured_run_inputs[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(

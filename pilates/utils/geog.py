@@ -17,7 +17,7 @@ import requests
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import os
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace

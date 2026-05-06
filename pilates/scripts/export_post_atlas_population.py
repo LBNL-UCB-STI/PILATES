@@ -267,7 +267,9 @@ def _choose_latest_run(runs: Sequence[Any]) -> Any:
         created_at = getattr(run, "created_at", None)
         return (
             1 if status == "completed" else 0,
-            created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+            created_at.isoformat()
+            if hasattr(created_at, "isoformat")
+            else str(created_at or ""),
         )
 
     return sorted(runs, key=_sort_key, reverse=True)[0]
@@ -451,7 +453,9 @@ def _extract_year(
         )
     usim_path = Path(usim_path_text)
     if not usim_path.exists():
-        raise FileNotFoundError(f"Resolved UrbanSim datastore did not exist: {usim_path}")
+        raise FileNotFoundError(
+            f"Resolved UrbanSim datastore did not exist: {usim_path}"
+        )
 
     vehicle_artifact_key, vehicle_path_text = _resolve_vehicle_source(
         tracker,
@@ -598,7 +602,11 @@ def _translation_output_record(
     try:
         relation = conn.read_parquet(str(output_path))
         columns = _relation_columns(relation)
-        rows = int(conn.sql(f"select count(*) from read_parquet('{str(output_path)}')").fetchone()[0])
+        rows = int(
+            conn.sql(
+                f"select count(*) from read_parquet('{str(output_path)}')"
+            ).fetchone()[0]
+        )
     finally:
         conn.close()
     return {
@@ -635,7 +643,9 @@ def _build_translation_manifest(
             "run_dir": source_manifest.get("source", {}).get("run_dir"),
             "db_path": source_manifest.get("source", {}).get("db_path"),
             "scenario_run_id": source_manifest.get("source", {}).get("scenario_run_id"),
-            "scenario_run_ids": source_manifest.get("source", {}).get("scenario_run_ids"),
+            "scenario_run_ids": source_manifest.get("source", {}).get(
+                "scenario_run_ids"
+            ),
             "requested_years": source_manifest.get("requested_years"),
             "available_years": source_manifest.get("years"),
             "tables": source_manifest.get("tables"),
@@ -695,7 +705,9 @@ def _require_existing_path(path: Path, *, label: str) -> Path:
     return path
 
 
-def _resolve_householdv_source(tracker: Any, *, step_run: Any, year: int) -> tuple[str, str]:
+def _resolve_householdv_source(
+    tracker: Any, *, step_run: Any, year: int
+) -> tuple[str, str]:
     artifact_key = f"householdv_{year}"
     outputs = load_tracker_run_outputs(getattr(step_run, "id", None), tracker=tracker)
     artifact = outputs.get(artifact_key)
@@ -721,7 +733,9 @@ def _relation_columns(relation: Any) -> list[str]:
 def _schema_for_artifact_key(artifact_key: str) -> Any:
     schema_cls = get_schema_for_key(artifact_key)
     if schema_cls is None:
-        raise ValueError(f"No registered schema found for artifact key {artifact_key!r}.")
+        raise ValueError(
+            f"No registered schema found for artifact key {artifact_key!r}."
+        )
     return schema_cls
 
 
@@ -800,7 +814,9 @@ def _create_households_base_stage(
     stage_view: str,
 ) -> None:
     columns = _relation_columns(conn.table(base_view))
-    select_parts = [_quoted_ident(column) for column in columns if column not in {"cars", "hh_cars"}]
+    select_parts = [
+        _quoted_ident(column) for column in columns if column not in {"cars", "hh_cars"}
+    ]
     if "cars" in columns:
         select_parts.append("try_cast(cars as BIGINT) as cars")
     else:
@@ -834,7 +850,9 @@ def _resolve_sql_year_sources(
         getattr(preprocess_step_run, "id", None),
         tracker=tracker,
     )
-    households_path = _artifact_path(preprocess_outputs.get("atlas_households_csv"), tracker)
+    households_path = _artifact_path(
+        preprocess_outputs.get("atlas_households_csv"), tracker
+    )
     persons_path = _artifact_path(preprocess_outputs.get("atlas_persons_csv"), tracker)
     households_csv = _require_existing_path(
         Path(households_path) if households_path else Path(""),
@@ -921,7 +939,9 @@ def _extract_year_sql(
         _read_csv_with_schema(
             conn,
             path=sources["households_base"]["path"],
-            schema_cls=_schema_for_artifact_key(sources["households_base"]["artifact_key"]),
+            schema_cls=_schema_for_artifact_key(
+                sources["households_base"]["artifact_key"]
+            ),
             view_name="households_base",
         )
         _read_csv_with_schema(
@@ -1003,8 +1023,12 @@ def _extract_year_sql(
         households_rows = int(
             conn.sql("select count(*) from households_post_atlas").fetchone()[0]
         )
-        persons_rows = int(conn.sql("select count(*) from persons_post_atlas").fetchone()[0])
-        vehicles_rows = int(conn.sql("select count(*) from vehicles_post_atlas").fetchone()[0])
+        persons_rows = int(
+            conn.sql("select count(*) from persons_post_atlas").fetchone()[0]
+        )
+        vehicles_rows = int(
+            conn.sql("select count(*) from vehicles_post_atlas").fetchone()[0]
+        )
     finally:
         conn.close()
 
@@ -1066,7 +1090,9 @@ def _shared_extract_command(
         project_root=Path(__file__).resolve().parents[2],
     )
 
-    scenario_run = tracker.get_run(args.scenario_run_id) if args.scenario_run_id else None
+    scenario_run = (
+        tracker.get_run(args.scenario_run_id) if args.scenario_run_id else None
+    )
     year_manifests: list[dict[str, Any]] = []
     skipped_years: list[dict[str, Any]] = []
     for year in args.years:
@@ -1205,7 +1231,9 @@ def translate_command(args: argparse.Namespace) -> int:
     translation_dir = (
         Path(args.translation_dir).expanduser().resolve()
         if args.translation_dir
-        else Path(__file__).resolve().parents[1] / "generated" / "polaris_population_translation"
+        else Path(__file__).resolve().parents[1]
+        / "generated"
+        / "polaris_population_translation"
     )
 
     year_manifests: list[dict[str, Any]] = []
@@ -1255,9 +1283,9 @@ def translate_command(args: argparse.Namespace) -> int:
                 "scenario": str(args.scenario),
                 "source": {
                     "source_dir": str(source_dir),
-                    "source_year_manifest": source_manifest.get("year_manifests", {}).get(
-                        str(year)
-                    ),
+                    "source_year_manifest": source_manifest.get(
+                        "year_manifests", {}
+                    ).get(str(year)),
                 },
                 "translation_sql": "translation_sql",
                 "outputs": outputs,

@@ -139,8 +139,12 @@ def copy_vehicles_from_atlas(
         atlas_output_data_dir = workspace.get_atlas_output_dir()
         atlas_candidates.extend(
             [
-                os.path.join(atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"),
-                os.path.join(atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"),
+                os.path.join(
+                    atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
+                ),
+                os.path.join(
+                    atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
+                ),
             ]
         )
 
@@ -213,7 +217,9 @@ def validate_population_consistency(
     ):
         return
 
-    households = BeamDataHelper.read_and_clean(households_path, "households", file_format)
+    households = BeamDataHelper.read_and_clean(
+        households_path, "households", file_format
+    )
     vehicles = _read_vehicle_table(vehicles_path)
     report = summarize_population_consistency(households=households, vehicles=vehicles)
     category_report = summarize_vehicle_category_consistency(
@@ -413,13 +419,12 @@ def summarize_population_consistency(
         context="staged households index",
     )
 
-    household_cars = (
-        _coerce_beam_vehicle_integer_column(
-            households["cars"] if "cars" in households.columns else pd.Series(0, index=households.index),
-            column_name="cars",
-        )
-        .reindex(households.index, fill_value=0)
-    )
+    household_cars = _coerce_beam_vehicle_integer_column(
+        households["cars"]
+        if "cars" in households.columns
+        else pd.Series(0, index=households.index),
+        column_name="cars",
+    ).reindex(households.index, fill_value=0)
     household_cars.index = household_ids.index
 
     vehicle_household_col = None
@@ -459,9 +464,9 @@ def summarize_population_consistency(
         .join(vehicle_counts, how="left")
         .fillna({"vehicle_row_count": 0})
     )
-    household_counts["vehicle_row_count"] = household_counts["vehicle_row_count"].astype(
-        "int64"
-    )
+    household_counts["vehicle_row_count"] = household_counts[
+        "vehicle_row_count"
+    ].astype("int64")
 
     mismatch_mask = household_counts["cars"] != household_counts["vehicle_row_count"]
     shortfall_mask = household_counts["cars"] > household_counts["vehicle_row_count"]
@@ -514,7 +519,9 @@ def summarize_vehicle_category_consistency(
     settings: Any,
     workspace: Any,
 ) -> Dict[str, Any]:
-    vehicle_types_path = _resolve_beam_vehicle_types_path(settings=settings, workspace=workspace)
+    vehicle_types_path = _resolve_beam_vehicle_types_path(
+        settings=settings, workspace=workspace
+    )
     if vehicle_types_path is None:
         return {
             "status": "missing",
@@ -539,13 +546,12 @@ def summarize_vehicle_category_consistency(
         households.index,
         context="staged households index",
     )
-    household_cars = (
-        _coerce_beam_vehicle_integer_column(
-            households["cars"] if "cars" in households.columns else pd.Series(0, index=households.index),
-            column_name="cars",
-        )
-        .reindex(households.index, fill_value=0)
-    )
+    household_cars = _coerce_beam_vehicle_integer_column(
+        households["cars"]
+        if "cars" in households.columns
+        else pd.Series(0, index=households.index),
+        column_name="cars",
+    ).reindex(households.index, fill_value=0)
 
     vehicle_household_col = None
     for candidate in ("householdId", "household_id"):
@@ -621,9 +627,7 @@ def _coerce_beam_vehicle_integer_column(
 ) -> pd.Series:
     numeric = pd.to_numeric(values, errors="coerce")
     if numeric.isna().any() or ((numeric % 1) != 0).any():
-        raise ValueError(
-            f"BEAM staging column '{column_name}' must be integer-valued."
-        )
+        raise ValueError(f"BEAM staging column '{column_name}' must be integer-valued.")
     return numeric.astype("int64")
 
 
@@ -688,7 +692,10 @@ def _resolve_beam_vehicle_types_path(*, settings: Any, workspace: Any) -> Option
 
 def _load_vehicle_type_categories(vehicle_types_path: str) -> Dict[str, str]:
     vehicle_types = pd.read_csv(vehicle_types_path)
-    if "vehicleTypeId" not in vehicle_types.columns or "vehicleCategory" not in vehicle_types.columns:
+    if (
+        "vehicleTypeId" not in vehicle_types.columns
+        or "vehicleCategory" not in vehicle_types.columns
+    ):
         raise ValueError(
             "BEAM vehicle types file must contain vehicleTypeId and vehicleCategory columns."
         )
@@ -826,7 +833,9 @@ def merge_replanned_asim_files(
 
     def get_data(path: Optional[str], table_type: str, source: str) -> pd.DataFrame:
         if path is None:
-            raise FileNotFoundError(f"{source} file for table '{table_type}' not found.")
+            raise FileNotFoundError(
+                f"{source} file for table '{table_type}' not found."
+            )
         if not os.path.exists(path):
             raise FileNotFoundError(
                 f"{source} file for table '{table_type}' not found at {path}."
@@ -914,7 +923,9 @@ def copy_plans_from_asim(
     asim_file_paths: Dict[str, Tuple[Optional[str], Optional[FileRecord]]] = {}
     for record in input_records.all_records():
         splt = record.short_name.rsplit("_", 2)
-        shortened_name = splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
+        shortened_name = (
+            splt[0] if len(splt) > 1 and str.isdigit(splt[1]) else record.short_name
+        )
         if shortened_name.endswith("_asim_out"):
             shortened_name = shortened_name.split("_asim_out")[0]
         if shortened_name == "plans":
@@ -968,7 +979,9 @@ def copy_plans_from_asim(
                     f"final.{file_format}",
                 )
             )
-        found_path = next((path for path in candidate_paths if os.path.exists(path)), None)
+        found_path = next(
+            (path for path in candidate_paths if os.path.exists(path)), None
+        )
 
         if found_path:
             logger.warning(
@@ -1015,7 +1028,9 @@ def copy_plans_from_asim(
             workspace,
         )
 
-    return RecordStore(recordList=[record for record in record_list if record is not None])
+    return RecordStore(
+        recordList=[record for record in record_list if record is not None]
+    )
 
 
 def handle_linkstats(

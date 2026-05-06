@@ -200,7 +200,10 @@ def _align_key_for_run(run: Any, *, align_on: str) -> Optional[str]:
 
 
 def _is_complete_epoch_candidate(run: Any) -> bool:
-    return _run_status(run) == "completed" and _as_int(_run_field(run, "iteration")) is not None
+    return (
+        _run_status(run) == "completed"
+        and _as_int(_run_field(run, "iteration")) is not None
+    )
 
 
 def _runset_keys(
@@ -253,9 +256,7 @@ def _validate_converged_alignment_candidates(
         return
 
     resolved_grouping = (
-        list(converged_group_by)
-        if converged_group_by
-        else ["year", "scenario_id"]
+        list(converged_group_by) if converged_group_by else ["year", "scenario_id"]
     )
     raise ValueError(
         "Converged scenario compare requires complete epoch candidates on both sides "
@@ -269,7 +270,9 @@ def _validate_converged_alignment_candidates(
     )
 
 
-def _aggregate_for_compare(frame: pd.DataFrame, key_cols: Sequence[str]) -> pd.DataFrame:
+def _aggregate_for_compare(
+    frame: pd.DataFrame, key_cols: Sequence[str]
+) -> pd.DataFrame:
     if frame.empty:
         return frame
     keys = [column for column in key_cols if column in frame.columns]
@@ -303,7 +306,9 @@ def _merge_comparison_frames(
 ) -> pd.DataFrame:
     left_keys = [column for column in key_cols if column in left.columns]
     right_keys = [column for column in key_cols if column in right.columns]
-    keys = [column for column in key_cols if column in left_keys and column in right_keys]
+    keys = [
+        column for column in key_cols if column in left_keys and column in right_keys
+    ]
     if not keys:
         left = left.copy()
         right = right.copy()
@@ -340,18 +345,35 @@ def _merge_comparison_frames(
     return merged
 
 
-def _dataset_summary_row(dataset: str, merged: pd.DataFrame, *, left_name: str, right_name: str) -> Dict[str, Any]:
+def _dataset_summary_row(
+    dataset: str, merged: pd.DataFrame, *, left_name: str, right_name: str
+) -> Dict[str, Any]:
     delta_cols = [column for column in merged.columns if column.endswith("_delta")]
-    delta_abs_cols = [column for column in merged.columns if column.endswith("_delta_abs")]
+    delta_abs_cols = [
+        column for column in merged.columns if column.endswith("_delta_abs")
+    ]
     rel_cols = [column for column in merged.columns if column.endswith("_delta_rel")]
-    left_cols = [column for column in merged.columns if column.endswith(f"_{left_name}")]
-    right_cols = [column for column in merged.columns if column.endswith(f"_{right_name}")]
+    left_cols = [
+        column for column in merged.columns if column.endswith(f"_{left_name}")
+    ]
+    right_cols = [
+        column for column in merged.columns if column.endswith(f"_{right_name}")
+    ]
 
     left_non_null = int(merged[left_cols].notna().any(axis=1).sum()) if left_cols else 0
-    right_non_null = int(merged[right_cols].notna().any(axis=1).sum()) if right_cols else 0
-    overlap = int(
-        (merged[left_cols].notna().any(axis=1) & merged[right_cols].notna().any(axis=1)).sum()
-    ) if left_cols and right_cols else 0
+    right_non_null = (
+        int(merged[right_cols].notna().any(axis=1).sum()) if right_cols else 0
+    )
+    overlap = (
+        int(
+            (
+                merged[left_cols].notna().any(axis=1)
+                & merged[right_cols].notna().any(axis=1)
+            ).sum()
+        )
+        if left_cols and right_cols
+        else 0
+    )
 
     def _safe_mean(columns: list[str]) -> float:
         if not columns:
@@ -460,21 +482,25 @@ def _build_config_diff(
     merged = frame.merge(pair_frame, on="on_value", how="left")
     merged = merged.rename(columns={"left_value": "left", "right_value": "right"})
     merged["align_on"] = aligned_pair.on
-    return merged[
-        [
-            "align_on",
-            "on_value",
-            "key",
-            "namespace",
-            "status",
-            "left",
-            "right",
-            "run_id_left",
-            "run_id_right",
-            "left_status",
-            "right_status",
+    return (
+        merged[
+            [
+                "align_on",
+                "on_value",
+                "key",
+                "namespace",
+                "status",
+                "left",
+                "right",
+                "run_id_left",
+                "run_id_right",
+                "left_status",
+                "right_status",
+            ]
         ]
-    ].sort_values(["status", "key"]).reset_index(drop=True)
+        .sort_values(["status", "key"])
+        .reset_index(drop=True)
+    )
 
 
 def _build_dataset_frame(
@@ -523,8 +549,12 @@ def _dataset_pair_frame(
     left_name: str,
     right_name: str,
 ) -> pd.DataFrame:
-    left_allowed = _to_string_set([getattr(left_run, "id", None), getattr(left_run, "parent_run_id", None)])
-    right_allowed = _to_string_set([getattr(right_run, "id", None), getattr(right_run, "parent_run_id", None)])
+    left_allowed = _to_string_set(
+        [getattr(left_run, "id", None), getattr(left_run, "parent_run_id", None)]
+    )
+    right_allowed = _to_string_set(
+        [getattr(right_run, "id", None), getattr(right_run, "parent_run_id", None)]
+    )
     left_filtered = _restrict_to_allowed_ids(left_frame, left_allowed)
     right_filtered = _restrict_to_allowed_ids(right_frame, right_allowed)
 
@@ -618,7 +648,9 @@ def compare_scenarios(
         include_equal=config_include_equal,
     )
 
-    dataset_summaries = pd.DataFrame(summary_rows).sort_values("dataset").reset_index(drop=True)
+    dataset_summaries = (
+        pd.DataFrame(summary_rows).sort_values("dataset").reset_index(drop=True)
+    )
     return ScenarioComparison(
         left_name=left_name,
         right_name=right_name,

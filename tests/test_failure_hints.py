@@ -46,6 +46,9 @@ def test_log_restart_instructions_uses_context_state_path(caplog):
 
     assert "Run failed. Restart command:" in caplog.text
     assert "python run.py -c settings.yaml -S /tmp/run/run_state.yaml" in caplog.text
-    assert "./hpc/job_runner.sh -c settings.yaml -a '<slurm_account>' -s /tmp/run/run_state.yaml" in caplog.text
+    assert (
+        "./hpc/job_runner.sh -c settings.yaml -a '<slurm_account>' -s /tmp/run/run_state.yaml"
+        in caplog.text
+    )
     assert "archive run dir: /tmp/run" in caplog.text
     assert "local run dir: /local/run" in caplog.text

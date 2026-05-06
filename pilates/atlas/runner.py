@@ -283,8 +283,7 @@ class AtlasRunner(GenericRunner):
         if missing_outputs:
             preview = ", ".join(missing_outputs)
             raise RuntimeError(
-                "ATLAS run did not produce required current-year outputs: "
-                f"{preview}"
+                f"ATLAS run did not produce required current-year outputs: {preview}"
             )
 
         logger.info(

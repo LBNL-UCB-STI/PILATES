@@ -73,7 +73,7 @@ class ArchiveScenario:
         converged: bool = False,
         iteration: Optional[int] = None,
         models: Optional[Iterable[str]] = None,
-        ) -> Epoch:
+    ) -> Epoch:
         return self.archive.epoch(
             year=year,
             scenario_id=self.scenario_id,
@@ -139,7 +139,9 @@ class Archive:
         hashing_strategy: str = "fast",
         strict_tagging: bool = False,
         fail_on_tagging_issues: bool = False,
-        artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
+        artifact_families: Optional[
+            Mapping[str, Mapping[str, Mapping[str, Any]]]
+        ] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: Optional[str] = None,
     ) -> "Archive":
@@ -382,7 +384,11 @@ class Archive:
                 model=model,
                 status=status,
             )
-            run_ids = [str(value).strip() for value in frame["run_id"].tolist() if str(value).strip()]
+            run_ids = [
+                str(value).strip()
+                for value in frame["run_id"].tolist()
+                if str(value).strip()
+            ]
             if not run_ids:
                 raise ValueError(
                     f"No runs matched comparison selection {resolved_name!r} "

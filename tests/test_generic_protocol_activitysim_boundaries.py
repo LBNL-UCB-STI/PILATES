@@ -14,7 +14,6 @@ from pilates.activitysim.outputs import (
 )
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
-from pilates.generic.model_factory import ModelFactory
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import FileRecord, RecordStore

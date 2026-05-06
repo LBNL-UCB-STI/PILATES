@@ -15,10 +15,12 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.workflows.orchestration import _update_coupler_from_outputs
+from pilates.workflows.orchestration import _update_coupler_from_mapping
 from pilates.workflows.outputs_base import iter_step_output_items, step_output_mapping
 from pilates.workflows.stages import land_use as land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps.activitysim import _execute_activitysim_run
+from pilates.utils import coupler_helpers
 
 
 class _TrackingOutputs:
@@ -48,6 +50,14 @@ class _DuplicateKeyOutputs:
     def _iter_record_items(self):
         yield "linkstats", self.first, "canonical linkstats"
         yield "linkstats", self.second, "duplicate linkstats"
+
+
+class _SetOnlyCoupler:
+    def __init__(self) -> None:
+        self.values = {}
+
+    def set(self, key: str, value) -> None:
+        self.values[key] = value
 
 
 def _store_with_record(path: Path, key: str) -> RecordStore:
@@ -90,6 +100,51 @@ def test_update_coupler_from_outputs_uses_direct_typed_output_mapping(
         "coupler": coupler,
         "workspace": workspace,
     }
+
+
+def test_update_coupler_from_mapping_materializes_historical_workspace_artifact(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    current_local = tmp_path / "local" / "current-run"
+    current_archive = tmp_path / "archive" / "current-run"
+    cached_archive = tmp_path / "archive" / "cached-run"
+    rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
+    source = cached_archive / rel_path
+    source.parent.mkdir(parents=True)
+    source.write_text("households", encoding="utf-8")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(current_local))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(current_archive))
+    monkeypatch.setattr(
+        coupler_helpers.cr,
+        "current_tracker",
+        lambda: SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(
+                id=run_id,
+                parent_run_id="cached-run",
+                meta={"_physical_run_dir": str(tmp_path / "local" / "cached-run")},
+            )
+        ),
+    )
+
+    artifact = SimpleNamespace(
+        key="households_asim_out",
+        container_uri=f"workspace://{rel_path}",
+        run_id="cached-step-run",
+        meta={},
+    )
+    coupler = _SetOnlyCoupler()
+
+    _update_coupler_from_mapping(
+        {"households_asim_out": artifact},
+        coupler=coupler,
+        workspace=SimpleNamespace(full_path=current_local),
+    )
+
+    expected_local = current_local / rel_path
+    assert expected_local.read_text(encoding="utf-8") == "households"
+    assert coupler.values == {"households_asim_out": artifact}
 
 
 def test_iter_step_output_items_materializes_direct_typed_output_items(
@@ -285,7 +340,10 @@ def test_step_output_mapping_matches_real_output_record_store_mapping(
         },
     )
 
-    assert step_output_mapping(outputs, warn_lossy=False) == outputs.to_record_store().to_mapping()
+    assert (
+        step_output_mapping(outputs, warn_lossy=False)
+        == outputs.to_record_store().to_mapping()
+    )
 
 
 def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -> None:

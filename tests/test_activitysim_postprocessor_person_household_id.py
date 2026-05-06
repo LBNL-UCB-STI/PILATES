@@ -107,7 +107,10 @@ def test_prepare_updated_tables_warns_on_household_member_person_alignment_fallb
             prefix=None,
         )
 
-    assert "missing person_id; falling back to household_id/member_id alignment" in caplog.text
+    assert (
+        "missing person_id; falling back to household_id/member_id alignment"
+        in caplog.text
+    )
 
 
 def test_prepare_updated_tables_falls_back_to_current_input_store(tmp_path):
@@ -262,7 +265,12 @@ def test_prepare_updated_tables_preserves_usim_owned_household_fields_when_atlas
     h5_path = tmp_path / "model_data_2023.h5"
     with pd.HDFStore(str(h5_path), mode="w") as store:
         store["households"] = pd.DataFrame(
-            {"persons": [2, 4], "workers": [1, 3], "cars": [7, 8], "block_id": ["0001", "0002"]},
+            {
+                "persons": [2, 4],
+                "workers": [1, 3],
+                "cars": [7, 8],
+                "block_id": ["0001", "0002"],
+            },
             index=pd.Index([1, 2], name="household_id"),
         )
         store["persons"] = pd.DataFrame(
@@ -298,7 +306,12 @@ def test_prepare_updated_tables_updates_cars_from_asim_when_atlas_disabled(tmp_p
     h5_path = tmp_path / "model_data_2023.h5"
     with pd.HDFStore(str(h5_path), mode="w") as store:
         store["households"] = pd.DataFrame(
-            {"persons": [2, 4], "workers": [1, 3], "cars": [7, 8], "block_id": ["0001", "0002"]},
+            {
+                "persons": [2, 4],
+                "workers": [1, 3],
+                "cars": [7, 8],
+                "block_id": ["0001", "0002"],
+            },
             index=pd.Index([1, 2], name="household_id"),
         )
         store["persons"] = pd.DataFrame(
@@ -330,7 +343,9 @@ def test_prepare_updated_tables_updates_cars_from_asim_when_atlas_disabled(tmp_p
     assert households["cars"].tolist() == [1, 2]
 
 
-def test_prepare_updated_tables_preserves_usim_person_fields_but_updates_zone_ids(tmp_path):
+def test_prepare_updated_tables_preserves_usim_person_fields_but_updates_zone_ids(
+    tmp_path,
+):
     h5_path = tmp_path / "model_data_2023.h5"
     with pd.HDFStore(str(h5_path), mode="w") as store:
         store["households"] = pd.DataFrame(

@@ -77,7 +77,9 @@ class RunSet(_ConsistRunSet):
         )
         pair.right = _coerce_runset(
             pair.right,
-            label=runset_label(pair.right, default=runset_label(other, default="right")),
+            label=runset_label(
+                pair.right, default=runset_label(other, default="right")
+            ),
             tracker=getattr(other, "_tracker", None) or getattr(self, "_tracker", None),
         )
         return pair
@@ -212,8 +214,7 @@ def runs_to_frame(runs: Iterable[Any]) -> pd.DataFrame:
             {
                 "run_id": str(getattr(run, "id", "") or ""),
                 "parent_run_id": getattr(run, "parent_run_id", None),
-                "name": getattr(run, "name", None)
-                or getattr(run, "description", None),
+                "name": getattr(run, "name", None) or getattr(run, "description", None),
                 "model": getattr(run, "model_name", None),
                 "year": getattr(run, "year", None),
                 "iteration": getattr(run, "iteration", None),
@@ -297,7 +298,9 @@ def runset_from_query(
     if hasattr(_ConsistRunSet, "from_query"):
         runset = _ConsistRunSet.from_query(tracker, label=runset_name, **filtered)
         return _coerce_runset(runset, label=runset_name, tracker=tracker)
-    raise RuntimeError("Tracker does not expose run_set() and RunSet.from_query unavailable.")
+    raise RuntimeError(
+        "Tracker does not expose run_set() and RunSet.from_query unavailable."
+    )
 
 
 def runset_from_runs(

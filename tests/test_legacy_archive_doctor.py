@@ -27,7 +27,9 @@ def _write_csv_gz(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
-def _seed_run_state(run_dir: Path, *, year: int = 2023, forecast_year: int = 2025) -> None:
+def _seed_run_state(
+    run_dir: Path, *, year: int = 2023, forecast_year: int = 2025
+) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     (run_dir / "run_state.yaml").write_text(
         yaml.safe_dump(
@@ -56,7 +58,9 @@ def _seed_activitysim_inputs(run_dir: Path, *, year: int = 2023) -> Path:
     return inputs_dir
 
 
-def test_dry_run_writes_report_and_does_not_create_activitysim_alias(tmp_path: Path) -> None:
+def test_dry_run_writes_report_and_does_not_create_activitysim_alias(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run"
     _seed_run_state(run_dir)
     _seed_activitysim_inputs(run_dir)
@@ -80,7 +84,9 @@ def test_dry_run_writes_report_and_does_not_create_activitysim_alias(tmp_path: P
     }
 
 
-def test_apply_creates_forecast_year_activitysim_copies_and_manifest(tmp_path: Path) -> None:
+def test_apply_creates_forecast_year_activitysim_copies_and_manifest(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run"
     _seed_run_state(run_dir)
     source_dir = _seed_activitysim_inputs(run_dir)
@@ -101,7 +107,9 @@ def test_apply_creates_forecast_year_activitysim_copies_and_manifest(tmp_path: P
     assert manifest["action_count"] == 3
     actions = [
         json.loads(line)
-        for line in (doctor_dir / "actions.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (doctor_dir / "actions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
         if line.strip()
     ]
     assert {action["status"] for action in actions} == {"applied"}
@@ -110,7 +118,9 @@ def test_apply_creates_forecast_year_activitysim_copies_and_manifest(tmp_path: P
     }
 
 
-def test_apply_reports_conflict_without_overwriting_existing_alias(tmp_path: Path) -> None:
+def test_apply_reports_conflict_without_overwriting_existing_alias(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run"
     _seed_run_state(run_dir)
     _seed_activitysim_inputs(run_dir)
@@ -128,11 +138,14 @@ def test_apply_reports_conflict_without_overwriting_existing_alias(tmp_path: Pat
     assert len(result.conflicts) == 1
     assert alias_households.read_text(encoding="utf-8").count("99") == 1
     conflicts = json.loads(
-        (
-            run_dir / ".workflow" / "legacy_archive_doctor" / "conflicts.json"
-        ).read_text(encoding="utf-8")
+        (run_dir / ".workflow" / "legacy_archive_doctor" / "conflicts.json").read_text(
+            encoding="utf-8"
+        )
     )
-    assert conflicts["conflicts"][0]["reason"] == "activitysim_forecast_year_alias_conflict"
+    assert (
+        conflicts["conflicts"][0]["reason"]
+        == "activitysim_forecast_year_alias_conflict"
+    )
 
 
 def test_detects_mixed_population_risk_from_tiny_csv_sources(tmp_path: Path) -> None:
@@ -140,7 +153,11 @@ def test_detects_mixed_population_risk_from_tiny_csv_sources(tmp_path: Path) -> 
     _seed_run_state(run_dir)
     _seed_activitysim_inputs(run_dir)
     _write_csv_gz(
-        run_dir / "beam" / "output" / "inputs-year-2025-iteration-0" / "households.csv.gz",
+        run_dir
+        / "beam"
+        / "output"
+        / "inputs-year-2025-iteration-0"
+        / "households.csv.gz",
         [{"household_id": 1}, {"household_id": 3}],
     )
     _write_csv(
@@ -200,9 +217,9 @@ def test_infers_forecast_year_from_asim_lifecycle_year_and_samples_vehicles2(
 
     result = inspect_legacy_archive(run_dir, apply=False)
 
-    assert {
-        Path(action.destination).parent.name for action in result.actions
-    } == {"inputs-year-2021-iteration-0"}
+    assert {Path(action.destination).parent.name for action in result.actions} == {
+        "inputs-year-2021-iteration-0"
+    }
     risk = result.mixed_population_risk
     assert risk["status"] == "risk"
     assert "atlas" in risk["sampled_roles"]
@@ -257,9 +274,9 @@ def test_reports_activitysim_h5_forecast_year_path_mismatch(tmp_path: Path) -> N
         }
     ]
     report = json.loads(
-        (
-            run_dir / ".workflow" / "legacy_archive_doctor" / "report.json"
-        ).read_text(encoding="utf-8")
+        (run_dir / ".workflow" / "legacy_archive_doctor" / "report.json").read_text(
+            encoding="utf-8"
+        )
     )
     assert report["h5_path_mismatches"][0]["semantic_year"] == 2021
 

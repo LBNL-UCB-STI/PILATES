@@ -41,8 +41,12 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.supply_demand import (
+    run_supply_demand_stage as _run_supply_demand_stage,
+)
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_golden_stub_workflow import (
     DummyPostprocessor,
@@ -50,12 +54,13 @@ from tests.test_golden_stub_workflow import (
     DummyRunner,
     _write_file,
     _write_parquet,
-    golden_stub_env,
 )
 from workflow_state import WorkflowState
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
     context = context or WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
@@ -170,7 +175,11 @@ def _scenario_output_keys(env: dict) -> set[str]:
     tracker = env["tracker"]
     scenario_run = _scenario_run(env)
     outputs = tracker.get_artifacts_for_run(scenario_run.id).outputs
-    return {getattr(artifact, "key", None) for artifact in outputs or [] if getattr(artifact, "key", None)}
+    return {
+        getattr(artifact, "key", None)
+        for artifact in outputs or []
+        if getattr(artifact, "key", None)
+    }
 
 
 def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
@@ -264,7 +273,10 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
             _write_file(path, "stub")
         return RecordStore(
             recordList=[
-                FileRecord(file_path=str(events), short_name=f"events_parquet_{state.forecast_year}_{state.iteration}_sub0"),
+                FileRecord(
+                    file_path=str(events),
+                    short_name=f"events_parquet_{state.forecast_year}_{state.iteration}_sub0",
+                ),
                 FileRecord(file_path=str(linkstats), short_name=LINKSTATS),
                 FileRecord(file_path=str(plans_out), short_name=BEAM_PLANS_OUT),
             ]
@@ -293,9 +305,14 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
     assert "beam_run" in steps
     assert "beam_postprocess" in steps
     assert "activitysim_postprocess" not in steps
-    beam_postprocess_outputs = set((steps["beam_postprocess"].get("outputs") or {}).values())
+    beam_postprocess_outputs = set(
+        (steps["beam_postprocess"].get("outputs") or {}).values()
+    )
     assert "zarr_skims" not in beam_postprocess_outputs
-    assert f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal" in beam_postprocess_outputs
+    assert (
+        f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal"
+        in beam_postprocess_outputs
+    )
 
 
 def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_archive(
@@ -347,9 +364,15 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         raw_outputs[f"{name}_asim_out_temp"] = temp_path
         processed_outputs[normalize_asim_output_key(name)] = temp_path
 
-    processed_outputs["asim_input_households_csv_archived"] = asim_input_dir / "households.csv"
-    processed_outputs["asim_input_persons_csv_archived"] = asim_input_dir / "persons.csv"
-    processed_outputs["asim_input_land_use_csv_archived"] = asim_input_dir / "land_use.csv"
+    processed_outputs["asim_input_households_csv_archived"] = (
+        asim_input_dir / "households.csv"
+    )
+    processed_outputs["asim_input_persons_csv_archived"] = (
+        asim_input_dir / "persons.csv"
+    )
+    processed_outputs["asim_input_land_use_csv_archived"] = (
+        asim_input_dir / "land_use.csv"
+    )
     processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
 
     beam_plans = beam_input_dir / "plans.csv"
@@ -442,7 +465,9 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     steps = _steps_by_model(env)
     assert "activitysim_postprocess" in steps
     assert "beam_run" in steps
-    postprocess_outputs = set((steps["activitysim_postprocess"].get("outputs") or {}).values())
+    postprocess_outputs = set(
+        (steps["activitysim_postprocess"].get("outputs") or {}).values()
+    )
     assert "asim_input_skims_zarr_archived" in postprocess_outputs
     assert "asim_input_skims_omx_archived" not in postprocess_outputs
 

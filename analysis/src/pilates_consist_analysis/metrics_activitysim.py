@@ -50,7 +50,9 @@ def compute_activitysim_equilibrium_metrics(
             stabilized_pair_share=0.0,
         )
 
-    tvd = _to_numeric(equilibrium_pairs_df, "mode_share_total_variation_distance").dropna()
+    tvd = _to_numeric(
+        equilibrium_pairs_df, "mode_share_total_variation_distance"
+    ).dropna()
     trip_delta_abs = _to_numeric(equilibrium_pairs_df, "total_trips_delta_abs").dropna()
 
     stabilized_share = 0.0
@@ -76,7 +78,9 @@ def compute_activitysim_equilibrium_metrics(
 
     mean_mode_share_delta_abs = 0.0
     if mode_deltas_df is not None and not mode_deltas_df.empty:
-        mode_share_delta_abs = _to_numeric(mode_deltas_df, "mode_share_delta_abs").dropna()
+        mode_share_delta_abs = _to_numeric(
+            mode_deltas_df, "mode_share_delta_abs"
+        ).dropna()
         if not mode_share_delta_abs.empty:
             mean_mode_share_delta_abs = float(mode_share_delta_abs.mean())
 
@@ -100,5 +104,7 @@ def write_activitysim_equilibrium_metrics(
 ) -> Path:
     out = Path(path).expanduser().resolve()
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(metrics.to_dict(), indent=2, sort_keys=True), encoding="utf-8")
+    out.write_text(
+        json.dumps(metrics.to_dict(), indent=2, sort_keys=True), encoding="utf-8"
+    )
     return out

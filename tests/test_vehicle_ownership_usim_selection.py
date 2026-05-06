@@ -33,7 +33,9 @@ def _state(*, forecast_year: int = 2023, run_info_path: str = None) -> SimpleNam
     )
 
 
-def test_select_atlas_usim_input_path_prefers_workspace_forecast_even_with_run_info(tmp_path):
+def test_select_atlas_usim_input_path_prefers_workspace_forecast_even_with_run_info(
+    tmp_path,
+):
     previous_run_dir = tmp_path / "previous_run"
     previous_usim_dir = previous_run_dir / "urbansim" / "data"
     previous_usim_dir.mkdir(parents=True)
@@ -63,7 +65,9 @@ def test_select_atlas_usim_input_path_prefers_workspace_forecast_even_with_run_i
     assert selected == str(expected)
 
 
-def test_select_atlas_usim_input_path_prefers_archive_forecast_over_older_current(tmp_path):
+def test_select_atlas_usim_input_path_prefers_archive_forecast_over_older_current(
+    tmp_path,
+):
     archive_run_dir = tmp_path / "archive-run"
     archive_usim_dir = archive_run_dir / "urbansim" / "data"
     archive_usim_dir.mkdir(parents=True)
@@ -242,7 +246,9 @@ def test_resolve_atlas_usim_datastore_path_accepts_artifact_like_explicit_value(
         get_usim_mutable_data_dir=lambda: str(usim_dir),
     )
     state = SimpleNamespace(
-        atlas_usim_datastore_h5=SimpleNamespace(path="urbansim/data/artifact_current.h5"),
+        atlas_usim_datastore_h5=SimpleNamespace(
+            path="urbansim/data/artifact_current.h5"
+        ),
         forecast_year=2029,
         is_start_year=lambda: False,
     )

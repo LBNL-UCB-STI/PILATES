@@ -103,9 +103,7 @@ class FakeTracker:
         return {"ok": True}
 
     def get_artifacts_for_run(self, run_id: str):
-        return self._run_artifacts.get(
-            run_id, FakeRunArtifacts(inputs={}, outputs={})
-        )
+        return self._run_artifacts.get(run_id, FakeRunArtifacts(inputs={}, outputs={}))
 
     def get_run(self, run_id: str):
         return self._runs.get(run_id)
@@ -330,7 +328,9 @@ def test_list_run_artifacts_includes_tagged_and_content_years(tmp_path):
     assert frame.iloc[0]["content_path_kind"] == "activitysim_input_snapshot"
 
 
-def test_resolve_urbansim_activitysim_boundary_h5s_discovers_next_input_snapshot(tmp_path):
+def test_resolve_urbansim_activitysim_boundary_h5s_discovers_next_input_snapshot(
+    tmp_path,
+):
     data_dir = tmp_path / "archive" / "urbansim" / "data"
     data_dir.mkdir(parents=True, exist_ok=True)
     (data_dir / "model_data_2029.h5").write_bytes(b"")
@@ -390,7 +390,9 @@ def test_export_scenario_bundle_uses_runset_and_export(monkeypatch, tmp_path):
 def test_cli_registers_new_handoff_commands():
     parser = cli_module.build_parser()
     subparser_action = next(
-        action for action in parser._subparsers._group_actions if hasattr(action, "choices")
+        action
+        for action in parser._subparsers._group_actions
+        if hasattr(action, "choices")
     )
     choices = set(subparser_action.choices.keys())
 

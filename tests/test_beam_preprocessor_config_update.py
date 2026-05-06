@@ -28,9 +28,7 @@ def _make_preprocessor(sample: float = 0.25) -> BeamPreprocessor:
 
 def test_update_beam_config_skips_rewrite_when_value_unchanged(tmp_path):
     preprocessor = _make_preprocessor(sample=0.25)
-    config_path = (
-        tmp_path / "beam" / "input" / "seattle" / "beam.conf"
-    )
+    config_path = tmp_path / "beam" / "input" / "seattle" / "beam.conf"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         "beam.agentsim.agentSampleSizeAsFractionOfPopulation = 0.25\n",
@@ -45,17 +43,16 @@ def test_update_beam_config_skips_rewrite_when_value_unchanged(tmp_path):
     )
 
     after_stat = config_path.stat()
-    assert "beam.agentsim.agentSampleSizeAsFractionOfPopulation = 0.25" in config_path.read_text(
-        encoding="utf-8"
+    assert (
+        "beam.agentsim.agentSampleSizeAsFractionOfPopulation = 0.25"
+        in config_path.read_text(encoding="utf-8")
     )
     assert after_stat.st_mtime_ns == before_stat.st_mtime_ns
 
 
 def test_update_beam_config_rewrites_when_value_changes(tmp_path):
     preprocessor = _make_preprocessor(sample=0.50)
-    config_path = (
-        tmp_path / "beam" / "input" / "seattle" / "beam.conf"
-    )
+    config_path = tmp_path / "beam" / "input" / "seattle" / "beam.conf"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         "beam.agentsim.agentSampleSizeAsFractionOfPopulation = 0.25\n",
@@ -84,7 +81,7 @@ def test_update_beam_config_updates_zone_settings_semantically(tmp_path):
 
     preprocessor._update_beam_config(
         "beam.agentsim.taz.filePath",
-        value_override='${beam.inputDirectory}/shape/canonical_zones_sorted.geojson',
+        value_override="${beam.inputDirectory}/shape/canonical_zones_sorted.geojson",
         base_path=str(tmp_path),
     )
     preprocessor._update_beam_config(
@@ -110,7 +107,9 @@ def test_update_beam_config_updates_zone_settings_semantically(tmp_path):
         ),
     )
 
-    assert str(resolved_file_path).endswith("/beam/input/seattle/shape/canonical_zones_sorted.geojson")
+    assert str(resolved_file_path).endswith(
+        "/beam/input/seattle/shape/canonical_zones_sorted.geojson"
+    )
     assert resolved_id_field == "zone_id"
 
 
@@ -132,7 +131,9 @@ def test_update_beam_config_raises_clearly_when_pyhocon_missing(tmp_path, monkey
 
     monkeypatch.setattr(beam_config_hocon, "_require_pyhocon", _raise)
 
-    with pytest.raises(beam_config_hocon.BeamConfigHoconError, match="pyhocon is required"):
+    with pytest.raises(
+        beam_config_hocon.BeamConfigHoconError, match="pyhocon is required"
+    ):
         preprocessor._update_beam_config(
             "beam_sample",
             value_override=0.5,

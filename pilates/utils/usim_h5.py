@@ -65,7 +65,9 @@ def resolve_usim_h5_table_key(
         if year_scoped_candidates:
             if year is None:
                 return min(year_scoped_candidates, key=lambda entry: entry[0])[1]
-            prior_or_equal = [entry for entry in year_scoped_candidates if entry[0] <= year]
+            prior_or_equal = [
+                entry for entry in year_scoped_candidates if entry[0] <= year
+            ]
             if prior_or_equal:
                 return max(prior_or_equal, key=lambda entry: entry[0])[1]
             return min(year_scoped_candidates, key=lambda entry: entry[0])[1]
@@ -97,7 +99,9 @@ def resolve_usim_population_table_paths(
             )
             for semantic_key, table_name in POPULATION_TABLE_BY_KEY.items()
         }
-        missing = [table_path for table_path in resolved.values() if table_path not in store]
+        missing = [
+            table_path for table_path in resolved.values() if table_path not in store
+        ]
         if missing:
             available = sorted(store.keys())
             raise KeyError(
@@ -168,7 +172,9 @@ def reconcile_usim_population_table_paths(
                 nearest_year_fallback=not require_exact_year,
             )
 
-        missing = [table_path for table_path in resolved.values() if table_path not in store]
+        missing = [
+            table_path for table_path in resolved.values() if table_path not in store
+        ]
         if missing:
             available = sorted(store.keys())
             raise KeyError(

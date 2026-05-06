@@ -12,252 +12,506 @@ from sqlmodel import Field, SQLModel
 # NOTE: When using SQLModel with sa_column=Column(...), index=True must live on
 # the Column itself (Field(index=...) is rejected in that case).
 
+
 class HouseholdsAsimIn(SQLModel, table=True):
-    __tablename__ = 'HouseholdsAsimIn'
+    __tablename__ = "HouseholdsAsimIn"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier used to relate persons to households.',
-        sa_column=Column('household_id', BigInteger, nullable=True, index=True),
+        description="Household identifier used to relate persons to households.",
+        sa_column=Column("household_id", BigInteger, nullable=True, index=True),
     )
-    gt2: Optional[float] = Field(default=None, sa_column=Column('gt2', Float, nullable=True))
-    workers: Optional[float] = Field(default=None, sa_column=Column('workers', Float, nullable=True))
-    hispanic_head: Optional[str] = Field(default=None, sa_column=Column('hispanic_head', String, nullable=True))
+    gt2: Optional[float] = Field(
+        default=None, sa_column=Column("gt2", Float, nullable=True)
+    )
+    workers: Optional[float] = Field(
+        default=None, sa_column=Column("workers", Float, nullable=True)
+    )
+    hispanic_head: Optional[str] = Field(
+        default=None, sa_column=Column("hispanic_head", String, nullable=True)
+    )
     block_id: Optional[int] = Field(
         default=None,
-        description='Census block identifier for household location.',
-        sa_column=Column('block_id', BigInteger, nullable=True, index=True),
+        description="Census block identifier for household location.",
+        sa_column=Column("block_id", BigInteger, nullable=True, index=True),
     )
-    recent_mover: Optional[str] = Field(default=None, sa_column=Column('recent_mover', String, nullable=True))
-    seniors: Optional[float] = Field(default=None, sa_column=Column('seniors', Float, nullable=True))
-    cars: Optional[int] = Field(default=None, sa_column=Column('cars', BigInteger, nullable=True))
-    hh_race_of_head: Optional[str] = Field(default=None, sa_column=Column('hh_race_of_head', String, nullable=True))
-    age_of_head: Optional[float] = Field(default=None, sa_column=Column('age_of_head', Float, nullable=True))
-    serialno: Optional[int] = Field(default=None, sa_column=Column('serialno', BigInteger, nullable=True))
-    lcm_county_id: Optional[int] = Field(default=None, sa_column=Column('lcm_county_id', BigInteger, nullable=True))
-    hh_children: Optional[str] = Field(default=None, sa_column=Column('hh_children', String, nullable=True))
-    tenure: Optional[str] = Field(default=None, sa_column=Column('tenure', String, nullable=True))
-    hh_age_of_head: Optional[str] = Field(default=None, sa_column=Column('hh_age_of_head', String, nullable=True))
-    sf_detached: Optional[str] = Field(default=None, sa_column=Column('sf_detached', String, nullable=True))
-    income: Optional[float] = Field(default=None, sa_column=Column('income', Float, nullable=True))
-    tenure_mover: Optional[str] = Field(default=None, sa_column=Column('tenure_mover', String, nullable=True))
-    race_of_head: Optional[float] = Field(default=None, sa_column=Column('race_of_head', Float, nullable=True))
-    hh_seniors: Optional[str] = Field(default=None, sa_column=Column('hh_seniors', String, nullable=True))
-    hh_size: Optional[str] = Field(default=None, sa_column=Column('hh_size', String, nullable=True))
-    hh_cars: Optional[str] = Field(default=None, sa_column=Column('hh_cars', String, nullable=True))
-    hispanic_status_of_head: Optional[float] = Field(default=None, sa_column=Column('hispanic_status_of_head', Float, nullable=True))
-    gt55: Optional[float] = Field(default=None, sa_column=Column('gt55', Float, nullable=True))
-    hh_workers: Optional[str] = Field(default=None, sa_column=Column('hh_workers', String, nullable=True))
-    hh_income: Optional[str] = Field(default=None, sa_column=Column('hh_income', String, nullable=True))
-    hh_type: Optional[int] = Field(default=None, sa_column=Column('hh_type', BigInteger, nullable=True))
-    persons: Optional[int] = Field(default=None, sa_column=Column('persons', BigInteger, nullable=True))
+    recent_mover: Optional[str] = Field(
+        default=None, sa_column=Column("recent_mover", String, nullable=True)
+    )
+    seniors: Optional[float] = Field(
+        default=None, sa_column=Column("seniors", Float, nullable=True)
+    )
+    cars: Optional[int] = Field(
+        default=None, sa_column=Column("cars", BigInteger, nullable=True)
+    )
+    hh_race_of_head: Optional[str] = Field(
+        default=None, sa_column=Column("hh_race_of_head", String, nullable=True)
+    )
+    age_of_head: Optional[float] = Field(
+        default=None, sa_column=Column("age_of_head", Float, nullable=True)
+    )
+    serialno: Optional[int] = Field(
+        default=None, sa_column=Column("serialno", BigInteger, nullable=True)
+    )
+    lcm_county_id: Optional[int] = Field(
+        default=None, sa_column=Column("lcm_county_id", BigInteger, nullable=True)
+    )
+    hh_children: Optional[str] = Field(
+        default=None, sa_column=Column("hh_children", String, nullable=True)
+    )
+    tenure: Optional[str] = Field(
+        default=None, sa_column=Column("tenure", String, nullable=True)
+    )
+    hh_age_of_head: Optional[str] = Field(
+        default=None, sa_column=Column("hh_age_of_head", String, nullable=True)
+    )
+    sf_detached: Optional[str] = Field(
+        default=None, sa_column=Column("sf_detached", String, nullable=True)
+    )
+    income: Optional[float] = Field(
+        default=None, sa_column=Column("income", Float, nullable=True)
+    )
+    tenure_mover: Optional[str] = Field(
+        default=None, sa_column=Column("tenure_mover", String, nullable=True)
+    )
+    race_of_head: Optional[float] = Field(
+        default=None, sa_column=Column("race_of_head", Float, nullable=True)
+    )
+    hh_seniors: Optional[str] = Field(
+        default=None, sa_column=Column("hh_seniors", String, nullable=True)
+    )
+    hh_size: Optional[str] = Field(
+        default=None, sa_column=Column("hh_size", String, nullable=True)
+    )
+    hh_cars: Optional[str] = Field(
+        default=None, sa_column=Column("hh_cars", String, nullable=True)
+    )
+    hispanic_status_of_head: Optional[float] = Field(
+        default=None, sa_column=Column("hispanic_status_of_head", Float, nullable=True)
+    )
+    gt55: Optional[float] = Field(
+        default=None, sa_column=Column("gt55", Float, nullable=True)
+    )
+    hh_workers: Optional[str] = Field(
+        default=None, sa_column=Column("hh_workers", String, nullable=True)
+    )
+    hh_income: Optional[str] = Field(
+        default=None, sa_column=Column("hh_income", String, nullable=True)
+    )
+    hh_type: Optional[int] = Field(
+        default=None, sa_column=Column("hh_type", BigInteger, nullable=True)
+    )
+    persons: Optional[int] = Field(
+        default=None, sa_column=Column("persons", BigInteger, nullable=True)
+    )
     taz: Optional[int] = Field(
         default=None,
-        description='Traffic analysis zone for household location.',
+        description="Traffic analysis zone for household location.",
         sa_column=Column(
-            'TAZ',
+            "TAZ",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    hht: Optional[int] = Field(default=None, sa_column=Column('HHT', BigInteger, nullable=True))
+    hht: Optional[int] = Field(
+        default=None, sa_column=Column("HHT", BigInteger, nullable=True)
+    )
 
 
 # Generated by Consist schema export (schema_id=494c3527d97e3413a861439aafb52cea2c640c634796a28143e1a8db25431432).
 
+
 class LandUseAsimIn(SQLModel, table=True):
-    __tablename__ = 'LandUseAsimIn'
+    __tablename__ = "LandUseAsimIn"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     taz: Optional[int] = Field(
         default=None,
-        description='Traffic analysis zone identifier for land use.',
-        sa_column=Column('TAZ', BigInteger, nullable=True, index=True),
+        description="Traffic analysis zone identifier for land use.",
+        sa_column=Column("TAZ", BigInteger, nullable=True, index=True),
     )
-    objectid: Optional[int] = Field(default=None, sa_column=Column('objectid', BigInteger, nullable=True))
-    district: Optional[int] = Field(default=None, sa_column=Column('district', BigInteger, nullable=True))
-    county: Optional[str] = Field(default=None, sa_column=Column('county', String, nullable=True))
-    gacres: Optional[float] = Field(default=None, sa_column=Column('gacres', Float, nullable=True))
+    objectid: Optional[int] = Field(
+        default=None, sa_column=Column("objectid", BigInteger, nullable=True)
+    )
+    district: Optional[int] = Field(
+        default=None, sa_column=Column("district", BigInteger, nullable=True)
+    )
+    county: Optional[str] = Field(
+        default=None, sa_column=Column("county", String, nullable=True)
+    )
+    gacres: Optional[float] = Field(
+        default=None, sa_column=Column("gacres", Float, nullable=True)
+    )
     geometry: Optional[str] = Field(
         default=None,
-        description='Serialized geometry if provided by upstream land-use processing.',
-        sa_column=Column('geometry', String, nullable=True),
+        description="Serialized geometry if provided by upstream land-use processing.",
+        sa_column=Column("geometry", String, nullable=True),
     )
-    age0004: Optional[float] = Field(default=None, sa_column=Column('AGE0004', Float, nullable=True))
-    age0519: Optional[float] = Field(default=None, sa_column=Column('AGE0519', Float, nullable=True))
-    age2044: Optional[float] = Field(default=None, sa_column=Column('AGE2044', Float, nullable=True))
-    age4564: Optional[float] = Field(default=None, sa_column=Column('AGE4564', Float, nullable=True))
-    age64p: Optional[float] = Field(default=None, sa_column=Column('AGE64P', Float, nullable=True))
-    age62p: Optional[float] = Field(default=None, sa_column=Column('AGE62P', Float, nullable=True))
-    totpop: Optional[float] = Field(default=None, sa_column=Column('TOTPOP', Float, nullable=True))
-    hhincq1: Optional[float] = Field(default=None, sa_column=Column('HHINCQ1', Float, nullable=True))
-    hhincq2: Optional[float] = Field(default=None, sa_column=Column('HHINCQ2', Float, nullable=True))
-    hhincq3: Optional[float] = Field(default=None, sa_column=Column('HHINCQ3', Float, nullable=True))
-    hhincq4: Optional[float] = Field(default=None, sa_column=Column('HHINCQ4', Float, nullable=True))
-    empres: Optional[float] = Field(default=None, sa_column=Column('EMPRES', Float, nullable=True))
-    tothh: Optional[float] = Field(default=None, sa_column=Column('TOTHH', Float, nullable=True))
-    retempn: Optional[int] = Field(default=None, sa_column=Column('RETEMPN', BigInteger, nullable=True))
-    fpsempn: Optional[int] = Field(default=None, sa_column=Column('FPSEMPN', BigInteger, nullable=True))
-    herempn: Optional[int] = Field(default=None, sa_column=Column('HEREMPN', BigInteger, nullable=True))
-    agrempn: Optional[int] = Field(default=None, sa_column=Column('AGREMPN', BigInteger, nullable=True))
-    mwtempn: Optional[int] = Field(default=None, sa_column=Column('MWTEMPN', BigInteger, nullable=True))
-    totemp: Optional[int] = Field(default=None, sa_column=Column('TOTEMP', BigInteger, nullable=True))
-    othempn: Optional[int] = Field(default=None, sa_column=Column('OTHEMPN', BigInteger, nullable=True))
-    shpop62p: Optional[float] = Field(default=None, sa_column=Column('SHPOP62P', Float, nullable=True))
-    totacre: Optional[float] = Field(default=None, sa_column=Column('TOTACRE', Float, nullable=True))
-    hsenroll: Optional[float] = Field(default=None, sa_column=Column('HSENROLL', Float, nullable=True))
-    topology: Optional[int] = Field(default=None, sa_column=Column('TOPOLOGY', BigInteger, nullable=True))
-    employment_density: Optional[float] = Field(default=None, sa_column=Column('employment_density', Float, nullable=True))
-    pop_density: Optional[float] = Field(default=None, sa_column=Column('pop_density', Float, nullable=True))
-    hh_density: Optional[float] = Field(default=None, sa_column=Column('hh_density', Float, nullable=True))
-    hq1_density: Optional[float] = Field(default=None, sa_column=Column('hq1_density', Float, nullable=True))
-    prkcst: Optional[float] = Field(default=None, sa_column=Column('PRKCST', Float, nullable=True))
-    oprkcst: Optional[float] = Field(default=None, sa_column=Column('OPRKCST', Float, nullable=True))
-    collfte: Optional[float] = Field(default=None, sa_column=Column('COLLFTE', Float, nullable=True))
-    collpte: Optional[float] = Field(default=None, sa_column=Column('COLLPTE', Float, nullable=True))
-    terminal: Optional[int] = Field(default=None, sa_column=Column('TERMINAL', BigInteger, nullable=True))
-    area_type_metric: Optional[float] = Field(default=None, sa_column=Column('area_type_metric', Float, nullable=True))
-    area_type: Optional[int] = Field(default=None, sa_column=Column('area_type', BigInteger, nullable=True))
-    county__2: Optional[int] = Field(default=None, sa_column=Column('COUNTY', BigInteger, nullable=True))
+    age0004: Optional[float] = Field(
+        default=None, sa_column=Column("AGE0004", Float, nullable=True)
+    )
+    age0519: Optional[float] = Field(
+        default=None, sa_column=Column("AGE0519", Float, nullable=True)
+    )
+    age2044: Optional[float] = Field(
+        default=None, sa_column=Column("AGE2044", Float, nullable=True)
+    )
+    age4564: Optional[float] = Field(
+        default=None, sa_column=Column("AGE4564", Float, nullable=True)
+    )
+    age64p: Optional[float] = Field(
+        default=None, sa_column=Column("AGE64P", Float, nullable=True)
+    )
+    age62p: Optional[float] = Field(
+        default=None, sa_column=Column("AGE62P", Float, nullable=True)
+    )
+    totpop: Optional[float] = Field(
+        default=None, sa_column=Column("TOTPOP", Float, nullable=True)
+    )
+    hhincq1: Optional[float] = Field(
+        default=None, sa_column=Column("HHINCQ1", Float, nullable=True)
+    )
+    hhincq2: Optional[float] = Field(
+        default=None, sa_column=Column("HHINCQ2", Float, nullable=True)
+    )
+    hhincq3: Optional[float] = Field(
+        default=None, sa_column=Column("HHINCQ3", Float, nullable=True)
+    )
+    hhincq4: Optional[float] = Field(
+        default=None, sa_column=Column("HHINCQ4", Float, nullable=True)
+    )
+    empres: Optional[float] = Field(
+        default=None, sa_column=Column("EMPRES", Float, nullable=True)
+    )
+    tothh: Optional[float] = Field(
+        default=None, sa_column=Column("TOTHH", Float, nullable=True)
+    )
+    retempn: Optional[int] = Field(
+        default=None, sa_column=Column("RETEMPN", BigInteger, nullable=True)
+    )
+    fpsempn: Optional[int] = Field(
+        default=None, sa_column=Column("FPSEMPN", BigInteger, nullable=True)
+    )
+    herempn: Optional[int] = Field(
+        default=None, sa_column=Column("HEREMPN", BigInteger, nullable=True)
+    )
+    agrempn: Optional[int] = Field(
+        default=None, sa_column=Column("AGREMPN", BigInteger, nullable=True)
+    )
+    mwtempn: Optional[int] = Field(
+        default=None, sa_column=Column("MWTEMPN", BigInteger, nullable=True)
+    )
+    totemp: Optional[int] = Field(
+        default=None, sa_column=Column("TOTEMP", BigInteger, nullable=True)
+    )
+    othempn: Optional[int] = Field(
+        default=None, sa_column=Column("OTHEMPN", BigInteger, nullable=True)
+    )
+    shpop62p: Optional[float] = Field(
+        default=None, sa_column=Column("SHPOP62P", Float, nullable=True)
+    )
+    totacre: Optional[float] = Field(
+        default=None, sa_column=Column("TOTACRE", Float, nullable=True)
+    )
+    hsenroll: Optional[float] = Field(
+        default=None, sa_column=Column("HSENROLL", Float, nullable=True)
+    )
+    topology: Optional[int] = Field(
+        default=None, sa_column=Column("TOPOLOGY", BigInteger, nullable=True)
+    )
+    employment_density: Optional[float] = Field(
+        default=None, sa_column=Column("employment_density", Float, nullable=True)
+    )
+    pop_density: Optional[float] = Field(
+        default=None, sa_column=Column("pop_density", Float, nullable=True)
+    )
+    hh_density: Optional[float] = Field(
+        default=None, sa_column=Column("hh_density", Float, nullable=True)
+    )
+    hq1_density: Optional[float] = Field(
+        default=None, sa_column=Column("hq1_density", Float, nullable=True)
+    )
+    prkcst: Optional[float] = Field(
+        default=None, sa_column=Column("PRKCST", Float, nullable=True)
+    )
+    oprkcst: Optional[float] = Field(
+        default=None, sa_column=Column("OPRKCST", Float, nullable=True)
+    )
+    collfte: Optional[float] = Field(
+        default=None, sa_column=Column("COLLFTE", Float, nullable=True)
+    )
+    collpte: Optional[float] = Field(
+        default=None, sa_column=Column("COLLPTE", Float, nullable=True)
+    )
+    terminal: Optional[int] = Field(
+        default=None, sa_column=Column("TERMINAL", BigInteger, nullable=True)
+    )
+    area_type_metric: Optional[float] = Field(
+        default=None, sa_column=Column("area_type_metric", Float, nullable=True)
+    )
+    area_type: Optional[int] = Field(
+        default=None, sa_column=Column("area_type", BigInteger, nullable=True)
+    )
+    county__2: Optional[int] = Field(
+        default=None, sa_column=Column("COUNTY", BigInteger, nullable=True)
+    )
 
 
 class LandUseAsimOut(SQLModel, table=True):
-    __tablename__ = 'LandUseAsimOut'
+    __tablename__ = "LandUseAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     zone_id: Optional[int] = Field(
         default=None,
-        description='Traffic analysis zone identifier for ActivitySim land-use output.',
+        description="Traffic analysis zone identifier for ActivitySim land-use output.",
         sa_column=Column(
-            'zone_id',
+            "zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     geometry: Optional[str] = Field(
         default=None,
-        description='Serialized geometry carried through the land-use pipeline.',
-        sa_column=Column('geometry', String, nullable=True),
+        description="Serialized geometry carried through the land-use pipeline.",
+        sa_column=Column("geometry", String, nullable=True),
     )
-    county_id: Optional[int] = Field(default=None, sa_column=Column('county_id', BigInteger, nullable=True))
-    tothh: Optional[float] = Field(default=None, sa_column=Column('TOTHH', Float, nullable=True))
-    totpop: Optional[float] = Field(default=None, sa_column=Column('TOTPOP', Float, nullable=True))
-    totacre: Optional[float] = Field(default=None, sa_column=Column('TOTACRE', Float, nullable=True))
-    totemp: Optional[int] = Field(default=None, sa_column=Column('TOTEMP', BigInteger, nullable=True))
-    age0519: Optional[float] = Field(default=None, sa_column=Column('AGE0519', Float, nullable=True))
-    retempn: Optional[int] = Field(default=None, sa_column=Column('RETEMPN', BigInteger, nullable=True))
-    fpsempn: Optional[int] = Field(default=None, sa_column=Column('FPSEMPN', BigInteger, nullable=True))
-    herempn: Optional[int] = Field(default=None, sa_column=Column('HEREMPN', BigInteger, nullable=True))
-    othempn: Optional[int] = Field(default=None, sa_column=Column('OTHEMPN', BigInteger, nullable=True))
-    agrempn: Optional[int] = Field(default=None, sa_column=Column('AGREMPN', BigInteger, nullable=True))
-    mwtempn: Optional[int] = Field(default=None, sa_column=Column('MWTEMPN', BigInteger, nullable=True))
-    prkcst: Optional[float] = Field(default=None, sa_column=Column('PRKCST', Float, nullable=True))
-    oprkcst: Optional[float] = Field(default=None, sa_column=Column('OPRKCST', Float, nullable=True))
-    area_type: Optional[int] = Field(default=None, sa_column=Column('area_type', BigInteger, nullable=True))
-    hsenroll: Optional[float] = Field(default=None, sa_column=Column('HSENROLL', Float, nullable=True))
-    collfte: Optional[float] = Field(default=None, sa_column=Column('COLLFTE', Float, nullable=True))
-    collpte: Optional[float] = Field(default=None, sa_column=Column('COLLPTE', Float, nullable=True))
-    topology: Optional[int] = Field(default=None, sa_column=Column('TOPOLOGY', BigInteger, nullable=True))
-    terminal: Optional[int] = Field(default=None, sa_column=Column('TERMINAL', BigInteger, nullable=True))
+    county_id: Optional[int] = Field(
+        default=None, sa_column=Column("county_id", BigInteger, nullable=True)
+    )
+    tothh: Optional[float] = Field(
+        default=None, sa_column=Column("TOTHH", Float, nullable=True)
+    )
+    totpop: Optional[float] = Field(
+        default=None, sa_column=Column("TOTPOP", Float, nullable=True)
+    )
+    totacre: Optional[float] = Field(
+        default=None, sa_column=Column("TOTACRE", Float, nullable=True)
+    )
+    totemp: Optional[int] = Field(
+        default=None, sa_column=Column("TOTEMP", BigInteger, nullable=True)
+    )
+    age0519: Optional[float] = Field(
+        default=None, sa_column=Column("AGE0519", Float, nullable=True)
+    )
+    retempn: Optional[int] = Field(
+        default=None, sa_column=Column("RETEMPN", BigInteger, nullable=True)
+    )
+    fpsempn: Optional[int] = Field(
+        default=None, sa_column=Column("FPSEMPN", BigInteger, nullable=True)
+    )
+    herempn: Optional[int] = Field(
+        default=None, sa_column=Column("HEREMPN", BigInteger, nullable=True)
+    )
+    othempn: Optional[int] = Field(
+        default=None, sa_column=Column("OTHEMPN", BigInteger, nullable=True)
+    )
+    agrempn: Optional[int] = Field(
+        default=None, sa_column=Column("AGREMPN", BigInteger, nullable=True)
+    )
+    mwtempn: Optional[int] = Field(
+        default=None, sa_column=Column("MWTEMPN", BigInteger, nullable=True)
+    )
+    prkcst: Optional[float] = Field(
+        default=None, sa_column=Column("PRKCST", Float, nullable=True)
+    )
+    oprkcst: Optional[float] = Field(
+        default=None, sa_column=Column("OPRKCST", Float, nullable=True)
+    )
+    area_type: Optional[int] = Field(
+        default=None, sa_column=Column("area_type", BigInteger, nullable=True)
+    )
+    hsenroll: Optional[float] = Field(
+        default=None, sa_column=Column("HSENROLL", Float, nullable=True)
+    )
+    collfte: Optional[float] = Field(
+        default=None, sa_column=Column("COLLFTE", Float, nullable=True)
+    )
+    collpte: Optional[float] = Field(
+        default=None, sa_column=Column("COLLPTE", Float, nullable=True)
+    )
+    topology: Optional[int] = Field(
+        default=None, sa_column=Column("TOPOLOGY", BigInteger, nullable=True)
+    )
+    terminal: Optional[int] = Field(
+        default=None, sa_column=Column("TERMINAL", BigInteger, nullable=True)
+    )
     original_zone_id: Optional[int] = Field(
         default=None,
-        sa_column=Column('_original_zone_id', BigInteger, nullable=True),
+        sa_column=Column("_original_zone_id", BigInteger, nullable=True),
     )
-    household_density: Optional[float] = Field(default=None, sa_column=Column('household_density', Float, nullable=True))
-    employment_density: Optional[float] = Field(default=None, sa_column=Column('employment_density', Float, nullable=True))
-    density_index: Optional[float] = Field(default=None, sa_column=Column('density_index', Float, nullable=True))
-    is_cbd: Optional[bool] = Field(default=None, sa_column=Column('is_cbd', Boolean, nullable=True))
-    totenr_univ: Optional[float] = Field(default=None, sa_column=Column('TOTENR_univ', Float, nullable=True))
-    ext_work_share: Optional[float] = Field(default=None, sa_column=Column('ext_work_share', Float, nullable=True))
-    retempn_scaled: Optional[float] = Field(default=None, sa_column=Column('RETEMPN_scaled', Float, nullable=True))
-    fpsempn_scaled: Optional[float] = Field(default=None, sa_column=Column('FPSEMPN_scaled', Float, nullable=True))
-    herempn_scaled: Optional[float] = Field(default=None, sa_column=Column('HEREMPN_scaled', Float, nullable=True))
-    othempn_scaled: Optional[float] = Field(default=None, sa_column=Column('OTHEMPN_scaled', Float, nullable=True))
-    agrempn_scaled: Optional[float] = Field(default=None, sa_column=Column('AGREMPN_scaled', Float, nullable=True))
-    mwtempn_scaled: Optional[float] = Field(default=None, sa_column=Column('MWTEMPN_scaled', Float, nullable=True))
-    totemp_scaled: Optional[float] = Field(default=None, sa_column=Column('TOTEMP_scaled', Float, nullable=True))
+    household_density: Optional[float] = Field(
+        default=None, sa_column=Column("household_density", Float, nullable=True)
+    )
+    employment_density: Optional[float] = Field(
+        default=None, sa_column=Column("employment_density", Float, nullable=True)
+    )
+    density_index: Optional[float] = Field(
+        default=None, sa_column=Column("density_index", Float, nullable=True)
+    )
+    is_cbd: Optional[bool] = Field(
+        default=None, sa_column=Column("is_cbd", Boolean, nullable=True)
+    )
+    totenr_univ: Optional[float] = Field(
+        default=None, sa_column=Column("TOTENR_univ", Float, nullable=True)
+    )
+    ext_work_share: Optional[float] = Field(
+        default=None, sa_column=Column("ext_work_share", Float, nullable=True)
+    )
+    retempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("RETEMPN_scaled", Float, nullable=True)
+    )
+    fpsempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("FPSEMPN_scaled", Float, nullable=True)
+    )
+    herempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("HEREMPN_scaled", Float, nullable=True)
+    )
+    othempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("OTHEMPN_scaled", Float, nullable=True)
+    )
+    agrempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("AGREMPN_scaled", Float, nullable=True)
+    )
+    mwtempn_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("MWTEMPN_scaled", Float, nullable=True)
+    )
+    totemp_scaled: Optional[float] = Field(
+        default=None, sa_column=Column("TOTEMP_scaled", Float, nullable=True)
+    )
 
 
 class AccessibilityAsimOut(SQLModel, table=True):
-    __tablename__ = 'AccessibilityAsimOut'
+    __tablename__ = "AccessibilityAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     zone_id: Optional[int] = Field(
         default=None,
-        description='Traffic analysis zone identifier for ActivitySim accessibility output.',
+        description="Traffic analysis zone identifier for ActivitySim accessibility output.",
         sa_column=Column(
-            'zone_id',
+            "zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    aupkretail: Optional[float] = Field(default=None, sa_column=Column('auPkRetail', Float, nullable=True))
-    aupktotal: Optional[float] = Field(default=None, sa_column=Column('auPkTotal', Float, nullable=True))
-    auopretail: Optional[float] = Field(default=None, sa_column=Column('auOpRetail', Float, nullable=True))
-    auoptotal: Optional[float] = Field(default=None, sa_column=Column('auOpTotal', Float, nullable=True))
-    trpkretail: Optional[float] = Field(default=None, sa_column=Column('trPkRetail', Float, nullable=True))
-    trpktotal: Optional[float] = Field(default=None, sa_column=Column('trPkTotal', Float, nullable=True))
-    tropretail: Optional[float] = Field(default=None, sa_column=Column('trOpRetail', Float, nullable=True))
-    troptotal: Optional[float] = Field(default=None, sa_column=Column('trOpTotal', Float, nullable=True))
-    nmretail: Optional[float] = Field(default=None, sa_column=Column('nmRetail', Float, nullable=True))
-    nmtotal: Optional[float] = Field(default=None, sa_column=Column('nmTotal', Float, nullable=True))
+    aupkretail: Optional[float] = Field(
+        default=None, sa_column=Column("auPkRetail", Float, nullable=True)
+    )
+    aupktotal: Optional[float] = Field(
+        default=None, sa_column=Column("auPkTotal", Float, nullable=True)
+    )
+    auopretail: Optional[float] = Field(
+        default=None, sa_column=Column("auOpRetail", Float, nullable=True)
+    )
+    auoptotal: Optional[float] = Field(
+        default=None, sa_column=Column("auOpTotal", Float, nullable=True)
+    )
+    trpkretail: Optional[float] = Field(
+        default=None, sa_column=Column("trPkRetail", Float, nullable=True)
+    )
+    trpktotal: Optional[float] = Field(
+        default=None, sa_column=Column("trPkTotal", Float, nullable=True)
+    )
+    tropretail: Optional[float] = Field(
+        default=None, sa_column=Column("trOpRetail", Float, nullable=True)
+    )
+    troptotal: Optional[float] = Field(
+        default=None, sa_column=Column("trOpTotal", Float, nullable=True)
+    )
+    nmretail: Optional[float] = Field(
+        default=None, sa_column=Column("nmRetail", Float, nullable=True)
+    )
+    nmtotal: Optional[float] = Field(
+        default=None, sa_column=Column("nmTotal", Float, nullable=True)
+    )
 
 
 class PersonsAsimIn(SQLModel, table=True):
-    __tablename__ = 'PersonsAsimIn'
+    __tablename__ = "PersonsAsimIn"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier unique within the input population.',
-        sa_column=Column('person_id', BigInteger, nullable=True, index=True),
+        description="Person identifier unique within the input population.",
+        sa_column=Column("person_id", BigInteger, nullable=True, index=True),
     )
-    relate: Optional[int] = Field(default=None, sa_column=Column('relate', BigInteger, nullable=True))
-    hispanic: Optional[float] = Field(default=None, sa_column=Column('hispanic', Float, nullable=True))
-    student: Optional[float] = Field(default=None, sa_column=Column('student', Float, nullable=True))
-    person_sex: Optional[str] = Field(default=None, sa_column=Column('person_sex', String, nullable=True))
-    p_hispanic: Optional[str] = Field(default=None, sa_column=Column('p_hispanic', String, nullable=True))
-    mar: Optional[int] = Field(default=None, sa_column=Column('MAR', BigInteger, nullable=True))
-    person_age: Optional[str] = Field(default=None, sa_column=Column('person_age', String, nullable=True))
-    edu: Optional[float] = Field(default=None, sa_column=Column('edu', Float, nullable=True))
-    age: Optional[float] = Field(default=None, sa_column=Column('age', Float, nullable=True))
-    work_at_home: Optional[float] = Field(default=None, sa_column=Column('work_at_home', Float, nullable=True))
-    race: Optional[str] = Field(default=None, sa_column=Column('race', String, nullable=True))
-    age_group: Optional[str] = Field(default=None, sa_column=Column('age_group', String, nullable=True))
-    hours: Optional[float] = Field(default=None, sa_column=Column('hours', Float, nullable=True))
-    earning: Optional[float] = Field(default=None, sa_column=Column('earning', Float, nullable=True))
+    relate: Optional[int] = Field(
+        default=None, sa_column=Column("relate", BigInteger, nullable=True)
+    )
+    hispanic: Optional[float] = Field(
+        default=None, sa_column=Column("hispanic", Float, nullable=True)
+    )
+    student: Optional[float] = Field(
+        default=None, sa_column=Column("student", Float, nullable=True)
+    )
+    person_sex: Optional[str] = Field(
+        default=None, sa_column=Column("person_sex", String, nullable=True)
+    )
+    p_hispanic: Optional[str] = Field(
+        default=None, sa_column=Column("p_hispanic", String, nullable=True)
+    )
+    mar: Optional[int] = Field(
+        default=None, sa_column=Column("MAR", BigInteger, nullable=True)
+    )
+    person_age: Optional[str] = Field(
+        default=None, sa_column=Column("person_age", String, nullable=True)
+    )
+    edu: Optional[float] = Field(
+        default=None, sa_column=Column("edu", Float, nullable=True)
+    )
+    age: Optional[float] = Field(
+        default=None, sa_column=Column("age", Float, nullable=True)
+    )
+    work_at_home: Optional[float] = Field(
+        default=None, sa_column=Column("work_at_home", Float, nullable=True)
+    )
+    race: Optional[str] = Field(
+        default=None, sa_column=Column("race", String, nullable=True)
+    )
+    age_group: Optional[str] = Field(
+        default=None, sa_column=Column("age_group", String, nullable=True)
+    )
+    hours: Optional[float] = Field(
+        default=None, sa_column=Column("hours", Float, nullable=True)
+    )
+    earning: Optional[float] = Field(
+        default=None, sa_column=Column("earning", Float, nullable=True)
+    )
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier to link persons to households.',
+        description="Household identifier to link persons to households.",
         sa_column=Column(
-            'household_id',
+            "household_id",
             BigInteger,
-            ForeignKey('HouseholdsAsimIn.household_id'),
+            ForeignKey("HouseholdsAsimIn.household_id"),
             nullable=True,
             index=True,
         ),
     )
-    sex: Optional[float] = Field(default=None, sa_column=Column('sex', Float, nullable=True))
-    member_id: Optional[int] = Field(default=None, sa_column=Column('member_id', BigInteger, nullable=True))
+    sex: Optional[float] = Field(
+        default=None, sa_column=Column("sex", Float, nullable=True)
+    )
+    member_id: Optional[int] = Field(
+        default=None, sa_column=Column("member_id", BigInteger, nullable=True)
+    )
     school_taz: Optional[int] = Field(
         default=None,
-        description='School location in TAZ geography.',
+        description="School location in TAZ geography.",
         sa_column=Column(
-            'school_taz',
+            "school_taz",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
@@ -265,540 +519,829 @@ class PersonsAsimIn(SQLModel, table=True):
     school_zone_id: Optional[int] = Field(
         default=None,
         sa_column=Column(
-            'school_zone_id',
+            "school_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    school_id: Optional[int] = Field(default=None, sa_column=Column('school_id', BigInteger, nullable=True))
-    hispanic_1: Optional[float] = Field(default=None, sa_column=Column('hispanic.1', Float, nullable=True))
-    race_id: Optional[float] = Field(default=None, sa_column=Column('race_id', Float, nullable=True))
-    worker: Optional[float] = Field(default=None, sa_column=Column('worker', Float, nullable=True))
+    school_id: Optional[int] = Field(
+        default=None, sa_column=Column("school_id", BigInteger, nullable=True)
+    )
+    hispanic_1: Optional[float] = Field(
+        default=None, sa_column=Column("hispanic.1", Float, nullable=True)
+    )
+    race_id: Optional[float] = Field(
+        default=None, sa_column=Column("race_id", Float, nullable=True)
+    )
+    worker: Optional[float] = Field(
+        default=None, sa_column=Column("worker", Float, nullable=True)
+    )
     work_block_id: Optional[int] = Field(
         default=None,
-        description='Work location in census block geography.',
-        sa_column=Column('work_block_id', BigInteger, nullable=True, index=True),
+        description="Work location in census block geography.",
+        sa_column=Column("work_block_id", BigInteger, nullable=True, index=True),
     )
-    education_group: Optional[str] = Field(default=None, sa_column=Column('education_group', String, nullable=True))
+    education_group: Optional[str] = Field(
+        default=None, sa_column=Column("education_group", String, nullable=True)
+    )
     work_zone_id: Optional[int] = Field(
         default=None,
         sa_column=Column(
-            'work_zone_id',
+            "work_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     workplace_taz: Optional[int] = Field(
         default=None,
-        description='Workplace location in TAZ geography.',
+        description="Workplace location in TAZ geography.",
         sa_column=Column(
-            'workplace_taz',
+            "workplace_taz",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     school_block_id: Optional[int] = Field(
         default=None,
-        description='School location in census block geography.',
-        sa_column=Column('school_block_id', BigInteger, nullable=True, index=True),
+        description="School location in census block geography.",
+        sa_column=Column("school_block_id", BigInteger, nullable=True, index=True),
     )
     taz: Optional[int] = Field(
         default=None,
-        description='Home location in TAZ geography.',
+        description="Home location in TAZ geography.",
         sa_column=Column(
-            'TAZ',
+            "TAZ",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    ptype: Optional[int] = Field(default=None, sa_column=Column('ptype', BigInteger, nullable=True))
-    pemploy: Optional[int] = Field(default=None, sa_column=Column('pemploy', BigInteger, nullable=True))
-    pstudent: Optional[int] = Field(default=None, sa_column=Column('pstudent', BigInteger, nullable=True))
-    home_x: Optional[float] = Field(default=None, sa_column=Column('home_x', Float, nullable=True))
-    home_y: Optional[float] = Field(default=None, sa_column=Column('home_y', Float, nullable=True))
+    ptype: Optional[int] = Field(
+        default=None, sa_column=Column("ptype", BigInteger, nullable=True)
+    )
+    pemploy: Optional[int] = Field(
+        default=None, sa_column=Column("pemploy", BigInteger, nullable=True)
+    )
+    pstudent: Optional[int] = Field(
+        default=None, sa_column=Column("pstudent", BigInteger, nullable=True)
+    )
+    home_x: Optional[float] = Field(
+        default=None, sa_column=Column("home_x", Float, nullable=True)
+    )
+    home_y: Optional[float] = Field(
+        default=None, sa_column=Column("home_y", Float, nullable=True)
+    )
+
 
 class BeamPlansAsimOut(SQLModel, table=True):
-    __tablename__ = 'BeamPlansAsimOut'
+    __tablename__ = "BeamPlansAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     tour_id: Optional[int] = Field(
         default=None,
-        description='Tour identifier in ActivitySim outputs.',
+        description="Tour identifier in ActivitySim outputs.",
         sa_column=Column(
-            'tour_id',
+            "tour_id",
             BigInteger,
-            ForeignKey('ToursAsimOut.tour_id'),
+            ForeignKey("ToursAsimOut.tour_id"),
             nullable=True,
             index=True,
         ),
     )
     trip_id: Optional[int] = Field(
         default=None,
-        description='Trip identifier in ActivitySim outputs.',
+        description="Trip identifier in ActivitySim outputs.",
         sa_column=Column(
-            'trip_id',
+            "trip_id",
             BigInteger,
-            ForeignKey('tripsAsimOut.trip_id'),
+            ForeignKey("tripsAsimOut.trip_id"),
             nullable=True,
             index=True,
         ),
     )
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier associated with the trip/tour.',
+        description="Person identifier associated with the trip/tour.",
         sa_column=Column(
-            'person_id',
+            "person_id",
             BigInteger,
-            ForeignKey('PersonsAsimOut.person_id'),
+            ForeignKey("PersonsAsimOut.person_id"),
             nullable=True,
             index=True,
         ),
     )
-    number_of_participants: Optional[float] = Field(default=None, sa_column=Column('number_of_participants', Float, nullable=True))
+    number_of_participants: Optional[float] = Field(
+        default=None, sa_column=Column("number_of_participants", Float, nullable=True)
+    )
     tour_mode: Optional[str] = Field(
         default=None,
-        description='Primary tour mode for the tour.',
-        sa_column=Column('tour_mode', String, nullable=True),
+        description="Primary tour mode for the tour.",
+        sa_column=Column("tour_mode", String, nullable=True),
     )
     trip_mode: Optional[str] = Field(
         default=None,
-        description='Mode used for the specific trip.',
-        sa_column=Column('trip_mode', String, nullable=True),
+        description="Mode used for the specific trip.",
+        sa_column=Column("trip_mode", String, nullable=True),
     )
-    planelementindex: Optional[int] = Field(default=None, sa_column=Column('PlanElementIndex', BigInteger, nullable=True))
+    planelementindex: Optional[int] = Field(
+        default=None, sa_column=Column("PlanElementIndex", BigInteger, nullable=True)
+    )
     activityelement: Optional[str] = Field(
         default=None,
-        description='Plan element type (activity or leg) for BEAM.',
-        sa_column=Column('ActivityElement', String, nullable=True),
+        description="Plan element type (activity or leg) for BEAM.",
+        sa_column=Column("ActivityElement", String, nullable=True),
     )
     activitytype: Optional[str] = Field(
         default=None,
-        description='Activity type for BEAM plans.',
-        sa_column=Column('ActivityType', String, nullable=True),
+        description="Activity type for BEAM plans.",
+        sa_column=Column("ActivityType", String, nullable=True),
     )
-    x: Optional[float] = Field(default=None, sa_column=Column('x', Float, nullable=True))
-    y: Optional[float] = Field(default=None, sa_column=Column('y', Float, nullable=True))
-    departure_time: Optional[float] = Field(default=None, sa_column=Column('departure_time', Float, nullable=True))
-    trip_dur_min: Optional[float] = Field(default=None, sa_column=Column('trip_dur_min', Float, nullable=True))
-    trip_cost_dollars: Optional[float] = Field(default=None, sa_column=Column('trip_cost_dollars', Float, nullable=True))
+    x: Optional[float] = Field(
+        default=None, sa_column=Column("x", Float, nullable=True)
+    )
+    y: Optional[float] = Field(
+        default=None, sa_column=Column("y", Float, nullable=True)
+    )
+    departure_time: Optional[float] = Field(
+        default=None, sa_column=Column("departure_time", Float, nullable=True)
+    )
+    trip_dur_min: Optional[float] = Field(
+        default=None, sa_column=Column("trip_dur_min", Float, nullable=True)
+    )
+    trip_cost_dollars: Optional[float] = Field(
+        default=None, sa_column=Column("trip_cost_dollars", Float, nullable=True)
+    )
+
 
 class HouseholdsAsimOut(SQLModel, table=True):
-    __tablename__ = 'HouseholdsAsimOut'
+    __tablename__ = "HouseholdsAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier used to relate persons to households.',
-        sa_column=Column('household_id', BigInteger, nullable=True, index=True),
+        description="Household identifier used to relate persons to households.",
+        sa_column=Column("household_id", BigInteger, nullable=True, index=True),
     )
     block_id: Optional[int] = Field(
         default=None,
-        description='Census block identifier for household location.',
-        sa_column=Column('block_id', BigInteger, nullable=True, index=True),
+        description="Census block identifier for household location.",
+        sa_column=Column("block_id", BigInteger, nullable=True, index=True),
     )
     home_zone_id: Optional[int] = Field(
         default=None,
-        description='Home TAZ for the household.',
+        description="Home TAZ for the household.",
         sa_column=Column(
-            'home_zone_id',
+            "home_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    income: Optional[float] = Field(default=None, sa_column=Column('income', Float, nullable=True))
-    hhsize: Optional[int] = Field(default=None, sa_column=Column('hhsize', BigInteger, nullable=True))
-    hht: Optional[int] = Field(default=None, sa_column=Column('HHT', BigInteger, nullable=True))
-    auto_ownership: Optional[int] = Field(default=None, sa_column=Column('auto_ownership', BigInteger, nullable=True))
-    num_workers: Optional[float] = Field(default=None, sa_column=Column('num_workers', Float, nullable=True))
-    sample_rate: Optional[float] = Field(default=None, sa_column=Column('sample_rate', Float, nullable=True))
-    income_in_thousands: Optional[float] = Field(default=None, sa_column=Column('income_in_thousands', Float, nullable=True))
-    income_segment: Optional[int] = Field(default=None, sa_column=Column('income_segment', BigInteger, nullable=True))
-    median_value_of_time: Optional[float] = Field(default=None, sa_column=Column('median_value_of_time', Float, nullable=True))
-    hh_value_of_time: Optional[float] = Field(default=None, sa_column=Column('hh_value_of_time', Float, nullable=True))
-    num_non_workers: Optional[float] = Field(default=None, sa_column=Column('num_non_workers', Float, nullable=True))
-    num_drivers: Optional[int] = Field(default=None, sa_column=Column('num_drivers', BigInteger, nullable=True))
-    num_adults: Optional[int] = Field(default=None, sa_column=Column('num_adults', BigInteger, nullable=True))
-    num_children: Optional[int] = Field(default=None, sa_column=Column('num_children', BigInteger, nullable=True))
-    num_young_children: Optional[int] = Field(default=None, sa_column=Column('num_young_children', BigInteger, nullable=True))
-    num_children_5_to_15: Optional[int] = Field(default=None, sa_column=Column('num_children_5_to_15', BigInteger, nullable=True))
-    num_children_16_to_17: Optional[int] = Field(default=None, sa_column=Column('num_children_16_to_17', BigInteger, nullable=True))
-    num_college_age: Optional[int] = Field(default=None, sa_column=Column('num_college_age', BigInteger, nullable=True))
-    num_young_adults: Optional[int] = Field(default=None, sa_column=Column('num_young_adults', BigInteger, nullable=True))
-    non_family: Optional[bool] = Field(default=None, sa_column=Column('non_family', Boolean, nullable=True))
-    family: Optional[bool] = Field(default=None, sa_column=Column('family', Boolean, nullable=True))
-    home_is_urban: Optional[bool] = Field(default=None, sa_column=Column('home_is_urban', Boolean, nullable=True))
-    home_is_rural: Optional[bool] = Field(default=None, sa_column=Column('home_is_rural', Boolean, nullable=True))
-    hh_work_auto_savings_ratio: Optional[float] = Field(default=None, sa_column=Column('hh_work_auto_savings_ratio', Float, nullable=True))
-    num_under16_not_at_school: Optional[int] = Field(default=None, sa_column=Column('num_under16_not_at_school', BigInteger, nullable=True))
-    num_travel_active: Optional[int] = Field(default=None, sa_column=Column('num_travel_active', BigInteger, nullable=True))
-    num_travel_active_adults: Optional[int] = Field(default=None, sa_column=Column('num_travel_active_adults', BigInteger, nullable=True))
-    num_travel_active_preschoolers: Optional[int] = Field(default=None, sa_column=Column('num_travel_active_preschoolers', BigInteger, nullable=True))
-    num_travel_active_children: Optional[int] = Field(default=None, sa_column=Column('num_travel_active_children', BigInteger, nullable=True))
-    num_travel_active_non_preschoolers: Optional[int] = Field(default=None, sa_column=Column('num_travel_active_non_preschoolers', BigInteger, nullable=True))
-    participates_in_jtf_model: Optional[bool] = Field(default=None, sa_column=Column('participates_in_jtf_model', Boolean, nullable=True))
-    joint_tour_frequency: Optional[str] = Field(default=None, sa_column=Column('joint_tour_frequency', String, nullable=True))
-    num_hh_joint_tours: Optional[int] = Field(default=None, sa_column=Column('num_hh_joint_tours', BigInteger, nullable=True))
+    income: Optional[float] = Field(
+        default=None, sa_column=Column("income", Float, nullable=True)
+    )
+    hhsize: Optional[int] = Field(
+        default=None, sa_column=Column("hhsize", BigInteger, nullable=True)
+    )
+    hht: Optional[int] = Field(
+        default=None, sa_column=Column("HHT", BigInteger, nullable=True)
+    )
+    auto_ownership: Optional[int] = Field(
+        default=None, sa_column=Column("auto_ownership", BigInteger, nullable=True)
+    )
+    num_workers: Optional[float] = Field(
+        default=None, sa_column=Column("num_workers", Float, nullable=True)
+    )
+    sample_rate: Optional[float] = Field(
+        default=None, sa_column=Column("sample_rate", Float, nullable=True)
+    )
+    income_in_thousands: Optional[float] = Field(
+        default=None, sa_column=Column("income_in_thousands", Float, nullable=True)
+    )
+    income_segment: Optional[int] = Field(
+        default=None, sa_column=Column("income_segment", BigInteger, nullable=True)
+    )
+    median_value_of_time: Optional[float] = Field(
+        default=None, sa_column=Column("median_value_of_time", Float, nullable=True)
+    )
+    hh_value_of_time: Optional[float] = Field(
+        default=None, sa_column=Column("hh_value_of_time", Float, nullable=True)
+    )
+    num_non_workers: Optional[float] = Field(
+        default=None, sa_column=Column("num_non_workers", Float, nullable=True)
+    )
+    num_drivers: Optional[int] = Field(
+        default=None, sa_column=Column("num_drivers", BigInteger, nullable=True)
+    )
+    num_adults: Optional[int] = Field(
+        default=None, sa_column=Column("num_adults", BigInteger, nullable=True)
+    )
+    num_children: Optional[int] = Field(
+        default=None, sa_column=Column("num_children", BigInteger, nullable=True)
+    )
+    num_young_children: Optional[int] = Field(
+        default=None, sa_column=Column("num_young_children", BigInteger, nullable=True)
+    )
+    num_children_5_to_15: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_children_5_to_15", BigInteger, nullable=True),
+    )
+    num_children_16_to_17: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_children_16_to_17", BigInteger, nullable=True),
+    )
+    num_college_age: Optional[int] = Field(
+        default=None, sa_column=Column("num_college_age", BigInteger, nullable=True)
+    )
+    num_young_adults: Optional[int] = Field(
+        default=None, sa_column=Column("num_young_adults", BigInteger, nullable=True)
+    )
+    non_family: Optional[bool] = Field(
+        default=None, sa_column=Column("non_family", Boolean, nullable=True)
+    )
+    family: Optional[bool] = Field(
+        default=None, sa_column=Column("family", Boolean, nullable=True)
+    )
+    home_is_urban: Optional[bool] = Field(
+        default=None, sa_column=Column("home_is_urban", Boolean, nullable=True)
+    )
+    home_is_rural: Optional[bool] = Field(
+        default=None, sa_column=Column("home_is_rural", Boolean, nullable=True)
+    )
+    hh_work_auto_savings_ratio: Optional[float] = Field(
+        default=None,
+        sa_column=Column("hh_work_auto_savings_ratio", Float, nullable=True),
+    )
+    num_under16_not_at_school: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_under16_not_at_school", BigInteger, nullable=True),
+    )
+    num_travel_active: Optional[int] = Field(
+        default=None, sa_column=Column("num_travel_active", BigInteger, nullable=True)
+    )
+    num_travel_active_adults: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_adults", BigInteger, nullable=True),
+    )
+    num_travel_active_preschoolers: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_preschoolers", BigInteger, nullable=True),
+    )
+    num_travel_active_children: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_travel_active_children", BigInteger, nullable=True),
+    )
+    num_travel_active_non_preschoolers: Optional[int] = Field(
+        default=None,
+        sa_column=Column(
+            "num_travel_active_non_preschoolers", BigInteger, nullable=True
+        ),
+    )
+    participates_in_jtf_model: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("participates_in_jtf_model", Boolean, nullable=True),
+    )
+    joint_tour_frequency: Optional[str] = Field(
+        default=None, sa_column=Column("joint_tour_frequency", String, nullable=True)
+    )
+    num_hh_joint_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_hh_joint_tours", BigInteger, nullable=True)
+    )
+
 
 class PersonsAsimOut(SQLModel, table=True):
-    __tablename__ = 'PersonsAsimOut'
+    __tablename__ = "PersonsAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier unique within the input population.',
-        sa_column=Column('person_id', BigInteger, nullable=True, index=True),
+        description="Person identifier unique within the input population.",
+        sa_column=Column("person_id", BigInteger, nullable=True, index=True),
     )
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier to link persons to households.',
+        description="Household identifier to link persons to households.",
         sa_column=Column(
-            'household_id',
+            "household_id",
             BigInteger,
-            ForeignKey('HouseholdsAsimOut.household_id'),
+            ForeignKey("HouseholdsAsimOut.household_id"),
             nullable=True,
             index=True,
         ),
     )
-    age: Optional[int] = Field(default=None, sa_column=Column('age', BigInteger, nullable=True))
+    age: Optional[int] = Field(
+        default=None, sa_column=Column("age", BigInteger, nullable=True)
+    )
     pnum: Optional[int] = Field(
         default=None,
-        description='Person number within household (PNUM).',
-        sa_column=Column('PNUM', BigInteger, nullable=True),
+        description="Person number within household (PNUM).",
+        sa_column=Column("PNUM", BigInteger, nullable=True),
     )
-    sex: Optional[int] = Field(default=None, sa_column=Column('sex', BigInteger, nullable=True))
-    pemploy: Optional[int] = Field(default=None, sa_column=Column('pemploy', BigInteger, nullable=True))
-    pstudent: Optional[int] = Field(default=None, sa_column=Column('pstudent', BigInteger, nullable=True))
-    ptype: Optional[int] = Field(default=None, sa_column=Column('ptype', BigInteger, nullable=True))
-    home_x: Optional[float] = Field(default=None, sa_column=Column('home_x', Float, nullable=True))
-    home_y: Optional[float] = Field(default=None, sa_column=Column('home_y', Float, nullable=True))
-    age_16_to_19: Optional[bool] = Field(default=None, sa_column=Column('age_16_to_19', Boolean, nullable=True))
-    age_16_p: Optional[bool] = Field(default=None, sa_column=Column('age_16_p', Boolean, nullable=True))
-    adult: Optional[bool] = Field(default=None, sa_column=Column('adult', Boolean, nullable=True))
-    male: Optional[bool] = Field(default=None, sa_column=Column('male', Boolean, nullable=True))
-    female: Optional[bool] = Field(default=None, sa_column=Column('female', Boolean, nullable=True))
-    has_non_worker: Optional[bool] = Field(default=None, sa_column=Column('has_non_worker', Boolean, nullable=True))
-    has_retiree: Optional[bool] = Field(default=None, sa_column=Column('has_retiree', Boolean, nullable=True))
-    has_preschool_kid: Optional[bool] = Field(default=None, sa_column=Column('has_preschool_kid', Boolean, nullable=True))
-    has_driving_kid: Optional[bool] = Field(default=None, sa_column=Column('has_driving_kid', Boolean, nullable=True))
-    has_school_kid: Optional[bool] = Field(default=None, sa_column=Column('has_school_kid', Boolean, nullable=True))
-    has_full_time: Optional[bool] = Field(default=None, sa_column=Column('has_full_time', Boolean, nullable=True))
-    has_part_time: Optional[bool] = Field(default=None, sa_column=Column('has_part_time', Boolean, nullable=True))
-    has_university: Optional[bool] = Field(default=None, sa_column=Column('has_university', Boolean, nullable=True))
-    student_is_employed: Optional[bool] = Field(default=None, sa_column=Column('student_is_employed', Boolean, nullable=True))
-    nonstudent_to_school: Optional[bool] = Field(default=None, sa_column=Column('nonstudent_to_school', Boolean, nullable=True))
-    is_student: Optional[bool] = Field(default=None, sa_column=Column('is_student', Boolean, nullable=True))
-    is_gradeschool: Optional[bool] = Field(default=None, sa_column=Column('is_gradeschool', Boolean, nullable=True))
-    is_highschool: Optional[bool] = Field(default=None, sa_column=Column('is_highschool', Boolean, nullable=True))
-    is_university: Optional[bool] = Field(default=None, sa_column=Column('is_university', Boolean, nullable=True))
-    school_segment: Optional[int] = Field(default=None, sa_column=Column('school_segment', BigInteger, nullable=True))
-    is_worker: Optional[bool] = Field(default=None, sa_column=Column('is_worker', Boolean, nullable=True))
+    sex: Optional[int] = Field(
+        default=None, sa_column=Column("sex", BigInteger, nullable=True)
+    )
+    pemploy: Optional[int] = Field(
+        default=None, sa_column=Column("pemploy", BigInteger, nullable=True)
+    )
+    pstudent: Optional[int] = Field(
+        default=None, sa_column=Column("pstudent", BigInteger, nullable=True)
+    )
+    ptype: Optional[int] = Field(
+        default=None, sa_column=Column("ptype", BigInteger, nullable=True)
+    )
+    home_x: Optional[float] = Field(
+        default=None, sa_column=Column("home_x", Float, nullable=True)
+    )
+    home_y: Optional[float] = Field(
+        default=None, sa_column=Column("home_y", Float, nullable=True)
+    )
+    age_16_to_19: Optional[bool] = Field(
+        default=None, sa_column=Column("age_16_to_19", Boolean, nullable=True)
+    )
+    age_16_p: Optional[bool] = Field(
+        default=None, sa_column=Column("age_16_p", Boolean, nullable=True)
+    )
+    adult: Optional[bool] = Field(
+        default=None, sa_column=Column("adult", Boolean, nullable=True)
+    )
+    male: Optional[bool] = Field(
+        default=None, sa_column=Column("male", Boolean, nullable=True)
+    )
+    female: Optional[bool] = Field(
+        default=None, sa_column=Column("female", Boolean, nullable=True)
+    )
+    has_non_worker: Optional[bool] = Field(
+        default=None, sa_column=Column("has_non_worker", Boolean, nullable=True)
+    )
+    has_retiree: Optional[bool] = Field(
+        default=None, sa_column=Column("has_retiree", Boolean, nullable=True)
+    )
+    has_preschool_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_preschool_kid", Boolean, nullable=True)
+    )
+    has_driving_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_driving_kid", Boolean, nullable=True)
+    )
+    has_school_kid: Optional[bool] = Field(
+        default=None, sa_column=Column("has_school_kid", Boolean, nullable=True)
+    )
+    has_full_time: Optional[bool] = Field(
+        default=None, sa_column=Column("has_full_time", Boolean, nullable=True)
+    )
+    has_part_time: Optional[bool] = Field(
+        default=None, sa_column=Column("has_part_time", Boolean, nullable=True)
+    )
+    has_university: Optional[bool] = Field(
+        default=None, sa_column=Column("has_university", Boolean, nullable=True)
+    )
+    student_is_employed: Optional[bool] = Field(
+        default=None, sa_column=Column("student_is_employed", Boolean, nullable=True)
+    )
+    nonstudent_to_school: Optional[bool] = Field(
+        default=None, sa_column=Column("nonstudent_to_school", Boolean, nullable=True)
+    )
+    is_student: Optional[bool] = Field(
+        default=None, sa_column=Column("is_student", Boolean, nullable=True)
+    )
+    is_gradeschool: Optional[bool] = Field(
+        default=None, sa_column=Column("is_gradeschool", Boolean, nullable=True)
+    )
+    is_highschool: Optional[bool] = Field(
+        default=None, sa_column=Column("is_highschool", Boolean, nullable=True)
+    )
+    is_university: Optional[bool] = Field(
+        default=None, sa_column=Column("is_university", Boolean, nullable=True)
+    )
+    school_segment: Optional[int] = Field(
+        default=None, sa_column=Column("school_segment", BigInteger, nullable=True)
+    )
+    is_worker: Optional[bool] = Field(
+        default=None, sa_column=Column("is_worker", Boolean, nullable=True)
+    )
     home_zone_id: Optional[int] = Field(
         default=None,
-        description='Home TAZ for the person.',
+        description="Home TAZ for the person.",
         sa_column=Column(
-            'home_zone_id',
+            "home_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    value_of_time: Optional[float] = Field(default=None, sa_column=Column('value_of_time', Float, nullable=True))
+    value_of_time: Optional[float] = Field(
+        default=None, sa_column=Column("value_of_time", Float, nullable=True)
+    )
     school_zone_id: Optional[int] = Field(
         default=None,
-        description='School location in TAZ geography.',
+        description="School location in TAZ geography.",
         sa_column=Column(
-            'school_zone_id',
+            "school_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    school_location_logsum: Optional[float] = Field(default=None, sa_column=Column('school_location_logsum', Float, nullable=True))
-    distance_to_school: Optional[float] = Field(default=None, sa_column=Column('distance_to_school', Float, nullable=True))
-    roundtrip_auto_time_to_school: Optional[float] = Field(default=None, sa_column=Column('roundtrip_auto_time_to_school', Float, nullable=True))
+    school_location_logsum: Optional[float] = Field(
+        default=None, sa_column=Column("school_location_logsum", Float, nullable=True)
+    )
+    distance_to_school: Optional[float] = Field(
+        default=None, sa_column=Column("distance_to_school", Float, nullable=True)
+    )
+    roundtrip_auto_time_to_school: Optional[float] = Field(
+        default=None,
+        sa_column=Column("roundtrip_auto_time_to_school", Float, nullable=True),
+    )
     workplace_zone_id: Optional[int] = Field(
         default=None,
-        description='Workplace location in TAZ geography.',
+        description="Workplace location in TAZ geography.",
         sa_column=Column(
-            'workplace_zone_id',
+            "workplace_zone_id",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
-    workplace_location_logsum: Optional[float] = Field(default=None, sa_column=Column('workplace_location_logsum', Float, nullable=True))
-    distance_to_work: Optional[float] = Field(default=None, sa_column=Column('distance_to_work', Float, nullable=True))
-    workplace_in_cbd: Optional[bool] = Field(default=None, sa_column=Column('workplace_in_cbd', Boolean, nullable=True))
-    work_zone_area_type: Optional[float] = Field(default=None, sa_column=Column('work_zone_area_type', Float, nullable=True))
-    roundtrip_auto_time_to_work: Optional[float] = Field(default=None, sa_column=Column('roundtrip_auto_time_to_work', Float, nullable=True))
-    work_auto_savings: Optional[float] = Field(default=None, sa_column=Column('work_auto_savings', Float, nullable=True))
-    work_auto_savings_ratio: Optional[float] = Field(default=None, sa_column=Column('work_auto_savings_ratio', Float, nullable=True))
-    free_parking_at_work: Optional[bool] = Field(default=None, sa_column=Column('free_parking_at_work', Boolean, nullable=True))
-    cdap_activity: Optional[str] = Field(default=None, sa_column=Column('cdap_activity', String, nullable=True))
-    travel_active: Optional[bool] = Field(default=None, sa_column=Column('travel_active', Boolean, nullable=True))
-    under16_not_at_school: Optional[bool] = Field(default=None, sa_column=Column('under16_not_at_school', Boolean, nullable=True))
-    has_preschool_kid_at_home: Optional[bool] = Field(default=None, sa_column=Column('has_preschool_kid_at_home', Boolean, nullable=True))
-    has_school_kid_at_home: Optional[bool] = Field(default=None, sa_column=Column('has_school_kid_at_home', Boolean, nullable=True))
-    mandatory_tour_frequency: Optional[str] = Field(default=None, sa_column=Column('mandatory_tour_frequency', String, nullable=True))
-    work_and_school_and_worker: Optional[bool] = Field(default=None, sa_column=Column('work_and_school_and_worker', Boolean, nullable=True))
-    work_and_school_and_student: Optional[bool] = Field(default=None, sa_column=Column('work_and_school_and_student', Boolean, nullable=True))
-    num_mand: Optional[int] = Field(default=None, sa_column=Column('num_mand', BigInteger, nullable=True))
-    num_work_tours: Optional[int] = Field(default=None, sa_column=Column('num_work_tours', BigInteger, nullable=True))
-    num_joint_tours: Optional[int] = Field(default=None, sa_column=Column('num_joint_tours', BigInteger, nullable=True))
-    non_mandatory_tour_frequency: Optional[int] = Field(default=None, sa_column=Column('non_mandatory_tour_frequency', BigInteger, nullable=True))
-    num_non_mand: Optional[int] = Field(default=None, sa_column=Column('num_non_mand', BigInteger, nullable=True))
-    num_escort_tours: Optional[int] = Field(default=None, sa_column=Column('num_escort_tours', BigInteger, nullable=True))
-    num_eatout_tours: Optional[int] = Field(default=None, sa_column=Column('num_eatout_tours', BigInteger, nullable=True))
-    num_shop_tours: Optional[int] = Field(default=None, sa_column=Column('num_shop_tours', BigInteger, nullable=True))
-    num_maint_tours: Optional[int] = Field(default=None, sa_column=Column('num_maint_tours', BigInteger, nullable=True))
-    num_discr_tours: Optional[int] = Field(default=None, sa_column=Column('num_discr_tours', BigInteger, nullable=True))
-    num_social_tours: Optional[int] = Field(default=None, sa_column=Column('num_social_tours', BigInteger, nullable=True))
-    num_non_escort_tours: Optional[int] = Field(default=None, sa_column=Column('num_non_escort_tours', BigInteger, nullable=True))
+    workplace_location_logsum: Optional[float] = Field(
+        default=None,
+        sa_column=Column("workplace_location_logsum", Float, nullable=True),
+    )
+    distance_to_work: Optional[float] = Field(
+        default=None, sa_column=Column("distance_to_work", Float, nullable=True)
+    )
+    workplace_in_cbd: Optional[bool] = Field(
+        default=None, sa_column=Column("workplace_in_cbd", Boolean, nullable=True)
+    )
+    work_zone_area_type: Optional[float] = Field(
+        default=None, sa_column=Column("work_zone_area_type", Float, nullable=True)
+    )
+    roundtrip_auto_time_to_work: Optional[float] = Field(
+        default=None,
+        sa_column=Column("roundtrip_auto_time_to_work", Float, nullable=True),
+    )
+    work_auto_savings: Optional[float] = Field(
+        default=None, sa_column=Column("work_auto_savings", Float, nullable=True)
+    )
+    work_auto_savings_ratio: Optional[float] = Field(
+        default=None, sa_column=Column("work_auto_savings_ratio", Float, nullable=True)
+    )
+    free_parking_at_work: Optional[bool] = Field(
+        default=None, sa_column=Column("free_parking_at_work", Boolean, nullable=True)
+    )
+    cdap_activity: Optional[str] = Field(
+        default=None, sa_column=Column("cdap_activity", String, nullable=True)
+    )
+    travel_active: Optional[bool] = Field(
+        default=None, sa_column=Column("travel_active", Boolean, nullable=True)
+    )
+    under16_not_at_school: Optional[bool] = Field(
+        default=None, sa_column=Column("under16_not_at_school", Boolean, nullable=True)
+    )
+    has_preschool_kid_at_home: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("has_preschool_kid_at_home", Boolean, nullable=True),
+    )
+    has_school_kid_at_home: Optional[bool] = Field(
+        default=None, sa_column=Column("has_school_kid_at_home", Boolean, nullable=True)
+    )
+    mandatory_tour_frequency: Optional[str] = Field(
+        default=None,
+        sa_column=Column("mandatory_tour_frequency", String, nullable=True),
+    )
+    work_and_school_and_worker: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("work_and_school_and_worker", Boolean, nullable=True),
+    )
+    work_and_school_and_student: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("work_and_school_and_student", Boolean, nullable=True),
+    )
+    num_mand: Optional[int] = Field(
+        default=None, sa_column=Column("num_mand", BigInteger, nullable=True)
+    )
+    num_work_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_work_tours", BigInteger, nullable=True)
+    )
+    num_joint_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_joint_tours", BigInteger, nullable=True)
+    )
+    non_mandatory_tour_frequency: Optional[int] = Field(
+        default=None,
+        sa_column=Column("non_mandatory_tour_frequency", BigInteger, nullable=True),
+    )
+    num_non_mand: Optional[int] = Field(
+        default=None, sa_column=Column("num_non_mand", BigInteger, nullable=True)
+    )
+    num_escort_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_escort_tours", BigInteger, nullable=True)
+    )
+    num_eatout_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_eatout_tours", BigInteger, nullable=True)
+    )
+    num_shop_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_shop_tours", BigInteger, nullable=True)
+    )
+    num_maint_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_maint_tours", BigInteger, nullable=True)
+    )
+    num_discr_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_discr_tours", BigInteger, nullable=True)
+    )
+    num_social_tours: Optional[int] = Field(
+        default=None, sa_column=Column("num_social_tours", BigInteger, nullable=True)
+    )
+    num_non_escort_tours: Optional[int] = Field(
+        default=None,
+        sa_column=Column("num_non_escort_tours", BigInteger, nullable=True),
+    )
+
 
 class TripsAsimOut(SQLModel, table=True):
-    __tablename__ = 'tripsAsimOut'
+    __tablename__ = "tripsAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     trip_id: Optional[int] = Field(
         default=None,
-        description='Unique trip identifier.',
-        sa_column=Column('trip_id', BigInteger, nullable=True, index=True),
+        description="Unique trip identifier.",
+        sa_column=Column("trip_id", BigInteger, nullable=True, index=True),
     )
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier for the trip.',
+        description="Person identifier for the trip.",
         sa_column=Column(
-            'person_id',
+            "person_id",
             BigInteger,
-            ForeignKey('PersonsAsimOut.person_id'),
+            ForeignKey("PersonsAsimOut.person_id"),
             nullable=True,
             index=True,
         ),
     )
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier for the trip.',
+        description="Household identifier for the trip.",
         sa_column=Column(
-            'household_id',
+            "household_id",
             BigInteger,
-            ForeignKey('HouseholdsAsimOut.household_id'),
+            ForeignKey("HouseholdsAsimOut.household_id"),
             nullable=True,
             index=True,
         ),
     )
     primary_purpose: Optional[str] = Field(
         default=None,
-        description='Primary purpose for the tour/trip.',
-        sa_column=Column('primary_purpose', String, nullable=True),
+        description="Primary purpose for the tour/trip.",
+        sa_column=Column("primary_purpose", String, nullable=True),
     )
     trip_num: Optional[int] = Field(
         default=None,
-        description='Trip number within the tour.',
-        sa_column=Column('trip_num', BigInteger, nullable=True),
+        description="Trip number within the tour.",
+        sa_column=Column("trip_num", BigInteger, nullable=True),
     )
     outbound: Optional[bool] = Field(
         default=None,
-        description='True if the trip is outbound from the tour origin.',
-        sa_column=Column('outbound', Boolean, nullable=True),
+        description="True if the trip is outbound from the tour origin.",
+        sa_column=Column("outbound", Boolean, nullable=True),
     )
     trip_count: Optional[int] = Field(
         default=None,
-        description='Total trips in the tour.',
-        sa_column=Column('trip_count', BigInteger, nullable=True),
+        description="Total trips in the tour.",
+        sa_column=Column("trip_count", BigInteger, nullable=True),
     )
     destination: Optional[int] = Field(
         default=None,
-        description='Destination TAZ for the trip.',
+        description="Destination TAZ for the trip.",
         sa_column=Column(
-            'destination',
+            "destination",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     origin: Optional[int] = Field(
         default=None,
-        description='Origin TAZ for the trip.',
+        description="Origin TAZ for the trip.",
         sa_column=Column(
-            'origin',
+            "origin",
             BigInteger,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     tour_id: Optional[int] = Field(
         default=None,
-        description='Tour identifier associated with the trip.',
+        description="Tour identifier associated with the trip.",
         sa_column=Column(
-            'tour_id',
+            "tour_id",
             BigInteger,
-            ForeignKey('ToursAsimOut.tour_id'),
+            ForeignKey("ToursAsimOut.tour_id"),
             nullable=True,
             index=True,
         ),
     )
     purpose: Optional[str] = Field(
         default=None,
-        description='Trip purpose (may differ from primary purpose).',
-        sa_column=Column('purpose', String, nullable=True),
+        description="Trip purpose (may differ from primary purpose).",
+        sa_column=Column("purpose", String, nullable=True),
     )
-    destination_logsum: Optional[float] = Field(default=None, sa_column=Column('destination_logsum', Float, nullable=True))
-    depart: Optional[float] = Field(default=None, sa_column=Column('depart', Float, nullable=True))
-    trip_mode: Optional[str] = Field(default=None, sa_column=Column('trip_mode', String, nullable=True))
-    mode_choice_logsum: Optional[float] = Field(default=None, sa_column=Column('mode_choice_logsum', Float, nullable=True))
+    destination_logsum: Optional[float] = Field(
+        default=None, sa_column=Column("destination_logsum", Float, nullable=True)
+    )
+    depart: Optional[float] = Field(
+        default=None, sa_column=Column("depart", Float, nullable=True)
+    )
+    trip_mode: Optional[str] = Field(
+        default=None, sa_column=Column("trip_mode", String, nullable=True)
+    )
+    mode_choice_logsum: Optional[float] = Field(
+        default=None, sa_column=Column("mode_choice_logsum", Float, nullable=True)
+    )
+
 
 class ToursAsimOut(SQLModel, table=True):
-    __tablename__ = 'ToursAsimOut'
+    __tablename__ = "ToursAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     tour_id: Optional[int] = Field(
         default=None,
-        description='Unique tour identifier.',
-        sa_column=Column('tour_id', BigInteger, nullable=True, index=True),
+        description="Unique tour identifier.",
+        sa_column=Column("tour_id", BigInteger, nullable=True, index=True),
     )
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier associated with the tour.',
+        description="Person identifier associated with the tour.",
         sa_column=Column(
-            'person_id',
+            "person_id",
             BigInteger,
-            ForeignKey('PersonsAsimOut.person_id'),
+            ForeignKey("PersonsAsimOut.person_id"),
             nullable=True,
             index=True,
         ),
     )
-    tour_type: Optional[str] = Field(default=None, sa_column=Column('tour_type', String, nullable=True))
-    tour_type_count: Optional[int] = Field(default=None, sa_column=Column('tour_type_count', BigInteger, nullable=True))
-    tour_type_num: Optional[int] = Field(default=None, sa_column=Column('tour_type_num', BigInteger, nullable=True))
-    tour_num: Optional[int] = Field(default=None, sa_column=Column('tour_num', BigInteger, nullable=True))
-    tour_count: Optional[int] = Field(default=None, sa_column=Column('tour_count', BigInteger, nullable=True))
-    tour_category: Optional[str] = Field(default=None, sa_column=Column('tour_category', String, nullable=True))
-    number_of_participants: Optional[int] = Field(default=None, sa_column=Column('number_of_participants', BigInteger, nullable=True))
+    tour_type: Optional[str] = Field(
+        default=None, sa_column=Column("tour_type", String, nullable=True)
+    )
+    tour_type_count: Optional[int] = Field(
+        default=None, sa_column=Column("tour_type_count", BigInteger, nullable=True)
+    )
+    tour_type_num: Optional[int] = Field(
+        default=None, sa_column=Column("tour_type_num", BigInteger, nullable=True)
+    )
+    tour_num: Optional[int] = Field(
+        default=None, sa_column=Column("tour_num", BigInteger, nullable=True)
+    )
+    tour_count: Optional[int] = Field(
+        default=None, sa_column=Column("tour_count", BigInteger, nullable=True)
+    )
+    tour_category: Optional[str] = Field(
+        default=None, sa_column=Column("tour_category", String, nullable=True)
+    )
+    number_of_participants: Optional[int] = Field(
+        default=None,
+        sa_column=Column("number_of_participants", BigInteger, nullable=True),
+    )
     destination: Optional[float] = Field(
         default=None,
-        description='Destination TAZ for the tour.',
+        description="Destination TAZ for the tour.",
         sa_column=Column(
-            'destination',
+            "destination",
             Float,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     origin: Optional[float] = Field(
         default=None,
-        description='Origin TAZ for the tour.',
+        description="Origin TAZ for the tour.",
         sa_column=Column(
-            'origin',
+            "origin",
             Float,
-            ForeignKey('LandUseAsimIn.TAZ'),
+            ForeignKey("LandUseAsimIn.TAZ"),
             nullable=True,
             index=True,
         ),
     )
     household_id: Optional[int] = Field(
         default=None,
-        description='Household identifier associated with the tour.',
+        description="Household identifier associated with the tour.",
         sa_column=Column(
-            'household_id',
+            "household_id",
             BigInteger,
-            ForeignKey('HouseholdsAsimOut.household_id'),
+            ForeignKey("HouseholdsAsimOut.household_id"),
             nullable=True,
             index=True,
         ),
     )
-    tdd: Optional[float] = Field(default=None, sa_column=Column('tdd', Float, nullable=True))
-    start: Optional[float] = Field(default=None, sa_column=Column('start', Float, nullable=True))
-    end: Optional[float] = Field(default=None, sa_column=Column('end', Float, nullable=True))
-    duration: Optional[float] = Field(default=None, sa_column=Column('duration', Float, nullable=True))
-    composition: Optional[str] = Field(default=None, sa_column=Column('composition', String, nullable=True))
-    destination_logsum: Optional[float] = Field(default=None, sa_column=Column('destination_logsum', Float, nullable=True))
+    tdd: Optional[float] = Field(
+        default=None, sa_column=Column("tdd", Float, nullable=True)
+    )
+    start: Optional[float] = Field(
+        default=None, sa_column=Column("start", Float, nullable=True)
+    )
+    end: Optional[float] = Field(
+        default=None, sa_column=Column("end", Float, nullable=True)
+    )
+    duration: Optional[float] = Field(
+        default=None, sa_column=Column("duration", Float, nullable=True)
+    )
+    composition: Optional[str] = Field(
+        default=None, sa_column=Column("composition", String, nullable=True)
+    )
+    destination_logsum: Optional[float] = Field(
+        default=None, sa_column=Column("destination_logsum", Float, nullable=True)
+    )
     tour_mode: Optional[str] = Field(
         default=None,
-        description='Primary tour mode.',
-        sa_column=Column('tour_mode', String, nullable=True),
+        description="Primary tour mode.",
+        sa_column=Column("tour_mode", String, nullable=True),
     )
-    mode_choice_logsum: Optional[float] = Field(default=None, sa_column=Column('mode_choice_logsum', Float, nullable=True))
-    atwork_subtour_frequency: Optional[str] = Field(default=None, sa_column=Column('atwork_subtour_frequency', String, nullable=True))
+    mode_choice_logsum: Optional[float] = Field(
+        default=None, sa_column=Column("mode_choice_logsum", Float, nullable=True)
+    )
+    atwork_subtour_frequency: Optional[str] = Field(
+        default=None,
+        sa_column=Column("atwork_subtour_frequency", String, nullable=True),
+    )
     parent_tour_id: Optional[float] = Field(
         default=None,
-        description='Parent tour identifier for at-work subtours.',
+        description="Parent tour identifier for at-work subtours.",
         sa_column=Column(
-            'parent_tour_id',
+            "parent_tour_id",
             Float,
-            ForeignKey('ToursAsimOut.tour_id'),
+            ForeignKey("ToursAsimOut.tour_id"),
             nullable=True,
             index=True,
         ),
     )
-    stop_frequency: Optional[str] = Field(default=None, sa_column=Column('stop_frequency', String, nullable=True))
-    primary_purpose: Optional[str] = Field(default=None, sa_column=Column('primary_purpose', String, nullable=True))
+    stop_frequency: Optional[str] = Field(
+        default=None, sa_column=Column("stop_frequency", String, nullable=True)
+    )
+    primary_purpose: Optional[str] = Field(
+        default=None, sa_column=Column("primary_purpose", String, nullable=True)
+    )
 
 
 class JointTourParticipantsAsimOut(SQLModel, table=True):
-    __tablename__ = 'JointTourParticipantsAsimOut'
+    __tablename__ = "JointTourParticipantsAsimOut"
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
     tour_id: Optional[int] = Field(
         default=None,
-        description='Tour identifier for the joint-tour participation record.',
+        description="Tour identifier for the joint-tour participation record.",
         sa_column=Column(
-            'tour_id',
+            "tour_id",
             BigInteger,
-            ForeignKey('ToursAsimOut.tour_id'),
+            ForeignKey("ToursAsimOut.tour_id"),
             nullable=True,
             index=True,
         ),
     )
     household_id: Optional[float] = Field(
         default=None,
-        description='Household identifier associated with the joint tour.',
-        sa_column=Column('household_id', Float, nullable=True),
+        description="Household identifier associated with the joint tour.",
+        sa_column=Column("household_id", Float, nullable=True),
     )
     person_id: Optional[int] = Field(
         default=None,
-        description='Person identifier recorded on the joint-tour participation row.',
+        description="Person identifier recorded on the joint-tour participation row.",
         sa_column=Column(
-            'person_id',
+            "person_id",
             BigInteger,
-            ForeignKey('PersonsAsimOut.person_id'),
+            ForeignKey("PersonsAsimOut.person_id"),
             nullable=True,
             index=True,
         ),
     )
     participant_num: Optional[int] = Field(
         default=None,
-        description='Participant sequence number within the joint tour.',
-        sa_column=Column('participant_num', BigInteger, nullable=True),
+        description="Participant sequence number within the joint tour.",
+        sa_column=Column("participant_num", BigInteger, nullable=True),
     )
     participant_id: Optional[int] = Field(
         default=None,
-        description='Participant identifier carried by ActivitySim joint-tour outputs.',
+        description="Participant identifier carried by ActivitySim joint-tour outputs.",
         sa_column=Column(
-            'participant_id',
+            "participant_id",
             BigInteger,
-            ForeignKey('PersonsAsimOut.person_id'),
+            ForeignKey("PersonsAsimOut.person_id"),
             nullable=True,
             index=True,
         ),

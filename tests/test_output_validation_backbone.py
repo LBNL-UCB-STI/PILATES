@@ -149,7 +149,9 @@ class _ValidationWorkspace:
         self.full_path = str(root)
 
 
-def test_cross_step_validator_reads_upstream_outputs_from_context(tmp_path: Path) -> None:
+def test_cross_step_validator_reads_upstream_outputs_from_context(
+    tmp_path: Path,
+) -> None:
     output_path = tmp_path / "generated.txt"
     output_path.write_text("ok")
 
@@ -165,14 +167,16 @@ def test_cross_step_validator_reads_upstream_outputs_from_context(tmp_path: Path
             phase="run",
             outputs_class=_CrossStepOutputs,
             component_getter=lambda _factory, _state: object(),
-            component_executor=lambda _component, _workspace, _holder, **_kwargs: RecordStore(
-                recordList=[
-                    FileRecord(
-                        file_path=str(output_path),
-                        short_name="dummy_output",
-                        description="dummy output",
-                    )
-                ]
+            component_executor=lambda _component, _workspace, _holder, **_kwargs: (
+                RecordStore(
+                    recordList=[
+                        FileRecord(
+                            file_path=str(output_path),
+                            short_name="dummy_output",
+                            description="dummy output",
+                        )
+                    ]
+                )
             ),
         ),
     )

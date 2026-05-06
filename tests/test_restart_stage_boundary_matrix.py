@@ -63,14 +63,18 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.binding import BindingPlan
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.supply_demand import (
+    run_supply_demand_stage as _run_supply_demand_stage,
+)
 from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
     _emit_beam_preprocess_binding_diagnostic,
     _maybe_fail_after_beam_run_for_canary,
     beam_preprocess_binding_diagnostic_payload,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 from tests.workflow_contract_harness import (
     CouplerStub,
     DummyPostprocessor,
@@ -160,7 +164,9 @@ def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):
         run=SimpleNamespace(region="sfbay"),
         beam=SimpleNamespace(config="beam.conf"),
     )
-    state = SimpleNamespace(is_restart_run=True, year=2019, forecast_year=2021, iteration=0)
+    state = SimpleNamespace(
+        is_restart_run=True, year=2019, forecast_year=2021, iteration=0
+    )
     binding = BindingPlan(
         step_name="beam_preprocess",
         inputs={BEAM_CONFIG_FILE: str(region_dir / "beam.conf")},
@@ -206,7 +212,9 @@ def test_beam_restart_binding_diagnostic_persists_to_lifecycle_audit(
         run=SimpleNamespace(region="sfbay"),
         beam=SimpleNamespace(config="beam.conf"),
     )
-    state = SimpleNamespace(is_restart_run=True, year=2019, forecast_year=2021, iteration=0)
+    state = SimpleNamespace(
+        is_restart_run=True, year=2019, forecast_year=2021, iteration=0
+    )
 
     _emit_beam_preprocess_binding_diagnostic(
         binding=BindingPlan(
@@ -228,7 +236,9 @@ def test_beam_restart_binding_diagnostic_persists_to_lifecycle_audit(
     assert event["artifact_family"] == "beam_restart_diagnostic"
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
     context = context or WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
@@ -410,7 +420,8 @@ def restart_stage_env(tmp_path, monkeypatch):
         "usim-input",
     )
     usim_output_path = _write_file(
-        usim_dir / settings.urbansim.output_file_template.format(year=state.forecast_year),
+        usim_dir
+        / settings.urbansim.output_file_template.format(year=state.forecast_year),
         "usim-forecast",
     )
     usim_merged_path = _write_file(
@@ -462,7 +473,10 @@ def restart_stage_env(tmp_path, monkeypatch):
             if model_name == "urbansim":
                 return RecordStore(
                     recordList=[
-                        FileRecord(file_path=str(usim_output_path), short_name=USIM_FORECAST_OUTPUT)
+                        FileRecord(
+                            file_path=str(usim_output_path),
+                            short_name=USIM_FORECAST_OUTPUT,
+                        )
                     ]
                 )
             if model_name == "activitysim":
@@ -488,7 +502,10 @@ def restart_stage_env(tmp_path, monkeypatch):
             if model_name == "beam_full_skim":
                 return RecordStore(
                     recordList=[
-                        FileRecord(file_path=str(beam_full_skims_path), short_name="skimsODFull")
+                        FileRecord(
+                            file_path=str(beam_full_skims_path),
+                            short_name="skimsODFull",
+                        )
                     ]
                 )
             return RecordStore()
@@ -567,7 +584,8 @@ def test_restart_land_use_boundary_preserves_required_datastores(
     from pilates.workflows.steps import StepOutputsHolder
 
     geoid_to_zone_path = _write_file(
-        Path(restart_stage_env["workspace"].get_usim_mutable_data_dir()) / "geoid_to_zone.csv"
+        Path(restart_stage_env["workspace"].get_usim_mutable_data_dir())
+        / "geoid_to_zone.csv"
     )
     captured = {}
 
@@ -609,9 +627,17 @@ def test_restart_land_use_boundary_preserves_required_datastores(
     )
 
     assert captured["inputs"]["geoid_to_zone"] == str(geoid_to_zone_path)
-    assert captured["inputs"][USIM_DATASTORE_CURRENT_H5] == restart_stage_env["usim_input_path"]
-    assert captured["inputs"][USIM_DATASTORE_BASE_H5] == restart_stage_env["usim_input_path"]
-    assert usim_inputs[USIM_DATASTORE_CURRENT_H5] == restart_stage_env["usim_input_path"]
+    assert (
+        captured["inputs"][USIM_DATASTORE_CURRENT_H5]
+        == restart_stage_env["usim_input_path"]
+    )
+    assert (
+        captured["inputs"][USIM_DATASTORE_BASE_H5]
+        == restart_stage_env["usim_input_path"]
+    )
+    assert (
+        usim_inputs[USIM_DATASTORE_CURRENT_H5] == restart_stage_env["usim_input_path"]
+    )
 
 
 def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
@@ -624,9 +650,9 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
         "psid",
     )
 
-    restart_stage_env["state"].current_major_stage = (
-        restart_stage_env["state"].Stage.vehicle_ownership_model
-    )
+    restart_stage_env["state"].current_major_stage = restart_stage_env[
+        "state"
+    ].Stage.vehicle_ownership_model
     restart_stage_env["coupler"].set(
         USIM_DATASTORE_CURRENT_H5, restart_stage_env["usim_input_path"]
     )
@@ -664,7 +690,9 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     captured = {}
 
     def _fake_run_workflow(*, steps, state, workspace, outputs_holder, **_kwargs):
-        atlas_run_step = next((step for step in steps if step.name == "atlas_run"), None)
+        atlas_run_step = next(
+            (step for step in steps if step.name == "atlas_run"), None
+        )
         if atlas_run_step is not None and atlas_run_step.binding is not None:
             captured[state.year] = dict(atlas_run_step.binding.inputs or {})
             raw_output = _write_file(
@@ -690,8 +718,13 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     )
 
     atlas_run_inputs = captured[restart_stage_env["state"].year]
-    assert atlas_run_inputs[USIM_DATASTORE_CURRENT_H5] == restart_stage_env["usim_input_path"]
-    assert atlas_run_inputs[USIM_DATASTORE_BASE_H5] == restart_stage_env["usim_input_path"]
+    assert (
+        atlas_run_inputs[USIM_DATASTORE_CURRENT_H5]
+        == restart_stage_env["usim_input_path"]
+    )
+    assert (
+        atlas_run_inputs[USIM_DATASTORE_BASE_H5] == restart_stage_env["usim_input_path"]
+    )
     assert atlas_run_inputs["psid_names"] == str(atlas_static_path)
 
 
@@ -730,11 +763,14 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
         coupler=coupler,
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"restart_activity_demand_{year}_{iteration}.yaml",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"restart_activity_demand_{year}_{iteration}.yaml"
+        ),
     )
 
-    assert not any(call.get("model") == "activitysim_compile" for call in scenario.calls)
+    assert not any(
+        call.get("model") == "activitysim_compile" for call in scenario.calls
+    )
     asim_run_calls = [
         call
         for call in scenario.calls
@@ -743,7 +779,9 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
         and ASIM_PERSONS_IN in (call.get("input_keys") or [])
         and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
     ]
-    assert asim_run_calls, "Expected ActivitySim run to start from restored compile outputs."
+    assert asim_run_calls, (
+        "Expected ActivitySim run to start from restored compile outputs."
+    )
     assert ASIM_SHARROW_CACHE_DIR not in (asim_run_calls[0].get("input_keys") or [])
     assert ASIM_SHARROW_CACHE_DIR in (
         asim_run_calls[0].get("optional_input_keys") or []
@@ -791,14 +829,17 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
             USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
             USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
         },
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"restart_traffic_{year}_{iteration}.yaml",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"restart_traffic_{year}_{iteration}.yaml"
+        ),
     )
 
     beam_preprocess_calls = [
         call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
-    assert beam_preprocess_calls, "Expected BEAM preprocess to run for the restart boundary."
+    assert beam_preprocess_calls, (
+        "Expected BEAM preprocess to run for the restart boundary."
+    )
 
     assert default_plans.exists()
     assert default_households.exists()
@@ -816,9 +857,7 @@ def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(
         "resolved from staged default scenario inputs."
     )
     assert LINKSTATS_WARMSTART not in (beam_run_calls[0].get("input_keys") or [])
-    assert LINKSTATS_WARMSTART in (
-        beam_run_calls[0].get("optional_input_keys") or []
-    )
+    assert LINKSTATS_WARMSTART in (beam_run_calls[0].get("optional_input_keys") or [])
 
 
 def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
@@ -861,8 +900,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
             USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
             USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
         },
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"restart_traffic_asim_{year}_{iteration}.yaml",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"restart_traffic_asim_{year}_{iteration}.yaml"
+        ),
     )
 
     beam_preprocess_calls = [
@@ -872,7 +912,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
         and "households_beam_in" in call["inputs"]
         and "persons_beam_in" in call["inputs"]
     ]
-    assert beam_preprocess_calls, "Expected BEAM preprocess to start from restored ActivitySim outputs."
+    assert beam_preprocess_calls, (
+        "Expected BEAM preprocess to start from restored ActivitySim outputs."
+    )
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
     assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
     assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
@@ -901,7 +943,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_m
     households = _write_file(iter_dir / "households.parquet")
     persons = _write_file(iter_dir / "persons.parquet")
     archived_zarr = _write_file(
-        Path(workspace.get_asim_output_dir()) / "inputs-year-2017-iteration-0" / "skims.zarr"
+        Path(workspace.get_asim_output_dir())
+        / "inputs-year-2017-iteration-0"
+        / "skims.zarr"
     )
     usim_datastore = _write_file(
         Path(workspace.get_usim_mutable_data_dir())
@@ -958,7 +1002,9 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_m
         and "households_beam_in" in call["inputs"]
         and "persons_beam_in" in call["inputs"]
     ]
-    assert beam_preprocess_calls, "Expected BEAM preprocess to start from manifest-restored ActivitySim outputs."
+    assert beam_preprocess_calls, (
+        "Expected BEAM preprocess to start from manifest-restored ActivitySim outputs."
+    )
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
     assert beam_preprocess_inputs["plans_beam_in"] == str(beam_plans)
     assert beam_preprocess_inputs["households_beam_in"] == str(households)
@@ -981,7 +1027,10 @@ def test_restart_traffic_assignment_boundary_rejects_partial_hydrated_restore(
     settings.activity_demand_enabled = True
     state._settings["activity_demand_enabled"] = True
     settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="disabled")
-    coupler.set("beam_plans_asim_out", str(_write_file(tmp_path / "partial" / "beam_plans.parquet")))
+    coupler.set(
+        "beam_plans_asim_out",
+        str(_write_file(tmp_path / "partial" / "beam_plans.parquet")),
+    )
 
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
@@ -1002,8 +1051,9 @@ def test_restart_traffic_assignment_boundary_rejects_partial_hydrated_restore(
                 USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
                 USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
             },
-            build_manifest_path=lambda _workspace, year, iteration: tmp_path
-            / f"restart_traffic_asim_partial_{year}_{iteration}.yaml",
+            build_manifest_path=lambda _workspace, year, iteration: (
+                tmp_path / f"restart_traffic_asim_partial_{year}_{iteration}.yaml"
+            ),
         )
 
 
@@ -1054,14 +1104,13 @@ def test_restart_mid_iteration_traffic_assignment_preserves_promoted_warmstart(
             USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
             USIM_DATASTORE_BASE_H5: restart_stage_env["usim_input_path"],
         },
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"restart_midloop_{year}_{iteration}.yaml",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"restart_midloop_{year}_{iteration}.yaml"
+        ),
     )
 
     beam_preprocess_calls = [
-        call
-        for call in scenario.calls
-        if LINKSTATS_WARMSTART in call.get("inputs", {})
+        call for call in scenario.calls if LINKSTATS_WARMSTART in call.get("inputs", {})
     ]
     assert beam_preprocess_calls, (
         "Expected resumed BEAM preprocess to remap promoted prior linkstats "
@@ -1077,8 +1126,8 @@ def test_restart_mid_iteration_traffic_assignment_preserves_promoted_warmstart(
         and BEAM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
         and BEAM_PERSONS_IN in (call.get("input_keys") or [])
     ]
-    assert beam_run_calls, "Expected resumed mid-loop traffic assignment to reach BEAM run."
-    assert LINKSTATS_WARMSTART not in (beam_run_calls[0].get("input_keys") or [])
-    assert LINKSTATS_WARMSTART in (
-        beam_run_calls[0].get("optional_input_keys") or []
+    assert beam_run_calls, (
+        "Expected resumed mid-loop traffic assignment to reach BEAM run."
     )
+    assert LINKSTATS_WARMSTART not in (beam_run_calls[0].get("input_keys") or [])
+    assert LINKSTATS_WARMSTART in (beam_run_calls[0].get("optional_input_keys") or [])

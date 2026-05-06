@@ -169,7 +169,9 @@ class Comparison:
             iteration=self.iteration,
         )
         left_frame = _restrict_to_runset(dataset.mode_counts, self.selected_left_runset)
-        right_frame = _restrict_to_runset(dataset.mode_counts, self.selected_right_runset)
+        right_frame = _restrict_to_runset(
+            dataset.mode_counts, self.selected_right_runset
+        )
         merged = _compare_frames(
             left_frame,
             right_frame,

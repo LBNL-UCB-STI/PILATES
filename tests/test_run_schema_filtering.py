@@ -73,14 +73,14 @@ def test_filter_schema_steps_matches_catalog_enablement_models():
     models = {step.__consist_step__.model for step in required_steps}
     expected = enabled_schema_step_models(
         settings,
-        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: bool(
-            getattr(current_settings, flag_attr, None)
-        )
-        or bool(
-            getattr(
-                getattr(getattr(current_settings, "run", None), "models", None),
-                model_attr,
-                None,
+        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: (
+            bool(getattr(current_settings, flag_attr, None))
+            or bool(
+                getattr(
+                    getattr(getattr(current_settings, "run", None), "models", None),
+                    model_attr,
+                    None,
+                )
             )
         ),
         include_optional=False,

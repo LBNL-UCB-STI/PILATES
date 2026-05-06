@@ -31,7 +31,9 @@ def summarize_run_outputs(outputs: Mapping[str, object]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _latest_run_id(archive, *, scenario_id: str | None = None, model: str | None = None):
+def _latest_run_id(
+    archive, *, scenario_id: str | None = None, model: str | None = None
+):
     runs = archive.runs(
         scenario_id=scenario_id,
         model=model,
@@ -55,8 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Project root mounted as Consist inputs. Defaults to the current PILATES checkout.",
     )
     parser.add_argument("--run-id", help="Explicit run id to inspect.")
-    parser.add_argument("--scenario-id", help="Optional scenario filter when selecting the latest run.")
-    parser.add_argument("--model", help="Optional model filter when selecting the latest run.")
+    parser.add_argument(
+        "--scenario-id", help="Optional scenario filter when selecting the latest run."
+    )
+    parser.add_argument(
+        "--model", help="Optional model filter when selecting the latest run."
+    )
     parser.add_argument(
         "--key",
         action="append",

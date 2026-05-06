@@ -61,7 +61,11 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     merge_calls = []
 
     def _fake_split_events_parquet_by_type(
-        events_path, event_types=None, output_dir=None, output_prefix=None, create_path_traversal_links=False
+        events_path,
+        event_types=None,
+        output_dir=None,
+        output_prefix=None,
+        create_path_traversal_links=False,
     ):
         split_calls.append((events_path, create_path_traversal_links))
         output_root = Path(output_dir) if output_dir else Path(events_path).parent
@@ -145,9 +149,17 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     assert merge_calls[0]["beam_output_dir"] == str(beam_output_dir)
     assert merge_calls[0]["override"] == str(raw_skims)
 
-    assert f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal" in output_keys
-    assert f"events_parquet_{state.forecast_year}_{state.iteration}_type_ModeChoice" in output_keys
-    assert f"path_traversal_links_{state.forecast_year}_{state.iteration}" in output_keys
+    assert (
+        f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal"
+        in output_keys
+    )
+    assert (
+        f"events_parquet_{state.forecast_year}_{state.iteration}_type_ModeChoice"
+        in output_keys
+    )
+    assert (
+        f"path_traversal_links_{state.forecast_year}_{state.iteration}" in output_keys
+    )
     assert "zarr_skims" in output_keys
     assert "final_skims_omx" not in output_keys
     assert state.sub_stage_progress == "postprocessor"

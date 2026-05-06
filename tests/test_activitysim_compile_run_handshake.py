@@ -286,9 +286,8 @@ def test_activitysim_run_carries_preprocess_and_compile_hash_metadata(
     run_outputs = outputs_holder.activitysim_run
     assert isinstance(run_outputs, ActivitySimRunOutputs)
     assert logged == ["households_asim_out"]
-    assert (
-        artifact_to_path(coupler.get("households_asim_out"), workspace)
-        == str(asim_output_dir / "households.parquet")
+    assert artifact_to_path(coupler.get("households_asim_out"), workspace) == str(
+        asim_output_dir / "households.parquet"
     )
     assert run_outputs.raw_output_hashes["households_asim_out"] == "hash_households_out"
     assert run_outputs.source_input_paths[ASIM_LAND_USE_IN] == land_use
@@ -333,7 +332,9 @@ def test_activitysim_run_publishes_optional_outputs_to_coupler(
 
     class _RunRunner:
         def run(self, inputs, workspace, *, extra_inputs=None):
-            output_path = workspace.get_asim_output_dir() + "/school_destination_size.parquet"
+            output_path = (
+                workspace.get_asim_output_dir() + "/school_destination_size.parquet"
+            )
             Path(output_path).write_text("out")
             return ActivitySimRunOutputs(
                 output_dir=Path(workspace.get_asim_output_dir()),
@@ -369,10 +370,9 @@ def test_activitysim_run_publishes_optional_outputs_to_coupler(
     run_step(settings=settings, state=state, workspace=workspace)
 
     assert logged == ["school_destination_size_asim_out"]
-    assert (
-        artifact_to_path(coupler.get("school_destination_size_asim_out"), workspace)
-        == str(asim_output_dir / "school_destination_size.parquet")
-    )
+    assert artifact_to_path(
+        coupler.get("school_destination_size_asim_out"), workspace
+    ) == str(asim_output_dir / "school_destination_size.parquet")
 
 
 def test_activitysim_compile_passes_typed_preprocess_outputs_to_runner(
@@ -491,7 +491,9 @@ def test_activitysim_compile_publishes_expected_zarr_path_without_runner_record(
         logged_outputs[kwargs["key"]] = kwargs["path"]
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(activitysim_steps, "log_and_set_output", _capture_log_and_set_output)
+    monkeypatch.setattr(
+        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
+    )
 
     compile_step = activitysim_steps.make_activitysim_compile_step(
         coupler=coupler,
@@ -516,8 +518,12 @@ def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None
     settings_on = _settings(persist_sharrow_cache=True)
     settings_off = _settings(persist_sharrow_cache=False)
 
-    outputs_on = ActivitysimCompileRunner.expected_outputs(settings_on, state, workspace)
-    outputs_off = ActivitysimCompileRunner.expected_outputs(settings_off, state, workspace)
+    outputs_on = ActivitysimCompileRunner.expected_outputs(
+        settings_on, state, workspace
+    )
+    outputs_off = ActivitysimCompileRunner.expected_outputs(
+        settings_off, state, workspace
+    )
 
     assert ArtifactKeys.ASIM_SHARROW_CACHE_DIR == ASIM_SHARROW_CACHE_DIR
     assert ASIM_SHARROW_CACHE_DIR in outputs_on
@@ -530,7 +536,9 @@ def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None
         coupler=coupler,
         outputs_holder=holder,
     )
-    schema_on = build_coupler_schema([compile_step], settings=settings_on, include_extras=False)
+    schema_on = build_coupler_schema(
+        [compile_step], settings=settings_on, include_extras=False
+    )
     schema_off = build_coupler_schema(
         [compile_step], settings=settings_off, include_extras=False
     )
@@ -538,7 +546,9 @@ def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None
     assert ASIM_SHARROW_CACHE_DIR not in schema_off
 
 
-def test_activitysim_compile_cleanup_removes_stale_retry_artifacts(tmp_path: Path) -> None:
+def test_activitysim_compile_cleanup_removes_stale_retry_artifacts(
+    tmp_path: Path,
+) -> None:
     asim_output_dir = tmp_path / "activitysim" / "output"
     stale_zarr = asim_output_dir / "cache" / "skims.zarr"
     stale_output_numba = asim_output_dir / "cache" / "numba"
@@ -605,7 +615,9 @@ def test_activitysim_compile_logs_cache_output_when_gate_on(
         logged_outputs[kwargs["key"]] = kwargs["path"]
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(activitysim_steps, "log_and_set_output", _capture_log_and_set_output)
+    monkeypatch.setattr(
+        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
+    )
 
     compile_step = activitysim_steps.make_activitysim_compile_step(
         coupler=coupler,
@@ -671,7 +683,9 @@ def test_activitysim_compile_does_not_log_cache_output_when_gate_off(
         logged_keys.append(kwargs["key"])
 
     monkeypatch.setattr(activitysim_steps.ModelFactory, "get_runner", _get_runner)
-    monkeypatch.setattr(activitysim_steps, "log_and_set_output", _capture_log_and_set_output)
+    monkeypatch.setattr(
+        activitysim_steps, "log_and_set_output", _capture_log_and_set_output
+    )
 
     compile_step = activitysim_steps.make_activitysim_compile_step(
         coupler=coupler,
@@ -691,7 +705,9 @@ def test_activitysim_compile_does_not_log_cache_output_when_gate_off(
     assert ASIM_SHARROW_CACHE_DIR not in logged_keys
 
 
-def test_activitysim_run_raises_when_container_execution_fails(monkeypatch, tmp_path: Path) -> None:
+def test_activitysim_run_raises_when_container_execution_fails(
+    monkeypatch, tmp_path: Path
+) -> None:
     root = tmp_path / "workspace"
     asim_output_dir = root / "activitysim" / "output"
     asim_output_dir.mkdir(parents=True)
@@ -738,9 +754,15 @@ def test_activitysim_run_raises_when_container_execution_fails(monkeypatch, tmp_
 
     runner = ActivitysimRunner("activitysim", state)
 
-    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args, **_kwargs: ("activitysim", "docker://fake"))
+    monkeypatch.setattr(
+        runner,
+        "get_model_and_image",
+        lambda *_args, **_kwargs: ("activitysim", "docker://fake"),
+    )
     monkeypatch.setattr(runner, "get_asim_docker_vols", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(runner, "get_base_asim_cmd", lambda *_args, **_kwargs: "asim run")
+    monkeypatch.setattr(
+        runner, "get_base_asim_cmd", lambda *_args, **_kwargs: "asim run"
+    )
     monkeypatch.setattr(
         runner,
         "get_asim_additional_args",
