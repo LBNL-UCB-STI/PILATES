@@ -143,6 +143,54 @@ def test_build_binding_plan_ignores_noop_coupler_placeholders() -> None:
     assert plan.source_by_key[LINKSTATS_WARMSTART] == "missing"
 
 
+def test_beam_preprocess_warmstart_fallback_materializes_historical_artifact(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from pilates.utils import coupler_helpers
+    from pilates.workflows import binding as binding_module
+
+    current_local = tmp_path / "local" / "current-run"
+    current_archive = tmp_path / "archive" / "current-run"
+    cached_archive = tmp_path / "archive" / "cached-run"
+    rel_path = "beam/beam_output/year-2018-iteration-0/0.linkstats.csv.gz"
+    source = cached_archive / rel_path
+    source.parent.mkdir(parents=True)
+    source.write_text("linkstats", encoding="utf-8")
+
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(current_local))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(current_archive))
+    monkeypatch.setattr(
+        coupler_helpers.cr,
+        "current_tracker",
+        lambda: SimpleNamespace(
+            get_run=lambda run_id: SimpleNamespace(
+                id=run_id,
+                parent_run_id="cached-run",
+                meta={"_physical_run_dir": str(tmp_path / "local" / "cached-run")},
+            )
+        ),
+    )
+    artifact = SimpleNamespace(
+        key=LINKSTATS_WARMSTART,
+        container_uri=f"workspace://{rel_path}",
+        run_id="cached-beam-postprocess",
+        meta={},
+    )
+
+    fallback = binding_module._beam_preprocess_warmstart_inputs(
+        settings=SimpleNamespace(
+            run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam"))
+        ),
+        coupler=_CouplerStub({LINKSTATS_WARMSTART: artifact}),
+        workspace=SimpleNamespace(full_path=current_local),
+    )
+
+    expected_local = current_local / rel_path
+    assert fallback == {LINKSTATS_WARMSTART: str(expected_local)}
+    assert expected_local.read_text(encoding="utf-8") == "linkstats"
+
+
 def test_beam_preprocess_binding_plan_seeds_default_exchange_and_atlas_inputs(
     monkeypatch,
 ):
