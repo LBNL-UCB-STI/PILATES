@@ -17,6 +17,7 @@ from pilates.activitysim.runner import (
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
+from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
@@ -70,6 +71,7 @@ from .shared import (
     log_and_set_output,
     log_input_only,
     log_output_only,
+    recovered_cached_paths,
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
@@ -610,10 +612,36 @@ def _recover_activitysim_run_outputs(
 ) -> Optional[ActivitySimRunOutputs]:
     del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    cached_paths = recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+        step_logger=logger,
+        log_context="ActivitySim run cached output recovery",
+    )
     raw_outputs: Dict[str, Path] = {}
     raw_output_hashes: Dict[str, str] = {}
     source_input_paths: Dict[str, Path] = {}
     source_input_hashes: Dict[str, str] = {}
+    asim_output_keys = set(ASIM_OUTPUT_KEY_MAP.values())
+    for short_name, fpath in cached_paths.items():
+        normalized_name = normalize_asim_output_key(short_name)
+        if normalized_name not in asim_output_keys:
+            continue
+        raw_outputs[normalized_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_activitysim_run_cached_value(
+                key=normalized_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=normalized_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            raw_output_hashes[normalized_name] = content_hash
 
     final_pipeline = Path(
         _existing_local_path(asim_output_dir / "final_pipeline", workspace)
@@ -713,6 +741,21 @@ def _recover_activitysim_run_outputs(
         )
         if content_hash:
             source_input_hashes[ZARR_SKIMS] = content_hash
+    elif ZARR_SKIMS in cached_paths:
+        source_input_paths[ZARR_SKIMS] = cached_paths[ZARR_SKIMS]
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=ZARR_SKIMS,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=ZARR_SKIMS,
+            workspace=workspace,
+            fallback_path=cached_paths[ZARR_SKIMS],
+        )
+        if content_hash:
+            source_input_hashes[ZARR_SKIMS] = content_hash
 
     return ActivitySimRunOutputs(
         output_dir=asim_output_dir,
@@ -736,6 +779,13 @@ def _recover_activitysim_postprocess_outputs(
 ) -> Optional[ActivitySimPostprocessOutputs]:
     del outputs_holder
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    cached_paths = recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+        step_logger=logger,
+        log_context="ActivitySim postprocess cached output recovery",
+    )
     iter_dir = Path(
         _existing_local_path(
             asim_output_dir / f"year-{state.year}-iteration-{state.iteration}",
@@ -745,12 +795,34 @@ def _recover_activitysim_postprocess_outputs(
     )
     processed_outputs: Dict[str, Path] = {}
     processed_output_hashes: Dict[str, str] = {}
-    if iter_dir.exists():
-        required_outputs = {
-            "persons_asim_out",
-            "households_asim_out",
-            "beam_plans_asim_out",
-        }
+    required_outputs = {
+        "persons_asim_out",
+        "households_asim_out",
+        "beam_plans_asim_out",
+    }
+    asim_output_keys = set(ASIM_OUTPUT_KEY_MAP.values())
+    for short_name, fpath in cached_paths.items():
+        normalized_name = normalize_asim_output_key(short_name)
+        if normalized_name not in asim_output_keys:
+            continue
+        processed_outputs[normalized_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=normalized_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=normalized_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            processed_output_hashes[normalized_name] = content_hash
+
+    if not required_outputs.issubset(set(processed_outputs)):
+        if not iter_dir.exists():
+            return None
         available_outputs = {
             normalize_asim_output_key(path.stem) for path in iter_dir.glob("*.parquet")
         }
@@ -772,8 +844,6 @@ def _recover_activitysim_postprocess_outputs(
             )
             if content_hash:
                 processed_output_hashes[short_name] = content_hash
-    else:
-        return None
 
     archived_input_year = resolve_forecast_year(state)
     inputs_dir = Path(
@@ -829,6 +899,31 @@ def _recover_activitysim_postprocess_outputs(
             if content_hash:
                 processed_output_hashes[short_name] = content_hash
 
+    for short_name in (
+        "asim_input_households_csv_archived",
+        "asim_input_persons_csv_archived",
+        "asim_input_land_use_csv_archived",
+        "asim_input_skims_omx_archived",
+        "asim_input_skims_zarr_archived",
+    ):
+        if short_name in processed_outputs or short_name not in cached_paths:
+            continue
+        fpath = cached_paths[short_name]
+        processed_outputs[short_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=short_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=short_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            processed_output_hashes[short_name] = content_hash
+
     usim_path = None
     land_use_enabled = False
     is_enabled = getattr(state, "is_enabled", None)
@@ -858,6 +953,8 @@ def _recover_activitysim_postprocess_outputs(
             usim_path = _existing_artifact_path(
                 step_inputs[USIM_DATASTORE_BASE_H5], workspace
             )
+    if not usim_path and USIM_DATASTORE_H5 in cached_paths:
+        usim_path = str(cached_paths[USIM_DATASTORE_H5])
     usim_existing = _existing_local_path(usim_path, workspace)
     if not processed_outputs and not usim_existing:
         return None

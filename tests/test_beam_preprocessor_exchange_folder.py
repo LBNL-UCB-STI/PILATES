@@ -66,10 +66,10 @@ def test_resolve_beam_exchange_scenario_folder_reads_config_folder(tmp_path):
     base_input_dir.mkdir(parents=True, exist_ok=True)
     config_path = base_input_dir / "sfbay-pilates-base-omx.conf"
     config_path.write_text(
-        'beam.exchange.scenario {\n'
+        "beam.exchange.scenario {\n"
         '  source = "urbansim_v2"\n'
         '  folder = ${beam.inputDirectory}"/urbansim/2018"\n'
-        '}\n',
+        "}\n",
         encoding="utf-8",
     )
 
@@ -86,9 +86,7 @@ def test_resolve_beam_exchange_scenario_folder_supports_bare_inputdirectory(tmp_
     base_input_dir.mkdir(parents=True, exist_ok=True)
     config_path = base_input_dir / "sfbay-pilates-base-omx.conf"
     config_path.write_text(
-        'beam.exchange.scenario {\n'
-        '  folder = ${inputDirectory}"/urbansim/2018"\n'
-        '}\n',
+        'beam.exchange.scenario {\n  folder = ${inputDirectory}"/urbansim/2018"\n}\n',
         encoding="utf-8",
     )
 
@@ -110,9 +108,9 @@ def test_resolve_beam_exchange_scenario_folder_reads_included_config_folder(tmp_
         encoding="utf-8",
     )
     include_path.write_text(
-        'beam.exchange.scenario {\n'
+        "beam.exchange.scenario {\n"
         '  folder = ${beam.inputDirectory}"/urbansim/2018"\n'
-        '}\n',
+        "}\n",
         encoding="utf-8",
     )
 
@@ -121,7 +119,9 @@ def test_resolve_beam_exchange_scenario_folder_reads_included_config_folder(tmp_
     assert resolved == str(base_input_dir / "urbansim" / "2018")
 
 
-def test_resolve_beam_exchange_scenario_folder_falls_back_on_unparseable_folder(tmp_path):
+def test_resolve_beam_exchange_scenario_folder_falls_back_on_unparseable_folder(
+    tmp_path,
+):
     preprocessor = _make_preprocessor(scenario_folder="urbansim")
     workspace = _make_workspace(tmp_path)
 
@@ -129,10 +129,10 @@ def test_resolve_beam_exchange_scenario_folder_falls_back_on_unparseable_folder(
     base_input_dir.mkdir(parents=True, exist_ok=True)
     config_path = base_input_dir / "sfbay-pilates-base-omx.conf"
     config_path.write_text(
-        'beam.exchange.scenario {\n'
-        '  # missing ${beam.inputDirectory} placeholder on purpose\n'
+        "beam.exchange.scenario {\n"
+        "  # missing ${beam.inputDirectory} placeholder on purpose\n"
         '  folder = "/app/input/sfbay/urbansim/2018"\n'
-        '}\n',
+        "}\n",
         encoding="utf-8",
     )
 
@@ -164,7 +164,9 @@ def test_beam_preprocess_registers_existing_default_scenario_inputs(
     for stem in ("plans", "households", "persons"):
         (scenario_dir / f"{stem}.parquet").write_text(stem, encoding="utf-8")
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         preprocessor,
@@ -192,7 +194,9 @@ def test_beam_preprocess_fails_early_when_default_scenario_inputs_missing(
     (scenario_dir / "plans.parquet").write_text("plans", encoding="utf-8")
     (scenario_dir / "households.parquet").write_text("households", encoding="utf-8")
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         preprocessor,
@@ -218,7 +222,9 @@ def test_beam_preprocess_does_not_fallback_to_defaults_when_activitysim_enabled(
     for stem in ("plans", "households", "persons"):
         (scenario_dir / f"{stem}.parquet").write_text(stem, encoding="utf-8")
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         preprocessor,
@@ -226,7 +232,9 @@ def test_beam_preprocess_does_not_fallback_to_defaults_when_activitysim_enabled(
         lambda *_args, **_kwargs: RecordStore(),
     )
 
-    with pytest.raises(RuntimeError, match="expected ActivitySim to stage the canonical"):
+    with pytest.raises(
+        RuntimeError, match="expected ActivitySim to stage the canonical"
+    ):
         preprocessor.preprocess(workspace)
 
 
@@ -243,7 +251,9 @@ def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_h
     scenario_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
     scenario_dir.mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
 
     def _fake_copy_plans(_input_records, _workspace):
@@ -279,7 +289,11 @@ def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_h
     def _fake_copy_vehicles(_workspace, source_path=None):
         _ = source_path
         pd.DataFrame(
-            {"vehicleId": [100], "householdId": [999], "vehicleTypeId": ["sedan_gas_2015"]}
+            {
+                "vehicleId": [100],
+                "householdId": [999],
+                "vehicleTypeId": ["sedan_gas_2015"],
+            }
         ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
         return FileRecord(
             file_path=str(scenario_dir / "vehicles.parquet"),
@@ -311,7 +325,9 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
         {"vehicle_id": [100], "household_id": [1], "vehicleTypeId": ["sedan_gas_2015"]}
     ).to_csv(explicit_vehicles, index=False, compression="gzip")
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
 
     def _fake_copy_plans(_input_records, _workspace):
@@ -349,7 +365,11 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     def _fake_copy_vehicles(_workspace, source_path=None):
         captured["source_path"] = source_path
         pd.DataFrame(
-            {"vehicleId": [100], "householdId": [1], "vehicleTypeId": ["sedan_gas_2015"]}
+            {
+                "vehicleId": [100],
+                "householdId": [1],
+                "vehicleTypeId": ["sedan_gas_2015"],
+            }
         ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
         return FileRecord(
             file_path=str(scenario_dir / "vehicles.parquet"),
@@ -365,7 +385,9 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     )
 
     assert captured["source_path"] == str(explicit_vehicles)
-    assert outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
+    assert (
+        outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
+    )
 
 
 def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_local_ids():
@@ -392,9 +414,8 @@ def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_loc
 
 
 def test_summarize_population_consistency_reports_shortfalls_and_duplicates():
-    households = (
-        pd.DataFrame({"household_id": [1, 2, 3], "cars": [2, 1, 0]})
-        .set_index("household_id")
+    households = pd.DataFrame({"household_id": [1, 2, 3], "cars": [2, 1, 0]}).set_index(
+        "household_id"
     )
     vehicles = pd.DataFrame(
         {
@@ -426,7 +447,9 @@ def test_summarize_vehicle_category_consistency_warns_on_non_car_rows(tmp_path):
 
     base_input_dir = tmp_path / "beam" / "input" / "sfbay"
     scenario_dir = base_input_dir / "urbansim"
-    atlas_vehicle_types = base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    atlas_vehicle_types = (
+        base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    )
     atlas_vehicle_types.parent.mkdir(parents=True, exist_ok=True)
     atlas_vehicle_types.write_text(
         "vehicleTypeId,vehicleCategory\nsedan_gas_2015,Car\nebike_1,Bike\n",
@@ -488,7 +511,9 @@ def test_validate_population_consistency_logs_advisory_car_category_shortfall(
             "vehicleTypeId": ["sedan_gas_2015", "ebike_1"],
         }
     ).to_parquet(scenario_dir / "vehicles.parquet", index=False)
-    atlas_vehicle_types = base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    atlas_vehicle_types = (
+        base_input_dir / "atlas-vehicles" / "vehicleTypes_baseline.csv"
+    )
     atlas_vehicle_types.parent.mkdir(parents=True, exist_ok=True)
     atlas_vehicle_types.write_text(
         "vehicleTypeId,vehicleCategory\nsedan_gas_2015,Car\nebike_1,Bike\n",

@@ -340,7 +340,9 @@ def _with_declared_schema_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
     if schema is None:
         return dict(meta)
     updated = dict(meta)
-    updated.setdefault("declared_schema_class", getattr(schema, "__name__", str(schema)))
+    updated.setdefault(
+        "declared_schema_class", getattr(schema, "__name__", str(schema))
+    )
     updated.setdefault("declared_schema_table", getattr(schema, "__tablename__", None))
     return updated
 

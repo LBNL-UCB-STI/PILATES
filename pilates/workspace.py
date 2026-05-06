@@ -54,7 +54,9 @@ class Workspace:
     def get_usim_mutable_data_dir(self) -> str:
         urbansim_settings = self.settings.urbansim
         if urbansim_settings is None:
-            raise RuntimeError("UrbanSim config is required for UrbanSim workspace paths.")
+            raise RuntimeError(
+                "UrbanSim config is required for UrbanSim workspace paths."
+            )
         return os.path.join(
             self.full_path,
             urbansim_settings.local_mutable_data_folder,
@@ -142,9 +144,7 @@ class Workspace:
         self._asim_mutable_data_dir_override = os.path.abspath(path) if path else None
 
     def set_asim_runtime_cache_dir_override(self, path: Optional[str]) -> None:
-        self._asim_runtime_cache_dir_override = (
-            os.path.abspath(path) if path else None
-        )
+        self._asim_runtime_cache_dir_override = os.path.abspath(path) if path else None
 
     def set_beam_mutable_data_dir_override(self, path: Optional[str]) -> None:
         self._beam_mutable_data_dir_override = os.path.abspath(path) if path else None

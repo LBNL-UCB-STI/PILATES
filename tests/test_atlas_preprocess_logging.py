@@ -35,7 +35,9 @@ def test_atlas_preprocess_output_logger_preserves_static_input_metadata(
 
     monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", _log_output_only)
 
-    static_csv = tmp_path / "adopt" / "zev_mandate" / "new_vehicles_biannual_values_2021.csv"
+    static_csv = (
+        tmp_path / "adopt" / "zev_mandate" / "new_vehicles_biannual_values_2021.csv"
+    )
     static_csv.parent.mkdir(parents=True, exist_ok=True)
     static_csv.write_text("year,value\n2021,1\n", encoding="utf-8")
 
@@ -69,7 +71,10 @@ def test_atlas_preprocess_output_logger_preserves_static_input_metadata(
     key, _path, meta = calls[0]
     assert key == "adopt/zev_mandate/new_vehicles_biannual_values_2021"
     assert meta["atlas_static_input"] is True
-    assert meta["atlas_relpath"] == "adopt/zev_mandate/new_vehicles_biannual_values_2021.csv"
+    assert (
+        meta["atlas_relpath"]
+        == "adopt/zev_mandate/new_vehicles_biannual_values_2021.csv"
+    )
     assert meta["atlas_scenario"] == "zev_mandate"
     assert meta["atlas_input_group"] == "adopt"
     assert meta["atlas_input_year"] == 2021

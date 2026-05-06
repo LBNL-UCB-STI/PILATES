@@ -3,7 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.utils.provenance_report import build_provenance_report, write_provenance_report
+from pilates.utils.provenance_report import (
+    build_provenance_report,
+    write_provenance_report,
+)
 
 
 class _FakeTracker:
@@ -21,12 +24,28 @@ class _FakeTracker:
         )
         self._artifacts = {
             "step-a": SimpleNamespace(
-                inputs={"usim_datastore_h5": SimpleNamespace(key="usim_datastore_h5", path="/tmp/usim.h5")},
-                outputs={"asim_households_in": SimpleNamespace(key="asim_households_in", path="/tmp/households.csv")},
+                inputs={
+                    "usim_datastore_h5": SimpleNamespace(
+                        key="usim_datastore_h5", path="/tmp/usim.h5"
+                    )
+                },
+                outputs={
+                    "asim_households_in": SimpleNamespace(
+                        key="asim_households_in", path="/tmp/households.csv"
+                    )
+                },
             ),
             "step-b": SimpleNamespace(
-                inputs={"asim_households_in": SimpleNamespace(key="asim_households_in", path="/tmp/households.csv")},
-                outputs={"zarr_skims": SimpleNamespace(key="zarr_skims", path="/tmp/skims.zarr")},
+                inputs={
+                    "asim_households_in": SimpleNamespace(
+                        key="asim_households_in", path="/tmp/households.csv"
+                    )
+                },
+                outputs={
+                    "zarr_skims": SimpleNamespace(
+                        key="zarr_skims", path="/tmp/skims.zarr"
+                    )
+                },
             ),
         }
 

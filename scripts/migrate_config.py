@@ -153,7 +153,9 @@ class ConfigMigrator:
                 "source_crs": zone_defaults.get("source_crs"),
             }
             if zone_defaults.get("alternative_zones"):
-                geography["alternative_zones"] = dict(zone_defaults["alternative_zones"])
+                geography["alternative_zones"] = dict(
+                    zone_defaults["alternative_zones"]
+                )
 
         # Skims
         skims = {
@@ -401,9 +403,7 @@ class ConfigMigrator:
 
             modes_to_build: Dict[str, bool] = {}
             if self.legacy.get("beam_full_skim_modes_drive") is not None:
-                modes_to_build["drive"] = self.legacy.get(
-                    "beam_full_skim_modes_drive"
-                )
+                modes_to_build["drive"] = self.legacy.get("beam_full_skim_modes_drive")
             if self.legacy.get("beam_full_skim_modes_walk") is not None:
                 modes_to_build["walk"] = self.legacy.get("beam_full_skim_modes_walk")
             if self.legacy.get("beam_full_skim_modes_transit") is not None:
@@ -418,7 +418,9 @@ class ConfigMigrator:
                 "run_schedule": self.legacy.get(
                     f"{skim_key_prefix}_run_schedule", "standalone"
                 ),
-                "router_type": self.legacy.get(f"{skim_key_prefix}_router_type", "r5+gh"),
+                "router_type": self.legacy.get(
+                    f"{skim_key_prefix}_router_type", "r5+gh"
+                ),
                 "skims_geo_type": self.legacy.get(
                     f"{skim_key_prefix}_skims_geo_type", "taz"
                 ),
@@ -462,7 +464,9 @@ class ConfigMigrator:
             if self.legacy.get("beam_full_skim_modes_walk") is not None:
                 modes_to_build["walk"] = self.legacy.get("beam_full_skim_modes_walk")
             if self.legacy.get("beam_full_skim_modes_transit") is not None:
-                modes_to_build["transit"] = self.legacy.get("beam_full_skim_modes_transit")
+                modes_to_build["transit"] = self.legacy.get(
+                    "beam_full_skim_modes_transit"
+                )
 
             # Default to drive-only if no modes specified
             if not modes_to_build:
@@ -473,8 +477,12 @@ class ConfigMigrator:
                 "run_schedule": self.legacy.get(
                     f"{skim_key_prefix}_run_schedule", "standalone"
                 ),
-                "router_type": self.legacy.get(f"{skim_key_prefix}_router_type", "r5+gh"),
-                "skims_geo_type": self.legacy.get(f"{skim_key_prefix}_skims_geo_type", "taz"),
+                "router_type": self.legacy.get(
+                    f"{skim_key_prefix}_router_type", "r5+gh"
+                ),
+                "skims_geo_type": self.legacy.get(
+                    f"{skim_key_prefix}_skims_geo_type", "taz"
+                ),
                 "skims_kind": self.legacy.get(f"{skim_key_prefix}_skims_kind", "od"),
                 "peak_hours": self.legacy.get(f"{skim_key_prefix}_peak_hours", [8.5]),
                 "modes_to_build": modes_to_build,
@@ -483,9 +491,13 @@ class ConfigMigrator:
             # Add parallelism_thread_ratio only if explicitly set (otherwise auto-calculate at 0.8)
             parallelism_value = None
             if "beam_full_skim_parallelism_thread_ratio" in self.legacy:
-                parallelism_value = self.legacy.get("beam_full_skim_parallelism_thread_ratio")
+                parallelism_value = self.legacy.get(
+                    "beam_full_skim_parallelism_thread_ratio"
+                )
             elif "beam_full_skim_parallelism_thread_pct" in self.legacy:
-                parallelism_value = self.legacy.get("beam_full_skim_parallelism_thread_pct")
+                parallelism_value = self.legacy.get(
+                    "beam_full_skim_parallelism_thread_pct"
+                )
             elif "beam_full_skim_parallelism" in self.legacy:
                 parallelism_value = self.legacy.get("beam_full_skim_parallelism")
 
@@ -494,7 +506,9 @@ class ConfigMigrator:
                 if parallelism_value <= 1.0:
                     full_skim_config["parallelism_thread_ratio"] = parallelism_value
                 else:
-                    full_skim_config["parallelism_thread_ratio"] = parallelism_value / 100.0
+                    full_skim_config["parallelism_thread_ratio"] = (
+                        parallelism_value / 100.0
+                    )
 
             beam_config["full_skim"] = full_skim_config
 

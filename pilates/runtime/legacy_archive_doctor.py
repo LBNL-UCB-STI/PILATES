@@ -20,7 +20,9 @@ except ImportError:  # pragma: no cover - PyYAML is available in the PILATES env
 
 DOCTOR_DIR = ".workflow/legacy_archive_doctor"
 LIFECYCLE_AUDIT = ".workflow/diagnostics/artifact_lifecycle_audit.jsonl"
-ASIM_INPUT_DIR_RE = re.compile(r"^inputs-year-(?P<year>\d{4})-iteration-(?P<iteration>\d+)$")
+ASIM_INPUT_DIR_RE = re.compile(
+    r"^inputs-year-(?P<year>\d{4})-iteration-(?P<iteration>\d+)$"
+)
 ASIM_INPUT_FILES = (
     "households.csv",
     "persons.csv",
@@ -123,7 +125,9 @@ def _read_run_state(run_dir: Path) -> tuple[Optional[Path], dict[str, Any]]:
     return path, loaded
 
 
-def _read_lifecycle_events(run_dir: Path) -> tuple[Optional[Path], list[dict[str, Any]]]:
+def _read_lifecycle_events(
+    run_dir: Path,
+) -> tuple[Optional[Path], list[dict[str, Any]]]:
     path = run_dir / LIFECYCLE_AUDIT
     if not path.exists():
         return None, []
@@ -172,7 +176,9 @@ def _discover_activitysim_input_dirs(run_dir: Path) -> list[dict[str, Any]]:
     dirs: list[dict[str, Any]] = []
     candidates = sorted(
         path
-        for path in (run_dir / "activitysim" / "output").glob("inputs-year-*-iteration-*")
+        for path in (run_dir / "activitysim" / "output").glob(
+            "inputs-year-*-iteration-*"
+        )
         if path.is_dir()
     )
     if not candidates:
@@ -287,13 +293,18 @@ def _plan_activitysim_aliases(
         return actions, conflicts
 
     current_year = _safe_int(run_state.get("year") or run_state.get("current_year"))
-    state_iteration = _safe_int(run_state.get("iteration") or run_state.get("current_inner_iter"))
+    state_iteration = _safe_int(
+        run_state.get("iteration") or run_state.get("current_inner_iter")
+    )
     for source_info in input_dirs:
         source_year = _safe_int(source_info.get("year"))
         source_iteration = _safe_int(source_info.get("iteration"))
         if state_iteration is not None and source_iteration != state_iteration:
             continue
-        if current_year is not None and source_year not in {current_year, *forecast_years}:
+        if current_year is not None and source_year not in {
+            current_year,
+            *forecast_years,
+        }:
             continue
         if not {"households.csv", "persons.csv", "land_use.csv"}.issubset(
             set(source_info.get("files") or [])
@@ -367,7 +378,11 @@ def _population_candidate_paths(run_dir: Path) -> list[Path]:
         if _role_for_population_path(path) is None:
             continue
         suffixes = "".join(path.suffixes)
-        if suffixes.endswith(".csv") or suffixes.endswith(".csv.gz") or suffixes.endswith(".parquet"):
+        if (
+            suffixes.endswith(".csv")
+            or suffixes.endswith(".csv.gz")
+            or suffixes.endswith(".parquet")
+        ):
             candidates.append(path)
     return sorted(candidates)
 
@@ -397,7 +412,9 @@ def _open_text_table(path: Path):
     return path.open("r", encoding="utf-8", newline="")
 
 
-def _read_csv_household_ids(path: Path, max_rows: int) -> tuple[set[str], Optional[str]]:
+def _read_csv_household_ids(
+    path: Path, max_rows: int
+) -> tuple[set[str], Optional[str]]:
     with _open_text_table(path) as handle:
         reader = csv.DictReader(handle)
         if not reader.fieldnames:
@@ -415,7 +432,9 @@ def _read_csv_household_ids(path: Path, max_rows: int) -> tuple[set[str], Option
         return ids, None
 
 
-def _read_parquet_household_ids(path: Path, max_rows: int) -> tuple[set[str], Optional[str]]:
+def _read_parquet_household_ids(
+    path: Path, max_rows: int
+) -> tuple[set[str], Optional[str]]:
     try:
         import pandas as pd
     except ImportError:
@@ -519,7 +538,9 @@ def _detect_mixed_population_risk(run_dir: Path) -> dict[str, Any]:
     }
 
 
-def _apply_actions(actions: list[DoctorAction], conflicts: list[DoctorConflict]) -> None:
+def _apply_actions(
+    actions: list[DoctorAction], conflicts: list[DoctorConflict]
+) -> None:
     conflicted_destinations = {conflict.destination for conflict in conflicts}
     for action in actions:
         if action.status == "already_present":
@@ -536,7 +557,9 @@ def _apply_actions(actions: list[DoctorAction], conflicts: list[DoctorConflict])
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    path.write_text(
+        json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _write_jsonl(path: Path, rows: Iterable[Mapping[str, Any]]) -> None:
@@ -626,15 +649,23 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Archived PILATES run directory to inspect.",
     )
     mode = parser.add_mutually_exclusive_group(required=True)
-    mode.add_argument("--dry-run", action="store_true", help="Inspect and write a report only.")
-    mode.add_argument("--apply", action="store_true", help="Create safe filesystem aliases/copies.")
+    mode.add_argument(
+        "--dry-run", action="store_true", help="Inspect and write a report only."
+    )
+    mode.add_argument(
+        "--apply", action="store_true", help="Create safe filesystem aliases/copies."
+    )
     return parser
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     result = inspect_legacy_archive(args.archive_run_dir, apply=args.apply)
-    print(json.dumps({"report": str(Path(result.doctor_dir) / "report.json")}, sort_keys=True))
+    print(
+        json.dumps(
+            {"report": str(Path(result.doctor_dir) / "report.json")}, sort_keys=True
+        )
+    )
     return 0
 
 

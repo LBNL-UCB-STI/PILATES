@@ -1,5 +1,4 @@
 target-version = "py38"
-include = ["run.py", "workflow_state.py", "pilates/workflows/**/*.py"]
 
 [lint]
 select = ["E", "F"]

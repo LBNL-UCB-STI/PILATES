@@ -86,7 +86,10 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
                 return False
             if sub_stage is None:
                 return True
-            return sub_stage in {self.Stage.activity_demand, self.Stage.traffic_assignment}
+            return sub_stage in {
+                self.Stage.activity_demand,
+                self.Stage.traffic_assignment,
+            }
 
         def is_enabled(self, _stage):
             return False
@@ -139,7 +142,9 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         coupler=SimpleNamespace(),
         year=2018,
         usim_inputs={},
-        build_manifest_path=lambda _workspace, _year, iteration: tmp_path / f"iter-{iteration}.yaml",
+        build_manifest_path=lambda _workspace, _year, iteration: (
+            tmp_path / f"iter-{iteration}.yaml"
+        ),
         context=context,
     )
 
@@ -147,7 +152,9 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     assert seen["beam_context"] is context
 
 
-def test_run_postprocessing_stage_uses_runtime_context(monkeypatch, tmp_path: Path) -> None:
+def test_run_postprocessing_stage_uses_runtime_context(
+    monkeypatch, tmp_path: Path
+) -> None:
     settings = SimpleNamespace()
     state = SimpleNamespace(iteration=0)
     workspace = SimpleNamespace(full_path=str(tmp_path))

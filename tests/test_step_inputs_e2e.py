@@ -179,7 +179,9 @@ def test_build_activitysim_inputs_requires_surface(tmp_path) -> None:
     (asim_dir / "persons.csv").write_text("")
     (asim_dir / "land_use.csv").write_text("")
 
-    with pytest.raises(TypeError, match="missing 1 required keyword-only argument: 'surface'"):
+    with pytest.raises(
+        TypeError, match="missing 1 required keyword-only argument: 'surface'"
+    ):
         build_activitysim_inputs(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),

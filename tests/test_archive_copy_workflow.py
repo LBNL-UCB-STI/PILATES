@@ -56,10 +56,7 @@ def _write_file(path: Path, content: str = "x") -> None:
 def _lifecycle_summary(root: Path) -> dict:
     return json.loads(
         (
-            root
-            / ".workflow"
-            / "diagnostics"
-            / "artifact_lifecycle_audit_summary.json"
+            root / ".workflow" / "diagnostics" / "artifact_lifecycle_audit_summary.json"
         ).read_text(encoding="utf-8")
     )
 
@@ -143,7 +140,9 @@ def test_local_archive_copy_does_not_write_recovery_roots(monkeypatch, tmp_path)
     ch.flush_archive_queue(timeout=5)
 
     assert recovery_root_calls == []
-    assert _lifecycle_summary(local_root)["local_to_scratch_recovery_roots_written"] == 0
+    assert (
+        _lifecycle_summary(local_root)["local_to_scratch_recovery_roots_written"] == 0
+    )
 
 
 def test_consist_audit_files_are_archived_with_separate_local_and_archive_roots(
@@ -168,22 +167,13 @@ def test_consist_audit_files_are_archived_with_separate_local_and_archive_roots(
     ch.stop_archive_worker(timeout=5)
 
     local_events = (
-        local_root
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit.jsonl"
+        local_root / ".workflow" / "diagnostics" / "consist_restart_audit.jsonl"
     )
     local_summary = (
-        local_root
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit_summary.json"
+        local_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
     )
     archive_events = (
-        archive_root
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit.jsonl"
+        archive_root / ".workflow" / "diagnostics" / "consist_restart_audit.jsonl"
     )
     archive_summary = (
         archive_root
@@ -275,9 +265,14 @@ def test_consist_audit_rotates_attempt_scoped_files_without_overwriting_history(
         (archive_root / ".workflow" / "diagnostics" / "attempts").glob("*")
     )
     assert len(archived_attempt_dirs) == 2
-    assert (archive_root / ".workflow" / "diagnostics" / "consist_restart_audit.jsonl").exists()
     assert (
-        archive_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+        archive_root / ".workflow" / "diagnostics" / "consist_restart_audit.jsonl"
+    ).exists()
+    assert (
+        archive_root
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
     ).exists()
 
 
@@ -311,17 +306,18 @@ def test_artifact_lifecycle_summary_updates_on_log_and_copy(monkeypatch, tmp_pat
     assert summary_after_log["snapshot_artifacts_missing_required_facets"] == 0
     assert summary_after_log["event_counts"]["artifact_logged"] == 1
 
-    assert ch.archive_copy_now(
-        key="beam_input_plans_archived",
-        path=str(source),
-    ) is True
+    assert (
+        ch.archive_copy_now(
+            key="beam_input_plans_archived",
+            path=str(source),
+        )
+        is True
+    )
     ch.flush_archive_queue(timeout=5)
 
     summary_after_copy = _lifecycle_summary(local_root)
     assert (
-        summary_after_copy[
-            "copied_artifacts_eligible_for_recovery_root_registration"
-        ]
+        summary_after_copy["copied_artifacts_eligible_for_recovery_root_registration"]
         == 1
     )
     assert summary_after_copy["local_to_scratch_recovery_roots_written"] == 0
@@ -338,10 +334,13 @@ def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
 
     copied_before_log = local_root / "beam" / "output" / "persons.csv.gz"
     _write_file(copied_before_log, "persons")
-    assert ch.archive_copy_now(
-        key="beam_input_persons_archived",
-        path=str(copied_before_log),
-    ) is True
+    assert (
+        ch.archive_copy_now(
+            key="beam_input_persons_archived",
+            path=str(copied_before_log),
+        )
+        is True
+    )
     consist_audit.emit_artifact_lifecycle_audit_event(
         event_type="artifact_logged",
         key="beam_input_persons_archived",
@@ -369,10 +368,13 @@ def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
         year=2030,
         iteration=0,
     )
-    assert ch.archive_copy_now(
-        key="asim_input_skims_zarr_archived",
-        path=str(zarr_dir),
-    ) is True
+    assert (
+        ch.archive_copy_now(
+            key="asim_input_skims_zarr_archived",
+            path=str(zarr_dir),
+        )
+        is True
+    )
 
     h5_path = local_root / "urbansim" / "data" / "model_data_2030.h5"
     _write_file(h5_path, "h5")
@@ -428,10 +430,7 @@ def test_artifact_lifecycle_summary_preserves_attempts_on_run_context(
     )
 
     events_path = (
-        local_root
-        / ".workflow"
-        / "diagnostics"
-        / "artifact_lifecycle_audit.jsonl"
+        local_root / ".workflow" / "diagnostics" / "artifact_lifecycle_audit.jsonl"
     )
     events = events_path.read_text(encoding="utf-8").splitlines()
     assert len(events) == 3
@@ -440,24 +439,25 @@ def test_artifact_lifecycle_summary_preserves_attempts_on_run_context(
     assert "second" in events[2]
 
     attempt_dirs = sorted(
-        (
-            local_root
-            / ".workflow"
-            / "diagnostics"
-            / "attempts"
-        ).glob("attempt_*")
+        (local_root / ".workflow" / "diagnostics" / "attempts").glob("attempt_*")
     )
     assert len(attempt_dirs) == 2
-    assert len(
-        (
-            attempt_dirs[0] / "artifact_lifecycle_audit.jsonl"
-        ).read_text(encoding="utf-8").splitlines()
-    ) == 2
-    assert len(
-        (
-            attempt_dirs[1] / "artifact_lifecycle_audit.jsonl"
-        ).read_text(encoding="utf-8").splitlines()
-    ) == 1
+    assert (
+        len(
+            (attempt_dirs[0] / "artifact_lifecycle_audit.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        == 2
+    )
+    assert (
+        len(
+            (attempt_dirs[1] / "artifact_lifecycle_audit.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        == 1
+    )
 
     summary = _lifecycle_summary(local_root)
     assert summary["phase2_recommendation_basis"] == "aggregate_attempts"
@@ -573,9 +573,10 @@ def test_artifact_lifecycle_summary_defers_usim_h5_snapshots_explicitly(
     assert summary["blocking_reasons_by_family"]["usim_input_merged"] == [
         "h5_parent_child_policy"
     ]
-    assert "artifact_not_logged" not in summary["blocking_reasons_by_family"][
-        "usim_input_merged"
-    ]
+    assert (
+        "artifact_not_logged"
+        not in summary["blocking_reasons_by_family"]["usim_input_merged"]
+    )
 
 
 def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
@@ -607,9 +608,10 @@ def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     summary = _lifecycle_summary(local_root)
     assert summary["snapshot_artifacts_logged"] == 1
     assert summary["snapshot_artifacts_missing_required_facets"] == 0
-    assert "missing_required_snapshot_facets" not in summary[
-        "blocking_reasons_by_family"
-    ]["usim_input_archive"]
+    assert (
+        "missing_required_snapshot_facets"
+        not in summary["blocking_reasons_by_family"]["usim_input_archive"]
+    )
 
 
 def test_artifact_lifecycle_summary_accepts_sanitized_artifact_iteration(
@@ -697,9 +699,7 @@ def test_artifact_lifecycle_summary_uses_first_log_for_copy_order(
     ]
 
 
-def test_artifact_lifecycle_summary_blocks_copy_only_promotions(
-    monkeypatch, tmp_path
-):
+def test_artifact_lifecycle_summary_blocks_copy_only_promotions(monkeypatch, tmp_path):
     run_dir = tmp_path / "archive" / "run"
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(run_dir))
 
@@ -718,9 +718,7 @@ def test_artifact_lifecycle_summary_blocks_copy_only_promotions(
     assert summary["copy_only_promotions_db_tracker_metadata_unavailable"] == 1
     assert "post_run_promotion" in summary["blocked_families_for_phase2"]
     assert (
-        summary["blocker_counts_by_reason"][
-            "copy_only_promotion_metadata_unavailable"
-        ]
+        summary["blocker_counts_by_reason"]["copy_only_promotion_metadata_unavailable"]
         == 1
     )
     assert summary["phase2_recommendation"] == "defer"
@@ -883,7 +881,10 @@ def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tm
         ("urbansim_bootstrap_data_root", "urbansim/data/hsize_ct_000.csv"),
         ("beam_mutable_data_dir", "beam/input/test/beam.conf"),
         ("activitysim_bootstrap_data_root", "activitysim/data/households.csv"),
-        ("activitysim_bootstrap_configs_root", "activitysim/configs/configs/settings.yaml"),
+        (
+            "activitysim_bootstrap_configs_root",
+            "activitysim/configs/configs/settings.yaml",
+        ),
     ],
 )
 def test_archive_copy_allows_bootstrap_runtime_directories(
@@ -932,7 +933,9 @@ def test_archive_copy_allows_atlas_year_input_directory(monkeypatch, tmp_path):
     ch.flush_archive_queue(timeout=5)
     ch.stop_archive_worker(timeout=5)
 
-    archived = archive_root / "atlas" / "atlas_input" / "year2030" / "vehicles_output.RData"
+    archived = (
+        archive_root / "atlas" / "atlas_input" / "year2030" / "vehicles_output.RData"
+    )
     assert archived.exists()
     assert archived.read_text() == "atlas-rdata"
 
@@ -982,7 +985,9 @@ def test_archive_copy_coalesces_pending_updates_for_same_destination(
 
     monkeypatch.setattr(ch, "_ensure_archive_worker", _ensure_queue_only)
 
-    source = local_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    source = (
+        local_root / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    )
     _write_file(source, '{"event_count": 1}')
     ch._enqueue_archive_copy(
         "workflow_diagnostics_consist_restart_audit_summary",
@@ -1005,13 +1010,17 @@ def test_archive_copy_coalesces_pending_updates_for_same_destination(
     assert ch._archive_queue.qsize() == 1
     assert dest in ch._archive_pending_tasks
 
-    key, pending_src, pending_dest, _is_dir, _signature = ch._archive_pending_tasks[dest]
+    key, pending_src, pending_dest, _is_dir, _signature = ch._archive_pending_tasks[
+        dest
+    ]
     assert key == "workflow_diagnostics_consist_restart_audit_summary"
     assert pending_src == str(source)
     assert pending_dest == dest
 
 
-def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, tmp_path):
+def test_archive_copy_now_copies_file_and_preserves_relative_path(
+    monkeypatch, tmp_path
+):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"
     monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
@@ -1028,7 +1037,9 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(monkeypatch, t
     assert archived.read_text() == "manifest"
 
 
-def test_archive_copy_destination_returns_preserved_relative_path(monkeypatch, tmp_path):
+def test_archive_copy_destination_returns_preserved_relative_path(
+    monkeypatch, tmp_path
+):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"
     monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
@@ -1059,11 +1070,14 @@ def test_archive_copy_now_force_recopies_matching_signature(monkeypatch, tmp_pat
     signature = ch._archive_path_signature(str(source), is_dir=False)
     ch._archive_last_copied_signature[str(archived)] = signature
 
-    assert ch.archive_copy_now(
-        key="usim_population_source_h5",
-        path=str(source),
-        force=True,
-    ) is True
+    assert (
+        ch.archive_copy_now(
+            key="usim_population_source_h5",
+            path=str(source),
+            force=True,
+        )
+        is True
+    )
     assert archived.read_text() == "fresh"
 
 
@@ -1105,7 +1119,9 @@ def test_flush_archive_queue_can_fail_on_timeout():
 def test_log_output_only_enqueues_archive_copy(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(ch.cr, "log_output", lambda *args, **kwargs: "artifact")
-    monkeypatch.setattr(ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path)))
+    monkeypatch.setattr(
+        ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path))
+    )
 
     out_path = tmp_path / "out.txt"
     _write_file(out_path, "output")
@@ -1119,12 +1135,16 @@ def test_log_output_only_enqueues_archive_copy(monkeypatch, tmp_path):
     assert calls == [("beam_output_plans_xml", str(out_path))]
 
 
-def test_log_and_set_output_enqueues_archive_copy_and_sets_coupler(monkeypatch, tmp_path):
+def test_log_and_set_output_enqueues_archive_copy_and_sets_coupler(
+    monkeypatch, tmp_path
+):
     calls = []
     coupler = DummyCoupler()
     monkeypatch.setattr(ch.cr, "log_output", lambda *args, **kwargs: "artifact")
     monkeypatch.setattr(ch.cr, "current_run", lambda: object())
-    monkeypatch.setattr(ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path)))
+    monkeypatch.setattr(
+        ch, "_enqueue_archive_copy", lambda key, path: calls.append((key, path))
+    )
 
     out_path = tmp_path / "out.txt"
     _write_file(out_path, "output")
@@ -1171,7 +1191,9 @@ def test_mocked_workflow_archives_logged_outputs(monkeypatch, tmp_path):
             description="mock zarr archive",
         )
 
-    _mock_step.__consist_step__ = SimpleNamespace(model="mock_archive_step", outputs=["linkstats"])
+    _mock_step.__consist_step__ = SimpleNamespace(
+        model="mock_archive_step", outputs=["linkstats"]
+    )
 
     run_workflow(
         stage_name="mock_archive_stage",

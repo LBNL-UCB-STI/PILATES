@@ -55,7 +55,9 @@ def test_step_output_handoff_mapping_prefers_coupler_artifacts(
         container_uri="workspace://beam_plans.parquet",
     )
     coupler = SimpleNamespace(
-        get=lambda key, default=None: artifact if key == "beam_plans_asim_out" else default
+        get=lambda key, default=None: (
+            artifact if key == "beam_plans_asim_out" else default
+        )
     )
 
     mapping = step_output_handoff_mapping(outputs, coupler=coupler)
@@ -138,7 +140,10 @@ def test_step_output_handoff_mapping_ignores_noop_artifact_placeholders(
         mapping = step_output_handoff_mapping(outputs, coupler=coupler)
 
     assert mapping["beam_plans_asim_out"] == str(output_path)
-    assert "Ignoring NoopArtifact placeholder for coupler key 'beam_plans_asim_out'" in caplog.text
+    assert (
+        "Ignoring NoopArtifact placeholder for coupler key 'beam_plans_asim_out'"
+        in caplog.text
+    )
 
 
 def test_step_output_mapping_warns_that_it_is_lossy(
@@ -156,7 +161,9 @@ def test_step_output_mapping_warns_that_it_is_lossy(
         mapping = step_output_mapping(outputs)
 
     assert mapping["beam_plans_asim_out"] == str(output_path)
-    assert "is lossy and should not be used for runtime workflow handoffs" in caplog.text
+    assert (
+        "is lossy and should not be used for runtime workflow handoffs" in caplog.text
+    )
 
 
 def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
@@ -430,6 +437,15 @@ def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs
     assert run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5] == str(
         usim_current
     )
-    assert "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_base_h5'" in caplog.text
-    assert "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_h5'" in caplog.text
-    assert "[land_use] Runtime handoff for usim_datastore_base_h5 resolved via missing" in caplog.text
+    assert (
+        "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_base_h5'"
+        in caplog.text
+    )
+    assert (
+        "Ignoring NoopArtifact placeholder for coupler key 'usim_datastore_h5'"
+        in caplog.text
+    )
+    assert (
+        "[land_use] Runtime handoff for usim_datastore_base_h5 resolved via missing"
+        in caplog.text
+    )

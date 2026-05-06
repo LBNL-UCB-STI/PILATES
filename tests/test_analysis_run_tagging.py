@@ -186,7 +186,9 @@ def test_validate_run_tagging_handles_empty_runs():
         "asim_parent_mismatch": 0,
     }
     assert report["warnings"] == ["No runs available for run-tag validation."]
-    assert validate_run_tagging(TrackerStub([])) == ["No runs available for run-tag validation."]
+    assert validate_run_tagging(TrackerStub([])) == [
+        "No runs available for run-tag validation."
+    ]
 
 
 def test_run_tagging_issues_and_assert_helpers():
@@ -210,11 +212,16 @@ def test_run_tagging_issues_and_assert_helpers():
     }
 
     assert get_run_tagging_issues(payload, strict=False) == []
-    assert get_run_tagging_issues(payload, strict=True) == ["run_tagging.model.missing=1/1"]
-    assert get_run_tagging_issues(
-        ["No runs available for run-tag validation."],
-        strict=False,
-    ) == []
+    assert get_run_tagging_issues(payload, strict=True) == [
+        "run_tagging.model.missing=1/1"
+    ]
+    assert (
+        get_run_tagging_issues(
+            ["No runs available for run-tag validation."],
+            strict=False,
+        )
+        == []
+    )
     assert get_run_tagging_issues(
         ["No runs available for run-tag validation."],
         strict=True,
@@ -312,7 +319,9 @@ def test_analysis_session_run_tagging_report_and_assert(monkeypatch, tmp_path):
 
 def test_analysis_session_open_strict_or_fail_modes_raise(monkeypatch, tmp_path):
     archive_run_dir, project_root = _archive_paths(tmp_path)
-    monkeypatch.setattr(api_module, "create_analysis_tracker", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        api_module, "create_analysis_tracker", lambda **_kwargs: object()
+    )
     monkeypatch.setattr(
         api_module,
         "inspect_run_tagging_report",
@@ -409,7 +418,9 @@ def test_cli_run_tagging_non_strict_fail_mode_ignores_empty_runs_warning(
     )
 
     payloads: list[dict] = []
-    monkeypatch.setattr(cli_module, "_print_json", lambda payload: payloads.append(payload))
+    monkeypatch.setattr(
+        cli_module, "_print_json", lambda payload: payloads.append(payload)
+    )
 
     exit_code = cli_module.cmd_run_tagging(args)
     assert exit_code == 0
@@ -457,7 +468,9 @@ def test_cli_run_tagging_strict_fail_mode_exits_2(monkeypatch, tmp_path):
     )
 
     payloads: list[dict] = []
-    monkeypatch.setattr(cli_module, "_print_json", lambda payload: payloads.append(payload))
+    monkeypatch.setattr(
+        cli_module, "_print_json", lambda payload: payloads.append(payload)
+    )
 
     exit_code = cli_module.cmd_run_tagging(args)
     assert exit_code == 2
@@ -466,7 +479,9 @@ def test_cli_run_tagging_strict_fail_mode_exits_2(monkeypatch, tmp_path):
     assert payloads[0]["strict"] is True
 
 
-def test_cli_run_tagging_table_output_includes_optional_lines(monkeypatch, tmp_path, capsys):
+def test_cli_run_tagging_table_output_includes_optional_lines(
+    monkeypatch, tmp_path, capsys
+):
     parser = cli_module.build_parser()
     args = parser.parse_args(
         [

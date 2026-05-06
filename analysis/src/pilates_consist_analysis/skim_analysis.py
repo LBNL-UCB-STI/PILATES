@@ -150,7 +150,9 @@ def _empty_deltas_frame() -> pd.DataFrame:
     )
 
 
-def _run_metadata_map(tracker: Any, run_ids: Sequence[str]) -> Dict[str, Dict[str, Any]]:
+def _run_metadata_map(
+    tracker: Any, run_ids: Sequence[str]
+) -> Dict[str, Dict[str, Any]]:
     db = getattr(tracker, "db", None)
     if db is None or not hasattr(db, "session_scope"):
         return {}
@@ -200,7 +202,9 @@ def _discover_openmatrix_concept_keys(
         return []
 
     key_contains_pattern = str(key_contains or "").strip()
-    explicit_run_ids = sorted({str(v).strip() for v in (run_ids or []) if str(v).strip()})
+    explicit_run_ids = sorted(
+        {str(v).strip() for v in (run_ids or []) if str(v).strip()}
+    )
 
     with db.session_scope() as session:
         statement = (
@@ -211,7 +215,9 @@ def _discover_openmatrix_concept_keys(
             .limit(int(limit))
         )
         if key_contains_pattern:
-            statement = statement.where(col(Artifact.key).ilike(f"%{key_contains_pattern}%"))
+            statement = statement.where(
+                col(Artifact.key).ilike(f"%{key_contains_pattern}%")
+            )
         if explicit_run_ids:
             statement = statement.where(col(Artifact.run_id).in_(explicit_run_ids))
         if year is not None:
@@ -308,7 +314,15 @@ def _summarize_artifacts_from_matrices(matrices_df: pd.DataFrame) -> pd.DataFram
         return _empty_artifacts_frame()
 
     grouped = matrices_df.groupby(
-        ["concept_key", "run_id", "parent_run_id", "comparison_group", "model", "year", "iteration"],
+        [
+            "concept_key",
+            "run_id",
+            "parent_run_id",
+            "comparison_group",
+            "model",
+            "year",
+            "iteration",
+        ],
         dropna=False,
     )
     artifacts = grouped.agg(
@@ -360,7 +374,8 @@ def _summarize_iterations_from_matrices(matrices_df: pd.DataFrame) -> pd.DataFra
 
     summary = (
         run_level.groupby(
-            ["concept_key", "comparison_group", "model", "year", "iteration"], dropna=False
+            ["concept_key", "comparison_group", "model", "year", "iteration"],
+            dropna=False,
         )
         .agg(
             run_count=("run_id", "nunique"),
@@ -378,7 +393,9 @@ def _summarize_iterations_from_matrices(matrices_df: pd.DataFrame) -> pd.DataFra
         )
         .reset_index()
     )
-    summary["matrix_count_stable"] = summary["matrix_count_min"] == summary["matrix_count_max"]
+    summary["matrix_count_stable"] = (
+        summary["matrix_count_min"] == summary["matrix_count_max"]
+    )
     summary["scenario_id"] = summary["comparison_group"]
     summary["run_id"] = summary["comparison_group"]
     summary["phys_sim_iteration"] = None
@@ -506,7 +523,9 @@ def summarize_skim_iteration_deltas(summary_df: pd.DataFrame) -> pd.DataFrame:
     frame["year"] = pd.to_numeric(frame["year"], errors="coerce")
     frame["iteration"] = pd.to_numeric(frame["iteration"], errors="coerce")
     frame["run_count"] = pd.to_numeric(frame["run_count"], errors="coerce")
-    frame["matrix_count_mean"] = pd.to_numeric(frame["matrix_count_mean"], errors="coerce")
+    frame["matrix_count_mean"] = pd.to_numeric(
+        frame["matrix_count_mean"], errors="coerce"
+    )
     frame["row_count_mean"] = pd.to_numeric(frame["row_count_mean"], errors="coerce")
     frame["row_count_uniform_share"] = pd.to_numeric(
         frame["row_count_uniform_share"], errors="coerce"
@@ -514,22 +533,30 @@ def summarize_skim_iteration_deltas(summary_df: pd.DataFrame) -> pd.DataFrame:
     frame["col_count_uniform_share"] = pd.to_numeric(
         frame["col_count_uniform_share"], errors="coerce"
     )
-    frame["matrix_count_stable"] = frame["matrix_count_stable"].fillna(False).astype(bool)
+    frame["matrix_count_stable"] = (
+        frame["matrix_count_stable"].fillna(False).astype(bool)
+    )
 
     frame = frame.sort_values(
         ["concept_key", "comparison_group", "year", "iteration"],
         na_position="last",
     ).reset_index(drop=True)
     group_keys = ["concept_key", "comparison_group", "year"]
-    frame["iteration_prev"] = frame.groupby(group_keys, dropna=False)["iteration"].shift(1)
-    frame["run_count_prev"] = frame.groupby(group_keys, dropna=False)["run_count"].shift(1)
+    frame["iteration_prev"] = frame.groupby(group_keys, dropna=False)[
+        "iteration"
+    ].shift(1)
+    frame["run_count_prev"] = frame.groupby(group_keys, dropna=False)[
+        "run_count"
+    ].shift(1)
     frame["matrix_count_mean_prev"] = frame.groupby(group_keys, dropna=False)[
         "matrix_count_mean"
     ].shift(1)
     frame["matrix_count_stable_prev"] = frame.groupby(group_keys, dropna=False)[
         "matrix_count_stable"
     ].shift(1)
-    frame["row_count_mean_prev"] = frame.groupby(group_keys, dropna=False)["row_count_mean"].shift(1)
+    frame["row_count_mean_prev"] = frame.groupby(group_keys, dropna=False)[
+        "row_count_mean"
+    ].shift(1)
     frame["row_count_uniform_share_prev"] = frame.groupby(group_keys, dropna=False)[
         "row_count_uniform_share"
     ].shift(1)
@@ -546,7 +573,9 @@ def summarize_skim_iteration_deltas(summary_df: pd.DataFrame) -> pd.DataFrame:
         deltas["matrix_count_mean"] - deltas["matrix_count_mean_prev"]
     )
     deltas["matrix_count_mean_delta_abs"] = deltas["matrix_count_mean_delta"].abs()
-    deltas["row_count_mean_delta"] = deltas["row_count_mean"] - deltas["row_count_mean_prev"]
+    deltas["row_count_mean_delta"] = (
+        deltas["row_count_mean"] - deltas["row_count_mean_prev"]
+    )
     deltas["row_count_mean_delta_abs"] = deltas["row_count_mean_delta"].abs()
     deltas["row_count_uniform_share_delta"] = (
         deltas["row_count_uniform_share"] - deltas["row_count_uniform_share_prev"]
@@ -557,9 +586,7 @@ def summarize_skim_iteration_deltas(summary_df: pd.DataFrame) -> pd.DataFrame:
     stable_curr = deltas["matrix_count_stable"].fillna(False).astype(bool)
     stable_prev = deltas["matrix_count_stable_prev"].fillna(False).astype(bool)
     deltas["matrix_count_stability_pair"] = (
-        stable_curr
-        & stable_prev
-        & (deltas["matrix_count_mean_delta"] == 0)
+        stable_curr & stable_prev & (deltas["matrix_count_mean_delta"] == 0)
     )
     deltas["scenario_id"] = deltas["comparison_group"]
     deltas["run_id"] = deltas["comparison_group"]
@@ -634,7 +661,14 @@ def _build_matrices_table(
     matrices = pd.concat(frames, ignore_index=True)
     matrices = _annotate_run_fields(tracker, matrices)
     matrices = matrices.sort_values(
-        ["concept_key", "comparison_group", "year", "iteration", "run_id", "matrix_name"],
+        [
+            "concept_key",
+            "comparison_group",
+            "year",
+            "iteration",
+            "run_id",
+            "matrix_name",
+        ],
         na_position="last",
     ).reset_index(drop=True)
     return ensure_canonical_key_columns(matrices)

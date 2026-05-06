@@ -380,9 +380,9 @@ class TestBeamPreprocessor:
 
         # 1a. Check if the order of GEOIDs now matches the canonical order
         final_order = sorted_gdf[mock_settings.beam.skim_zone_geoid_col].tolist()
-        assert (
-            final_order == CANONICAL_GEOID_ORDER
-        ), "Shapefile GEOID order does not match canonical order after sorting."
+        assert final_order == CANONICAL_GEOID_ORDER, (
+            "Shapefile GEOID order does not match canonical order after sorting."
+        )
 
         # 2. Verify the new shapefile is used in the BEAM config
         assert mock_settings.beam.skim_zone_geoid_col in sorted_gdf.columns
@@ -445,7 +445,9 @@ def test_prepare_beam_zone_shapefile_preserves_canonical_order_when_sort_col_con
     assert "would reorder canonical zones" in caplog.text
 
 
-def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settings, mock_workspace):
+def test_preprocess_ignores_workspace_beam_output_cache(
+    monkeypatch, mock_settings, mock_workspace
+):
     state = SimpleNamespace(
         full_settings=mock_settings,
         current_year=2020,
@@ -485,7 +487,9 @@ def test_preprocess_ignores_workspace_beam_output_cache(monkeypatch, mock_settin
 
     captured = {}
 
-    monkeypatch.setattr(preprocessor, "_update_beam_config", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
     monkeypatch.setattr(
         preprocessor,
         "prepare_beam_zone_shapefile",
@@ -595,9 +599,13 @@ def test_copy_plans_from_asim_accepts_plans_asim_out_alias(
         "activitysim",
         SimpleNamespace(file_format="parquet"),
     )
-    mock_workspace.get_asim_output_dir.return_value = str(tmp_path / "activitysim" / "output")
+    mock_workspace.get_asim_output_dir.return_value = str(
+        tmp_path / "activitysim" / "output"
+    )
 
-    plans_path = tmp_path / "activitysim" / "output" / "year-2020-iteration-0" / "plans.parquet"
+    plans_path = (
+        tmp_path / "activitysim" / "output" / "year-2020-iteration-0" / "plans.parquet"
+    )
     plans_path.parent.mkdir(parents=True, exist_ok=True)
     plans_path.write_text("plans", encoding="utf-8")
 

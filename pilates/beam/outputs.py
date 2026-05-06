@@ -77,7 +77,9 @@ class _BeamPostprocessExpectedOutputsValidator:
                     metadata={"activity_demand_model": activity_demand_model},
                 )
             )
-        if (write_omx or land_use_model == "urbansim") and outputs.final_skims_omx is None:
+        if (
+            write_omx or land_use_model == "urbansim"
+        ) and outputs.final_skims_omx is None:
             results.append(
                 ValidationResult(
                     message=(
@@ -235,9 +237,7 @@ class BeamRunOutputs(StepOutputsBase):
             return (year, iteration, sub_iteration)
         return None
 
-    def _latest_raw_output_for_prefix(
-        self, prefix: str
-    ) -> Optional[Tuple[str, Path]]:
+    def _latest_raw_output_for_prefix(self, prefix: str) -> Optional[Tuple[str, Path]]:
         best_key: Optional[str] = None
         best_path: Optional[Path] = None
         best_rank: Optional[Tuple[int, int, int]] = None
@@ -311,9 +311,7 @@ class BeamRunOutputs(StepOutputsBase):
     def promoted_experienced_plans_xml_for_publication(
         self,
     ) -> Optional[Tuple[str, Path]]:
-        return self._latest_publication_output_for_prefix(
-            BEAM_EXPERIENCED_PLANS_XML
-        )
+        return self._latest_publication_output_for_prefix(BEAM_EXPERIENCED_PLANS_XML)
 
     def iter_linkstats_parquet_outputs(self) -> Iterable[Tuple[str, Path]]:
         for key, path in self.raw_outputs.items():

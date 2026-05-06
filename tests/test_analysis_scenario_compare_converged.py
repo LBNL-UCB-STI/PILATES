@@ -173,7 +173,9 @@ def test_compare_scenarios_converged_allows_valid_candidates(monkeypatch):
         )
 
     monkeypatch.setattr(scenario_compare, "_build_dataset_frame", _fake_dataset_frame)
-    monkeypatch.setattr(scenario_compare, "_build_config_diff", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        scenario_compare, "_build_config_diff", lambda *args, **kwargs: pd.DataFrame()
+    )
 
     comparison = scenario_compare.compare_scenarios(
         tracker=object(),
@@ -188,4 +190,3 @@ def test_compare_scenarios_converged_allows_valid_candidates(monkeypatch):
     assert list(comparison.dataset_summaries["dataset"]) == ["linkstats"]
     assert "linkstats" in comparison.dataset_frames
     assert calls == [("linkstats", 3), ("linkstats", 3)]
-

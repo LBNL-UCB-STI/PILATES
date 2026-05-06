@@ -115,17 +115,23 @@ def _facet_map_from_artifact_kv(
             if key_path not in _TRIPS_FACET_KEYS:
                 continue
             resolved.add(normalized)
-            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(row)
+            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(
+                row
+            )
         return resolved
 
     def _query(artifact_ids_subset: list[Any], ns: Optional[str]) -> list[Any]:
         rows: list[Any] = []
         for chunk in _chunked(artifact_ids_subset, 1000):
             with db.session_scope() as session:
-                statement = select(ArtifactKV).where(col(ArtifactKV.artifact_id).in_(chunk))
+                statement = select(ArtifactKV).where(
+                    col(ArtifactKV.artifact_id).in_(chunk)
+                )
                 if ns is not None:
                     statement = statement.where(ArtifactKV.namespace == ns)
-                statement = statement.where(col(ArtifactKV.key_path).in_(_TRIPS_FACET_KEYS))
+                statement = statement.where(
+                    col(ArtifactKV.key_path).in_(_TRIPS_FACET_KEYS)
+                )
                 rows.extend(session.exec(statement).all())
         return rows
 
@@ -380,6 +386,7 @@ def _single_string_value(series: Optional[pd.Series]) -> Optional[str]:
 def _resolve_trips_schema_model() -> Optional[type]:
     try:
         from pilates.database.schema.activitysim_schema import TripsAsimOut
+
         return TripsAsimOut
     except Exception:
         pass
@@ -477,9 +484,13 @@ def _resolve_grouped_schema_selector(
 
     db = getattr(tracker, "db", None)
     if db is not None and hasattr(db, "find_schema_ids_for_model"):
-        schema_ids = db.find_schema_ids_for_model(schema_model=schema_model, compatible=False)
+        schema_ids = db.find_schema_ids_for_model(
+            schema_model=schema_model, compatible=False
+        )
         if not schema_ids:
-            schema_ids = db.find_schema_ids_for_model(schema_model=schema_model, compatible=True)
+            schema_ids = db.find_schema_ids_for_model(
+                schema_model=schema_model, compatible=True
+            )
         if schema_ids:
             return {"schema_ids": list(schema_ids), "schema": schema_model}
     return {"schema": schema_model}
@@ -560,9 +571,8 @@ def _create_grouped_view(
     predicates = _build_artifact_predicates(tracker, params)
     facets = list(_TRIPS_FACET_KEYS)
     create_grouped_hybrid = _resolve_grouped_hybrid_creator(tracker)
-    can_use_hybrid = (
-        callable(create_grouped_hybrid)
-        and ("schema_id" in selector or "schema_ids" in selector)
+    can_use_hybrid = callable(create_grouped_hybrid) and (
+        "schema_id" in selector or "schema_ids" in selector
     )
 
     if can_use_hybrid:
@@ -675,7 +685,9 @@ def _summarize_mode_counts(
         return frame
     frame["artifact_id"] = frame["artifact_id"].astype(str)
     frame["trip_mode"] = frame["trip_mode"].astype(str)
-    frame["trip_count"] = pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    frame["trip_count"] = (
+        pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    )
     frame["distinct_persons"] = (
         pd.to_numeric(frame["distinct_persons"], errors="coerce").fillna(0).astype(int)
     )
@@ -709,7 +721,9 @@ def _summarize_purpose_mode_counts(
     frame["artifact_id"] = frame["artifact_id"].astype(str)
     frame["primary_purpose"] = frame["primary_purpose"].astype(str)
     frame["trip_mode"] = frame["trip_mode"].astype(str)
-    frame["trip_count"] = pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    frame["trip_count"] = (
+        pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    )
     return frame
 
 
@@ -735,7 +749,9 @@ def _summarize_depart_hour_counts(
         return frame
     frame["artifact_id"] = frame["artifact_id"].astype(str)
     frame["depart_hour"] = pd.to_numeric(frame["depart_hour"], errors="coerce")
-    frame["trip_count"] = pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    frame["trip_count"] = (
+        pd.to_numeric(frame["trip_count"], errors="coerce").fillna(0).astype(int)
+    )
     frame["depart_hour_in_day"] = (frame["depart_hour"] % 24).astype("Int64")
     return frame
 
@@ -771,8 +787,15 @@ def _summarize_iteration(
     if frame.empty:
         return frame
     frame["artifact_id"] = frame["artifact_id"].astype(str)
-    for column in ("total_trips", "distinct_persons", "distinct_modes", "outbound_trip_count"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0).astype(int)
+    for column in (
+        "total_trips",
+        "distinct_persons",
+        "distinct_modes",
+        "outbound_trip_count",
+    ):
+        frame[column] = (
+            pd.to_numeric(frame[column], errors="coerce").fillna(0).astype(int)
+        )
     frame["mode_choice_logsum_mean"] = pd.to_numeric(
         frame["mode_choice_logsum_mean"], errors="coerce"
     )
@@ -874,9 +897,9 @@ def _build_equilibrium_pairs(
         aggfunc="sum",
     ).sort_index()
 
-    totals = iteration_summary.set_index(
-        ["comparison_group", "year", "iteration"]
-    )["total_trips"]
+    totals = iteration_summary.set_index(["comparison_group", "year", "iteration"])[
+        "total_trips"
+    ]
 
     rows: list[Dict[str, Any]] = []
     grouped_indices = share_pivot.index.to_frame(index=False)
@@ -1007,14 +1030,18 @@ def build_activitysim_trips_dataset(
         iteration_summary_by_artifact, on="artifact_id", how="inner"
     )
 
-    selected_ids = set(iteration_summary_by_artifact["artifact_id"].astype(str).tolist())
+    selected_ids = set(
+        iteration_summary_by_artifact["artifact_id"].astype(str).tolist()
+    )
     if latest_per_iteration:
         selected_ids = _select_latest_artifact_ids(iteration_summary_by_artifact)
     selected = iteration_summary_by_artifact[
         iteration_summary_by_artifact["artifact_id"].astype(str).isin(selected_ids)
     ].copy()
 
-    mode_counts = mode_counts[mode_counts["artifact_id"].astype(str).isin(selected_ids)].copy()
+    mode_counts = mode_counts[
+        mode_counts["artifact_id"].astype(str).isin(selected_ids)
+    ].copy()
     purpose_mode_counts = purpose_mode_counts[
         purpose_mode_counts["artifact_id"].astype(str).isin(selected_ids)
     ].copy()
@@ -1092,7 +1119,9 @@ def build_activitysim_trips_dataset(
         mode_deltas["phys_sim_iteration"] = None
         mode_deltas["beam_sub_iteration"] = None
 
-    equilibrium_pairs = _build_equilibrium_pairs(mode_iteration_summary, iteration_summary)
+    equilibrium_pairs = _build_equilibrium_pairs(
+        mode_iteration_summary, iteration_summary
+    )
     if not equilibrium_pairs.empty:
         equilibrium_pairs["scenario_id"] = equilibrium_pairs["comparison_group"]
         equilibrium_pairs["run_id"] = equilibrium_pairs["comparison_group"]
@@ -1106,14 +1135,28 @@ def build_activitysim_trips_dataset(
         mode_counts=mode_iteration_summary,
         purpose_mode_counts=purpose_mode_counts.merge(
             metadata[
-                ["artifact_id", "comparison_group", "year", "iteration", "model", "seed"]
+                [
+                    "artifact_id",
+                    "comparison_group",
+                    "year",
+                    "iteration",
+                    "model",
+                    "seed",
+                ]
             ],
             on="artifact_id",
             how="left",
         ),
         depart_hour_counts=depart_hour_counts.merge(
             metadata[
-                ["artifact_id", "comparison_group", "year", "iteration", "model", "seed"]
+                [
+                    "artifact_id",
+                    "comparison_group",
+                    "year",
+                    "iteration",
+                    "model",
+                    "seed",
+                ]
             ],
             on="artifact_id",
             how="left",
@@ -1144,7 +1187,9 @@ def write_activitysim_trips_dataset(
     equilibrium_pairs_path = out / "asim_trips_equilibrium_pairs.csv"
 
     dataset.artifacts.to_csv(artifacts_path, index=False)
-    ensure_canonical_key_columns(dataset.mode_counts).to_csv(mode_counts_path, index=False)
+    ensure_canonical_key_columns(dataset.mode_counts).to_csv(
+        mode_counts_path, index=False
+    )
     ensure_canonical_key_columns(dataset.purpose_mode_counts).to_csv(
         purpose_mode_counts_path, index=False
     )
@@ -1154,7 +1199,9 @@ def write_activitysim_trips_dataset(
     ensure_canonical_key_columns(dataset.iteration_summary).to_csv(
         iteration_summary_path, index=False
     )
-    ensure_canonical_key_columns(dataset.mode_deltas).to_csv(mode_deltas_path, index=False)
+    ensure_canonical_key_columns(dataset.mode_deltas).to_csv(
+        mode_deltas_path, index=False
+    )
     ensure_canonical_key_columns(dataset.equilibrium_pairs).to_csv(
         equilibrium_pairs_path, index=False
     )

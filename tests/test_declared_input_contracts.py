@@ -139,7 +139,9 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
             "usim_population_source_h5": os.path.join(
                 tmp_path, "usim", "data", "usim_123.h5"
             ),
-            FINAL_SKIMS_OMX: os.path.join(tmp_path, "beam", "input", "test", "skims.omx"),
+            FINAL_SKIMS_OMX: os.path.join(
+                tmp_path, "beam", "input", "test", "skims.omx"
+            ),
         }
 
         urbansim_contract = UrbansimPreprocessor.declared_expected_inputs(
@@ -148,9 +150,7 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
         assert urbansim_contract == {
             "usim_source_data_dir": "usim/input",
             "usim_mutable_data_dir": os.path.join(tmp_path, "usim", "data"),
-            "usim_datastore_h5": os.path.join(
-                tmp_path, "usim", "data", "usim_123.h5"
-            ),
+            "usim_datastore_h5": os.path.join(tmp_path, "usim", "data", "usim_123.h5"),
         }
 
         atlas_contract = AtlasPreprocessor.declared_expected_inputs(
@@ -158,9 +158,7 @@ def test_declared_expected_inputs_are_filesystem_free(tmp_path):
         )
         assert atlas_contract == {
             "atlas_mutable_input_dir": os.path.join(tmp_path, "atlas", "input"),
-            "usim_datastore_h5": os.path.join(
-                tmp_path, "usim", "data", "usim_123.h5"
-            ),
+            "usim_datastore_h5": os.path.join(tmp_path, "usim", "data", "usim_123.h5"),
         }
 
         beam_contract = BeamRunner.declared_expected_inputs(settings, state, workspace)

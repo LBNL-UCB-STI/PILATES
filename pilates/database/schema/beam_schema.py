@@ -13,6 +13,8 @@ from sqlalchemy import (
     String,
 )
 from sqlmodel import Field, SQLModel
+
+
 class HouseholdsBeamIn(SQLModel, table=True):
     __tablename__ = "HouseholdsBeamIn"
     __table_args__ = {"extend_existing": True}
@@ -407,7 +409,9 @@ class VehiclesBeamIn(SQLModel, table=True):
     year: Optional[int] = Field(
         default=None,
         description="Model year associated with the output record.",
-        sa_column=Column("year", BigInteger, primary_key=True, nullable=True, index=True),
+        sa_column=Column(
+            "year", BigInteger, primary_key=True, nullable=True, index=True
+        ),
     )
     newhhflag: Optional[str] = Field(
         default=None,
@@ -502,8 +506,12 @@ class PlansBeamIn(SQLModel, table=True):
         description="Activity type for BEAM plans.",
         sa_column=Column("ActivityType", String, nullable=True),
     )
-    x: Optional[float] = Field(default=None, sa_column=Column("x", Float, nullable=True))
-    y: Optional[float] = Field(default=None, sa_column=Column("y", Float, nullable=True))
+    x: Optional[float] = Field(
+        default=None, sa_column=Column("x", Float, nullable=True)
+    )
+    y: Optional[float] = Field(
+        default=None, sa_column=Column("y", Float, nullable=True)
+    )
     departure_time: Optional[float] = Field(
         default=None, sa_column=Column("departure_time", Float, nullable=True)
     )
@@ -598,21 +606,51 @@ class BeamPlansOut(SQLModel, table=True):
             index=True,
         ),
     )
-    plan_index: Optional[int] = Field(default=None, sa_column=Column("planIndex", BigInteger, nullable=True))
-    plan_score: Optional[float] = Field(default=None, sa_column=Column("planScore", Float, nullable=True))
-    plan_selected: Optional[bool] = Field(default=None, sa_column=Column("planSelected", Boolean, nullable=True))
-    plan_element_type: Optional[str] = Field(default=None, sa_column=Column("planElementType", String, nullable=True))
-    plan_element_index: Optional[int] = Field(default=None, sa_column=Column("planElementIndex", BigInteger, nullable=True))
-    activity_type: Optional[str] = Field(default=None, sa_column=Column("activityType", String, nullable=True))
-    activity_location_x: Optional[float] = Field(default=None, sa_column=Column("activityLocationX", Float, nullable=True))
-    activity_location_y: Optional[float] = Field(default=None, sa_column=Column("activityLocationY", Float, nullable=True))
-    activity_end_time: Optional[float] = Field(default=None, sa_column=Column("activityEndTime", Float, nullable=True))
-    leg_mode: Optional[str] = Field(default=None, sa_column=Column("legMode", String, nullable=True))
-    leg_departure_time: Optional[float] = Field(default=None, sa_column=Column("legDepartureTime", Float, nullable=True))
-    trip_dur_min: Optional[str] = Field(default=None, sa_column=Column("trip_dur_min", String, nullable=True))
-    trip_cost_dollars: Optional[str] = Field(default=None, sa_column=Column("trip_cost_dollars", String, nullable=True))
-    leg_travel_time: Optional[float] = Field(default=None, sa_column=Column("legTravelTime", Float, nullable=True))
-    leg_route_type: Optional[str] = Field(default=None, sa_column=Column("legRouteType", String, nullable=True))
+    plan_index: Optional[int] = Field(
+        default=None, sa_column=Column("planIndex", BigInteger, nullable=True)
+    )
+    plan_score: Optional[float] = Field(
+        default=None, sa_column=Column("planScore", Float, nullable=True)
+    )
+    plan_selected: Optional[bool] = Field(
+        default=None, sa_column=Column("planSelected", Boolean, nullable=True)
+    )
+    plan_element_type: Optional[str] = Field(
+        default=None, sa_column=Column("planElementType", String, nullable=True)
+    )
+    plan_element_index: Optional[int] = Field(
+        default=None, sa_column=Column("planElementIndex", BigInteger, nullable=True)
+    )
+    activity_type: Optional[str] = Field(
+        default=None, sa_column=Column("activityType", String, nullable=True)
+    )
+    activity_location_x: Optional[float] = Field(
+        default=None, sa_column=Column("activityLocationX", Float, nullable=True)
+    )
+    activity_location_y: Optional[float] = Field(
+        default=None, sa_column=Column("activityLocationY", Float, nullable=True)
+    )
+    activity_end_time: Optional[float] = Field(
+        default=None, sa_column=Column("activityEndTime", Float, nullable=True)
+    )
+    leg_mode: Optional[str] = Field(
+        default=None, sa_column=Column("legMode", String, nullable=True)
+    )
+    leg_departure_time: Optional[float] = Field(
+        default=None, sa_column=Column("legDepartureTime", Float, nullable=True)
+    )
+    trip_dur_min: Optional[str] = Field(
+        default=None, sa_column=Column("trip_dur_min", String, nullable=True)
+    )
+    trip_cost_dollars: Optional[str] = Field(
+        default=None, sa_column=Column("trip_cost_dollars", String, nullable=True)
+    )
+    leg_travel_time: Optional[float] = Field(
+        default=None, sa_column=Column("legTravelTime", Float, nullable=True)
+    )
+    leg_route_type: Optional[str] = Field(
+        default=None, sa_column=Column("legRouteType", String, nullable=True)
+    )
     leg_route_start_link: Optional[int] = Field(
         default=None,
         description="Start link identifier for the BEAM route leg.",
@@ -635,9 +673,15 @@ class BeamPlansOut(SQLModel, table=True):
             index=True,
         ),
     )
-    leg_route_travel_time: Optional[float] = Field(default=None, sa_column=Column("legRouteTravelTime", Float, nullable=True))
-    leg_route_distance: Optional[float] = Field(default=None, sa_column=Column("legRouteDistance", Float, nullable=True))
-    leg_route_links: Optional[str] = Field(default=None, sa_column=Column("legRouteLinks", String, nullable=True))
+    leg_route_travel_time: Optional[float] = Field(
+        default=None, sa_column=Column("legRouteTravelTime", Float, nullable=True)
+    )
+    leg_route_distance: Optional[float] = Field(
+        default=None, sa_column=Column("legRouteDistance", Float, nullable=True)
+    )
+    leg_route_links: Optional[str] = Field(
+        default=None, sa_column=Column("legRouteLinks", String, nullable=True)
+    )
 
 
 class BeamEventsParquet(SQLModel, table=True):
@@ -645,82 +689,227 @@ class BeamEventsParquet(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
-    capacity: Optional[int] = Field(default=None, sa_column=Column("capacity", Integer, nullable=True))
-    tour_index: Optional[int] = Field(default=None, sa_column=Column("tourIndex", Integer, nullable=True))
-    weight: Optional[str] = Field(default=None, sa_column=Column("weight", String, nullable=True))
-    current_activity: Optional[str] = Field(default=None, sa_column=Column("currentActivity", String, nullable=True))
-    from_stop_index: Optional[str] = Field(default=None, sa_column=Column("fromStopIndex", String, nullable=True))
-    driver: Optional[str] = Field(default=None, sa_column=Column("driver", String, nullable=True))
-    num_passengers: Optional[int] = Field(default=None, sa_column=Column("numPassengers", Integer, nullable=True))
-    start_y: Optional[float] = Field(default=None, sa_column=Column("startY", Float, nullable=True))
-    act_type: Optional[str] = Field(default=None, sa_column=Column("actType", String, nullable=True))
-    toll_cost: Optional[str] = Field(default=None, sa_column=Column("tollCost", String, nullable=True))
-    trip_id_event: Optional[str] = Field(default=None, sa_column=Column("tripId", String, nullable=True))
-    charging_point_type: Optional[str] = Field(default=None, sa_column=Column("chargingPointType", String, nullable=True))
-    location_y: Optional[float] = Field(default=None, sa_column=Column("locationY", Float, nullable=True))
-    vehicle: Optional[str] = Field(default=None, sa_column=Column("vehicle", String, nullable=True))
+    capacity: Optional[int] = Field(
+        default=None, sa_column=Column("capacity", Integer, nullable=True)
+    )
+    tour_index: Optional[int] = Field(
+        default=None, sa_column=Column("tourIndex", Integer, nullable=True)
+    )
+    weight: Optional[str] = Field(
+        default=None, sa_column=Column("weight", String, nullable=True)
+    )
+    current_activity: Optional[str] = Field(
+        default=None, sa_column=Column("currentActivity", String, nullable=True)
+    )
+    from_stop_index: Optional[str] = Field(
+        default=None, sa_column=Column("fromStopIndex", String, nullable=True)
+    )
+    driver: Optional[str] = Field(
+        default=None, sa_column=Column("driver", String, nullable=True)
+    )
+    num_passengers: Optional[int] = Field(
+        default=None, sa_column=Column("numPassengers", Integer, nullable=True)
+    )
+    start_y: Optional[float] = Field(
+        default=None, sa_column=Column("startY", Float, nullable=True)
+    )
+    act_type: Optional[str] = Field(
+        default=None, sa_column=Column("actType", String, nullable=True)
+    )
+    toll_cost: Optional[str] = Field(
+        default=None, sa_column=Column("tollCost", String, nullable=True)
+    )
+    trip_id_event: Optional[str] = Field(
+        default=None, sa_column=Column("tripId", String, nullable=True)
+    )
+    charging_point_type: Optional[str] = Field(
+        default=None, sa_column=Column("chargingPointType", String, nullable=True)
+    )
+    location_y: Optional[float] = Field(
+        default=None, sa_column=Column("locationY", Float, nullable=True)
+    )
+    vehicle: Optional[str] = Field(
+        default=None, sa_column=Column("vehicle", String, nullable=True)
+    )
     y: Optional[str] = Field(default=None, sa_column=Column("y", String, nullable=True))
-    end_x: Optional[float] = Field(default=None, sa_column=Column("endX", Float, nullable=True))
-    shift_status: Optional[str] = Field(default=None, sa_column=Column("shiftStatus", String, nullable=True))
-    secondary_fuel_level: Optional[float] = Field(default=None, sa_column=Column("secondaryFuelLevel", Float, nullable=True))
-    time: Optional[float] = Field(default=None, sa_column=Column("time", Float, nullable=True))
+    end_x: Optional[float] = Field(
+        default=None, sa_column=Column("endX", Float, nullable=True)
+    )
+    shift_status: Optional[str] = Field(
+        default=None, sa_column=Column("shiftStatus", String, nullable=True)
+    )
+    secondary_fuel_level: Optional[float] = Field(
+        default=None, sa_column=Column("secondaryFuelLevel", Float, nullable=True)
+    )
+    time: Optional[float] = Field(
+        default=None, sa_column=Column("time", Float, nullable=True)
+    )
     link: Optional[int] = Field(
         default=None,
         description="Network link identifier carried by the BEAM event row when present.",
-        sa_column=Column("link", Integer, ForeignKey("BeamNetworkFinal.linkId"), nullable=True, index=True),
+        sa_column=Column(
+            "link",
+            Integer,
+            ForeignKey("BeamNetworkFinal.linkId"),
+            nullable=True,
+            index=True,
+        ),
     )
-    personal_vehicle_available: Optional[bool] = Field(default=None, sa_column=Column("personalVehicleAvailable", Boolean, nullable=True))
-    payload_ids: Optional[str] = Field(default=None, sa_column=Column("PayloadIds", String, nullable=True))
-    primary_fuel_type: Optional[str] = Field(default=None, sa_column=Column("primaryFuelType", String, nullable=True))
-    current_tour_mode: Optional[str] = Field(default=None, sa_column=Column("currentTourMode", String, nullable=True))
-    link_travel_time: Optional[str] = Field(default=None, sa_column=Column("linkTravelTime", String, nullable=True))
-    reason: Optional[str] = Field(default=None, sa_column=Column("reason", String, nullable=True))
-    net_cost: Optional[str] = Field(default=None, sa_column=Column("netCost", String, nullable=True))
-    fuel: Optional[float] = Field(default=None, sa_column=Column("fuel", Float, nullable=True))
-    next_activity: Optional[str] = Field(default=None, sa_column=Column("nextActivity", String, nullable=True))
-    depart_time: Optional[int] = Field(default=None, sa_column=Column("departTime", Integer, nullable=True))
-    seating_capacity: Optional[int] = Field(default=None, sa_column=Column("seatingCapacity", Integer, nullable=True))
-    parking_type: Optional[str] = Field(default=None, sa_column=Column("parkingType", String, nullable=True))
-    location: Optional[int] = Field(default=None, sa_column=Column("location", Integer, nullable=True))
-    secondary_fuel: Optional[float] = Field(default=None, sa_column=Column("secondaryFuel", Float, nullable=True))
-    person: Optional[str] = Field(default=None, sa_column=Column("person", String, nullable=True))
-    available_alternatives: Optional[str] = Field(default=None, sa_column=Column("availableAlternatives", String, nullable=True))
-    departure_time: Optional[int] = Field(default=None, sa_column=Column("departureTime", Integer, nullable=True))
-    secondary_fuel_type: Optional[str] = Field(default=None, sa_column=Column("secondaryFuelType", String, nullable=True))
-    arrival_time: Optional[int] = Field(default=None, sa_column=Column("arrivalTime", Integer, nullable=True))
-    cost: Optional[float] = Field(default=None, sa_column=Column("cost", Float, nullable=True))
-    parking_taz: Optional[str] = Field(default=None, sa_column=Column("parkingTaz", String, nullable=True))
-    toll_paid: Optional[float] = Field(default=None, sa_column=Column("tollPaid", Float, nullable=True))
-    trip_id: Optional[str] = Field(default=None, sa_column=Column("trip_id", String, nullable=True))
-    payloads: Optional[str] = Field(default=None, sa_column=Column("payloads", String, nullable=True))
-    duration: Optional[float] = Field(default=None, sa_column=Column("duration", Float, nullable=True))
-    expected_maximum_utility: Optional[float] = Field(default=None, sa_column=Column("expectedMaximumUtility", Float, nullable=True))
-    leg_modes: Optional[str] = Field(default=None, sa_column=Column("legModes", String, nullable=True))
-    length: Optional[float] = Field(default=None, sa_column=Column("length", Float, nullable=True))
-    to_stop_index: Optional[str] = Field(default=None, sa_column=Column("toStopIndex", String, nullable=True))
-    links: Optional[str] = Field(default=None, sa_column=Column("links", String, nullable=True))
-    end_y: Optional[float] = Field(default=None, sa_column=Column("endY", Float, nullable=True))
-    mode: Optional[str] = Field(default=None, sa_column=Column("mode", String, nullable=True))
-    type: Optional[str] = Field(default=None, sa_column=Column("type", String, nullable=True))
-    score: Optional[float] = Field(default=None, sa_column=Column("score", Float, nullable=True))
-    start_x: Optional[float] = Field(default=None, sa_column=Column("startX", Float, nullable=True))
-    facility: Optional[str] = Field(default=None, sa_column=Column("facility", String, nullable=True))
-    location_x: Optional[float] = Field(default=None, sa_column=Column("locationX", Float, nullable=True))
-    incentive: Optional[str] = Field(default=None, sa_column=Column("incentive", String, nullable=True))
+    personal_vehicle_available: Optional[bool] = Field(
+        default=None,
+        sa_column=Column("personalVehicleAvailable", Boolean, nullable=True),
+    )
+    payload_ids: Optional[str] = Field(
+        default=None, sa_column=Column("PayloadIds", String, nullable=True)
+    )
+    primary_fuel_type: Optional[str] = Field(
+        default=None, sa_column=Column("primaryFuelType", String, nullable=True)
+    )
+    current_tour_mode: Optional[str] = Field(
+        default=None, sa_column=Column("currentTourMode", String, nullable=True)
+    )
+    link_travel_time: Optional[str] = Field(
+        default=None, sa_column=Column("linkTravelTime", String, nullable=True)
+    )
+    reason: Optional[str] = Field(
+        default=None, sa_column=Column("reason", String, nullable=True)
+    )
+    net_cost: Optional[str] = Field(
+        default=None, sa_column=Column("netCost", String, nullable=True)
+    )
+    fuel: Optional[float] = Field(
+        default=None, sa_column=Column("fuel", Float, nullable=True)
+    )
+    next_activity: Optional[str] = Field(
+        default=None, sa_column=Column("nextActivity", String, nullable=True)
+    )
+    depart_time: Optional[int] = Field(
+        default=None, sa_column=Column("departTime", Integer, nullable=True)
+    )
+    seating_capacity: Optional[int] = Field(
+        default=None, sa_column=Column("seatingCapacity", Integer, nullable=True)
+    )
+    parking_type: Optional[str] = Field(
+        default=None, sa_column=Column("parkingType", String, nullable=True)
+    )
+    location: Optional[int] = Field(
+        default=None, sa_column=Column("location", Integer, nullable=True)
+    )
+    secondary_fuel: Optional[float] = Field(
+        default=None, sa_column=Column("secondaryFuel", Float, nullable=True)
+    )
+    person: Optional[str] = Field(
+        default=None, sa_column=Column("person", String, nullable=True)
+    )
+    available_alternatives: Optional[str] = Field(
+        default=None, sa_column=Column("availableAlternatives", String, nullable=True)
+    )
+    departure_time: Optional[int] = Field(
+        default=None, sa_column=Column("departureTime", Integer, nullable=True)
+    )
+    secondary_fuel_type: Optional[str] = Field(
+        default=None, sa_column=Column("secondaryFuelType", String, nullable=True)
+    )
+    arrival_time: Optional[int] = Field(
+        default=None, sa_column=Column("arrivalTime", Integer, nullable=True)
+    )
+    cost: Optional[float] = Field(
+        default=None, sa_column=Column("cost", Float, nullable=True)
+    )
+    parking_taz: Optional[str] = Field(
+        default=None, sa_column=Column("parkingTaz", String, nullable=True)
+    )
+    toll_paid: Optional[float] = Field(
+        default=None, sa_column=Column("tollPaid", Float, nullable=True)
+    )
+    trip_id: Optional[str] = Field(
+        default=None, sa_column=Column("trip_id", String, nullable=True)
+    )
+    payloads: Optional[str] = Field(
+        default=None, sa_column=Column("payloads", String, nullable=True)
+    )
+    duration: Optional[float] = Field(
+        default=None, sa_column=Column("duration", Float, nullable=True)
+    )
+    expected_maximum_utility: Optional[float] = Field(
+        default=None, sa_column=Column("expectedMaximumUtility", Float, nullable=True)
+    )
+    leg_modes: Optional[str] = Field(
+        default=None, sa_column=Column("legModes", String, nullable=True)
+    )
+    length: Optional[float] = Field(
+        default=None, sa_column=Column("length", Float, nullable=True)
+    )
+    to_stop_index: Optional[str] = Field(
+        default=None, sa_column=Column("toStopIndex", String, nullable=True)
+    )
+    links: Optional[str] = Field(
+        default=None, sa_column=Column("links", String, nullable=True)
+    )
+    end_y: Optional[float] = Field(
+        default=None, sa_column=Column("endY", Float, nullable=True)
+    )
+    mode: Optional[str] = Field(
+        default=None, sa_column=Column("mode", String, nullable=True)
+    )
+    type: Optional[str] = Field(
+        default=None, sa_column=Column("type", String, nullable=True)
+    )
+    score: Optional[float] = Field(
+        default=None, sa_column=Column("score", Float, nullable=True)
+    )
+    start_x: Optional[float] = Field(
+        default=None, sa_column=Column("startX", Float, nullable=True)
+    )
+    facility: Optional[str] = Field(
+        default=None, sa_column=Column("facility", String, nullable=True)
+    )
+    location_x: Optional[float] = Field(
+        default=None, sa_column=Column("locationX", Float, nullable=True)
+    )
+    incentive: Optional[str] = Field(
+        default=None, sa_column=Column("incentive", String, nullable=True)
+    )
     x: Optional[str] = Field(default=None, sa_column=Column("x", String, nullable=True))
-    primary_fuel: Optional[float] = Field(default=None, sa_column=Column("primaryFuel", Float, nullable=True))
-    riders: Optional[str] = Field(default=None, sa_column=Column("riders", String, nullable=True))
-    current_trip_mode: Optional[str] = Field(default=None, sa_column=Column("currentTripMode", String, nullable=True))
-    leg_vehicle_ids: Optional[str] = Field(default=None, sa_column=Column("legVehicleIds", String, nullable=True))
-    payload_weight_in_kg: Optional[str] = Field(default=None, sa_column=Column("PayloadWeightInKg", String, nullable=True))
-    require_wheelchair: Optional[str] = Field(default=None, sa_column=Column("requireWheelchair", String, nullable=True))
-    pricing_model: Optional[str] = Field(default=None, sa_column=Column("pricingModel", String, nullable=True))
-    vehicle_type: Optional[str] = Field(default=None, sa_column=Column("vehicleType", String, nullable=True))
-    parking_zone_id: Optional[str] = Field(default=None, sa_column=Column("parkingZoneId", String, nullable=True))
-    leg_mode: Optional[str] = Field(default=None, sa_column=Column("legMode", String, nullable=True))
-    emissions: Optional[str] = Field(default=None, sa_column=Column("emissions", String, nullable=True))
-    primary_fuel_level: Optional[float] = Field(default=None, sa_column=Column("primaryFuelLevel", Float, nullable=True))
-    price: Optional[float] = Field(default=None, sa_column=Column("price", Float, nullable=True))
+    primary_fuel: Optional[float] = Field(
+        default=None, sa_column=Column("primaryFuel", Float, nullable=True)
+    )
+    riders: Optional[str] = Field(
+        default=None, sa_column=Column("riders", String, nullable=True)
+    )
+    current_trip_mode: Optional[str] = Field(
+        default=None, sa_column=Column("currentTripMode", String, nullable=True)
+    )
+    leg_vehicle_ids: Optional[str] = Field(
+        default=None, sa_column=Column("legVehicleIds", String, nullable=True)
+    )
+    payload_weight_in_kg: Optional[str] = Field(
+        default=None, sa_column=Column("PayloadWeightInKg", String, nullable=True)
+    )
+    require_wheelchair: Optional[str] = Field(
+        default=None, sa_column=Column("requireWheelchair", String, nullable=True)
+    )
+    pricing_model: Optional[str] = Field(
+        default=None, sa_column=Column("pricingModel", String, nullable=True)
+    )
+    vehicle_type: Optional[str] = Field(
+        default=None, sa_column=Column("vehicleType", String, nullable=True)
+    )
+    parking_zone_id: Optional[str] = Field(
+        default=None, sa_column=Column("parkingZoneId", String, nullable=True)
+    )
+    leg_mode: Optional[str] = Field(
+        default=None, sa_column=Column("legMode", String, nullable=True)
+    )
+    emissions: Optional[str] = Field(
+        default=None, sa_column=Column("emissions", String, nullable=True)
+    )
+    primary_fuel_level: Optional[float] = Field(
+        default=None, sa_column=Column("primaryFuelLevel", Float, nullable=True)
+    )
+    price: Optional[float] = Field(
+        default=None, sa_column=Column("price", Float, nullable=True)
+    )
 
 
 class BeamFinalVehicles(SQLModel, table=True):
@@ -733,8 +922,12 @@ class BeamFinalVehicles(SQLModel, table=True):
         description="BEAM vehicle identifier in the final vehicles summary.",
         sa_column=Column("vehicleId", BigInteger, nullable=True, index=True),
     )
-    vehicle_type_id: Optional[str] = Field(default=None, sa_column=Column("vehicleTypeId", String, nullable=True))
-    state_of_charge: Optional[float] = Field(default=None, sa_column=Column("stateOfCharge", Float, nullable=True))
+    vehicle_type_id: Optional[str] = Field(
+        default=None, sa_column=Column("vehicleTypeId", String, nullable=True)
+    )
+    state_of_charge: Optional[float] = Field(
+        default=None, sa_column=Column("stateOfCharge", Float, nullable=True)
+    )
     household_id: Optional[int] = Field(
         default=None,
         description="Household identifier associated with the BEAM vehicle.",
@@ -753,7 +946,9 @@ class BeamRouteHistory(SQLModel, table=True):
     __table_args__ = {"extend_existing": True}
     __abstract__ = True
 
-    time_bin: Optional[int] = Field(default=None, sa_column=Column("timeBin", BigInteger, nullable=True))
+    time_bin: Optional[int] = Field(
+        default=None, sa_column=Column("timeBin", BigInteger, nullable=True)
+    )
     origin_link_id: Optional[int] = Field(
         default=None,
         description="Origin link identifier for the recorded route.",
@@ -776,7 +971,9 @@ class BeamRouteHistory(SQLModel, table=True):
             index=True,
         ),
     )
-    route: Optional[str] = Field(default=None, sa_column=Column("route", String, nullable=True))
+    route: Optional[str] = Field(
+        default=None, sa_column=Column("route", String, nullable=True)
+    )
 
 
 class BeamNetworkFinal(SQLModel, table=True):

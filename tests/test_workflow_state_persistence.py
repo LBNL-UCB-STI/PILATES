@@ -135,7 +135,9 @@ def test_set_run_info_path_does_not_convert_fresh_run_into_restart(tmp_path):
 
 
 def test_state_resume_maps_supply_demand_substage_into_major_and_substage(tmp_path):
-    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+    settings = _make_settings(
+        tmp_path, start_year=2017, end_year=2030, travel_model_freq=6
+    )
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
 
@@ -168,7 +170,9 @@ def test_state_resume_maps_supply_demand_substage_into_major_and_substage(tmp_pa
 
 
 def test_state_resume_resets_disabled_supply_demand_substage_to_first_enabled(tmp_path):
-    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+    settings = _make_settings(
+        tmp_path, start_year=2017, end_year=2030, travel_model_freq=6
+    )
     settings.activity_demand_enabled = False
     settings.traffic_assignment_enabled = True
 
@@ -234,8 +238,12 @@ def test_state_corruption_detection(tmp_path):
         WorkflowState.from_settings(settings)
 
 
-def test_from_settings_ignores_repo_default_stage_file_for_fresh_runs(tmp_path, monkeypatch):
-    settings = _make_settings(tmp_path, start_year=2017, end_year=2030, travel_model_freq=6)
+def test_from_settings_ignores_repo_default_stage_file_for_fresh_runs(
+    tmp_path, monkeypatch
+):
+    settings = _make_settings(
+        tmp_path, start_year=2017, end_year=2030, travel_model_freq=6
+    )
     settings.activity_demand_enabled = True
     settings.traffic_assignment_enabled = True
     settings.state_file_loc = None

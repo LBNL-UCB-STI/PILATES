@@ -9,7 +9,10 @@ import os
 from typing import Tuple, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
-from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivitySimRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
@@ -45,7 +48,9 @@ def _activitysim_iteration_output_paths(
         Path(workspace.get_asim_output_dir()) / f"year-{year}-iteration-{iteration}"
     )
     return {
-        output_key: str(iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet")
+        output_key: str(
+            iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet"
+        )
         for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
     }
 
@@ -61,10 +66,13 @@ def _activitysim_archived_input_paths(
         return {}
     iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
     archived_inputs_dir = (
-        Path(workspace.get_asim_output_dir()) / f"inputs-year-{year}-iteration-{iteration}"
+        Path(workspace.get_asim_output_dir())
+        / f"inputs-year-{year}-iteration-{iteration}"
     )
     return {
-        "asim_input_households_csv_archived": str(archived_inputs_dir / "households.csv"),
+        "asim_input_households_csv_archived": str(
+            archived_inputs_dir / "households.csv"
+        ),
         "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
         "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
         "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
@@ -228,11 +236,7 @@ def _detect_h5_prefix(
 
     for candidate_prefix in candidate_prefixes:
         if all(
-            (
-                f"{candidate_prefix}/{table_name}"
-                if candidate_prefix
-                else table_name
-            )
+            (f"{candidate_prefix}/{table_name}" if candidate_prefix else table_name)
             in normalized_keys
             for table_name in required_tables
         ):
@@ -302,10 +306,9 @@ def _prepare_updated_tables(
     required_cols = {}
     usim_tables = {}
 
-    vehicle_ownership_model = (
-        getattr(getattr(settings, "run", None), "models", None)
-        and getattr(settings.run.models, "vehicle_ownership", None)
-    )
+    vehicle_ownership_model = getattr(
+        getattr(settings, "run", None), "models", None
+    ) and getattr(settings.run.models, "vehicle_ownership", None)
     use_asim_auto_ownership = vehicle_ownership_model != "atlas"
 
     def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
@@ -345,9 +348,9 @@ def _prepare_updated_tables(
             if persons_df.index.name == "person_id":
                 sample_person_ids = persons_df.index[invalid_mask].tolist()[:10]
             elif "person_id" in persons_df.columns:
-                sample_person_ids = (
-                    persons_df.loc[invalid_mask, "person_id"].tolist()[:10]
-                )
+                sample_person_ids = persons_df.loc[invalid_mask, "person_id"].tolist()[
+                    :10
+                ]
             logger.warning(
                 "Dropping %s ActivitySim persons rows with missing/invalid household_id "
                 "before writing the updated UrbanSim persons table. Sample person_ids=%s",
@@ -385,9 +388,9 @@ def _prepare_updated_tables(
             return pd.DataFrame(index=pd.Index([], name="person_id"))
 
         key_cols = ["household_id", "member_id"]
-        persons[key_cols] = persons[key_cols].apply(
-            pd.to_numeric, errors="coerce"
-        ).astype("Int64")
+        persons[key_cols] = (
+            persons[key_cols].apply(pd.to_numeric, errors="coerce").astype("Int64")
+        )
 
         logger.warning(
             "ASim persons output is missing person_id; falling back to household_id/member_id "
@@ -396,9 +399,9 @@ def _prepare_updated_tables(
         )
 
         usim_lookup = usim_persons.reset_index()[["person_id"] + key_cols].copy()
-        usim_lookup[key_cols] = usim_lookup[key_cols].apply(
-            pd.to_numeric, errors="coerce"
-        ).astype("Int64")
+        usim_lookup[key_cols] = (
+            usim_lookup[key_cols].apply(pd.to_numeric, errors="coerce").astype("Int64")
+        )
         duplicate_mask = usim_lookup.duplicated(key_cols, keep=False)
         if duplicate_mask.any():
             logger.warning(
@@ -860,7 +863,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         )
         asim_output_dir = inputs.get("asim_output_dir")
         inputs["asim_output_dir"] = (
-            asim_output_dir if asim_output_dir and os.path.exists(asim_output_dir) else None
+            asim_output_dir
+            if asim_output_dir and os.path.exists(asim_output_dir)
+            else None
         )
         zarr_path = inputs.get(ZARR_SKIMS)
         inputs[ZARR_SKIMS] = (
@@ -1150,9 +1155,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.debug("ASim output already archived: %s", target)
                 processed_outputs[output_key] = target
                 if content_hash is None:
-                    content_hash = _resolve_content_hash(source) or _resolve_content_hash(
-                        target
-                    )
+                    content_hash = _resolve_content_hash(
+                        source
+                    ) or _resolve_content_hash(target)
                 if content_hash:
                     processed_output_hashes[output_key] = content_hash
                 continue

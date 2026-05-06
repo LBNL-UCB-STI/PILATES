@@ -120,9 +120,8 @@ def build_activitysim_inputs(
 
     explicit_usim_inputs: Dict[str, Any] = {}
     if usim_inputs and not land_use_enabled:
-        population_source = (
-            usim_inputs.get(USIM_DATASTORE_BASE_H5)
-            or usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        population_source = usim_inputs.get(USIM_DATASTORE_BASE_H5) or usim_inputs.get(
+            USIM_DATASTORE_CURRENT_H5
         )
         if population_source is not None:
             explicit_usim_inputs[USIM_POPULATION_SOURCE_H5] = population_source

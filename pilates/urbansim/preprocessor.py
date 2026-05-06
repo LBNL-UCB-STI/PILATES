@@ -610,7 +610,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
                                 previous_run_dir, "beam", "input"
                             )
                         else:
-                            beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
+                            beam_mutable_data_dir = (
+                                workspace.get_beam_mutable_data_dir()
+                            )
 
                         source_skims_path = os.path.join(
                             beam_mutable_data_dir,

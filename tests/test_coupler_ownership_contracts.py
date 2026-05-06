@@ -103,8 +103,7 @@ def _find_direct_coupler_calls(path: Path) -> List[CouplerCall]:
 
 def _format_calls(calls: Iterable[CouplerCall]) -> str:
     return "\n".join(
-        f"- {call.path}:{call.lineno} uses coupler.{call.method}(...)"
-        for call in calls
+        f"- {call.path}:{call.lineno} uses coupler.{call.method}(...)" for call in calls
     )
 
 

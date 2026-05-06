@@ -206,7 +206,9 @@ class RunIndex:
             normalized_status = _normalize_optional_text(status)
             completed_status = (normalized_status or "").lower() == "completed"
 
-            parent_run_id = _normalize_optional_text(getattr(run, "parent_run_id", None))
+            parent_run_id = _normalize_optional_text(
+                getattr(run, "parent_run_id", None)
+            )
             rows.append(
                 {
                     "run_id": _normalize_optional_text(getattr(run, "id", None)) or "",
@@ -225,13 +227,17 @@ class RunIndex:
                     "seed_source": seed_source,
                     "created_at": _iso(getattr(run, "created_at", None)),
                     "ended_at": _iso(getattr(run, "ended_at", None)),
-                    "is_complete": bool(completed_status and normalized_iteration is not None),
+                    "is_complete": bool(
+                        completed_status and normalized_iteration is not None
+                    ),
                     "is_completed_status": bool(completed_status),
                     "is_converged_candidate": bool(
                         completed_status and normalized_iteration is not None
                     ),
                     "has_parent": bool(parent_run_id),
-                    "archive_run_dir": str(resolved_archive) if resolved_archive is not None else None,
+                    "archive_run_dir": str(resolved_archive)
+                    if resolved_archive is not None
+                    else None,
                 }
             )
 
@@ -284,7 +290,9 @@ class RunIndex:
         if scenario_id is not None:
             frame = frame.loc[frame["scenario_id"] == str(scenario_id)]
         if year is not None:
-            frame = frame.loc[pd.to_numeric(frame["year"], errors="coerce") == int(year)]
+            frame = frame.loc[
+                pd.to_numeric(frame["year"], errors="coerce") == int(year)
+            ]
         if iteration is not None:
             frame = frame.loc[
                 pd.to_numeric(frame["iteration"], errors="coerce") == int(iteration)

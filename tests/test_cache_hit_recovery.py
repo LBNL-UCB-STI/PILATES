@@ -248,7 +248,9 @@ def test_recover_activitysim_preprocess_outputs_preserves_input_hashes(
     )
 
 
-def test_recover_activitysim_preprocess_outputs_from_archive_only(tmp_path, monkeypatch):
+def test_recover_activitysim_preprocess_outputs_from_archive_only(
+    tmp_path, monkeypatch
+):
     local_root = tmp_path / "local-run"
     archive_root = tmp_path / "archive-run"
     workspace = DummyWorkspace(local_root)
@@ -547,7 +549,9 @@ def test_recover_activitysim_postprocess_outputs_preserves_hashes(
 
     holder = StepOutputsHolder()
     coupler = DummyCoupler()
-    step_func = make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder)
+    step_func = make_activitysim_postprocess_step(
+        coupler=coupler, outputs_holder=holder
+    )
     outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_postprocess",
         step_func=step_func,
@@ -567,15 +571,22 @@ def test_recover_activitysim_postprocess_outputs_preserves_hashes(
     )
 
     assert outputs is not None
-    assert holder.activitysim_postprocess.processed_output_hashes[
-        "households_asim_out"
-    ] == "hash-households_asim_out"
-    assert holder.activitysim_postprocess.processed_output_hashes[
-        "asim_input_households_csv_archived"
-    ] == "hash-asim_input_households_csv_archived"
-    assert holder.activitysim_postprocess.processed_output_hashes[
-        "asim_input_skims_zarr_archived"
-    ] == "hash-asim_input_skims_zarr_archived"
+    assert (
+        holder.activitysim_postprocess.processed_output_hashes["households_asim_out"]
+        == "hash-households_asim_out"
+    )
+    assert (
+        holder.activitysim_postprocess.processed_output_hashes[
+            "asim_input_households_csv_archived"
+        ]
+        == "hash-asim_input_households_csv_archived"
+    )
+    assert (
+        holder.activitysim_postprocess.processed_output_hashes[
+            "asim_input_skims_zarr_archived"
+        ]
+        == "hash-asim_input_skims_zarr_archived"
+    )
 
 
 def test_recover_beam_run_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
@@ -894,7 +905,9 @@ def test_recover_atlas_preprocess_outputs_recovers_declared_cached_inputs_only(
     tmp_path, monkeypatch
 ):
     workspace = DummyWorkspace(tmp_path)
-    households_path = Path(workspace.get_atlas_mutable_input_dir()) / "year2023" / "households.csv"
+    households_path = (
+        Path(workspace.get_atlas_mutable_input_dir()) / "year2023" / "households.csv"
+    )
     _write_file(households_path)
 
     class DummyTracker:
@@ -932,7 +945,10 @@ def test_recover_atlas_preprocess_outputs_recovers_declared_cached_inputs_only(
 
     assert outputs is not None
     assert holder.atlas_preprocess is not None
-    assert holder.atlas_preprocess.prepared_inputs["atlas_households_csv"] == households_path
+    assert (
+        holder.atlas_preprocess.prepared_inputs["atlas_households_csv"]
+        == households_path
+    )
     assert "atlas_grave_csv" not in holder.atlas_preprocess.prepared_inputs
 
 
@@ -988,7 +1004,10 @@ def test_recover_atlas_postprocess_outputs_from_cached_run_artifacts(
     assert holder.atlas_postprocess is not None
     assert holder.atlas_postprocess.usim_datastore_h5 == updated_h5
     assert holder.atlas_postprocess.processed_outputs[USIM_DATASTORE_H5] == updated_h5
-    assert holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"] == vehicles2
+    assert (
+        holder.atlas_postprocess.processed_outputs["atlas_vehicles2_output"]
+        == vehicles2
+    )
     assert coupler.get(USIM_POPULATION_SOURCE_H5) is not None
     assert coupler.get(USIM_H5_UPDATED) is None
 
@@ -1040,9 +1059,7 @@ def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
     assert holder.atlas_postprocess is None
 
 
-def test_copy_vehicles_from_atlas_materializes_archive_fallback(
-    tmp_path, monkeypatch
-):
+def test_copy_vehicles_from_atlas_materializes_archive_fallback(tmp_path, monkeypatch):
     local_root = tmp_path / "local"
     archive_root = tmp_path / "archive"
     workspace = DummyWorkspace(local_root / "run")
@@ -1083,7 +1100,9 @@ def test_copy_vehicles_from_atlas_materializes_archive_fallback(
     assert str(vehicles["sourceVehicleId"].dtype) == "int64"
 
 
-def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(tmp_path, monkeypatch):
+def test_recover_beam_full_skim_outputs_from_cached_run_artifacts(
+    tmp_path, monkeypatch
+):
     workspace = DummyWorkspace(tmp_path)
     full_skims = Path(workspace.get_beam_output_dir()) / "full-skims.omx"
     _write_file(full_skims)
@@ -1128,7 +1147,9 @@ def test_recover_activitysim_postprocess_outputs_without_urbansim_settings(tmp_p
 
     coupler = DummyCoupler()
     holder = StepOutputsHolder()
-    step_func = make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder)
+    step_func = make_activitysim_postprocess_step(
+        coupler=coupler, outputs_holder=holder
+    )
     outputs = _recover_activitysim_step_outputs(
         step_name="activitysim_postprocess",
         step_func=step_func,
@@ -1155,10 +1176,11 @@ def test_recover_activitysim_postprocess_outputs_without_urbansim_settings(tmp_p
         holder.activitysim_postprocess.processed_outputs["households_asim_out"]
         == households
     )
-    assert holder.activitysim_postprocess.processed_outputs["persons_asim_out"] == persons
     assert (
-        holder.activitysim_postprocess.processed_outputs["beam_plans_asim_out"]
-        == plans
+        holder.activitysim_postprocess.processed_outputs["persons_asim_out"] == persons
+    )
+    assert (
+        holder.activitysim_postprocess.processed_outputs["beam_plans_asim_out"] == plans
     )
     assert holder.activitysim_postprocess.usim_datastore_h5 is None
 

@@ -71,13 +71,19 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_prefers_archive_then
     )
 
     assert (usim_dir / "hsize_ct_000.csv").read_text(encoding="utf-8") == "archive-hh"
-    assert (usim_dir / "income_rates_000.csv").read_text(encoding="utf-8") == "source-income"
+    assert (usim_dir / "income_rates_000.csv").read_text(
+        encoding="utf-8"
+    ) == "source-income"
     assert existing_local.read_text(encoding="utf-8") == "existing-local"
-    assert (usim_dir / "schools_2010.csv").read_text(encoding="utf-8") == "source-schools"
+    assert (usim_dir / "schools_2010.csv").read_text(
+        encoding="utf-8"
+    ) == "source-schools"
     assert (usim_dir / "blocks_school_districts_2010.csv").read_text(
         encoding="utf-8"
     ) == "source-districts"
-    assert (usim_dir / "skims_mpo_000.omx").read_text(encoding="utf-8") == "source-skims"
+    assert (usim_dir / "skims_mpo_000.omx").read_text(
+        encoding="utf-8"
+    ) == "source-skims"
     assert set(restored) == {
         "omx_skims",
         "hh_size",
@@ -95,7 +101,9 @@ def test_restore_missing_mutable_urbansim_supporting_inputs_uses_omx_export_name
     local_run_dir = tmp_path / "local-run"
     usim_dir = local_run_dir / "urbansim" / "data"
     workspace = _WorkspaceStub(local_run_dir, usim_dir)
-    state = SimpleNamespace(run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"))
+    state = SimpleNamespace(
+        run_info_path=str(tmp_path / "archive-run" / "run_state.yaml")
+    )
 
     usim_dir.mkdir(parents=True, exist_ok=True)
     Path(state.run_info_path).parent.mkdir(parents=True, exist_ok=True)

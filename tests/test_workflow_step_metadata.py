@@ -133,7 +133,10 @@ def test_make_step_factories_attach_consist_metadata():
     assert compile_meta.outputs == ["zarr_skims"]
     assert compile_meta.output_paths is activitysim_compile_output_paths
     assert compile_meta.cache_mode == "overwrite"
-    assert preprocess_meta.name_template == "{func_name}__y{year}__i{iteration}__phase_{phase}"
+    assert (
+        preprocess_meta.name_template
+        == "{func_name}__y{year}__i{iteration}__phase_{phase}"
+    )
     assert callable(preprocess_meta.adapter)
     assert callable(preprocess_meta.config)
     assert callable(preprocess_meta.identity_inputs)
@@ -223,7 +226,9 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
         settings=settings, state=state, workspace=workspace
     )
     assert preprocess_inputs[FINAL_SKIMS_OMX] == str(beam_skims)
-    assert preprocess_outputs[ASIM_HOUSEHOLDS_IN] == str(asim_data_dir / "households.csv")
+    assert preprocess_outputs[ASIM_HOUSEHOLDS_IN] == str(
+        asim_data_dir / "households.csv"
+    )
     assert preprocess_outputs["omx_skims"] == str(asim_data_dir / "skims.omx")
 
     assert run_meta.input_binding == "paths"
@@ -235,14 +240,20 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     assert run_inputs == ActivitysimRunner.declared_expected_inputs(
         settings=settings, state=state, workspace=workspace
     )
-    run_outputs = run_meta.output_paths(settings=settings, state=state, workspace=workspace)
+    run_outputs = run_meta.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
     assert run_outputs == ActivitysimRunner.expected_outputs(
         settings=settings, state=state, workspace=workspace
     )
     assert run_inputs[ZARR_SKIMS] == str(zarr_path)
     assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(sharrow_cache_dir)
-    assert run_outputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
-    assert run_outputs["persons_asim_out"] == str(final_pipeline_dir / "persons" / "final.parquet")
+    assert run_outputs["beam_plans_asim_out"] == str(
+        final_pipeline_dir / "beam_plans" / "final.parquet"
+    )
+    assert run_outputs["persons_asim_out"] == str(
+        final_pipeline_dir / "persons" / "final.parquet"
+    )
 
     assert postprocess_meta.input_binding == "paths"
     assert postprocess_meta.cache_hydration == "metadata"
@@ -259,13 +270,23 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     assert post_outputs == ActivitysimPostprocessor.expected_outputs(
         settings=settings, state=state, workspace=workspace
     )
-    assert post_inputs["beam_plans_asim_out"] == str(final_pipeline_dir / "beam_plans" / "final.parquet")
+    assert post_inputs["beam_plans_asim_out"] == str(
+        final_pipeline_dir / "beam_plans" / "final.parquet"
+    )
     assert post_outputs[USIM_DATASTORE_H5] == str(usim_input)
     assert post_outputs["beam_plans_asim_out"] == str(
-        tmp_path / "activitysim" / "output" / "year-2025-iteration-1" / "beam_plans.parquet"
+        tmp_path
+        / "activitysim"
+        / "output"
+        / "year-2025-iteration-1"
+        / "beam_plans.parquet"
     )
     assert post_outputs["asim_input_skims_zarr_archived"] == str(
-        tmp_path / "activitysim" / "output" / "inputs-year-2025-iteration-1" / "skims.zarr"
+        tmp_path
+        / "activitysim"
+        / "output"
+        / "inputs-year-2025-iteration-1"
+        / "skims.zarr"
     )
 
 
@@ -512,7 +533,9 @@ def test_atlas_run_runtime_kwargs_use_stateful_required_outputs():
 
 
 def test_step_scope_fields_use_forecast_year_for_activitysim_and_beam_steps():
-    state = SimpleNamespace(year=2017, current_year=2017, forecast_year=2023, iteration=0)
+    state = SimpleNamespace(
+        year=2017, current_year=2017, forecast_year=2023, iteration=0
+    )
 
     activitysim_scope = _step_scope_fields(
         stage_name="activity_demand_run",
@@ -532,7 +555,9 @@ def test_step_scope_fields_use_forecast_year_for_activitysim_and_beam_steps():
 
 
 def test_step_scope_fields_keep_simulation_year_for_urbansim_steps():
-    state = SimpleNamespace(year=2023, current_year=2023, forecast_year=2029, iteration=0)
+    state = SimpleNamespace(
+        year=2023, current_year=2023, forecast_year=2029, iteration=0
+    )
 
     scope = _step_scope_fields(
         stage_name="land_use",
@@ -1000,7 +1025,9 @@ def test_workflow_stage_infers_strict_output_enforcement_from_step_output_class(
     )
 
 
-def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(tmp_path):
+def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(
+    tmp_path,
+):
     scenario = _FakeScenario()
     coupler = _DummyCoupler()
     outputs_holder = StepOutputsHolder()
@@ -1265,7 +1292,9 @@ def test_build_scenario_runtime_contract_sets_child_step_defaults_for_epoch_meta
         build_coupler_schema_fn=lambda *_args, **_kwargs: {},
         validate_workflow_step_contracts_fn=lambda **_kwargs: None,
         build_schema_steps_fn=lambda: [],
-        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: steps,
+        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: (
+            steps
+        ),
         merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
         scenario_name_template="scenario-{run_name}",
         surface=empty_surface,
@@ -1402,7 +1431,10 @@ def test_beam_postprocess_step_metadata_tracks_current_canonical_outputs():
 @pytest.mark.parametrize(
     ("factory", "expected_outputs"),
     [
-        (make_beam_preprocess_step, [BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN]),
+        (
+            make_beam_preprocess_step,
+            [BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN],
+        ),
         (make_beam_run_step, [LINKSTATS, BEAM_PLANS_OUT]),
         (make_beam_full_skim_step, [BEAM_FULL_SKIMS]),
     ],

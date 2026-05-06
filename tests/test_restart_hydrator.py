@@ -98,7 +98,7 @@ def _settings(*, activity_demand="activitysim", traffic_assignment="beam"):
             models=SimpleNamespace(
                 activity_demand=activity_demand,
                 traffic_assignment=traffic_assignment,
-            )
+            ),
         ),
         beam=SimpleNamespace(
             config="beam.conf",
@@ -171,8 +171,9 @@ def test_restart_frontier_contract_prefers_surface_projection():
 
 def test_prebootstrap_missing_artifacts_are_split_by_surface():
     surface = SimpleNamespace(
-        is_restart_prebootstrap_deferred_artifact_key=lambda key: key
-        == "bootstrap_owned"
+        is_restart_prebootstrap_deferred_artifact_key=lambda key: (
+            key == "bootstrap_owned"
+        )
     )
     artifacts = [
         {"key": "runtime_owned", "path": "/tmp/runtime", "reason": "runtime"},
@@ -455,7 +456,9 @@ def test_hydrate_missing_restart_artifacts_copies_archive_workflow_manifests(
         query_facet={"scenario_id": "scenario-a", "seed": 7},
     )
 
-    copied_manifest = Path(workspace.full_path) / ".workflow" / "year_2017_iteration_0.yaml"
+    copied_manifest = (
+        Path(workspace.full_path) / ".workflow" / "year_2017_iteration_0.yaml"
+    )
     assert result["success"] is True
     assert copied_manifest.read_text(encoding="utf-8") == archive_manifest.read_text(
         encoding="utf-8"
@@ -476,14 +479,21 @@ def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
     restored_dir.mkdir(parents=True, exist_ok=True)
     archived_paths = {
         "beam_input_plans_archived": restored_dir / "beam_input_plans_archived.csv.gz",
-        "beam_input_households_archived": restored_dir / "beam_input_households_archived.csv.gz",
-        "beam_input_persons_archived": restored_dir / "beam_input_persons_archived.csv.gz",
+        "beam_input_households_archived": restored_dir
+        / "beam_input_households_archived.csv.gz",
+        "beam_input_persons_archived": restored_dir
+        / "beam_input_persons_archived.csv.gz",
         "beam_input_config_archived": restored_dir / "beam_input_config_archived.conf",
-        "beam_input_config_references_archived": restored_dir / "beam_input_config_references_archived",
-        "beam_input_vehicles_archived": restored_dir / "beam_input_vehicles_archived.csv.gz",
-        "beam_input_linkstats_warmstart_archived": restored_dir / "beam_input_linkstats_warmstart_archived.csv.gz",
-        "beam_input_plans_warmstart_archived": restored_dir / "beam_input_plans_warmstart_archived.xml.gz",
-        "beam_input_experienced_plans_warmstart_archived": restored_dir / "beam_input_experienced_plans_warmstart_archived.xml.gz",
+        "beam_input_config_references_archived": restored_dir
+        / "beam_input_config_references_archived",
+        "beam_input_vehicles_archived": restored_dir
+        / "beam_input_vehicles_archived.csv.gz",
+        "beam_input_linkstats_warmstart_archived": restored_dir
+        / "beam_input_linkstats_warmstart_archived.csv.gz",
+        "beam_input_plans_warmstart_archived": restored_dir
+        / "beam_input_plans_warmstart_archived.xml.gz",
+        "beam_input_experienced_plans_warmstart_archived": restored_dir
+        / "beam_input_experienced_plans_warmstart_archived.xml.gz",
     }
     archived_paths["beam_input_config_archived"].write_text(
         "beam config",
@@ -493,9 +503,9 @@ def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
         parents=True,
         exist_ok=True,
     )
-    (
-        archived_paths["beam_input_config_references_archived"] / "extra.conf"
-    ).write_text("beam extra", encoding="utf-8")
+    (archived_paths["beam_input_config_references_archived"] / "extra.conf").write_text(
+        "beam extra", encoding="utf-8"
+    )
     (
         archived_paths["beam_input_config_references_archived"]
         / "scenario"
@@ -563,7 +573,9 @@ def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
     assert result["success"] is True
     region_dir = Path(workspace.get_beam_mutable_data_dir()) / "test-region"
     assert (region_dir / "extra.conf").read_text(encoding="utf-8") == "beam extra"
-    assert (region_dir / "scenario" / "network.csv").read_text(encoding="utf-8") == "network"
+    assert (region_dir / "scenario" / "network.csv").read_text(
+        encoding="utf-8"
+    ) == "network"
     assert not (region_dir / "__archive_manifest.json").exists()
     scenario_dir = (
         Path(workspace.get_beam_mutable_data_dir()) / "test-region" / "scenario"
@@ -576,7 +588,9 @@ def test_hydrate_rewind_runner_inputs_restores_beam_overlay_and_optional_inputs(
     )
     assert coupler.get("plans_beam_in") == str(scenario_dir / "plans.csv.gz")
     assert coupler.get("vehicles_beam_in") == str(scenario_dir / "vehicles.csv.gz")
-    assert coupler.get("atlas_vehicles2_output") == str(scenario_dir / "vehicles.csv.gz")
+    assert coupler.get("atlas_vehicles2_output") == str(
+        scenario_dir / "vehicles.csv.gz"
+    )
     assert coupler.get("beam_output_plans_xml").endswith(".xml.gz")
     assert coupler.get("beam_output_experienced_plans_xml").endswith(".xml.gz")
 

@@ -87,7 +87,7 @@ class RunNotificationSettings:
             default=_parse_bool(
                 values.get("PILATES_SLACK_INCLUDE_INTERNAL"),
                 default=_parse_bool(
-                values.get("PILATES_GCHAT_INCLUDE_INTERNAL"),
+                    values.get("PILATES_GCHAT_INCLUDE_INTERNAL"),
                     default=_parse_bool(
                         values.get("PILATES_SLACK_VERBOSE"),
                         default=False,
@@ -360,9 +360,7 @@ class ConsistRunNotifier:
         if not is_scenario:
             return tuple(lines)
 
-        if self.context.run_name and self.context.run_name != _string_value(
-            run.id, ""
-        ):
+        if self.context.run_name and self.context.run_name != _string_value(run.id, ""):
             lines.append(f"Consist run: `{_string_value(run.id, '<unknown>')}`")
         if self.context.scenario_id:
             lines.append(f"Scenario: `{self.context.scenario_id}`")
@@ -375,7 +373,9 @@ class ConsistRunNotifier:
             lines.append(f"Slurm job: `{slurm_job}`")
         cluster_parts = _cluster_parts(self.context)
         if cluster_parts:
-            lines.append(f"Cluster: {' | '.join(f'`{part}`' for part in cluster_parts)}")
+            lines.append(
+                f"Cluster: {' | '.join(f'`{part}`' for part in cluster_parts)}"
+            )
         node_label = _node_label(self.context)
         if node_label and not cluster_parts:
             lines.append(f"Nodes: `{node_label}`")

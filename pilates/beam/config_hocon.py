@@ -33,7 +33,9 @@ def beam_config_root(
     if workspace is not None and hasattr(workspace, "get_beam_mutable_data_dir"):
         return Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
     if workspace_path is None:
-        raise ValueError("workspace or workspace_path is required for BEAM config root resolution.")
+        raise ValueError(
+            "workspace or workspace_path is required for BEAM config root resolution."
+        )
     if settings.beam is None:
         raise ValueError("Beam settings are not configured.")
     return (
@@ -51,11 +53,14 @@ def beam_primary_config_path(
 ) -> Path:
     if settings.beam is None:
         raise ValueError("Beam settings are not configured.")
-    return beam_config_root(
-        settings,
-        workspace=workspace,
-        workspace_path=workspace_path,
-    ) / settings.beam.config
+    return (
+        beam_config_root(
+            settings,
+            workspace=workspace,
+            workspace_path=workspace_path,
+        )
+        / settings.beam.config
+    )
 
 
 def beam_config_env_overrides(
@@ -95,7 +100,9 @@ def load_resolved_beam_config_tree(
     *,
     env_overrides: Mapping[str, str],
 ) -> dict[str, Any]:
-    config_factory, hocon_converter, config_parser, non_existent_key = _require_pyhocon()
+    config_factory, hocon_converter, config_parser, non_existent_key = (
+        _require_pyhocon()
+    )
 
     try:
         config = config_factory.parse_file(str(config_path), resolve=False)
@@ -207,7 +214,9 @@ def _remove_dotted_key(config: Any, key: str) -> None:
 def _resolve_value_semantics(value: Any, *, env_overrides: Mapping[str, str]) -> Any:
     if not isinstance(value, str) or "${" not in value:
         return value
-    config_factory, hocon_converter, config_parser, non_existent_key = _require_pyhocon()
+    config_factory, hocon_converter, config_parser, non_existent_key = (
+        _require_pyhocon()
+    )
     try:
         expression_config = config_factory.parse_string(
             f"pilates_override = {value}\n",

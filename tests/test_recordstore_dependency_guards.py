@@ -285,7 +285,10 @@ def test_step_output_mapping_matches_real_output_record_store_mapping(
         },
     )
 
-    assert step_output_mapping(outputs, warn_lossy=False) == outputs.to_record_store().to_mapping()
+    assert (
+        step_output_mapping(outputs, warn_lossy=False)
+        == outputs.to_record_store().to_mapping()
+    )
 
 
 def test_step_output_mapping_keeps_first_duplicate_key(tmp_path: Path, caplog) -> None:

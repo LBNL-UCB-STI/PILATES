@@ -74,9 +74,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     assert publish_meta[0]["child_selection"] == "include_only"
     assert {
         path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
-    } == {
-        "/2023/households": "atlas_postprocess_usim_households_table_updated"
-    }
+    } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
 
 
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
@@ -128,16 +126,12 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
     assert calls[0][2]["child_selection"] == "include_only"
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
 
-def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
-    monkeypatch, tmp_path
-):
+def test_atlas_postprocess_logs_selected_start_year_h5_as_input(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_build_standard_step(*, spec, **_kwargs):
@@ -195,16 +189,12 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(base_h5)
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/households": "atlas_postprocess_usim_households_table_input"
     }
 
 
-def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
-    monkeypatch, tmp_path
-):
+def test_atlas_postprocess_logs_year_scoped_start_subyear_table(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_build_standard_step(*, spec, **_kwargs):
@@ -262,9 +252,7 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(year_scoped_h5)
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
@@ -334,19 +322,17 @@ def test_atlas_postprocess_logs_resolved_fallback_households_table(
         holder=SimpleNamespace(),
     )
 
-    assert {
-        path: spec.key for path, spec in input_calls[0]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in input_calls[0]["child_specs"].items()} == {
         "/2024/households": "atlas_postprocess_usim_households_table_input"
     }
     assert {
         path: spec.key for path, spec in output_calls[0]["child_specs"].items()
-    } == {
-        "/2024/households": "atlas_postprocess_usim_households_table_updated"
-    }
+    } == {"/2024/households": "atlas_postprocess_usim_households_table_updated"}
 
 
-def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, tmp_path):
+def test_atlas_postprocess_enqueues_restart_critical_intermediates(
+    monkeypatch, tmp_path
+):
     calls = []
     monkeypatch.setattr(
         atlas_postprocessor,
@@ -363,7 +349,9 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
 
     usim_h5 = usim_dir / "model_data_2023.h5"
     usim_h5.write_text("h5")
-    (atlas_output_dir / "householdv_2023.csv").write_text("household_id,nvehicles\n1,1\n")
+    (atlas_output_dir / "householdv_2023.csv").write_text(
+        "household_id,nvehicles\n1,1\n"
+    )
     (atlas_output_dir / "vehicles_2023.csv").write_text(
         "bodytype,pred_power,modelyear\nsedan,gas,2020\n"
     )

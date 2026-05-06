@@ -175,14 +175,14 @@ def restart_required_atlas_input_paths(
             prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
             for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
                 artifact_name = filename.rsplit(".", 1)[0]
-                required[
-                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-                ] = os.path.join(prior_year_dir, filename)
+                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+                    os.path.join(prior_year_dir, filename)
+                )
             for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
                 artifact_name = filename.replace(".", "_")
-                required[
-                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-                ] = os.path.join(prior_year_dir, filename)
+                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+                    os.path.join(prior_year_dir, filename)
+                )
 
     return required
 
@@ -269,9 +269,9 @@ def _record_restart_chained_rdata_inputs(
         if not os.path.exists(path):
             continue
         artifact_name = filename.replace(".", "_")
-        prepared_inputs[
-            f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-        ] = Path(path)
+        prepared_inputs[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+            Path(path)
+        )
 
 
 def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
@@ -598,7 +598,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                     short_name=short_name,
                 )
             )
-        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
+        return RecordStore(recordList=input_records), RecordStore(
+            recordList=output_records
+        )
 
     def _preprocess(
         self,
@@ -783,7 +785,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
-
             missing_required_tables: List[str] = []
 
             def process_table(

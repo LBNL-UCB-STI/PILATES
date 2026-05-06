@@ -21,7 +21,10 @@ def test_copy_canonical_zone_source_to_dir_is_noop_for_same_geojson_file(
     copied = copy_canonical_zone_source_to_dir(str(source), str(tmp_path))
 
     assert copied == str(source)
-    assert source.read_text(encoding="utf-8") == '{"type":"FeatureCollection","features":[]}'
+    assert (
+        source.read_text(encoding="utf-8")
+        == '{"type":"FeatureCollection","features":[]}'
+    )
 
 
 def test_resolve_canonical_zone_source_prefers_staged_copy_without_warning_when_primary_exists(
@@ -66,7 +69,9 @@ def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_
     asim_dir = tmp_path / "activitysim" / "data"
     asim_dir.mkdir(parents=True, exist_ok=True)
     staged_zone = asim_dir / "taz_sfbay.geojson"
-    staged_zone.write_text('{"type":"FeatureCollection","features":[]}', encoding="utf-8")
+    staged_zone.write_text(
+        '{"type":"FeatureCollection","features":[]}', encoding="utf-8"
+    )
 
     monkeypatch.setattr(
         activitysim_preprocessor,
@@ -87,7 +92,9 @@ def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_
         activitysim_preprocessor,
         "get_setting",
         lambda settings, key, default=None: (
-            getattr(getattr(settings, key.split(".", 1)[0]), key.split(".", 1)[1], default)
+            getattr(
+                getattr(settings, key.split(".", 1)[0]), key.split(".", 1)[1], default
+            )
             if "." in key and hasattr(settings, key.split(".", 1)[0])
             else getattr(settings, key, default)
         ),
@@ -122,15 +129,19 @@ def test_activitysim_copy_data_to_mutable_location_skips_duplicate_zone_records_
             main_configs_dir="configs",
             clipped_geoms_path=None,
         ),
-        beam=SimpleNamespace(local_input_folder="beam-input", router_directory="router"),
+        beam=SimpleNamespace(
+            local_input_folder="beam-input", router_directory="router"
+        ),
     )
     workspace = SimpleNamespace(get_asim_mutable_data_dir=lambda: str(asim_dir))
 
     with caplog.at_level("INFO"):
-        input_records, output_records = activitysim_preprocessor._copy_data_to_mutable_location(
-            settings,
-            str(asim_dir),
-            workspace,
+        input_records, output_records = (
+            activitysim_preprocessor._copy_data_to_mutable_location(
+                settings,
+                str(asim_dir),
+                workspace,
+            )
         )
 
     assert input_records.all_records() == []

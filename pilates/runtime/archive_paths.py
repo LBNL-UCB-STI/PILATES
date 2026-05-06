@@ -43,7 +43,9 @@ def path_under_root(path: str, root: str) -> bool:
         return False
 
 
-def resolve_archive_path(path: str, local_root: str, archive_root: str) -> Optional[str]:
+def resolve_archive_path(
+    path: str, local_root: str, archive_root: str
+) -> Optional[str]:
     abs_path = os.path.abspath(path)
     if path_under_root(abs_path, archive_root):
         return None

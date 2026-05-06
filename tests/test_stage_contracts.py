@@ -79,7 +79,9 @@ from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.supply_demand import (
+    run_supply_demand_stage as _run_supply_demand_stage,
+)
 from pilates.workflows.stages import supply_demand as supply_demand_stage
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.supply_demand import (
@@ -96,7 +98,9 @@ from pilates.workflows.stages.supply_demand_resume import (
     _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 import h5py
 
 from tests.workflow_contract_harness import (
@@ -206,7 +210,11 @@ def _build_settings(tmp_path: Path):
                 "local_crs": "EPSG:4326",
             },
             "skims": {"fname": "skims.omx"},
-            "database": {"enabled": False, "type": "duckdb", "path": str(tmp_path / "db.duckdb")},
+            "database": {
+                "enabled": False,
+                "type": "duckdb",
+                "path": str(tmp_path / "db.duckdb"),
+            },
         },
         "infrastructure": {
             "container_manager": "docker",
@@ -406,12 +414,16 @@ def stage_env(tmp_path, monkeypatch):
             if model_name == "atlas":
                 prepared_inputs = {}
                 grave_candidates = sorted(
-                    Path(workspace.get_atlas_mutable_input_dir()).glob("year*/grave.csv")
+                    Path(workspace.get_atlas_mutable_input_dir()).glob(
+                        "year*/grave.csv"
+                    )
                 )
                 if grave_candidates:
                     prepared_inputs["atlas_grave_csv"] = grave_candidates[-1]
                 return AtlasPreprocessOutputs(
-                    atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
+                    atlas_mutable_input_dir=Path(
+                        workspace.get_atlas_mutable_input_dir()
+                    ),
                     prepared_inputs=prepared_inputs,
                 )
             if model_name == "activitysim":
@@ -716,11 +728,10 @@ def test_land_use_stage_archives_forecast_output_using_state_forecast_year(
     )
 
     stage_env["state"].forecast_year = stage_env["state"].year + 2
-    forecast_path = (
-        Path(stage_env["workspace"].get_usim_mutable_data_dir())
-        / stage_env["settings"].urbansim.output_file_template.format(
-            year=stage_env["state"].forecast_year
-        )
+    forecast_path = Path(
+        stage_env["workspace"].get_usim_mutable_data_dir()
+    ) / stage_env["settings"].urbansim.output_file_template.format(
+        year=stage_env["state"].forecast_year
     )
     _write_file(forecast_path)
 
@@ -855,7 +866,9 @@ def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env)
     )
 
     preprocess_calls = [
-        call for call in stage_env["scenario"].calls if call.get("model") == "atlas_preprocess"
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "atlas_preprocess"
     ]
     assert preprocess_calls, "Expected an ATLAS preprocess step call."
     assert FINAL_SKIMS_OMX in (preprocess_calls[0].get("optional_input_keys") or [])
@@ -873,19 +886,16 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
     coupler = stage_env["coupler"]
 
     state.forecast_year = state.year + 4  # 2017, 2019, 2021
-    forecast_usim_path = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / settings.urbansim.output_file_template.format(year=state.forecast_year)
-    )
+    forecast_usim_path = Path(
+        workspace.get_usim_mutable_data_dir()
+    ) / settings.urbansim.output_file_template.format(year=state.forecast_year)
     _write_file(forecast_usim_path)
     coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
 
     atlas_years = [state.year, state.year + 2, state.year + 4]
     for atlas_year in atlas_years:
-        year_dir = (
-            Path(workspace.get_atlas_mutable_input_dir()) / f"year{atlas_year}"
-        )
+        year_dir = Path(workspace.get_atlas_mutable_input_dir()) / f"year{atlas_year}"
         year_dir.mkdir(parents=True, exist_ok=True)
         _write_file(year_dir / "vehicles_output.RData")
         if atlas_year > state.start_year:
@@ -931,11 +941,14 @@ def test_vehicle_ownership_stage_flushes_per_subyear(stage_env, monkeypatch):
             and str(call["path"]).endswith("vehicles_output.RData")
             for call in archive_now_calls
         )
-    assert sum(
-        1
-        for call in archive_now_calls
-        if call["key"] == USIM_POPULATION_SOURCE_H5 and call.get("force") is True
-    ) == 2
+    assert (
+        sum(
+            1
+            for call in archive_now_calls
+            if call["key"] == USIM_POPULATION_SOURCE_H5 and call.get("force") is True
+        )
+        == 2
+    )
 
 
 def test_atlas_sub_years_cover_each_two_year_increment(stage_env):
@@ -964,10 +977,9 @@ def test_vehicle_ownership_atlas_postprocess_binding_includes_run_outputs(
     coupler = stage_env["coupler"]
     scenario = stage_env["scenario"]
 
-    forecast_usim_path = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / settings.urbansim.output_file_template.format(year=state.forecast_year)
-    )
+    forecast_usim_path = Path(
+        workspace.get_usim_mutable_data_dir()
+    ) / settings.urbansim.output_file_template.format(year=state.forecast_year)
     _write_file(forecast_usim_path)
     coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
@@ -1050,10 +1062,9 @@ def test_vehicle_ownership_stage_persists_subyear_manifest_run_ids_and_restores(
     scenario = _RunIdScenario(coupler)
 
     state.forecast_year = state.year + 4  # 2017, 2019, 2021
-    forecast_usim_path = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / settings.urbansim.output_file_template.format(year=state.forecast_year)
-    )
+    forecast_usim_path = Path(
+        workspace.get_usim_mutable_data_dir()
+    ) / settings.urbansim.output_file_template.format(year=state.forecast_year)
     _write_file(forecast_usim_path)
     coupler.set(USIM_DATASTORE_CURRENT_H5, str(forecast_usim_path))
     coupler.set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
@@ -1217,7 +1228,9 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     state.compile_asim()
 
     # Keep zarr skims present but delete numba cache to trigger forced compile.
-    zarr_path = Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    zarr_path = (
+        Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    )
     _write_file(zarr_path)
     stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
 
@@ -1240,9 +1253,13 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     )
 
     compile_calls = [
-        call for call in stage_env["scenario"].calls if call.get("model") == "activitysim_compile"
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_compile"
     ]
-    assert compile_calls, "Expected forced ActivitySim compile when numba cache is missing."
+    assert compile_calls, (
+        "Expected forced ActivitySim compile when numba cache is missing."
+    )
 
 
 def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
@@ -1268,7 +1285,9 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     state.current_inner_iter = 0
     state.compile_asim()
 
-    zarr_path = Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    zarr_path = (
+        Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    )
     _write_file(zarr_path)
     stage_env["coupler"]._values.pop(ZARR_SKIMS, None)
 
@@ -1287,9 +1306,13 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     )
 
     compile_calls = [
-        call for call in stage_env["scenario"].calls if call.get("model") == "activitysim_compile"
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_compile"
     ]
-    assert not compile_calls, "Did not expect ActivitySim compile when local artifacts already exist."
+    assert not compile_calls, (
+        "Did not expect ActivitySim compile when local artifacts already exist."
+    )
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
 
 
@@ -1366,7 +1389,9 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
         for call in stage_env["scenario"].calls
         if call.get("model") == "activitysim_compile"
     ]
-    assert not compile_calls, "Did not expect ActivitySim compile when archive artifacts exist."
+    assert not compile_calls, (
+        "Did not expect ActivitySim compile when archive artifacts exist."
+    )
     assert zarr_path.exists()
     assert numba_cache_dir.exists()
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
@@ -1408,8 +1433,9 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     preprocess_calls = [
@@ -1427,7 +1453,9 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
 def test_supply_demand_activitysim_preprocess_uses_base_population_source_when_land_use_disabled(
     stage_env, tmp_path
 ):
-    stale_current = Path(stage_env["workspace"].get_usim_mutable_data_dir()) / "stale_2023.h5"
+    stale_current = (
+        Path(stage_env["workspace"].get_usim_mutable_data_dir()) / "stale_2023.h5"
+    )
     _write_file(stale_current)
 
     stage_env["settings"].land_use_enabled = False
@@ -1452,8 +1480,9 @@ def test_supply_demand_activitysim_preprocess_uses_base_population_source_when_l
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     preprocess_calls = [
@@ -1493,8 +1522,9 @@ def test_supply_demand_activitysim_restart_requires_explicit_population_roles(
             usim_inputs={
                 USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
             },
-            build_manifest_path=lambda _workspace, year, iteration: tmp_path
-            / f"manifest_{year}_{iteration}.json",
+            build_manifest_path=lambda _workspace, year, iteration: (
+                tmp_path / f"manifest_{year}_{iteration}.json"
+            ),
         )
 
 
@@ -1517,8 +1547,9 @@ def test_supply_demand_activitysim_restart_with_empty_inputs_still_requires_expl
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs={},
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) is not None
@@ -1547,8 +1578,9 @@ def test_supply_demand_stage_accepts_typed_land_use_handoff(stage_env, tmp_path)
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         handoff=handoff,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     preprocess_calls = [
@@ -1589,8 +1621,9 @@ def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_inpu
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     postprocess_calls = [
@@ -1602,7 +1635,8 @@ def test_supply_demand_activitysim_postprocess_preserves_explicit_usim_base_inpu
     binding = postprocess_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
     assert (
-        (binding.inputs or {}).get(USIM_DATASTORE_BASE_H5) == stage_env["usim_input_path"]
+        (binding.inputs or {}).get(USIM_DATASTORE_BASE_H5)
+        == stage_env["usim_input_path"]
         or USIM_DATASTORE_BASE_H5 in (binding.input_keys or [])
         or USIM_DATASTORE_BASE_H5 in (binding.optional_input_keys or [])
     )
@@ -1630,8 +1664,9 @@ def test_supply_demand_activitysim_postprocess_uses_local_usim_base_fallback(
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     postprocess_calls = [
@@ -1690,8 +1725,9 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     postprocess_calls = [
@@ -1727,8 +1763,9 @@ def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_us
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs={USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"]},
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     postprocess_calls = [
@@ -1794,8 +1831,9 @@ def test_supply_demand_activitysim_postprocess_surface_policy_is_authoritative(
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
         surface=shadow_surface,
     )
 
@@ -1845,17 +1883,16 @@ def test_supply_demand_stage_forwards_surface_to_traffic_assignment(
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs={},
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
         surface=surface,
     )
 
     assert captured["surface"] is surface
 
 
-def test_supply_demand_activitysim_run_keeps_numba_cache_optional(
-    stage_env, tmp_path
-):
+def test_supply_demand_activitysim_run_keeps_numba_cache_optional(stage_env, tmp_path):
     stage_env["settings"].activitysim.num_processes = 25
     stage_env["settings"].activitysim.persist_sharrow_cache = True
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
@@ -1878,8 +1915,9 @@ def test_supply_demand_activitysim_run_keeps_numba_cache_optional(
         coupler=stage_env["coupler"],
         year=state.forecast_year,
         usim_inputs=usim_inputs,
-        build_manifest_path=lambda _workspace, year, iteration: tmp_path
-        / f"manifest_{year}_{iteration}.json",
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
     )
 
     run_calls = [
@@ -1894,7 +1932,9 @@ def test_supply_demand_activitysim_run_keeps_numba_cache_optional(
     assert ASIM_SHARROW_CACHE_DIR in (binding.optional_input_keys or [])
 
 
-def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatch, tmp_path):
+def test_supply_demand_stage_flushes_and_enqueues_manifest(
+    stage_env, monkeypatch, tmp_path
+):
     """Supply-demand iteration boundary should enqueue/flush manifest artifacts."""
     from pilates.workflows.stages import supply_demand as sd_stage
 
@@ -1943,7 +1983,9 @@ def test_supply_demand_stage_flushes_and_enqueues_manifest(stage_env, monkeypatc
     assert flush_calls == [300]
 
 
-def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, tmp_path):
+def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(
+    stage_env, tmp_path
+):
     """
     Beam-only mode should source default scenario plans/households/persons.
 
@@ -2012,7 +2054,9 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(stage_env, t
     assert beam_preprocess_inputs[BEAM_HOUSEHOLDS_IN] == str(default_households)
     assert beam_preprocess_inputs[BEAM_PERSONS_IN] == str(default_persons)
 
-    beam_run_calls = [call for call in scenario.calls if call.get("model") == "beam_run"]
+    beam_run_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_run"
+    ]
     assert beam_run_calls, "Expected BEAM run step call."
     run_input_keys = beam_run_calls[0].get("input_keys") or []
     assert BEAM_PLANS_IN in run_input_keys
@@ -2147,8 +2191,12 @@ def test_completed_beam_run_hydration_requires_postprocess_critical_keys(
     run_id = f"{Path(workspace.full_path).name}__step_func__y2018__i0__phase_run_x"
     outputs = {
         LINKSTATS: str(linkstats),
-        f"events_parquet_{state.forecast_year}_0": str(tmp_path / "missing.events.parquet"),
-        f"raw_od_skims_zarr_{state.forecast_year}_0": str(tmp_path / "missing.skims.zarr"),
+        f"events_parquet_{state.forecast_year}_0": str(
+            tmp_path / "missing.events.parquet"
+        ),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": str(
+            tmp_path / "missing.skims.zarr"
+        ),
     }
 
     class _Hydrated(dict):
@@ -2746,9 +2794,7 @@ def test_supply_demand_stage_beam_only_clamps_outer_iterations(
     beam_preprocess_binding = beam_preprocess_calls[0]["binding"]
     assert isinstance(beam_preprocess_binding, BindingResult)
     assert beam_preprocess_binding.inputs[BEAM_PLANS_IN] == str(plans_path)
-    assert beam_preprocess_binding.inputs[BEAM_HOUSEHOLDS_IN] == str(
-        households_path
-    )
+    assert beam_preprocess_binding.inputs[BEAM_HOUSEHOLDS_IN] == str(households_path)
     assert beam_preprocess_binding.inputs[BEAM_PERSONS_IN] == str(persons_path)
     assert "Clamping outer supply-demand iterations to 1" in caplog.text
 
@@ -3304,7 +3350,9 @@ def test_restore_activity_demand_outputs_for_resume_finds_archive_side_manifest(
         Path(workspace.full_path) / ".workflow" / "year_2017_iteration_0.yaml"
     )
     archive_root = tmp_path / "archive_run"
-    archive_manifest_path = archive_root / "run" / ".workflow" / "year_2017_iteration_0.yaml"
+    archive_manifest_path = (
+        archive_root / "run" / ".workflow" / "year_2017_iteration_0.yaml"
+    )
     archive_manifest_path.parent.mkdir(parents=True, exist_ok=True)
     archive_manifest_path.write_text(
         yaml.safe_dump(
@@ -3552,7 +3600,9 @@ def test_supply_demand_stage_runs_full_skim_after_each_iteration(stage_env, tmp_
         build_manifest_path=_build_manifest_path,
     )
 
-    full_skim_calls = [call for call in scenario.calls if call.get("model") == "beam_full_skim"]
+    full_skim_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_full_skim"
+    ]
     assert full_skim_calls, "Expected BEAM full-skim step call."
     assert coupler.get(BEAM_FULL_SKIMS) is not None
 
@@ -3673,9 +3723,7 @@ def test_traffic_assignment_does_not_require_missing_linkstats_warmstart(
     coupler.set(ZARR_SKIMS, str(zarr_path))
     linkstats_history_path = tmp_path / "linkstats_parquet_2018_0.parquet"
     _write_file(linkstats_history_path)
-    previous_beam_outputs = {
-        "linkstats_parquet_2018_0": str(linkstats_history_path)
-    }
+    previous_beam_outputs = {"linkstats_parquet_2018_0": str(linkstats_history_path)}
 
     class _BeamPreprocessorNoWarmstart:
         def preprocess(
@@ -3776,9 +3824,7 @@ def test_traffic_assignment_publishes_present_linkstats_warmstart(
     coupler.set(ZARR_SKIMS, str(zarr_path))
     warmstart_path = tmp_path / "init.linkstats.csv.gz"
     _write_file(warmstart_path)
-    previous_beam_outputs = {
-        "linkstats_parquet_2018_0": str(warmstart_path)
-    }
+    previous_beam_outputs = {"linkstats_parquet_2018_0": str(warmstart_path)}
 
     class _BeamPreprocessorWithWarmstart:
         def preprocess(
@@ -3849,9 +3895,7 @@ def test_traffic_assignment_publishes_present_linkstats_warmstart(
     assert LINKSTATS_WARMSTART in beam_run_calls[0].get("optional_input_keys", [])
 
 
-def test_traffic_assignment_prefers_coupler_warmstart_artifact(
-    stage_env, tmp_path
-):
+def test_traffic_assignment_prefers_coupler_warmstart_artifact(stage_env, tmp_path):
     settings = stage_env["settings"]
     state = stage_env["state"]
     workspace = stage_env["workspace"]
@@ -3910,9 +3954,8 @@ def test_traffic_assignment_prefers_coupler_warmstart_artifact(
         call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
     assert beam_preprocess_calls, "Expected a BEAM preprocess step call."
-    assert (
-        beam_preprocess_calls[0]["binding"].inputs[LINKSTATS_WARMSTART]
-        == str(warmstart_path)
+    assert beam_preprocess_calls[0]["binding"].inputs[LINKSTATS_WARMSTART] == str(
+        warmstart_path
     )
 
 

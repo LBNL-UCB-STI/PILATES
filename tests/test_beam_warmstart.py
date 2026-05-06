@@ -13,14 +13,7 @@ class DummyWorkspace:
 
 def test_resolve_initial_linkstats_path_uses_configured_relative_path(tmp_path):
     workspace = DummyWorkspace(tmp_path)
-    configured = (
-        tmp_path
-        / "beam"
-        / "input"
-        / "sfbay"
-        / "custom"
-        / "warmstart.csv.gz"
-    )
+    configured = tmp_path / "beam" / "input" / "sfbay" / "custom" / "warmstart.csv.gz"
     configured.parent.mkdir(parents=True, exist_ok=True)
     configured.write_text("linkstats", encoding="utf-8")
 

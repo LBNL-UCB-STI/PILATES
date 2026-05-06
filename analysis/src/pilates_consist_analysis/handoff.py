@@ -21,8 +21,12 @@ _ACTIVITYSIM_OUTPUT_SNAPSHOT_RE = re.compile(
     r"(?:^|/|\\\\)year-(?P<year>\d+)-iteration-(?P<iteration>\d+)(?:/|\\\\|$)"
 )
 _URBANSIM_FORECAST_OUTPUT_RE = re.compile(r"(?:^|/|\\\\)model_data_(?P<year>\d+)\.h5$")
-_URBANSIM_NEXT_INPUT_RE = re.compile(r"(?:^|/|\\\\)input_data_for_(?P<year>\d+)_outputs\.h5$")
-_URBANSIM_ROLLING_INPUT_RE = re.compile(r"(?:^|/|\\\\)(?P<name>[^/\\\\]+_model_data\.h5)$")
+_URBANSIM_NEXT_INPUT_RE = re.compile(
+    r"(?:^|/|\\\\)input_data_for_(?P<year>\d+)_outputs\.h5$"
+)
+_URBANSIM_ROLLING_INPUT_RE = re.compile(
+    r"(?:^|/|\\\\)(?P<name>[^/\\\\]+_model_data\.h5)$"
+)
 
 
 @dataclass
@@ -128,12 +132,16 @@ def ingest_artifacts(
             artifact_rows.append(
                 {
                     "artifact_id": str(getattr(artifact, "id", "") or ""),
-                    "key": str(getattr(artifact, "key", resolved_spec.key) or resolved_spec.key),
+                    "key": str(
+                        getattr(artifact, "key", resolved_spec.key) or resolved_spec.key
+                    ),
                     "uri": str(getattr(artifact, "uri", "") or ""),
                     "direction": resolved_spec.direction,
                     "artifact_family": resolved_spec.artifact_family,
                     "driver": resolved_spec.driver,
-                    "ingested": bool(getattr(artifact, "meta", {}).get("is_ingested", False))
+                    "ingested": bool(
+                        getattr(artifact, "meta", {}).get("is_ingested", False)
+                    )
                     if isinstance(getattr(artifact, "meta", None), dict)
                     else False,
                     "ingest_result_type": ingest_result_type,
@@ -173,9 +181,13 @@ def list_run_artifacts(
 
     selected: list[tuple[str, Any]] = []
     if direction in {"input", "both"}:
-        selected.extend([("input", artifact) for artifact in (records.inputs or {}).values()])
+        selected.extend(
+            [("input", artifact) for artifact in (records.inputs or {}).values()]
+        )
     if direction in {"output", "both"}:
-        selected.extend([("output", artifact) for artifact in (records.outputs or {}).values()])
+        selected.extend(
+            [("output", artifact) for artifact in (records.outputs or {}).values()]
+        )
 
     for role, artifact in selected:
         key = str(getattr(artifact, "key", "") or "")
@@ -183,7 +195,9 @@ def list_run_artifacts(
             continue
         meta = getattr(artifact, "meta", {})
         family = meta.get("artifact_family") if isinstance(meta, dict) else None
-        if artifact_family_prefix and not str(family or "").startswith(artifact_family_prefix):
+        if artifact_family_prefix and not str(family or "").startswith(
+            artifact_family_prefix
+        ):
             continue
 
         resolved_path = _resolve_artifact_path(tracker, artifact=artifact, run=run)
@@ -207,8 +221,12 @@ def list_run_artifacts(
                 "content_iteration": path_context.get("content_iteration"),
                 "content_path_kind": path_context.get("content_path_kind"),
                 "container_uri": str(getattr(artifact, "container_uri", "") or ""),
-                "resolved_path": str(resolved_path) if resolved_path is not None else None,
-                "path_exists": bool(resolved_path.exists()) if resolved_path is not None else False,
+                "resolved_path": str(resolved_path)
+                if resolved_path is not None
+                else None,
+                "path_exists": bool(resolved_path.exists())
+                if resolved_path is not None
+                else False,
             }
         )
 
@@ -264,7 +282,9 @@ def resolve_urbansim_activitysim_boundary_h5s(
                 ].dropna()
             }
         )
-        next_candidates = [value for value in input_years if value > resolved_forecast_year]
+        next_candidates = [
+            value for value in input_years if value > resolved_forecast_year
+        ]
         next_year = next_candidates[0] if next_candidates else None
 
     rows = [
@@ -298,7 +318,9 @@ def resolve_urbansim_activitysim_boundary_h5s(
 
     frame = pd.DataFrame(rows)
     if frame.empty:
-        return pd.DataFrame(columns=["boundary_role", "year", "kind", "path", "path_exists"])
+        return pd.DataFrame(
+            columns=["boundary_role", "year", "kind", "path", "path_exists"]
+        )
     frame["path_exists"] = frame["path"].map(lambda value: Path(value).exists())
     return frame
 
@@ -345,7 +367,9 @@ def export_scenario_bundle(
         runset = runset.filter(seed=seed)
 
     if use_converged:
-        runset = runset.converged(group_by=list(converged_group_by) if converged_group_by else None)
+        runset = runset.converged(
+            group_by=list(converged_group_by) if converged_group_by else None
+        )
     if latest_group_by:
         runset = runset.latest(group_by=list(latest_group_by))
 
@@ -384,7 +408,9 @@ def export_sql_query(
     if limit is not None and limit >= 0:
         frame = frame.head(int(limit))
 
-    resolved_path = _write_table(frame, output_path=output_path, output_format=output_format)
+    resolved_path = _write_table(
+        frame, output_path=output_path, output_format=output_format
+    )
     return {
         "output_path": str(resolved_path),
         "output_format": output_format,
@@ -569,7 +595,11 @@ def _resolve_activitysim_epoch(
     candidates = [epoch for epoch in panel.epochs if int(epoch.year) == resolved_year]
 
     if iteration is not None:
-        candidates = [epoch for epoch in candidates if int(epoch.outer_iteration) == int(iteration)]
+        candidates = [
+            epoch
+            for epoch in candidates
+            if int(epoch.outer_iteration) == int(iteration)
+        ]
 
     if not candidates:
         raise ValueError(
@@ -586,8 +616,10 @@ def _resolve_activitysim_epoch(
     return candidates[0]
 
 
-def _read_view_table(tracker: Any, view_name: str, *, transform: Optional[TableTransformSpec]) -> pd.DataFrame:
-    where_sql = (transform.where_sql.strip() if transform and transform.where_sql else "")
+def _read_view_table(
+    tracker: Any, view_name: str, *, transform: Optional[TableTransformSpec]
+) -> pd.DataFrame:
+    where_sql = transform.where_sql.strip() if transform and transform.where_sql else ""
     sql = f"SELECT * FROM {view_name}"
     if where_sql:
         sql = f"{sql} WHERE {where_sql}"
@@ -597,7 +629,9 @@ def _read_view_table(tracker: Any, view_name: str, *, transform: Optional[TableT
         return frame
 
     if transform.columns:
-        missing = [column for column in transform.columns if column not in frame.columns]
+        missing = [
+            column for column in transform.columns if column not in frame.columns
+        ]
         if missing:
             raise KeyError(f"Columns not found in source table {view_name}: {missing}")
         frame = frame.loc[:, transform.columns]
@@ -637,10 +671,7 @@ def _resolve_spec(spec: ArtifactIngestSpec, tracker: Any) -> ArtifactIngestSpec:
     merged_meta = dict(artifact_meta) if isinstance(artifact_meta, dict) else {}
     merged_meta.update(dict(spec.meta))
     resolved_key = spec.key or getattr(artifact, "key", None) or resolved_path.stem
-    resolved_family = (
-        spec.artifact_family
-        or merged_meta.get("artifact_family")
-    )
+    resolved_family = spec.artifact_family or merged_meta.get("artifact_family")
     resolved_driver = spec.driver or getattr(artifact, "driver", None)
 
     return ArtifactIngestSpec(
@@ -657,7 +688,9 @@ def _resolve_spec(spec: ArtifactIngestSpec, tracker: Any) -> ArtifactIngestSpec:
     )
 
 
-def _resolve_source_artifact(tracker: Any, spec: ArtifactIngestSpec) -> tuple[Any, Optional[Any]]:
+def _resolve_source_artifact(
+    tracker: Any, spec: ArtifactIngestSpec
+) -> tuple[Any, Optional[Any]]:
     artifact = None
     run = None
 
@@ -735,7 +768,11 @@ def _resolve_artifact_path(
 
     if run is not None and hasattr(tracker, "resolve_historical_path"):
         try:
-            path = Path(tracker.resolve_historical_path(artifact, run)).expanduser().resolve()
+            path = (
+                Path(tracker.resolve_historical_path(artifact, run))
+                .expanduser()
+                .resolve()
+            )
             return path
         except Exception:
             pass
@@ -921,7 +958,9 @@ def _start_run_context(
 
 def _default_run_id(model: str) -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    safe_model = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in model)
+    safe_model = "".join(
+        ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in model
+    )
     safe_model = safe_model.strip("_") or "analysis"
     return f"{safe_model}__{stamp}"
 

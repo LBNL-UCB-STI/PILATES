@@ -73,8 +73,16 @@ def test_set_coupler_from_artifact_publishes_namespaced_and_legacy_keys() -> Non
         None,
         fallback="/tmp/linkstats.csv.gz",
     )
-    assert ("view.set", "beam/linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
-    assert ("set_from_artifact", "linkstats_warmstart", "/tmp/linkstats.csv.gz") in coupler.calls
+    assert (
+        "view.set",
+        "beam/linkstats_warmstart",
+        "/tmp/linkstats.csv.gz",
+    ) in coupler.calls
+    assert (
+        "set_from_artifact",
+        "linkstats_warmstart",
+        "/tmp/linkstats.csv.gz",
+    ) in coupler.calls
 
 
 def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() -> None:
@@ -91,7 +99,9 @@ def test_set_coupler_from_artifact_skips_namespaced_alias_for_artifact_values() 
     assert coupler.calls == [("set_from_artifact", "usim_datastore_h5", artifact)]
 
 
-def test_log_and_set_output_publishes_plain_path_without_active_run(monkeypatch) -> None:
+def test_log_and_set_output_publishes_plain_path_without_active_run(
+    monkeypatch,
+) -> None:
     coupler = CouplerWithSetOnly()
     logged_meta = {}
     archived = []
@@ -120,7 +130,9 @@ def test_log_and_set_output_publishes_plain_path_without_active_run(monkeypatch)
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_log_and_set_output_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+def test_log_and_set_output_publishes_logged_artifact_with_active_run(
+    monkeypatch,
+) -> None:
     coupler = CouplerWithSetFromArtifact()
     archived = []
     artifact = object()
@@ -219,7 +231,9 @@ def test_log_and_set_input_publishes_plain_path_without_active_run(monkeypatch) 
     assert coupler.calls == [("set", "usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_log_and_set_input_publishes_logged_artifact_with_active_run(monkeypatch) -> None:
+def test_log_and_set_input_publishes_logged_artifact_with_active_run(
+    monkeypatch,
+) -> None:
     coupler = CouplerWithSetFromArtifact()
     artifact = object()
 
@@ -434,7 +448,9 @@ def test_log_output_only_sanitizes_facet_lifecycle_collisions(monkeypatch) -> No
     }
 
 
-def test_log_output_only_logs_and_enqueues_archive_without_active_run(monkeypatch) -> None:
+def test_log_output_only_logs_and_enqueues_archive_without_active_run(
+    monkeypatch,
+) -> None:
     logged = {"called": False}
     archived = []
 
@@ -460,7 +476,9 @@ def test_log_output_only_logs_and_enqueues_archive_without_active_run(monkeypatc
     assert archived == [("usim_datastore_h5", "/tmp/path.h5")]
 
 
-def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
+def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(
+    monkeypatch,
+) -> None:
     logged = {"called": False}
     archived = []
 
@@ -486,7 +504,9 @@ def test_log_input_only_logs_without_active_run_and_does_not_enqueue_archive(mon
     assert archived == []
 
 
-def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(monkeypatch) -> None:
+def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(
+    monkeypatch,
+) -> None:
     logged = {"called": False}
     archived = []
 

@@ -7,8 +7,7 @@ from types import SimpleNamespace
 
 def test_step_outputs_classes_are_catalog_derived():
     expected = {
-        spec.step_name: spec.outputs_class
-        for spec in catalog.tracked_step_specs()
+        spec.step_name: spec.outputs_class for spec in catalog.tracked_step_specs()
     }
     assert step_shared.STEP_OUTPUTS_CLASSES == expected
 
@@ -92,14 +91,14 @@ def test_enabled_schema_step_models_honors_settings_flags():
     )
     enabled = catalog.enabled_schema_step_models(
         settings,
-        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: bool(
-            getattr(current_settings, flag_attr, None)
-        )
-        or bool(
-            getattr(
-                getattr(getattr(current_settings, "run", None), "models", None),
-                model_attr,
-                None,
+        is_model_enabled=lambda current_settings, *, flag_attr, model_attr: (
+            bool(getattr(current_settings, flag_attr, None))
+            or bool(
+                getattr(
+                    getattr(getattr(current_settings, "run", None), "models", None),
+                    model_attr,
+                    None,
+                )
             )
         ),
         include_optional=False,

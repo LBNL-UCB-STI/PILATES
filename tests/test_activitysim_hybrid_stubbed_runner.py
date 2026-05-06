@@ -145,7 +145,12 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
         short_name
         for short_name, _path, _description in preprocess_outputs._iter_record_items()
     }
-    assert {ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_OMX_SKIMS} <= preprocess_keys
+    assert {
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_OMX_SKIMS,
+    } <= preprocess_keys
     assert preprocess_outputs.input_hashes[ASIM_LAND_USE_IN] == "hash_land_use"
     assert preprocess_outputs.input_hashes[ASIM_HOUSEHOLDS_IN] == "hash_households_in"
     assert preprocess_outputs.input_hashes[ASIM_PERSONS_IN] == "hash_persons_in"
@@ -220,7 +225,10 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert "asim_input_skims_omx_archived" not in output_map
     assert "asim_input_skims_zarr_archived" in output_map
 
-    iteration_dir = asim_output_dir / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    iteration_dir = (
+        asim_output_dir
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
     assert (iteration_dir / "households.parquet").exists()
     assert (iteration_dir / "persons.parquet").exists()
     assert (iteration_dir / "beam_plans.parquet").exists()
@@ -229,18 +237,32 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert not raw_persons.exists()
     assert not raw_beam_plans.exists()
 
-    assert postprocess_outputs.processed_output_hashes["households_asim_out"] == "hash_households_out"
-    assert postprocess_outputs.processed_output_hashes["persons_asim_out"] == "hash_persons_out"
-    assert postprocess_outputs.processed_output_hashes["beam_plans_asim_out"] == "hash_beam_plans_out"
     assert (
-        postprocess_outputs.processed_output_hashes["asim_input_households_csv_archived"]
+        postprocess_outputs.processed_output_hashes["households_asim_out"]
+        == "hash_households_out"
+    )
+    assert (
+        postprocess_outputs.processed_output_hashes["persons_asim_out"]
+        == "hash_persons_out"
+    )
+    assert (
+        postprocess_outputs.processed_output_hashes["beam_plans_asim_out"]
+        == "hash_beam_plans_out"
+    )
+    assert (
+        postprocess_outputs.processed_output_hashes[
+            "asim_input_households_csv_archived"
+        ]
         == "hash_households_in"
     )
     assert (
         postprocess_outputs.processed_output_hashes["asim_input_persons_csv_archived"]
         == "hash_persons_in"
     )
-    assert postprocess_outputs.processed_output_hashes["asim_input_land_use_csv_archived"] == "hash_land_use"
+    assert (
+        postprocess_outputs.processed_output_hashes["asim_input_land_use_csv_archived"]
+        == "hash_land_use"
+    )
     assert (
         postprocess_outputs.processed_output_hashes["asim_input_skims_zarr_archived"]
         == "hash_zarr_skims"
@@ -392,7 +414,10 @@ def test_activitysim_postprocess_rehydrates_existing_iteration_outputs(
     postprocessor = ActivitysimPostprocessor("activitysim", state)
     postprocess_outputs = postprocessor.postprocess(run_outputs, workspace)
 
-    assert postprocess_outputs.processed_outputs["households_asim_out"] == archived_households
+    assert (
+        postprocess_outputs.processed_outputs["households_asim_out"]
+        == archived_households
+    )
     assert postprocess_outputs.processed_outputs["persons_asim_out"] == archived_persons
     assert (
         postprocess_outputs.processed_outputs["beam_plans_asim_out"]

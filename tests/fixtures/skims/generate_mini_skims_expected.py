@@ -6,6 +6,7 @@ Usage:
   /Users/zaneedell/miniforge3/envs/PILATES/bin/python \
     tests/fixtures/skims/generate_mini_skims_expected.py
 """
+
 from __future__ import annotations
 
 import os
@@ -51,9 +52,11 @@ def main() -> None:
         src.close()
 
     # Patch dependencies to keep deterministic + avoid filesystem requirements.
-    pp.verify_skim_zone_order = lambda settings, skim_file_path, workspace: list(range(5))
-    pp.zone_utils.load_canonical_zones = (
-        lambda settings, workspace: pd.DataFrame(index=range(5))
+    pp.verify_skim_zone_order = lambda settings, skim_file_path, workspace: list(
+        range(5)
+    )
+    pp.zone_utils.load_canonical_zones = lambda settings, workspace: pd.DataFrame(
+        index=range(5)
     )
     pp.ensure_0_based_and_flag_zarr_skims = lambda *args, **kwargs: None
 

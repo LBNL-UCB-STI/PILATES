@@ -18,4 +18,3 @@ def test_discover_global_atlas_input_files_includes_rdat_and_rdata(tmp_path):
     assert "psid_names.Rdat" in found_names
     assert "psid_names_lower.rdat" in found_names
     assert "README.txt" not in found_names
-

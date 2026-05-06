@@ -48,9 +48,15 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     _write_h5_tables(
         merged_h5,
         {
-            "households": pd.DataFrame({"cars": [1]}, index=pd.Index([1], name="household_id")),
-            "persons": pd.DataFrame({"age": [40]}, index=pd.Index([1], name="person_id")),
-            "land_use": pd.DataFrame({"TOTEMP": [10]}, index=pd.Index(["1"], name="TAZ")),
+            "households": pd.DataFrame(
+                {"cars": [1]}, index=pd.Index([1], name="household_id")
+            ),
+            "persons": pd.DataFrame(
+                {"age": [40]}, index=pd.Index([1], name="person_id")
+            ),
+            "land_use": pd.DataFrame(
+                {"TOTEMP": [10]}, index=pd.Index(["1"], name="TAZ")
+            ),
         },
     )
 
@@ -114,14 +120,20 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
             output_only_meta.append(meta),
         ),
     )
-    monkeypatch.setattr(steps_urbansim_atlas, "log_and_set_output", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        steps_urbansim_atlas, "log_and_set_output", lambda **_kwargs: None
+    )
 
     archive_h5 = tmp_path / "input_data_for_2023_outputs.h5"
     _write_h5_tables(
         archive_h5,
         {
-            "households": pd.DataFrame({"cars": [1]}, index=pd.Index([1], name="household_id")),
-            "parcels": pd.DataFrame({"acres": [0.5]}, index=pd.Index([10], name="parcel_id")),
+            "households": pd.DataFrame(
+                {"cars": [1]}, index=pd.Index([1], name="household_id")
+            ),
+            "parcels": pd.DataFrame(
+                {"acres": [0.5]}, index=pd.Index([10], name="parcel_id")
+            ),
         },
     )
 

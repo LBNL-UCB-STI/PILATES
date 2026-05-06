@@ -71,7 +71,9 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
     monkeypatch.setattr(
         steps_beam,
         "log_input_only",
-        lambda *, key, path, description, **meta: calls.append((key, path, description)),
+        lambda *, key, path, description, **meta: calls.append(
+            (key, path, description)
+        ),
     )
     monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
 
@@ -153,14 +155,18 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
     monkeypatch.setattr(
         steps_beam,
         "log_input_only",
-        lambda *, key, path, description, **meta: calls.append((key, path, description)),
+        lambda *, key, path, description, **meta: calls.append(
+            (key, path, description)
+        ),
     )
     monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
     monkeypatch.setattr(
         steps_beam,
         "find_last_run_output_plans",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("disk scan should not run when coupler outputs are available")
+            AssertionError(
+                "disk scan should not run when coupler outputs are available"
+            )
         ),
     )
 
@@ -184,7 +190,11 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
         holder=SimpleNamespace(beam_preprocess=upstream),
     )
 
-    assert ("beam_output_plans_xml", str(output_plans), "BEAM warm-start plans (selected by BEAM from previous outputs)") in calls
+    assert (
+        "beam_output_plans_xml",
+        str(output_plans),
+        "BEAM warm-start plans (selected by BEAM from previous outputs)",
+    ) in calls
     assert (
         "beam_output_experienced_plans_xml",
         str(output_experienced),
@@ -265,7 +275,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     config_path = beam_input_root / "seattle" / "seattle-pilates.conf"
     config_path.write_text(
         'include "extra.conf"\n'
-        'beam.test = 1\n'
+        "beam.test = 1\n"
         'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n',
         encoding="utf-8",
     )
@@ -342,7 +352,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
         encoding="utf-8"
     ) == (
         'include "extra.conf"\n'
-        'beam.test = 1\n'
+        "beam.test = 1\n"
         'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n'
     )
     assert (
@@ -469,7 +479,9 @@ def test_beam_run_archives_atlas_vehicles_input_when_present(monkeypatch, tmp_pa
     )
     assert archived_vehicles.exists()
     assert archived_vehicles.read_text(encoding="utf-8") == "atlas-vehicles"
-    vehicles_calls = [call for call in calls if call[0] == "beam_input_vehicles_archived"]
+    vehicles_calls = [
+        call for call in calls if call[0] == "beam_input_vehicles_archived"
+    ]
     assert len(vehicles_calls) == 1
     assert vehicles_calls[0][2]["facet"] == {
         "artifact_family": "beam_input_archived",

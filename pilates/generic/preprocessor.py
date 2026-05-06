@@ -16,9 +16,7 @@ PreprocessInputsT = TypeVar("PreprocessInputsT")
 PreprocessOutputsT = TypeVar("PreprocessOutputsT")
 
 
-class GenericPreprocessor(
-    Model, ABC, Generic[PreprocessInputsT, PreprocessOutputsT]
-):
+class GenericPreprocessor(Model, ABC, Generic[PreprocessInputsT, PreprocessOutputsT]):
     """Base class for preprocessors with model-specific staged outputs."""
 
     def __init__(

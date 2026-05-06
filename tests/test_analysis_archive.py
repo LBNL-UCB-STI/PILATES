@@ -157,7 +157,9 @@ class SessionStub:
         if scenario_id is None:
             return self._panel
         filtered = [
-            epoch for epoch in self._panel if str(epoch.scenario_id or "") == str(scenario_id)
+            epoch
+            for epoch in self._panel
+            if str(epoch.scenario_id or "") == str(scenario_id)
         ]
         return PanelStub(filtered)
 
@@ -180,7 +182,9 @@ class SessionStub:
     def compare_scenarios(self, left, right, **kwargs):
         if callable(self._compare_factory):
             return self._compare_factory(left, right, **kwargs)
-        raise NotImplementedError("SessionStub.compare_scenarios requires _compare_factory.")
+        raise NotImplementedError(
+            "SessionStub.compare_scenarios requires _compare_factory."
+        )
 
 
 def _run(run_id: str, *, minutes: int = 0, **kwargs) -> FakeRun:
@@ -356,9 +360,9 @@ def test_build_run_index_keeps_grouping_stable_across_old_and_new_metadata_shape
     frame = run_index.frame
     tuples = set(
         tuple(row)
-        for row in frame.loc[:, ["scenario_id", "year", "iteration", "model"]].itertuples(
-            index=False, name=None
-        )
+        for row in frame.loc[
+            :, ["scenario_id", "year", "iteration", "model"]
+        ].itertuples(index=False, name=None)
     )
 
     assert tuples == {
@@ -476,7 +480,9 @@ def test_open_archive_exposes_notebook_friendly_discovery(monkeypatch, tmp_path)
         epochs=epochs,
     )
 
-    monkeypatch.setattr(archive_module.AnalysisSession, "open", lambda **kwargs: session)
+    monkeypatch.setattr(
+        archive_module.AnalysisSession, "open", lambda **kwargs: session
+    )
     monkeypatch.setattr(
         archive_module,
         "get_db_health",
@@ -513,7 +519,9 @@ def test_open_archive_exposes_notebook_friendly_discovery(monkeypatch, tmp_path)
     assert list(converged.tables.trips(limit=1)["trip_mode"]) == ["DRIVE"]
     assert list(converged.tables.persons(columns=["person_id"])["person_id"]) == [1]
     assert int(converged.tables.skim_summary().iloc[0]["n_rows"]) == 3
-    assert list(converged.sql("SELECT * FROM {views.trips} LIMIT 1")["person_id"]) == [1]
+    assert list(converged.sql("SELECT * FROM {views.trips} LIMIT 1")["person_id"]) == [
+        1
+    ]
     assert converged.tables.view_name("linkstats") == "v_linkstats"
 
     converged_frame = baseline.epochs(converged=True)
@@ -706,7 +714,9 @@ def test_archive_compare_exposes_notebook_friendly_comparison(monkeypatch, tmp_p
                 ]
             )
 
-    monkeypatch.setattr(archive_module.AnalysisSession, "open", lambda **kwargs: session)
+    monkeypatch.setattr(
+        archive_module.AnalysisSession, "open", lambda **kwargs: session
+    )
     monkeypatch.setattr(
         archive_module,
         "get_db_health",

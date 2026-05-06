@@ -18,7 +18,9 @@ from pilates.workflows.artifact_keys import (
 
 
 def test_activitysim_h5_table_path_normalizes_prefixes() -> None:
-    assert asim_preprocessor._activitysim_h5_table_path("", "households") == "/households"
+    assert (
+        asim_preprocessor._activitysim_h5_table_path("", "households") == "/households"
+    )
     assert (
         asim_preprocessor._activitysim_h5_table_path("2017", "households")
         == "/2017/households"
@@ -129,7 +131,9 @@ def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> No
     }
 
 
-def test_resolve_usim_population_table_paths_falls_back_to_root_tables(tmp_path) -> None:
+def test_resolve_usim_population_table_paths_falls_back_to_root_tables(
+    tmp_path,
+) -> None:
     h5_path = tmp_path / "model_data_input.h5"
     with pd.HDFStore(h5_path, mode="w") as store:
         for table_name in ("households", "persons", "jobs", "blocks"):

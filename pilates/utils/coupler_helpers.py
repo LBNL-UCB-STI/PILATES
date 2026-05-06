@@ -10,7 +10,16 @@ import shutil
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, Sequence, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Mapping,
+    Optional,
+    Sequence,
+    TYPE_CHECKING,
+    Union,
+)
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol
@@ -53,9 +62,7 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "atlas_input_year_dir",
     "atlas_input_year_dir_*",
 )
-_archive_queue: Optional[
-    "queue.Queue[Optional[str]]"
-] = None
+_archive_queue: Optional["queue.Queue[Optional[str]]"] = None
 _archive_thread: Optional[threading.Thread] = None
 _archive_lock = threading.Lock()
 _archive_pending_tasks: Dict[
@@ -121,7 +128,9 @@ def _archive_enabled() -> bool:
 
 def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
     container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
-    if not isinstance(container_uri, str) or not container_uri.startswith("workspace://"):
+    if not isinstance(container_uri, str) or not container_uri.startswith(
+        "workspace://"
+    ):
         return None
     meta = getattr(value, "meta", None)
     if not isinstance(meta, Mapping):
@@ -134,7 +143,9 @@ def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
 
 
 def _archive_dir_allowed(key: str) -> bool:
-    return any(fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS)
+    return any(
+        fnmatch.fnmatch(key, pattern) for pattern in _ARCHIVE_ALLOWED_DIR_PATTERNS
+    )
 
 
 def _resolve_archive_copy_target(
@@ -156,7 +167,9 @@ def _resolve_archive_copy_target(
     if not resolved or "://" in resolved:
         return None
     if not os.path.exists(resolved):
-        logger.warning("[Archive] Output path does not exist: %s (key=%s)", resolved, key)
+        logger.warning(
+            "[Archive] Output path does not exist: %s (key=%s)", resolved, key
+        )
         return None
 
     is_dir = os.path.isdir(resolved)
@@ -430,7 +443,9 @@ def _enqueue_archive_copy(
                 should_queue = True
     _ensure_archive_worker()
     if should_queue and _archive_queue is not None:
-        _archive_log_method(key)("[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key)
+        _archive_log_method(key)(
+            "[Archive] Enqueued %s -> %s (key=%s)", resolved, dest, key
+        )
         _archive_queue.put(dest)
     else:
         logger.debug(
@@ -798,7 +813,9 @@ def resolve_existing_path(
 
     local_path = _resolve_local_path(abs_path, local_root, archive_root)
     if local_path and os.path.exists(local_path):
-        logger.debug("[Archive] Resolved path already available locally: %s", local_path)
+        logger.debug(
+            "[Archive] Resolved path already available locally: %s", local_path
+        )
         return local_path
     logger.debug("[Archive] Unable to resolve existing path for: %s", abs_path)
     return None
@@ -1339,6 +1356,7 @@ def _log_with_optional_h5_container(
     """
     Log either an HDF5 container or a standard artifact based on meta flags.
     """
+
     def _is_internal_h5_table(table_name: str) -> bool:
         leaf = table_name.rsplit("/", 1)[-1]
         normalized_leaf = leaf.lower()
@@ -1347,12 +1365,10 @@ def _log_with_optional_h5_container(
         # (e.g. travel_data_axis1_level0).
         if re.fullmatch(r"(axis|block|level|label)\d+(?:_.*)?", normalized_leaf):
             return True
-        return bool(
-            re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf)
-        )
+        return bool(re.search(r"_(axis|block|level|label)\d*(?:_|$)", normalized_leaf))
 
     def _table_filter_to_callable(
-        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]]
+        table_filter: Optional[Union[Callable[[str], bool], Sequence[str]]],
     ) -> Optional[Callable[[str], bool]]:
         if table_filter is None:
             return None
@@ -1367,9 +1383,7 @@ def _log_with_optional_h5_container(
 
     def _h5_table_filter_from_list(tables_used):
         normalized = {
-            name if name.startswith("/") else f"/{name}"
-            for name in tables_used
-            if name
+            name if name.startswith("/") else f"/{name}" for name in tables_used if name
         }
 
         def _filter(table_name: str) -> bool:
@@ -1401,8 +1415,10 @@ def _log_with_optional_h5_container(
         if requested_filter is None:
             table_filter = base_filter
         else:
+
             def table_filter(table_name: str) -> bool:
                 return base_filter(table_name) and requested_filter(table_name)
+
         return cr.log_h5_container(
             path,
             key=key,

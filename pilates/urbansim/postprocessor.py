@@ -93,7 +93,6 @@ def create_next_iter_usim_data(
     with pd.HDFStore(
         str(archived_input_store_path), "r"
     ) as archived_store, pd.HDFStore(str(input_store_path), "w") as new_store:
-
         processed_tables = set()
 
         # Copy tables from the current run's output

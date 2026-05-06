@@ -103,7 +103,9 @@ class FakeScenario:
         return {"status": "ok"}
 
 
-def build_runtime_context(*, settings: Any, state: Any, workspace: Any) -> WorkflowRuntimeContext:
+def build_runtime_context(
+    *, settings: Any, state: Any, workspace: Any
+) -> WorkflowRuntimeContext:
     """Build the explicit runtime context expected by stage entrypoints."""
     return WorkflowRuntimeContext.from_parts(
         settings=settings,

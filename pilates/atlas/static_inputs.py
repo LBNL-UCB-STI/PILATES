@@ -9,7 +9,7 @@ ATLAS_STATIC_INPUTS_COMMON = [
     "taz_to_tract_sfbay.csv",
     "vehicle_type_mapping_ESS_const_220_price.csv",
     "vehicle_type_mapping_baseline.csv",
-    "vehicle_type_mapping_evMandForced2.csv"
+    "vehicle_type_mapping_evMandForced2.csv",
 ]
 
 ATLAS_STATIC_INPUTS_BY_SCENARIO = {
@@ -51,7 +51,7 @@ ATLAS_STATIC_INPUTS_BY_SCENARIO = {
         "adopt/baseline/used_vehicles_2043.csv",
         "adopt/baseline/used_vehicles_2045.csv",
         "adopt/baseline/used_vehicles_2047.csv",
-        "adopt/baseline/used_vehicles_2049.csv"
+        "adopt/baseline/used_vehicles_2049.csv",
     ],
     "ess_cons": [
         "adopt/ess_cons/new_vehicle_annual_medians.csv",
@@ -91,7 +91,7 @@ ATLAS_STATIC_INPUTS_BY_SCENARIO = {
         "adopt/ess_cons/used_vehicles_2043.csv",
         "adopt/ess_cons/used_vehicles_2045.csv",
         "adopt/ess_cons/used_vehicles_2047.csv",
-        "adopt/ess_cons/used_vehicles_2049.csv"
+        "adopt/ess_cons/used_vehicles_2049.csv",
     ],
     "zev_mandate": [
         "adopt/zev_mandate/new_vehicle_annual_medians.csv",
@@ -131,6 +131,6 @@ ATLAS_STATIC_INPUTS_BY_SCENARIO = {
         "adopt/zev_mandate/used_vehicles_2043.csv",
         "adopt/zev_mandate/used_vehicles_2045.csv",
         "adopt/zev_mandate/used_vehicles_2047.csv",
-        "adopt/zev_mandate/used_vehicles_2049.csv"
-    ]
+        "adopt/zev_mandate/used_vehicles_2049.csv",
+    ],
 }

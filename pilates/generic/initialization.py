@@ -67,7 +67,11 @@ def build_bootstrap_artifact_summary(
     models = sorted(set(input_counts.keys()) | set(output_counts.keys()))
     input_total = sum(input_counts.values())
     output_total = sum(output_counts.values())
-    copied_total = len(copied_records.all_records()) if isinstance(copied_records, RecordStore) else 0
+    copied_total = (
+        len(copied_records.all_records())
+        if isinstance(copied_records, RecordStore)
+        else 0
+    )
 
     return {
         "models": models,
@@ -98,9 +102,7 @@ def _tag_record_store(
 def _iter_unique_records(record_store: RecordStore) -> Iterator[Tuple[str, object]]:
     used_keys = set()
     for record in record_store.all_records():
-        key = getattr(record, "short_name", None) or getattr(
-            record, "unique_id", None
-        )
+        key = getattr(record, "short_name", None) or getattr(record, "unique_id", None)
         if not key:
             logger.warning(
                 "Initialization record missing short_name/unique_id; skipping."
@@ -184,10 +186,14 @@ def _log_record_store(
     direction: str,
 ) -> None:
     def _h5_table_filter_from_list(tables_used):
-        normalized = {name if name.startswith("/") else f"/{name}" for name in tables_used if name}
+        normalized = {
+            name if name.startswith("/") else f"/{name}" for name in tables_used if name
+        }
 
         def _filter(table_name: str) -> bool:
-            if any(tok in table_name for tok in ("_axis", "_block", "_level", "_label")):
+            if any(
+                tok in table_name for tok in ("_axis", "_block", "_level", "_label")
+            ):
                 return False
             return table_name in normalized
 
@@ -245,6 +251,7 @@ def _log_record_store(
             record_hash = getattr(artifact, "hash", None)
             if record_hash:
                 record.content_hash = record_hash
+
 
 def _accumulate_copy_result(
     *,
@@ -306,7 +313,10 @@ class Initialization(Model):
 
         try:
             # BEAM model initialization
-            if traffic_assignment_enabled and get_traffic_assignment_model(settings) == "beam":
+            if (
+                traffic_assignment_enabled
+                and get_traffic_assignment_model(settings) == "beam"
+            ):
                 beam_preprocessor = model_factory.get_preprocessor("beam", self.state)
 
                 beam_input_dir = workspace.get_beam_mutable_data_dir()
@@ -320,13 +330,15 @@ class Initialization(Model):
                     initialization_records_out=initialization_records_out,
                 )
 
-            if traffic_assignment_enabled and get_traffic_assignment_model(settings) == "beam":
+            if (
+                traffic_assignment_enabled
+                and get_traffic_assignment_model(settings) == "beam"
+            ):
                 zones_config = settings.shared.geography.zones
-                if (
-                    zones_config is not None
-                    and activity_demand_enabled
-                ):
-                    project_root = find_project_root(start_path=os.path.dirname(__file__))
+                if zones_config is not None and activity_demand_enabled:
+                    project_root = find_project_root(
+                        start_path=os.path.dirname(__file__)
+                    )
                     if not project_root:
                         project_root = os.path.realpath(os.getcwd())
                         logger.warning(
@@ -422,7 +434,6 @@ class Initialization(Model):
                     and have_not_copied_usim_data
                     and not urbansim_enabled
                 ):
-
                     output_dir = workspace.get_usim_mutable_data_dir()
                     os.makedirs(output_dir, exist_ok=True)
                     usim_preprocessor = model_factory.get_preprocessor(
@@ -459,7 +470,6 @@ class Initialization(Model):
 
                 # ActivitySim config copy
                 if model_name == "activitysim":
-
                     activitysim_preprocessor = model_factory.get_preprocessor(
                         model_name, self.state
                     )

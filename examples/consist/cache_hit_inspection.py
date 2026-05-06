@@ -83,7 +83,9 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Compare logical stage boundaries across a baseline archive and a rerun archive.",
     )
-    parser.add_argument("baseline_archive_run_dir", help="Baseline archive run directory.")
+    parser.add_argument(
+        "baseline_archive_run_dir", help="Baseline archive run directory."
+    )
     parser.add_argument("rerun_archive_run_dir", help="Rerun archive run directory.")
     parser.add_argument(
         "--project-root",

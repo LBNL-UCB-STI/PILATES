@@ -10,7 +10,9 @@ from pilates.atlas.inputs import (
 from pilates.workflows.coupler_schema import build_coupler_schema
 
 
-def _settings(*, scenario: str = "baseline", start: int = 2017, end: int = 2021, freq: int = 2):
+def _settings(
+    *, scenario: str = "baseline", start: int = 2017, end: int = 2021, freq: int = 2
+):
     return SimpleNamespace(
         run=SimpleNamespace(
             start_year=start,

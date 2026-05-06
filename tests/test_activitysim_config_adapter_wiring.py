@@ -65,10 +65,7 @@ class DummyWorkspace:
 
 def _fixture_root() -> Path:
     return (
-        Path(__file__).resolve().parent
-        / "fixtures"
-        / "consist"
-        / "activitysim_small"
+        Path(__file__).resolve().parent / "fixtures" / "consist" / "activitysim_small"
     )
 
 
@@ -165,7 +162,9 @@ def test_activitysim_run_metadata_adapter_is_none_when_config_root_missing(
 ):
     pytest.importorskip("consist")
 
-    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
+    workspace = DummyWorkspace(
+        tmp_path / "missing_configs_root", tmp_path / "asim_data"
+    )
     settings = _make_settings()
     _wire_common(monkeypatch)
 
@@ -268,7 +267,9 @@ def test_activitysim_run_metadata_keeps_identity_inputs_when_adapter_missing(
 ):
     pytest.importorskip("consist")
 
-    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
+    workspace = DummyWorkspace(
+        tmp_path / "missing_configs_root", tmp_path / "asim_data"
+    )
     settings = _make_settings()
     identity_inputs = [("asim_mutable_configs", Path("/tmp/asim/configs"))]
     monkeypatch.setattr(
@@ -328,9 +329,7 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
     population_source_h5.write_text("stub", encoding="utf-8")
 
     step_fn = make_activitysim_preprocess_step(
-        coupler=DummyCoupler(
-            {USIM_POPULATION_SOURCE_H5: str(population_source_h5)}
-        ),
+        coupler=DummyCoupler({USIM_POPULATION_SOURCE_H5: str(population_source_h5)}),
         outputs_holder=StepOutputsHolder(),
     )
     step_fn(settings=settings, state=state, workspace=workspace)

@@ -203,7 +203,11 @@ def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_pa
         "Settings",
         (),
         {
-            "run": type("RunCfg", (), {"models": type("Models", (), {"vehicle_ownership": "atlas"})()})()
+            "run": type(
+                "RunCfg",
+                (),
+                {"models": type("Models", (), {"vehicle_ownership": "atlas"})()},
+            )()
         },
     )()
     state = type(

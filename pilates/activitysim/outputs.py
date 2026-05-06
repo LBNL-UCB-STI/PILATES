@@ -115,15 +115,21 @@ def _asim_run_marker_filename(year: int, iteration: int) -> str:
     return f".pilates_asim_run_success_year_{year}_iter_{iteration}.json"
 
 
-def get_asim_run_marker_path(output_dir: Union[str, Path], year: int, iteration: int) -> Path:
+def get_asim_run_marker_path(
+    output_dir: Union[str, Path], year: int, iteration: int
+) -> Path:
     return Path(output_dir) / _asim_run_marker_filename(year, iteration)
 
 
-def has_asim_run_marker(output_dir: Union[str, Path], year: int, iteration: int) -> bool:
+def has_asim_run_marker(
+    output_dir: Union[str, Path], year: int, iteration: int
+) -> bool:
     return get_asim_run_marker_path(output_dir, year, iteration).exists()
 
 
-def clear_asim_run_marker(output_dir: Union[str, Path], year: int, iteration: int) -> bool:
+def clear_asim_run_marker(
+    output_dir: Union[str, Path], year: int, iteration: int
+) -> bool:
     path = get_asim_run_marker_path(output_dir, year, iteration)
     if path.exists():
         path.unlink()

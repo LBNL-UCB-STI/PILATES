@@ -26,8 +26,12 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.supply_demand import (
+    run_supply_demand_stage as _run_supply_demand_stage,
+)
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_golden_stub_workflow import (
     EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS,
@@ -39,7 +43,9 @@ from tests.test_golden_stub_workflow import (
 from tests.workflow_contract_harness import build_runtime_context
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
     context = context or build_runtime_context(
         settings=settings,
         state=state,
@@ -111,17 +117,19 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     )
     land_use_datastore = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert land_use_datastore is not None
-    assert Path(land_use_datastore).resolve() == Path(
-        usim_inputs[USIM_DATASTORE_BASE_H5]
-    ).resolve()
+    assert (
+        Path(land_use_datastore).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+    )
     base_usim_datastore = artifact_to_path(
         coupler.get(USIM_DATASTORE_BASE_H5),
         workspace,
     )
     assert base_usim_datastore is not None
-    assert Path(base_usim_datastore).resolve() == Path(
-        usim_inputs[USIM_DATASTORE_BASE_H5]
-    ).resolve()
+    assert (
+        Path(base_usim_datastore).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+    )
 
     run_vehicle_ownership_stage(
         scenario=scenario,
@@ -130,7 +138,9 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
         build_atlas_static_inputs_fallback=lambda _workspace: {},
         context=golden_stub_env["context"],
     )
-    after_vehicle_ownership = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
+    after_vehicle_ownership = artifact_to_path(
+        coupler.get(USIM_DATASTORE_H5), workspace
+    )
     assert after_vehicle_ownership is not None
     assert Path(after_vehicle_ownership).exists()
     assert Path(after_vehicle_ownership).parent == Path(land_use_datastore).parent
@@ -173,7 +183,9 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= activitysim_postprocess_outputs
     assert {LINKSTATS, BEAM_PLANS_OUT} <= beam_run_outputs
 
-    scenario_outputs = _artifact_map(tracker.get_artifacts_for_run(scenario_run.id).outputs)
+    scenario_outputs = _artifact_map(
+        tracker.get_artifacts_for_run(scenario_run.id).outputs
+    )
     scenario_output_keys = set(scenario_outputs)
 
     final_usim_datastore = artifact_to_path(
@@ -183,16 +195,19 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     assert final_usim_datastore is not None
     assert Path(final_usim_datastore).name == f"usim_{state.forecast_year}.h5"
     assert Path(final_usim_datastore).parent == Path(after_vehicle_ownership).parent
-    assert Path(final_usim_datastore).resolve() == Path(
-        scenario_outputs[USIM_DATASTORE_H5].path
-    ).resolve()
-    assert Path(final_usim_datastore).resolve() != Path(
-        base_usim_datastore
-    ).resolve()
+    assert (
+        Path(final_usim_datastore).resolve()
+        == Path(scenario_outputs[USIM_DATASTORE_H5].path).resolve()
+    )
+    assert Path(final_usim_datastore).resolve() != Path(base_usim_datastore).resolve()
 
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= scenario_output_keys
     assert {ZARR_SKIMS, LINKSTATS, BEAM_PLANS_OUT} <= scenario_output_keys
-    assert {"householdv_2017", "vehicles_2017", "atlas_vehicles2_output"} <= scenario_output_keys
+    assert {
+        "householdv_2017",
+        "vehicles_2017",
+        "atlas_vehicles2_output",
+    } <= scenario_output_keys
     assert activitysim_run_outputs <= scenario_output_keys
     assert activitysim_postprocess_outputs <= scenario_output_keys
     assert beam_run_outputs <= scenario_output_keys

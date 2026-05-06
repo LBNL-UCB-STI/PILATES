@@ -19,7 +19,11 @@ def _settings() -> SimpleNamespace:
             main_configs_dir="configs_extended",
             file_format="parquet",
             persist_sharrow_cache=None,
-            region_mappings={"region_to_subdir": {"sfbay": "activitysim/examples/prototype_mtc_clean"}},
+            region_mappings={
+                "region_to_subdir": {
+                    "sfbay": "activitysim/examples/prototype_mtc_clean"
+                }
+            },
         ),
     )
 
@@ -44,12 +48,15 @@ def test_activitysim_compile_args_skip_configs_mp():
     working_dir = "/tmp/pilates-workdir"
     vols = ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
 
-    args = ActivitysimCompileRunner.get_asim_additional_args(
-        settings, vols, True
-    )
+    args = ActivitysimCompileRunner.get_asim_additional_args(settings, vols, True)
 
-    assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp" not in args
-    assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs_sh_compile" in args
+    assert (
+        "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp" not in args
+    )
+    assert (
+        "/activitysim/activitysim/examples/prototype_mtc_clean/configs_sh_compile"
+        in args
+    )
     assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs" in args
 
 
@@ -60,8 +67,12 @@ def test_activitysim_run_args_include_configs_mp():
 
     args = ActivitysimRunner.get_asim_additional_args(settings, vols, False)
 
-    main_idx = args.index("/activitysim/activitysim/examples/prototype_mtc_clean/configs")
-    mp_idx = args.index("/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp")
+    main_idx = args.index(
+        "/activitysim/activitysim/examples/prototype_mtc_clean/configs"
+    )
+    mp_idx = args.index(
+        "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp"
+    )
 
     assert main_idx < mp_idx
 
