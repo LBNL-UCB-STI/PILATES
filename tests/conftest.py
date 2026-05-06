@@ -6,6 +6,8 @@ import pytest
 
 from pilates.utils import consist_runtime as cr
 
+pytest_plugins = ("tests.test_golden_stub_workflow",)
+
 
 _DISABLE_CONSIST_LOGGING_BASENAMES = {
     "test_activitysim_compile_run_handshake.py",

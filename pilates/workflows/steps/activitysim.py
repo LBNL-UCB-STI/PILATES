@@ -468,12 +468,12 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     if not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs:
         population_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
-            coupler=None,
+            coupler=coupler,
             artifact_rules=(
                 ArtifactBindingRule(
                     semantic_key=USIM_POPULATION_SOURCE_H5,
                     required=False,
-                    allow_coupler=False,
+                    allow_coupler=True,
                     allow_fallback=True,
                     preferred_keys=(USIM_POPULATION_SOURCE_H5,),
                     fallback_provider="activitysim_population_source",
@@ -489,12 +489,12 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         current_year = getattr(state, "year", getattr(state, "current_year", None))
         current_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
-            coupler=None,
+            coupler=coupler,
             artifact_rules=(
                 ArtifactBindingRule(
                     semantic_key=USIM_DATASTORE_CURRENT_H5,
                     required=False,
-                    allow_coupler=False,
+                    allow_coupler=True,
                     allow_fallback=True,
                     preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
                     fallback_provider="urbansim_inputs_for_year",
