@@ -708,10 +708,7 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
         year = kwargs["year"]
         captured_years.append(year)
         captured_rule_keys.append(
-            tuple(
-                rule.semantic_key
-                for rule in kwargs.get("artifact_rules", ())
-            )
+            tuple(rule.semantic_key for rule in kwargs.get("artifact_rules", ()))
         )
         if year == forecast_year:
             return BindingPlan(
