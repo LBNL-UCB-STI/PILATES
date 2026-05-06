@@ -702,10 +702,17 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     current_h5.write_text("current")
 
     captured_years = []
+    captured_rule_keys = []
 
     def _fake_build_binding_plan(**kwargs):
         year = kwargs["year"]
         captured_years.append(year)
+        captured_rule_keys.append(
+            tuple(
+                rule.semantic_key
+                for rule in kwargs.get("artifact_rules", ())
+            )
+        )
         if year == forecast_year:
             return BindingPlan(
                 inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
@@ -742,6 +749,10 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     )
 
     assert captured_years == [forecast_year, current_year]
+    assert captured_rule_keys == [
+        (USIM_POPULATION_SOURCE_H5,),
+        (USIM_DATASTORE_CURRENT_H5,),
+    ]
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
     assert runtime_inputs["current_input_h5_path"] == str(current_h5)
 

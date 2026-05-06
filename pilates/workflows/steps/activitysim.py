@@ -38,7 +38,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
@@ -468,7 +468,17 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     if not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs:
         population_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
-            coupler=coupler,
+            coupler=None,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_POPULATION_SOURCE_H5,
+                    required=False,
+                    allow_coupler=False,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+                    fallback_provider="activitysim_population_source",
+                ),
+            ),
             settings=settings,
             state=state,
             workspace=workspace,
@@ -479,7 +489,17 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         current_year = getattr(state, "year", getattr(state, "current_year", None))
         current_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
-            coupler=coupler,
+            coupler=None,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_DATASTORE_CURRENT_H5,
+                    required=False,
+                    allow_coupler=False,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+                    fallback_provider="urbansim_inputs_for_year",
+                ),
+            ),
             settings=settings,
             state=state,
             workspace=workspace,
