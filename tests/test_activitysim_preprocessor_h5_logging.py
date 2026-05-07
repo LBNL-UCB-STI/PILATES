@@ -9,6 +9,7 @@ from pilates.utils.usim_h5 import (
     allow_root_population_tables_for_target_year_datastore,
     reconcile_usim_population_table_paths,
     resolve_usim_population_table_paths,
+    should_require_exact_population_year_tables,
 )
 from pilates.workflows.artifact_keys import (
     USIM_POPULATION_BLOCKS_TABLE,
@@ -183,6 +184,16 @@ def test_allow_root_population_tables_for_target_year_datastore_matches_filename
     assert not allow_root_population_tables_for_target_year_datastore(
         str(tmp_path / "custom_mpo_06197001_model_data.h5"),
         2021,
+    )
+    assert not should_require_exact_population_year_tables(
+        h5_path=str(tmp_path / "model_data_2021.h5"),
+        year=2021,
+        require_exact_year=True,
+    )
+    assert should_require_exact_population_year_tables(
+        h5_path=str(tmp_path / "model_data_2019.h5"),
+        year=2021,
+        require_exact_year=True,
     )
 
 

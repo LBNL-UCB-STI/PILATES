@@ -42,6 +42,20 @@ def allow_root_population_tables_for_target_year_datastore(
     return re.search(rf"(?:^|[_-]){int(year)}(?:\.h5$|[_-])", name) is not None
 
 
+def should_require_exact_population_year_tables(
+    *,
+    h5_path: str,
+    year: Optional[int],
+    require_exact_year: bool,
+) -> bool:
+    """
+    Apply ActivitySim's exact-year table policy to one H5 datastore path.
+    """
+    return bool(require_exact_year) and not (
+        allow_root_population_tables_for_target_year_datastore(h5_path, year)
+    )
+
+
 def resolve_usim_h5_table_key(
     store: pd.HDFStore,
     *,

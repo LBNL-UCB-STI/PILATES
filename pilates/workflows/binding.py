@@ -41,8 +41,8 @@ from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
 from pilates.utils.usim_h5 import (
-    allow_root_population_tables_for_target_year_datastore,
     resolve_usim_population_table_paths,
+    should_require_exact_population_year_tables,
 )
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
@@ -725,11 +725,12 @@ def _activitysim_population_source(
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
                 target_year = _target_population_year()
-                require_exact_year = _requires_exact_activitysim_population_year(
-                    state
-                ) and not allow_root_population_tables_for_target_year_datastore(
-                    selected_path,
-                    target_year,
+                require_exact_year = should_require_exact_population_year_tables(
+                    h5_path=selected_path,
+                    year=target_year,
+                    require_exact_year=_requires_exact_activitysim_population_year(
+                        state
+                    ),
                 )
                 try:
                     mapping.update(

@@ -22,8 +22,8 @@ from pilates.atlas.inputs import (
 )
 from pilates.utils.input_logging import log_inputs
 from pilates.utils.usim_h5 import (
-    allow_root_population_tables_for_target_year_datastore,
     resolve_usim_population_table_paths,
+    should_require_exact_population_year_tables,
 )
 from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.atlas_state import AtlasSubState
@@ -64,9 +64,10 @@ def _validate_population_h5_for_activitysim_year(
     resolved = resolve_usim_population_table_paths(
         h5_path=h5_path,
         year=year,
-        require_exact_year=not allow_root_population_tables_for_target_year_datastore(
-            h5_path,
-            year,
+        require_exact_year=should_require_exact_population_year_tables(
+            h5_path=h5_path,
+            year=year,
+            require_exact_year=True,
         ),
     )
     logger.info(

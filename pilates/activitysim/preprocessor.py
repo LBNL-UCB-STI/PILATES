@@ -23,7 +23,10 @@ from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.geog import get_zone_from_points, get_block_geoms
-from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    reconcile_usim_population_table_paths,
+    should_require_exact_population_year_tables,
+)
 from pilates.utils.zone_utils import (
     copy_canonical_zone_source_to_dir,
     load_canonical_zones,
@@ -4036,10 +4039,15 @@ def create_asim_data_from_h5(
     target_year = getattr(state, "forecast_year", None)
     if target_year is None:
         target_year = getattr(state, "year", None)
-    resolved_table_keys = reconcile_usim_population_table_paths(
+    require_exact_year = should_require_exact_population_year_tables(
         h5_path=usim_store_path,
         year=target_year,
         require_exact_year=_requires_exact_population_year(),
+    )
+    resolved_table_keys = reconcile_usim_population_table_paths(
+        h5_path=usim_store_path,
+        year=target_year,
+        require_exact_year=require_exact_year,
         provided_paths=(
             None
             if resolved_h5_table_paths is None

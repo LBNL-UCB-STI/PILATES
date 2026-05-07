@@ -27,8 +27,8 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import (
-    allow_root_population_tables_for_target_year_datastore,
     reconcile_usim_population_table_paths,
+    should_require_exact_population_year_tables,
 )
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -414,12 +414,11 @@ def _resolve_activitysim_preprocess_runtime_inputs(
         target_year = getattr(state, "forecast_year", None)
         if target_year is None:
             target_year = getattr(state, "year", None)
-        require_exact_year = _requires_exact_population_year()
-        if allow_root_population_tables_for_target_year_datastore(
-            population_source_h5_path,
-            target_year,
-        ):
-            require_exact_year = False
+        require_exact_year = should_require_exact_population_year_tables(
+            h5_path=population_source_h5_path,
+            year=target_year,
+            require_exact_year=_requires_exact_population_year(),
+        )
         try:
             provided_table_paths = {
                 table_key: runtime_inputs[table_key]
