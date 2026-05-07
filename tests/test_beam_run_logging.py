@@ -71,7 +71,9 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
     monkeypatch.setattr(
         steps_beam,
         "log_input_only",
-        lambda *, key, path, description, **meta: calls.append((key, path, description)),
+        lambda *, key, path, description, **meta: calls.append(
+            (key, path, description)
+        ),
     )
     monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
 
@@ -101,6 +103,17 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
             "BEAM config file consumed by the BEAM run",
         )
     ]
+
+
+def test_beam_run_snapshot_dir_uses_forecast_year(tmp_path):
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam" / "output")
+    )
+    state = SimpleNamespace(year=2019, forecast_year=2021, iteration=0)
+
+    assert steps_beam._beam_run_snapshot_dir(workspace=workspace, state=state) == (
+        tmp_path / "beam" / "output" / "inputs-year-2021-iteration-0"
+    )
 
 
 def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
@@ -142,14 +155,18 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
     monkeypatch.setattr(
         steps_beam,
         "log_input_only",
-        lambda *, key, path, description, **meta: calls.append((key, path, description)),
+        lambda *, key, path, description, **meta: calls.append(
+            (key, path, description)
+        ),
     )
     monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
     monkeypatch.setattr(
         steps_beam,
         "find_last_run_output_plans",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("disk scan should not run when coupler outputs are available")
+            AssertionError(
+                "disk scan should not run when coupler outputs are available"
+            )
         ),
     )
 
@@ -173,7 +190,11 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
         holder=SimpleNamespace(beam_preprocess=upstream),
     )
 
-    assert ("beam_output_plans_xml", str(output_plans), "BEAM warm-start plans (selected by BEAM from previous outputs)") in calls
+    assert (
+        "beam_output_plans_xml",
+        str(output_plans),
+        "BEAM warm-start plans (selected by BEAM from previous outputs)",
+    ) in calls
     assert (
         "beam_output_experienced_plans_xml",
         str(output_experienced),
@@ -254,7 +275,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     config_path = beam_input_root / "seattle" / "seattle-pilates.conf"
     config_path.write_text(
         'include "extra.conf"\n'
-        'beam.test = 1\n'
+        "beam.test = 1\n"
         'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n',
         encoding="utf-8",
     )
@@ -331,7 +352,7 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
         encoding="utf-8"
     ) == (
         'include "extra.conf"\n'
-        'beam.test = 1\n'
+        "beam.test = 1\n"
         'beam.agentsim.agents.vehicles.travelTime = "scenario/network.csv"\n'
     )
     assert (
@@ -372,12 +393,20 @@ def test_beam_run_archives_exact_runner_inputs(monkeypatch, tmp_path):
     assert snapshot_meta["beam_input_plans_archived"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "plans",
+        "source_role": "plans_beam_in",
+        "snapshot_role": "beam_input_plans",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2030,
         "iteration": 2,
     }
     assert snapshot_meta["beam_input_plans_warmstart_archived"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "plans_warmstart",
+        "source_role": "beam_plans_warmstart",
+        "snapshot_role": "beam_input_plans_warmstart",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2030,
         "iteration": 2,
     }
@@ -450,11 +479,17 @@ def test_beam_run_archives_atlas_vehicles_input_when_present(monkeypatch, tmp_pa
     )
     assert archived_vehicles.exists()
     assert archived_vehicles.read_text(encoding="utf-8") == "atlas-vehicles"
-    vehicles_calls = [call for call in calls if call[0] == "beam_input_vehicles_archived"]
+    vehicles_calls = [
+        call for call in calls if call[0] == "beam_input_vehicles_archived"
+    ]
     assert len(vehicles_calls) == 1
     assert vehicles_calls[0][2]["facet"] == {
         "artifact_family": "beam_input_archived",
         "input_name": "vehicles",
+        "source_role": "vehicles_beam_in",
+        "snapshot_role": "beam_input_vehicles",
+        "snapshot_reason": "exact_rewind",
+        "storage_event": "snapshot_copy",
         "year": 2035,
         "iteration": 1,
     }

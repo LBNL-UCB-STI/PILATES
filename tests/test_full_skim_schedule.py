@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from pilates.workflows.stages.supply_demand import _should_run_full_skim
+from pilates.workflows.stages.supply_demand_beam import _should_run_full_skim
 
 
 def _make_settings(run_schedule: str, total_iters: int = 3):

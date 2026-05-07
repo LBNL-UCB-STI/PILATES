@@ -20,6 +20,22 @@ PILATES also keeps a few registry-level step variants separate from the broad mo
 
 If you need the real workflow-facing inputs, outputs, downstream consumers, and restart-relevant artifacts for each model family, use [Model Boundaries](model_boundaries.md). This page stays intentionally short.
 
+## Why The Coupling Matters
+
+The value is not only that the models run in one script. PILATES lets one model
+change the operating conditions seen by the next model, then carries the
+feedback forward across years and iterations. That makes it possible to ask
+questions such as whether a land-use policy changes activity patterns enough to
+alter congestion, whether congestion and accessibility feed back into future
+location choice, or whether fleet and fuel scenarios change travel demand and
+network outcomes differently across demographic groups.
+
+Single-model runs can answer useful within-model questions, but they usually
+hold the neighboring systems fixed. PILATES is designed for questions where the
+interaction is the object of study: land use, vehicle ownership, daily activity
+patterns, network assignment, skims, and archived provenance move together
+through the same scenario.
+
 ## Reading Path
 
 - Continue to [Model Boundaries](model_boundaries.md).

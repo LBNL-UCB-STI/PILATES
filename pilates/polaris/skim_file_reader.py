@@ -610,7 +610,6 @@ def WriteHighwaySkimsV1_CSV(
     highway_skim_file, skims, origin_list=None, dest_list=None, limit_values_list=None
 ):
     with open(highway_skim_file + ".csv", "w") as outfile:
-
         # Update the origin and destination lists
         if origin_list is None:
             origin_list = sorted(skims.zone_id_to_index_map.keys())
@@ -683,7 +682,6 @@ def WriteHighwaySkimsV1_TEXT(
     highway_skim_file, skims, origin_list=None, dest_list=None
 ):
     with open(highway_skim_file + ".csv", "w") as outfile:
-
         # Update the origin and destination lists
         if origin_list is None:
             origin_list = sorted(skims.zone_id_to_index_map.keys())
@@ -1328,7 +1326,6 @@ class Skim_Results:
 
 
 if __name__ == "__main__":
-
     skims = Skim_Results()
 
     # parse the command line args
@@ -1519,7 +1516,6 @@ if __name__ == "__main__":
                 WriteTransitSkimsV1_CSV(args.transit_skim_file + "_v1", skims)
 
     elif args.interactive:
-
         Main(
             skims,
             args.auto_skim_file,

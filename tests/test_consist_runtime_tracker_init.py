@@ -65,7 +65,9 @@ def test_create_tracker_uses_configured_hashing_strategy(monkeypatch):
         cr.set_enabled(None)
 
 
-def test_h5_fast_hash_override_disabled_when_tracker_hashing_is_full(tmp_path, monkeypatch):
+def test_h5_fast_hash_override_disabled_when_tracker_hashing_is_full(
+    tmp_path, monkeypatch
+):
     file_path = tmp_path / "sample.h5"
     file_path.write_text("test", encoding="utf-8")
     monkeypatch.setattr(cr, "_tracker_hashing_strategy", "full")
@@ -113,7 +115,9 @@ def test_log_input_raises_when_enabled_outside_active_run(monkeypatch):
 
 
 def test_current_run_id_returns_none_when_runtime_disabled(monkeypatch):
-    fake_consist = types.SimpleNamespace(current_run=lambda: SimpleNamespace(id="run-123"))
+    fake_consist = types.SimpleNamespace(
+        current_run=lambda: SimpleNamespace(id="run-123")
+    )
     monkeypatch.setattr(cr, "consist", fake_consist)
     cr.set_enabled(False)
 

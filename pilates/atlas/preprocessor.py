@@ -17,6 +17,7 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
+from pilates.runtime.archive_paths import first_existing_path
 from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
@@ -120,13 +121,6 @@ def _export_atlas_table_to_csv(
     )
 
 
-def _first_existing_path(*paths: Optional[str]) -> Optional[str]:
-    for path in paths:
-        if path and os.path.exists(path):
-            return path
-    return None
-
-
 def _resolve_existing_artifact_path(
     value: Any, *, workspace: "Workspace"
 ) -> Optional[str]:
@@ -181,14 +175,14 @@ def restart_required_atlas_input_paths(
             prior_year_dir = os.path.join(atlas_input_root, f"year{prior_subyear}")
             for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_CSVS:
                 artifact_name = filename.rsplit(".", 1)[0]
-                required[
-                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-                ] = os.path.join(prior_year_dir, filename)
+                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+                    os.path.join(prior_year_dir, filename)
+                )
             for filename in _ATLAS_RESTART_PRIOR_SUBYEAR_RDATA:
                 artifact_name = filename.replace(".", "_")
-                required[
-                    f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-                ] = os.path.join(prior_year_dir, filename)
+                required[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+                    os.path.join(prior_year_dir, filename)
+                )
 
     return required
 
@@ -275,9 +269,9 @@ def _record_restart_chained_rdata_inputs(
         if not os.path.exists(path):
             continue
         artifact_name = filename.replace(".", "_")
-        prepared_inputs[
-            f"atlas_restart_prior::{prior_subyear}::{artifact_name}"
-        ] = Path(path)
+        prepared_inputs[f"atlas_restart_prior::{prior_subyear}::{artifact_name}"] = (
+            Path(path)
+        )
 
 
 def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
@@ -604,7 +598,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                     short_name=short_name,
                 )
             )
-        return RecordStore(recordList=input_records), RecordStore(recordList=output_records)
+        return RecordStore(recordList=input_records), RecordStore(
+            recordList=output_records
+        )
 
     def _preprocess(
         self,
@@ -701,7 +697,7 @@ class AtlasPreprocessor(GenericPreprocessor):
             artifact_base_h5,
             workspace=workspace,
         )
-        preferred_h5 = _first_existing_path(
+        preferred_h5 = first_existing_path(
             base_h5_path if self.state.is_start_year() else current_h5_path,
             current_h5_path if self.state.is_start_year() else base_h5_path,
         )
@@ -789,7 +785,6 @@ class AtlasPreprocessor(GenericPreprocessor):
             )
 
         with pd.HDFStore(urbansim_output, mode="r") as data:
-
             missing_required_tables: List[str] = []
 
             def process_table(

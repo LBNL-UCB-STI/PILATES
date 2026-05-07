@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import replace
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from pilates.workflows.planning import StaticExecutionPlan
 
@@ -24,9 +24,7 @@ def _filtered_plan_for_render(
         return plan
 
     consumed_artifact_ids = {
-        edge.source
-        for edge in plan.edges
-        if edge.kind == "consumes"
+        edge.source for edge in plan.edges if edge.kind == "consumes"
     }
     kept_artifacts = [
         artifact for artifact in plan.artifacts if artifact.id in consumed_artifact_ids
@@ -90,10 +88,7 @@ def render_plan_mermaid(
         lines.append("%s -.-> %s" % (gap_node_id, gap.step_run_id))
 
     if plan.step_runs:
-        lines.append(
-            "class %s step;"
-            % ",".join(step.id for step in plan.step_runs)
-        )
+        lines.append("class %s step;" % ",".join(step.id for step in plan.step_runs))
     artifact_classes: List[str] = []
     external_classes: List[str] = []
     optional_classes: List[str] = []
@@ -150,7 +145,7 @@ def render_plan_html(
     )
     gaps_html = "\n".join(
         (
-            '<li><strong>%s</strong> <code>%s</code>: %s</li>'
+            "<li><strong>%s</strong> <code>%s</code>: %s</li>"
             % (
                 _html_escape(gap.kind),
                 _html_escape(_step_name_for_gap(plan, gap.step_run_id)),
@@ -162,7 +157,6 @@ def render_plan_html(
     if not gaps_html:
         gaps_html = "<li>No contract gaps reported.</li>"
 
-    step_by_id = {step.id: step for step in plan.step_runs}
     consumed_by_artifact_id: Dict[str, List[str]] = {}
     for edge in plan.edges:
         if edge.kind != "consumes":
@@ -268,7 +262,10 @@ def render_plan_html(
 
     lane_guides = [
         ("Land Use", 140 + _stage_lane("land_use") * lane_spacing),
-        ("Vehicle Ownership", 140 + _stage_lane("vehicle_ownership_model") * lane_spacing),
+        (
+            "Vehicle Ownership",
+            140 + _stage_lane("vehicle_ownership_model") * lane_spacing,
+        ),
         ("Activity Demand", 140 + _stage_lane("activity_demand") * lane_spacing),
         ("Traffic Assignment", 140 + _stage_lane("traffic_assignment") * lane_spacing),
         ("Postprocessing", 140 + _stage_lane("postprocessing") * lane_spacing),

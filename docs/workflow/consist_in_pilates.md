@@ -5,6 +5,32 @@ summary: What Consist owns in PILATES and how replay, caching, staging, and anal
 
 # Consist in PILATES
 
+## What Consist Is
+
+[Consist](https://lbnl-ucb-sti.github.io/consist/latest/) is an open-source,
+cache-aware run tracker for scientific workflows. It assigns durable identity to
+scenarios, steps, and artifacts; records inputs, outputs, and lineage; and
+detects when a previously executed step can be reused instead of rerun.
+
+PILATES uses Consist as its execution substrate. The practical consequences for
+day-to-day use are:
+
+- **Replay-first restart.** When a run resumes, PILATES re-enters the scenario
+  and lets Consist short-circuit any step whose declared inputs match a prior
+  execution, instead of rebuilding state by hand.
+- **Cache hits across runs.** A new run that shares identity with an earlier
+  step (same code, same config that contributes to identity, same input
+  digests) reuses the earlier output rather than recomputing it. This matters
+  most for long multi-year scenarios.
+- **Queryable run history.** Each run, step, and artifact is persisted to a
+  Consist database, which downstream analysis tooling reads to compare
+  scenarios, audit lineage, and open archived outputs.
+
+If you have not used Consist before, the [Consist
+documentation](https://lbnl-ucb-sti.github.io/consist/latest/) is the
+authoritative reference. The rest of this page is the PILATES-side boundary:
+what PILATES owns, what Consist owns, and where the two meet.
+
 ## What Consist Owns
 
 - Scenario and step contexts created in `run.py` / `pilates/runtime/launcher.py`.

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import copy
 import gzip
 import hashlib
 import json
@@ -21,7 +20,10 @@ from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import launcher as launcher_runtime
 from pilates.runtime.context import WorkflowRuntimeContext
-from pilates.runtime.consist_audit import emit_consist_audit_event, reset_consist_audit_state
+from pilates.runtime.consist_audit import (
+    emit_consist_audit_event,
+    reset_consist_audit_state,
+)
 from pilates.runtime.scenario_runtime import (
     ScenarioParentLinkProxy,
     resolve_cache_epoch,
@@ -36,15 +38,18 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-    ZARR_SKIMS,
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import run_supply_demand_stage as _run_supply_demand_stage
+from pilates.workflows.stages.supply_demand import (
+    run_supply_demand_stage as _run_supply_demand_stage,
+)
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 from pilates.workflows.steps import StepOutputsHolder
 from workflow_state import WorkflowState
 
@@ -60,7 +65,9 @@ from tests.test_golden_stub_workflow import (
 )
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
+):
     context = context or WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
@@ -135,7 +142,9 @@ def _build_test_settings(root: Path, run_name: str) -> Any:
     return settings
 
 
-def _build_workspace_inputs(settings: Any, workspace: Workspace, state: WorkflowState) -> None:
+def _build_workspace_inputs(
+    settings: Any, workspace: Workspace, state: WorkflowState
+) -> None:
     Path(settings.urbansim.local_data_input_folder).mkdir(parents=True, exist_ok=True)
 
     usim_dir = Path(workspace.get_usim_mutable_data_dir())
@@ -156,7 +165,9 @@ def _build_workspace_inputs(settings: Any, workspace: Workspace, state: Workflow
     ):
         path.mkdir(parents=True, exist_ok=True)
 
-    region_id = settings.urbansim.region_mappings["region_to_region_id"][settings.run.region]
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][
+        settings.run.region
+    ]
     _write_usim_toy_h5(
         usim_dir / settings.urbansim.input_file_template.format(region_id=region_id)
     )
@@ -219,7 +230,9 @@ def _build_workspace_inputs(settings: Any, workspace: Workspace, state: Workflow
     _write_file(beam_scenario_dir / "plans.parquet")
     _write_file(beam_scenario_dir / "households.parquet")
     _write_file(beam_scenario_dir / "persons.parquet")
-    _write_file(Path(workspace.full_path) / "shared_cache" / "numba" / "compile-cache.bin")
+    _write_file(
+        Path(workspace.full_path) / "shared_cache" / "numba" / "compile-cache.bin"
+    )
     _write_file(asim_out_dir / "cache" / "skims.zarr")
     state.data_initialized = True
     state.write_state()
@@ -239,7 +252,11 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         AtlasRunOutputs,
     )
     from pilates.utils.beam import get_beam_omx_skims_name
-    from pilates.beam.outputs import BeamPostprocessOutputs, BeamPreprocessOutputs, BeamRunOutputs
+    from pilates.beam.outputs import (
+        BeamPostprocessOutputs,
+        BeamPreprocessOutputs,
+        BeamRunOutputs,
+    )
     from pilates.generic.model_factory import ModelFactory
     from pilates.generic.records import RecordStore
     from pilates.urbansim.outputs import (
@@ -248,14 +265,24 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         UrbanSimRunOutputs,
     )
 
-    def _write_asim_outputs(workspace: Workspace, year: int, iteration: int) -> dict[str, Path]:
+    def _write_asim_outputs(
+        workspace: Workspace, year: int, iteration: int
+    ) -> dict[str, Path]:
         final_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
         temp_outputs = {
-            "accessibility_asim_out_temp": final_dir / "accessibility" / "final.parquet",
-            "disaggregate_accessibility_asim_out_temp": final_dir / "disaggregate_accessibility" / "final.parquet",
-            "joint_tour_participants_asim_out_temp": final_dir / "joint_tour_participants" / "final.parquet",
+            "accessibility_asim_out_temp": final_dir
+            / "accessibility"
+            / "final.parquet",
+            "disaggregate_accessibility_asim_out_temp": final_dir
+            / "disaggregate_accessibility"
+            / "final.parquet",
+            "joint_tour_participants_asim_out_temp": final_dir
+            / "joint_tour_participants"
+            / "final.parquet",
             "land_use_asim_out_temp": final_dir / "land_use" / "final.parquet",
-            "non_mandatory_tour_destination_accessibility_asim_out_temp": final_dir / "non_mandatory_tour_destination_accessibility" / "final.parquet",
+            "non_mandatory_tour_destination_accessibility_asim_out_temp": final_dir
+            / "non_mandatory_tour_destination_accessibility"
+            / "final.parquet",
             "households_asim_out_temp": final_dir / "households" / "final.parquet",
             "persons_asim_out_temp": final_dir / "persons" / "final.parquet",
             "tours_asim_out_temp": final_dir / "tours" / "final.parquet",
@@ -264,23 +291,37 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         }
         _write_parquet(
             temp_outputs["accessibility_asim_out_temp"],
-            pd.DataFrame({"year": [year], "iteration": [iteration], "accessibility": [1.0]}),
+            pd.DataFrame(
+                {"year": [year], "iteration": [iteration], "accessibility": [1.0]}
+            ),
         )
         _write_parquet(
             temp_outputs["land_use_asim_out_temp"],
-            pd.DataFrame({"zone_id": [1, 2], "TOTPOP": [120, 80], "year": [year, year]}),
+            pd.DataFrame(
+                {"zone_id": [1, 2], "TOTPOP": [120, 80], "year": [year, year]}
+            ),
         )
         _write_parquet(
             temp_outputs["disaggregate_accessibility_asim_out_temp"],
-            pd.DataFrame({"person_id": [11, 21], "zone_id": [1, 2], "year": [year, year]}),
+            pd.DataFrame(
+                {"person_id": [11, 21], "zone_id": [1, 2], "year": [year, year]}
+            ),
         )
         _write_parquet(
             temp_outputs["joint_tour_participants_asim_out_temp"],
-            pd.DataFrame({"tour_id": [100], "person_id": [12], "iteration": [iteration]}),
+            pd.DataFrame(
+                {"tour_id": [100], "person_id": [12], "iteration": [iteration]}
+            ),
         )
         _write_parquet(
             temp_outputs["households_asim_out_temp"],
-            pd.DataFrame({"household_id": [1, 2], "auto_ownership": [1, 2], "iteration": [iteration, iteration]}),
+            pd.DataFrame(
+                {
+                    "household_id": [1, 2],
+                    "auto_ownership": [1, 2],
+                    "iteration": [iteration, iteration],
+                }
+            ),
         )
         _write_parquet(
             temp_outputs["persons_asim_out_temp"],
@@ -296,11 +337,15 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         )
         _write_parquet(
             temp_outputs["non_mandatory_tour_destination_accessibility_asim_out_temp"],
-            pd.DataFrame({"person_id": [11, 21], "destination": [2, 1], "year": [year, year]}),
+            pd.DataFrame(
+                {"person_id": [11, 21], "destination": [2, 1], "year": [year, year]}
+            ),
         )
         _write_parquet(
             temp_outputs["beam_plans_asim_out_temp"],
-            pd.DataFrame({"trip_id": [1001, 1002], "iteration": [iteration, iteration]}),
+            pd.DataFrame(
+                {"trip_id": [1001, 1002], "iteration": [iteration, iteration]}
+            ),
         )
         return temp_outputs
 
@@ -317,8 +362,12 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
         if phase == "preprocess":
             if model_name == "urbansim":
                 usim_dir = Path(workspace.get_usim_mutable_data_dir())
-                region_id = settings.urbansim.region_mappings["region_to_region_id"][settings.run.region]
-                input_path = usim_dir / settings.urbansim.input_file_template.format(region_id=region_id)
+                region_id = settings.urbansim.region_mappings["region_to_region_id"][
+                    settings.run.region
+                ]
+                input_path = usim_dir / settings.urbansim.input_file_template.format(
+                    region_id=region_id
+                )
                 preprocess_paths = {
                     "geoid_to_zone": usim_dir / "geoid_to_zone.csv",
                     "hh_size": usim_dir / "hh_size.csv",
@@ -378,23 +427,32 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
             return RecordStore()
         if phase == "run":
             if model_name == "urbansim":
-                output_path = Path(workspace.get_usim_mutable_data_dir()) / f"usim_{state.forecast_year}.h5"
+                output_path = (
+                    Path(workspace.get_usim_mutable_data_dir())
+                    / f"usim_{state.forecast_year}.h5"
+                )
                 _write_usim_toy_h5(output_path, with_year_prefix=state.forecast_year)
                 return UrbanSimRunOutputs(
                     usim_datastore_h5=output_path,
                     raw_outputs={"usim_forecast_output": output_path},
                 )
             if model_name == "activitysim_compile":
-                zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+                zarr_path = (
+                    Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+                )
                 _write_file(zarr_path)
                 return ActivitySimCompileOutputs(
                     zarr_skims=zarr_path,
-                    sharrow_cache_dir=Path(workspace.full_path) / "shared_cache" / "numba",
+                    sharrow_cache_dir=Path(workspace.full_path)
+                    / "shared_cache"
+                    / "numba",
                 )
             if model_name == "activitysim":
                 return ActivitySimRunOutputs(
                     output_dir=Path(workspace.get_asim_output_dir()),
-                    raw_outputs=_write_asim_outputs(workspace, state.current_year, state.current_inner_iter),
+                    raw_outputs=_write_asim_outputs(
+                        workspace, state.current_year, state.current_inner_iter
+                    ),
                 )
             if model_name == "beam":
                 beam_output_dir = Path(workspace.get_beam_output_dir())
@@ -406,12 +464,20 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                         {
                             "link": [1, 2],
                             "year": [state.current_year, state.current_year],
-                            "iteration": [state.current_inner_iter, state.current_inner_iter],
+                            "iteration": [
+                                state.current_inner_iter,
+                                state.current_inner_iter,
+                            ],
                         }
                     ).to_csv(handle, index=False)
                 _write_parquet(
                     plans,
-                    pd.DataFrame({"trip_id": [1001, 1002], "year": [state.current_year, state.current_year]}),
+                    pd.DataFrame(
+                        {
+                            "trip_id": [1001, 1002],
+                            "year": [state.current_year, state.current_year],
+                        }
+                    ),
                 )
                 return BeamRunOutputs(
                     beam_output_dir=beam_output_dir,
@@ -422,7 +488,10 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 atlas_output_dir.mkdir(parents=True, exist_ok=True)
                 householdv = atlas_output_dir / f"householdv_{state.year}.csv"
                 vehicles = atlas_output_dir / f"vehicles_{state.year}.csv"
-                _write_csv(householdv, pd.DataFrame({"household_id": [1, 2], "nvehicles": [1, 2]}))
+                _write_csv(
+                    householdv,
+                    pd.DataFrame({"household_id": [1, 2], "nvehicles": [1, 2]}),
+                )
                 _write_csv(
                     vehicles,
                     pd.DataFrame(
@@ -437,27 +506,40 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 )
                 return AtlasRunOutputs(
                     atlas_output_dir=atlas_output_dir,
-                    raw_outputs={f"householdv_{state.year}": householdv, f"vehicles_{state.year}": vehicles},
+                    raw_outputs={
+                        f"householdv_{state.year}": householdv,
+                        f"vehicles_{state.year}": vehicles,
+                    },
                 )
             return RecordStore()
         if phase == "postprocess":
             if model_name == "urbansim":
-                merged = Path(workspace.get_usim_mutable_data_dir()) / f"usim_input_merged{state.forecast_year}.h5"
+                merged = (
+                    Path(workspace.get_usim_mutable_data_dir())
+                    / f"usim_input_merged{state.forecast_year}.h5"
+                )
                 _write_usim_toy_h5(merged, with_year_prefix=state.forecast_year)
                 return UrbanSimPostprocessOutputs(
                     usim_datastore_h5=merged,
-                    processed_outputs={f"usim_input_merged{state.forecast_year}": merged},
+                    processed_outputs={
+                        f"usim_input_merged{state.forecast_year}": merged
+                    },
                 )
             if model_name == "activitysim":
                 processed_outputs = {}
-                iter_dir = Path(workspace.get_asim_output_dir()) / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+                iter_dir = (
+                    Path(workspace.get_asim_output_dir())
+                    / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+                )
                 iter_dir.mkdir(parents=True, exist_ok=True)
                 for short_name, source_path in raw_outputs.raw_outputs.items():
                     source_path = Path(source_path)
                     clean_name = short_name.replace("_asim_out_temp", "")
                     target_path = iter_dir / f"{clean_name}.parquet"
                     shutil.copy2(source_path, target_path)
-                    processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+                    processed_outputs[normalize_asim_output_key(clean_name)] = (
+                        target_path
+                    )
                 inputs_dir = (
                     Path(workspace.get_asim_output_dir())
                     / f"inputs-year-{state.current_year}-iteration-{state.current_inner_iter}"
@@ -495,7 +577,10 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                     else:
                         shutil.copy2(source_path, target_path)
                     processed_outputs[short_name] = target_path
-                merged = Path(workspace.get_usim_mutable_data_dir()) / f"usim_input_merged{state.forecast_year}.h5"
+                merged = (
+                    Path(workspace.get_usim_mutable_data_dir())
+                    / f"usim_input_merged{state.forecast_year}.h5"
+                )
                 if not merged.exists():
                     _write_usim_toy_h5(merged, with_year_prefix=state.forecast_year)
                 return ActivitySimPostprocessOutputs(
@@ -513,9 +598,14 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 )
                 _write_file(zarr)
                 _write_file(final_skims)
-                return BeamPostprocessOutputs(zarr_skims=zarr, final_skims_omx=final_skims)
+                return BeamPostprocessOutputs(
+                    zarr_skims=zarr, final_skims_omx=final_skims
+                )
             if model_name == "atlas":
-                vehicles2 = Path(workspace.get_atlas_output_dir()) / f"vehicles2_{state.year}.csv"
+                vehicles2 = (
+                    Path(workspace.get_atlas_output_dir())
+                    / f"vehicles2_{state.year}.csv"
+                )
                 _write_csv(
                     vehicles2,
                     pd.DataFrame(
@@ -525,13 +615,21 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                             "bodytype": ["sedan", "suv"],
                             "pred_power": ["gasoline", "electricity"],
                             "modelyear": [2018, 2020],
-                            "vehicleTypeId": ["sedan_gasoline_2018", "suv_electricity_2020"],
+                            "vehicleTypeId": [
+                                "sedan_gasoline_2018",
+                                "suv_electricity_2020",
+                            ],
                         }
                     ),
                 )
-                usim_h5 = Path(workspace.get_usim_mutable_data_dir()) / f"usim_input_merged{state.main_forecast_year}.h5"
+                usim_h5 = (
+                    Path(workspace.get_usim_mutable_data_dir())
+                    / f"usim_input_merged{state.main_forecast_year}.h5"
+                )
                 if not usim_h5.exists():
-                    _write_usim_toy_h5(usim_h5, with_year_prefix=state.main_forecast_year)
+                    _write_usim_toy_h5(
+                        usim_h5, with_year_prefix=state.main_forecast_year
+                    )
                 return AtlasPostprocessOutputs(
                     atlas_output_dir=Path(workspace.get_atlas_output_dir()),
                     usim_datastore_h5=usim_h5,
@@ -540,7 +638,6 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
             return RecordStore()
         return RecordStore()
 
-    from pilates.generic.model_factory import ModelFactory
     from pilates.workflows.steps import shared as shared_steps
 
     original_consist_step_meta = shared_steps.consist_step_meta
@@ -603,7 +700,9 @@ def _query_facet(runtime: _StubRuntime) -> dict[str, Any]:
     return facet
 
 
-def _emit_run_context(runtime: _StubRuntime, *, restart_run: bool, archive_run_dir: Optional[Path] = None) -> None:
+def _emit_run_context(
+    runtime: _StubRuntime, *, restart_run: bool, archive_run_dir: Optional[Path] = None
+) -> None:
     emit_consist_audit_event(
         workspace=runtime.workspace,
         event_type="run_context",
@@ -613,7 +712,9 @@ def _emit_run_context(runtime: _StubRuntime, *, restart_run: bool, archive_run_d
         workspace_root=runtime.workspace.full_path,
         local_run_dir=runtime.workspace.full_path,
         archive_run_dir=str(archive_run_dir) if archive_run_dir is not None else None,
-        archive_state_path=str(archive_run_dir / "state.yaml") if archive_run_dir is not None else None,
+        archive_state_path=str(archive_run_dir / "state.yaml")
+        if archive_run_dir is not None
+        else None,
         restart_run=restart_run,
         data_initialized=bool(runtime.state.data_initialized),
     )
@@ -708,7 +809,11 @@ def _stage_runner(
             ) as scenario:
                 tagged = ScenarioParentLinkProxy(scenario)
                 coupler = tagged.coupler
-                coupler.declare_outputs(*coupler_schema.keys(), warn_undefined=True, description=coupler_schema)
+                coupler.declare_outputs(
+                    *coupler_schema.keys(),
+                    warn_undefined=True,
+                    description=coupler_schema,
+                )
                 bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
                     settings=runtime.settings,
                     state=runtime.state,
@@ -734,8 +839,12 @@ def _stage_runner(
                             context=context,
                         )
                         runtime.state.complete_step(WorkflowState.Stage.land_use)
-                    if runtime.state.should_run(WorkflowState.Stage.vehicle_ownership_model):
-                        _debug(f"run_vehicle_ownership year={year} forecast={runtime.state.forecast_year}")
+                    if runtime.state.should_run(
+                        WorkflowState.Stage.vehicle_ownership_model
+                    ):
+                        _debug(
+                            f"run_vehicle_ownership year={year} forecast={runtime.state.forecast_year}"
+                        )
                         run_vehicle_ownership_stage(
                             scenario=tagged,
                             coupler=coupler,
@@ -743,7 +852,9 @@ def _stage_runner(
                             build_atlas_static_inputs_fallback=launcher_runtime.build_atlas_static_inputs_fallback,
                             context=context,
                         )
-                        runtime.state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
+                        runtime.state.complete_step(
+                            WorkflowState.Stage.vehicle_ownership_model
+                        )
                     if runtime.state.should_run(WorkflowState.Stage.supply_demand_loop):
                         _debug(
                             f"run_supply_demand year={year} forecast={runtime.state.forecast_year} "
@@ -759,7 +870,9 @@ def _stage_runner(
                             context=context,
                         )
                     _maybe_interrupt("after_year_complete", runtime.state)
-                _debug(f"stage_runner:complete name={runtime.settings.run.output_run_name}")
+                _debug(
+                    f"stage_runner:complete name={runtime.settings.run.output_run_name}"
+                )
     finally:
         supply_demand_stage._run_activity_demand_phase = original_activity_phase
         supply_demand_stage._run_traffic_assignment_phase = original_traffic_phase
@@ -841,7 +954,9 @@ def _digest_bundle(workspace: Workspace) -> dict[str, str]:
             Path(workspace.get_beam_output_dir()) / "promoted_linkstats.csv.gz",
             compression="gzip",
         ),
-        "beam_plans": _hash_parquet(Path(workspace.get_beam_output_dir()) / "promoted_plans.parquet"),
+        "beam_plans": _hash_parquet(
+            Path(workspace.get_beam_output_dir()) / "promoted_plans.parquet"
+        ),
     }
     return bundle
 
@@ -923,7 +1038,11 @@ def _latest_completed_runs(tracker: Tracker) -> pd.DataFrame:
     if frame.empty:
         return frame
     frame = frame.sort_values(["year", "iteration", "model", "created_at"])
-    return frame.groupby(["year", "iteration", "model"], as_index=False).tail(1).reset_index(drop=True)
+    return (
+        frame.groupby(["year", "iteration", "model"], as_index=False)
+        .tail(1)
+        .reset_index(drop=True)
+    )
 
 
 def _normalized_parent_edges(tracker: Tracker) -> set[tuple[Any, ...]]:
@@ -941,7 +1060,9 @@ def _normalized_parent_edges(tracker: Tracker) -> set[tuple[Any, ...]]:
                 int(row["iteration"]) if row["iteration"] is not None else None,
                 parent["model"] if parent else None,
                 int(parent["year"]) if parent and parent["year"] is not None else None,
-                int(parent["iteration"]) if parent and parent["iteration"] is not None else None,
+                int(parent["iteration"])
+                if parent and parent["iteration"] is not None
+                else None,
             )
         )
     return edges
@@ -956,7 +1077,11 @@ def _run_index_rows(tracker: Tracker, archive_run_dir: str) -> set[tuple[Any, ..
     from pilates_consist_analysis.run_index import build_run_index
 
     frame = build_run_index(tracker, archive_run_dir=archive_run_dir).frame
-    completed = frame.loc[frame["is_completed_status"] == True, ["scenario_id", "year", "iteration", "model"]]
+    completed = frame.loc[
+        frame["is_completed_status"] == True,
+        ["scenario_id", "year", "iteration", "model"],
+    ]
+
     def _normalize_value(value: Any) -> Any:
         return None if pd.isna(value) else value
 
@@ -967,10 +1092,17 @@ def _run_index_rows(tracker: Tracker, archive_run_dir: str) -> set[tuple[Any, ..
 
 
 def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
-    summary_path = Path(workspace.full_path) / ".workflow" / "diagnostics" / "consist_restart_audit_summary.json"
+    summary_path = (
+        Path(workspace.full_path)
+        / ".workflow"
+        / "diagnostics"
+        / "consist_restart_audit_summary.json"
+    )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     return {
-        "steps_with_incomplete_hydration": summary.get("steps_with_incomplete_hydration", {}),
+        "steps_with_incomplete_hydration": summary.get(
+            "steps_with_incomplete_hydration", {}
+        ),
         "steps_using_custom_recovery": summary.get("steps_using_custom_recovery", {}),
         "restart_hydration": summary.get("restart_hydration", {}),
     }
@@ -1016,7 +1148,9 @@ def _run_metrics(tracker: Tracker, workspace: Workspace) -> dict[str, Any]:
         "restart_hydration_event_count": int(
             restart_hydration.get("event_count", 0) or 0
         ),
-        "custom_recovery_steps": sorted(audit.get("steps_using_custom_recovery", {}).keys()),
+        "custom_recovery_steps": sorted(
+            audit.get("steps_using_custom_recovery", {}).keys()
+        ),
     }
 
 
@@ -1047,7 +1181,11 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
         if isinstance(expected, dict) and isinstance(actual, dict):
             missing = sorted(set(expected) - set(actual))
             extra = sorted(set(actual) - set(expected))
-            changed = sorted(key for key in set(expected) & set(actual) if expected[key] != actual[key])
+            changed = sorted(
+                key
+                for key in set(expected) & set(actual)
+                if expected[key] != actual[key]
+            )
             parts = [f"{name} mismatch"]
             if missing:
                 parts.append(f"missing keys={missing[:5]}")
@@ -1074,28 +1212,46 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             f"resumed={pprint.pformat(actual, compact=True)}"
         )
 
-    assert resumed["artifact_digests"] == baseline["artifact_digests"], _describe_difference(
-        "artifact_digests", baseline["artifact_digests"], resumed["artifact_digests"]
+    assert resumed["artifact_digests"] == baseline["artifact_digests"], (
+        _describe_difference(
+            "artifact_digests",
+            baseline["artifact_digests"],
+            resumed["artifact_digests"],
+        )
     )
-    assert resumed["manifest_snapshot"] == baseline["manifest_snapshot"], _describe_difference(
-        "manifest_snapshot", baseline["manifest_snapshot"], resumed["manifest_snapshot"]
+    assert resumed["manifest_snapshot"] == baseline["manifest_snapshot"], (
+        _describe_difference(
+            "manifest_snapshot",
+            baseline["manifest_snapshot"],
+            resumed["manifest_snapshot"],
+        )
     )
     assert resumed["parent_edges"] == baseline["parent_edges"], _describe_difference(
         "parent_edges", baseline["parent_edges"], resumed["parent_edges"]
     )
-    assert resumed["run_index_rows"] == baseline["run_index_rows"], _describe_difference(
-        "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
+    assert resumed["run_index_rows"] == baseline["run_index_rows"], (
+        _describe_difference(
+            "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
+        )
     )
-    assert resumed["audit"]["steps_with_incomplete_hydration"] == {}, _describe_difference(
-        "steps_with_incomplete_hydration", {}, resumed["audit"]["steps_with_incomplete_hydration"]
+    assert resumed["audit"]["steps_with_incomplete_hydration"] == {}, (
+        _describe_difference(
+            "steps_with_incomplete_hydration",
+            {},
+            resumed["audit"]["steps_with_incomplete_hydration"],
+        )
     )
     compatibility_fallbacks = {
         step_name: mode_counts
-        for step_name, mode_counts in resumed["audit"]["steps_using_custom_recovery"].items()
+        for step_name, mode_counts in resumed["audit"][
+            "steps_using_custom_recovery"
+        ].items()
         if "used_compatibility_fallback" in mode_counts
     }
     assert compatibility_fallbacks == {}, _describe_difference(
-        "steps_using_custom_recovery.compatibility_fallbacks", {}, compatibility_fallbacks
+        "steps_using_custom_recovery.compatibility_fallbacks",
+        {},
+        compatibility_fallbacks,
     )
 
 
@@ -1126,13 +1282,17 @@ def baseline_snapshot(tmp_path, monkeypatch):
 
 
 def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
-    archive_runtime = _make_runtime(tmp_path, monkeypatch, name=f"archive_{stop_boundary}")
+    archive_runtime = _make_runtime(
+        tmp_path, monkeypatch, name=f"archive_{stop_boundary}"
+    )
     _emit_run_context(archive_runtime, restart_run=False)
     _debug(f"resumed_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
 
-    resumed_runtime = _make_runtime(tmp_path, monkeypatch, name=f"resume_{stop_boundary}")
+    resumed_runtime = _make_runtime(
+        tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
+    )
     _emit_run_context(
         resumed_runtime,
         restart_run=True,
@@ -1175,7 +1335,11 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
             ) as scenario:
                 tagged = ScenarioParentLinkProxy(scenario)
                 coupler = tagged.coupler
-                coupler.declare_outputs(*coupler_schema.keys(), warn_undefined=True, description=coupler_schema)
+                coupler.declare_outputs(
+                    *coupler_schema.keys(),
+                    warn_undefined=True,
+                    description=coupler_schema,
+                )
                 bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
                     settings=resumed_runtime.settings,
                     state=resumed_runtime.state,
@@ -1209,8 +1373,12 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                             outputs_holder_year=outputs_holder_year,
                             context=context,
                         )
-                        resumed_runtime.state.complete_step(WorkflowState.Stage.land_use)
-                    if resumed_runtime.state.should_run(WorkflowState.Stage.vehicle_ownership_model):
+                        resumed_runtime.state.complete_step(
+                            WorkflowState.Stage.land_use
+                        )
+                    if resumed_runtime.state.should_run(
+                        WorkflowState.Stage.vehicle_ownership_model
+                    ):
                         run_vehicle_ownership_stage(
                             scenario=tagged,
                             coupler=coupler,
@@ -1218,10 +1386,11 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                             build_atlas_static_inputs_fallback=launcher_runtime.build_atlas_static_inputs_fallback,
                             context=context,
                         )
-                        resumed_runtime.state.complete_step(WorkflowState.Stage.vehicle_ownership_model)
-                    if (
-                        not usim_inputs
-                        and not resumed_runtime.state.should_run(WorkflowState.Stage.land_use)
+                        resumed_runtime.state.complete_step(
+                            WorkflowState.Stage.vehicle_ownership_model
+                        )
+                    if not usim_inputs and not resumed_runtime.state.should_run(
+                        WorkflowState.Stage.land_use
                     ):
                         usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
                             coupler=coupler,
@@ -1229,7 +1398,9 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                             state=resumed_runtime.state,
                             settings=resumed_runtime.settings,
                         )
-                    if resumed_runtime.state.should_run(WorkflowState.Stage.supply_demand_loop):
+                    if resumed_runtime.state.should_run(
+                        WorkflowState.Stage.supply_demand_loop
+                    ):
                         run_supply_demand_stage(
                             scenario=tagged,
                             coupler=coupler,
@@ -1250,13 +1421,17 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
 
 
 def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
-    archive_runtime = _make_runtime(tmp_path, monkeypatch, name=f"replay_archive_{stop_boundary}")
+    archive_runtime = _make_runtime(
+        tmp_path, monkeypatch, name=f"replay_archive_{stop_boundary}"
+    )
     _emit_run_context(archive_runtime, restart_run=False)
     _debug(f"replay_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
 
-    replay_runtime = _make_runtime(tmp_path, monkeypatch, name=f"replay_{stop_boundary}")
+    replay_runtime = _make_runtime(
+        tmp_path, monkeypatch, name=f"replay_{stop_boundary}"
+    )
     _emit_run_context(
         replay_runtime,
         restart_run=True,
@@ -1313,13 +1488,21 @@ def test_stubbed_replay_resume_tracks_phase0_metrics(
 
     assert replayed["mode"] == "replay"
     assert replayed["elapsed_seconds"] is not None
-    assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["cache_hit"]
-    assert replayed["metrics"]["step_counts"]["total"] >= replayed["metrics"]["step_counts"]["executed"]
+    assert (
+        replayed["metrics"]["step_counts"]["total"]
+        >= replayed["metrics"]["step_counts"]["cache_hit"]
+    )
+    assert (
+        replayed["metrics"]["step_counts"]["total"]
+        >= replayed["metrics"]["step_counts"]["executed"]
+    )
     assert replayed["metrics"]["restart_hydration_event_count"] == 0
     assert replayed["audit"]["steps_with_incomplete_hydration"] == {}
     compatibility_fallbacks = {
         step_name: mode_counts
-        for step_name, mode_counts in replayed["audit"]["steps_using_custom_recovery"].items()
+        for step_name, mode_counts in replayed["audit"][
+            "steps_using_custom_recovery"
+        ].items()
         if "used_compatibility_fallback" in mode_counts
     }
     assert compatibility_fallbacks == {}

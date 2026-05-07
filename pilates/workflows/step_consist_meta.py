@@ -51,8 +51,10 @@ discovered until the workspace is created for each run.
 4. Register the new model in ``WORKFLOW_STEP_SPECS`` (catalog.py) and implement
    the step function in ``pilates/workflows/steps/``.
 """
+
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -60,6 +62,41 @@ from consist.core.step_context import StepContext
 
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.utils.consist_config import build_step_consist_kwargs
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    BEAM_VEHICLES_IN,
+    LINKSTATS_WARMSTART,
+)
+
+_DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
+
+
+def _adapter_covered_identity_input(item: Any, *, model: str) -> bool:
+    if not isinstance(item, tuple) or not item:
+        return False
+    key = str(item[0])
+    if model.startswith("beam_"):
+        return key.startswith("beam_conf")
+    if model.startswith("activitysim_"):
+        return key == "asim_mutable_configs" or key.startswith("asim_mutable_configs/")
+    return False
+
+
+def _filter_adapter_covered_identity_inputs(
+    identity_inputs: Any,
+    *,
+    model: str,
+) -> Optional[list[Any]]:
+    if not identity_inputs:
+        return None
+    filtered = [
+        item
+        for item in identity_inputs
+        if not _adapter_covered_identity_input(item, model=model)
+    ]
+    return filtered or None
 
 
 def consist_step_meta(model: str) -> Dict[str, Any]:
@@ -157,6 +194,14 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         return ActivitySimConfigAdapter(root_dirs=config_roots)
 
     def _beam_adapter(ctx: StepContext) -> Any:
+        if os.environ.get(_DISABLE_BEAM_CONFIG_ADAPTER_ENV, "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }:
+            return None
+
         settings = _settings(ctx)
         if settings is None:
             return None
@@ -166,15 +211,19 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             return None
 
         try:
-            from consist.integrations.beam import BeamConfigAdapter
+            from consist.integrations.beam import BeamConfigAdapter, BeamReferencePolicy
         except Exception:
             return None
 
         workspace_obj = _workspace(ctx)
         config_root: Optional[Path] = None
+        workspace_root: Optional[Path] = None
         if workspace_obj is not None and hasattr(
             workspace_obj, "get_beam_mutable_data_dir"
         ):
+            workspace_root_path = _workspace_path_from_value(workspace_obj)
+            if workspace_root_path:
+                workspace_root = Path(workspace_root_path)
             config_root = beam_config_root(
                 settings,
                 workspace=workspace_obj,
@@ -182,6 +231,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         else:
             ws_path = _workspace_path(ctx)
             if ws_path:
+                workspace_root = Path(ws_path)
                 config_root = beam_config_root(
                     settings,
                     workspace_path=ws_path,
@@ -193,6 +243,85 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if not primary_config.exists():
             return None
 
+        path_aliases: dict[str, Path] = {}
+        if workspace_root is not None:
+            path_aliases["workspace"] = workspace_root
+        if workspace_obj is not None:
+            if hasattr(workspace_obj, "get_beam_mutable_data_dir"):
+                path_aliases["beam_input"] = Path(
+                    workspace_obj.get_beam_mutable_data_dir()
+                )
+            if hasattr(workspace_obj, "get_beam_output_dir"):
+                path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
+            if hasattr(workspace_obj, "get_asim_output_dir"):
+                path_aliases["activitysim_output"] = Path(
+                    workspace_obj.get_asim_output_dir()
+                )
+        path_aliases["beam_region_input"] = config_root
+
+        reference_policies = {
+            "beam.exchange.scenario.folder": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_population_input_root",
+                required=True,
+                reason="population_inputs_declared_as_step_artifacts",
+                delegated_artifact_keys=(
+                    BEAM_PLANS_IN,
+                    BEAM_HOUSEHOLDS_IN,
+                    BEAM_PERSONS_IN,
+                    BEAM_VEHICLES_IN,
+                ),
+            ),
+            "beam.agentsim.agents.vehicles.vehiclesFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_vehicle_input",
+                required=True,
+                reason="vehicles_declared_as_step_artifact",
+                delegated_artifact_keys=(BEAM_VEHICLES_IN,),
+            ),
+            "beam.warmStart.initialLinkstatsFilePath": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_linkstats_warmstart",
+                required=False,
+                reason="warmstart_declared_as_optional_step_artifact",
+                delegated_artifact_keys=(LINKSTATS_WARMSTART,),
+            ),
+        }
+        dormant_matsim_keys = (
+            "matsim.conversion.populationFile",
+            "matsim.conversion.matsimNetworkFile",
+            "matsim.conversion.scenarioDirectory",
+            "matsim.conversion.shapeConfig.shapeFile",
+            "matsim.conversion.vehiclesFile",
+            "matsim.conversion.osmFile",
+        )
+        for key in dormant_matsim_keys:
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="ignored",
+                required=False,
+                reason="dormant_matsim_example_config",
+            )
+        reference_policies[
+            "beam.agentsim.agents.rideHail.managers[1].initialization.filePath"
+        ] = BeamReferencePolicy(
+            identity_policy="ignored",
+            required=False,
+            reason="optional_ridehail_fleet_ignored_in_pilates",
+        )
+        runtime_output_keys = (
+            "beam.router.skim.activity-sim-skimmer.fileBaseName",
+            "beam.router.skim.drive-time-skimmer.fileBaseName",
+            "beam.router.skim.origin-destination-skimmer.fileBaseName",
+            "beam.router.skim.taz-skimmer.fileBaseName",
+            "beam.router.skim.transit-crowding-skimmer.fileBaseName",
+        )
+        for key in runtime_output_keys:
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+                reason="runtime_output_prefix_not_identity_input",
+            )
+
         return BeamConfigAdapter(
             root_dirs=[config_root],
             primary_config=primary_config,
@@ -200,6 +329,8 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 settings,
                 config_root=config_root,
             ),
+            path_aliases=path_aliases,
+            reference_policies=reference_policies,
         )
 
     def _adapter(ctx: StepContext) -> Any:
@@ -253,6 +384,14 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         adapter = _adapter(ctx)
         if adapter is not None:
             resolved["adapter"] = adapter
+            identity_inputs = _filter_adapter_covered_identity_inputs(
+                resolved.get("identity_inputs"),
+                model=model,
+            )
+            if identity_inputs:
+                resolved["identity_inputs"] = identity_inputs
+            else:
+                resolved.pop("identity_inputs", None)
         if cache is not None:
             cache[model] = resolved
         return resolved

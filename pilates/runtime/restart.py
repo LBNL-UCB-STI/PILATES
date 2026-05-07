@@ -5,7 +5,18 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol, Sequence, Tuple, TypedDict
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Optional,
+    Protocol,
+    Sequence,
+    Tuple,
+    TypedDict,
+)
 
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.coupler_helpers import (
@@ -172,6 +183,72 @@ def format_missing_artifact_summary(
     return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
 
 
+def split_prebootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    surface: Any,
+) -> Tuple[List[RestartArtifactDiagnostic], List[RestartArtifactDiagnostic]]:
+    blocking_missing = [
+        item
+        for item in artifacts
+        if not surface.is_restart_prebootstrap_deferred_artifact_key(
+            item.get("key", "")
+        )
+    ]
+    deferred_missing = [
+        item
+        for item in artifacts
+        if surface.is_restart_prebootstrap_deferred_artifact_key(item.get("key", ""))
+    ]
+    return blocking_missing, deferred_missing
+
+
+def log_prebootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    surface: Any,
+) -> None:
+    if not artifacts:
+        return
+    blocking_missing, deferred_missing = split_prebootstrap_missing_artifacts(
+        artifacts,
+        surface=surface,
+    )
+    if blocking_missing:
+        logger.warning(
+            "Restart diagnostic found missing local workspace inputs while "
+            "data_initialized=True: %s",
+            format_missing_artifact_summary(blocking_missing),
+        )
+    if deferred_missing:
+        logger.info(
+            "Restart diagnostic deferring bootstrap-owned workspace inputs "
+            "until bootstrap hydration: %s",
+            format_missing_artifact_summary(deferred_missing),
+        )
+
+
+def enforce_postbootstrap_missing_artifacts(
+    artifacts: Sequence[RestartArtifactDiagnostic],
+    *,
+    settings: Any,
+) -> None:
+    if artifacts:
+        logger.warning(
+            "Restart diagnostic still sees missing local workspace inputs "
+            "after restart bootstrap: %s",
+            format_missing_artifact_summary(artifacts),
+        )
+    if artifacts and bool(
+        getattr(getattr(settings, "run", None), "restart_strict", False)
+    ):
+        raise RuntimeError(
+            "Strict restart preflight failed; required restart artifacts are "
+            "still missing after restart bootstrap. missing="
+            + format_missing_artifact_summary(artifacts)
+        )
+
+
 def read_archive_run_state_year(
     state_path: str,
     *,
@@ -328,11 +405,17 @@ class RestartExactRewindContract:
     optional_snapshot_keys: Tuple[str, ...] = ()
 
 
-def _surface_restart_frontier_contract(surface: Any) -> Optional[RestartFrontierContract]:
+def _surface_restart_frontier_contract(
+    surface: Any,
+) -> Optional[RestartFrontierContract]:
     if surface is None:
         return None
     getter = getattr(surface, "restart_frontier", None)
-    contract = getter() if callable(getter) else getattr(surface, "restart_frontier_contract", None)
+    contract = (
+        getter()
+        if callable(getter)
+        else getattr(surface, "restart_frontier_contract", None)
+    )
     if contract is None:
         return None
     return RestartFrontierContract(
@@ -687,7 +770,9 @@ def _clear_coupler_key(coupler: CouplerProtocol, key: str) -> None:
                 if callable(set_value):
                     set_value(local_key, None)
         except Exception:
-            logger.debug("Failed clearing namespaced coupler key %s", key, exc_info=True)
+            logger.debug(
+                "Failed clearing namespaced coupler key %s", key, exc_info=True
+            )
     set_value = getattr(coupler, "set", None)
     if callable(set_value):
         set_value(key, None)
@@ -727,9 +812,9 @@ def _materialize_run_output_paths(
         raise RuntimeError("materialization_incomplete:" + ";".join(failures))
 
     materialized_path = None
-    materialized_from_filesystem = getattr(
-        result, "materialized_from_filesystem", {}
-    ) or {}
+    materialized_from_filesystem = (
+        getattr(result, "materialized_from_filesystem", {}) or {}
+    )
     if isinstance(materialized_from_filesystem, Mapping):
         materialized_path = materialized_from_filesystem.get(run_id)
 
@@ -936,7 +1021,10 @@ def _restore_beam_rewind_overlay(
         )
     warmstart_plans = warmstart_restored.get(BEAM_INPUT_PLANS_WARMSTART_ARCHIVED)
     if warmstart_plans is not None:
-        if warmstart_plans.suffixes[-2:] == [".xml", ".gz"] or warmstart_plans.suffix == ".xml":
+        if (
+            warmstart_plans.suffixes[-2:] == [".xml", ".gz"]
+            or warmstart_plans.suffix == ".xml"
+        ):
             _set_coupler_path(coupler, BEAM_OUTPUT_PLANS_XML, warmstart_plans)
         else:
             _set_coupler_path(coupler, BEAM_PLANS_OUT, warmstart_plans)
@@ -1324,16 +1412,18 @@ def hydrate_missing_restart_artifacts(
             )
 
         materialized_path = None
-        materialized_from_filesystem = getattr(
-            result, "materialized_from_filesystem", {}
-        ) or {}
+        materialized_from_filesystem = (
+            getattr(result, "materialized_from_filesystem", {}) or {}
+        )
         if isinstance(materialized_from_filesystem, Mapping):
             materialized_path = materialized_from_filesystem.get(run_id)
 
         resolved_path = _resolve_restart_hydrated_path(
             artifact=artifact,
             workspace=workspace,
-            materialized_path=str(materialized_path) if materialized_path is not None else None,
+            materialized_path=str(materialized_path)
+            if materialized_path is not None
+            else None,
         )
         artifact_for_coupler = artifact
         if isinstance(artifact, (str, os.PathLike)):

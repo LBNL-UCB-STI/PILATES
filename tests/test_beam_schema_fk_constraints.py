@@ -85,7 +85,9 @@ def test_beam_events_path_traversal_vehicle_is_not_hard_fk() -> None:
 
 
 def test_beam_events_path_traversal_exposes_soft_vehicle_id_int() -> None:
-    vehicle_id_int_col = BeamEventsPathTraversal.model_fields["vehicle_id_int"].sa_column
+    vehicle_id_int_col = BeamEventsPathTraversal.model_fields[
+        "vehicle_id_int"
+    ].sa_column
     assert vehicle_id_int_col.type.__class__.__name__ == "BigInteger"
     assert vehicle_id_int_col.foreign_keys == set()
 

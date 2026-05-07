@@ -23,7 +23,13 @@ class _StateStub:
     class Stage:
         land_use = "land_use"
 
-    def __init__(self, *, start_year: bool, land_use_enabled: bool, run_info_path: str | None = None):
+    def __init__(
+        self,
+        *,
+        start_year: bool,
+        land_use_enabled: bool,
+        run_info_path: str | None = None,
+    ):
         self._start_year = start_year
         self._land_use_enabled = land_use_enabled
         self.run_info_path = run_info_path

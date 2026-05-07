@@ -2,7 +2,7 @@ import types
 
 import consist
 import pytest
-from consist.types import CacheOptions, ExecutionOptions
+from consist.types import CacheOptions
 
 from pilates.generic.model import Model
 from pilates.generic.records import FileRecord, RecordStore
@@ -12,7 +12,7 @@ from pilates.utils import consist_runtime as cr
 
 class _StubState:
     def __init__(self):
-        database = types.SimpleNamespace(use_consist=True)
+        database = types.SimpleNamespace()
         shared = types.SimpleNamespace(database=database)
         self.full_settings = types.SimpleNamespace(shared=shared)
         self.current_year = 2017
@@ -74,7 +74,7 @@ def test_run_container_uses_current_tracker(monkeypatch, tmp_path):
     )
 
     settings = types.SimpleNamespace(
-        shared=types.SimpleNamespace(database=types.SimpleNamespace(use_consist=True)),
+        shared=types.SimpleNamespace(database=types.SimpleNamespace()),
         infrastructure=types.SimpleNamespace(
             container_manager="docker",
             docker_config=types.SimpleNamespace(pull_latest=False),

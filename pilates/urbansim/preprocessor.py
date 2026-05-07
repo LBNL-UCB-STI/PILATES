@@ -12,6 +12,7 @@ import numpy as np
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.runtime.archive_paths import archive_fallback_path
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
@@ -77,24 +78,6 @@ def _beam_input_root(settings: PilatesConfig) -> Path:
     return Path(beam_input_dir)
 
 
-def _archive_fallback_path(
-    *,
-    state: "WorkflowState",
-    workspace: "Workspace",
-    local_path: Path,
-) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
-    if not run_info_path:
-        return None
-    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
-    local_root = Path(workspace.full_path).expanduser().resolve()
-    try:
-        rel = local_path.expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
 def _restore_missing_mutable_urbansim_supporting_inputs(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -138,7 +121,7 @@ def _restore_missing_mutable_urbansim_supporting_inputs(
         if dest_path.exists():
             continue
 
-        archive_path = _archive_fallback_path(
+        archive_path = archive_fallback_path(
             state=state,
             workspace=workspace,
             local_path=dest_path,
@@ -630,7 +613,9 @@ class UrbansimPreprocessor(GenericPreprocessor):
                                 previous_run_dir, "beam", "input"
                             )
                         else:
-                            beam_mutable_data_dir = workspace.get_beam_mutable_data_dir()
+                            beam_mutable_data_dir = (
+                                workspace.get_beam_mutable_data_dir()
+                            )
 
                         source_skims_path = os.path.join(
                             beam_mutable_data_dir,

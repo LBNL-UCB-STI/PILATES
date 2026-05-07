@@ -11,20 +11,17 @@ This module assembles and runs the full simulation lifecycle:
 """
 
 import warnings
-from contextlib import nullcontext
+from dataclasses import dataclass
 from datetime import datetime
 import os
 import logging
-import shlex
 import sys
-import shutil
-import socket
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Sequence, cast
 
+from consist.models.run import Run
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.generic.records import sanitize_artifact_key
 from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
@@ -42,25 +39,50 @@ from pilates.utils.consist_db_snapshot import (
     resolve_consist_db_paths,
     restore_local_consist_db_from_snapshot,
     seed_local_consist_db_from_shared,
-    snapshot_latest_dir,
 )
 from pilates.utils.coupler_helpers import (
-    enqueue_archive_copy,
     flush_archive_queue,
     stop_archive_worker,
 )
-from pilates.atlas.inputs import atlas_static_input_relpaths
+from pilates.atlas.inputs import (
+    atlas_static_input_relpaths,
+    build_atlas_static_inputs_fallback,
+)
 from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.runtime.consist_audit import (
+    emit_artifact_lifecycle_audit_event,
+    emit_consist_audit_event,
+)
 from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.runtime.failure_hints import (
+    RUN_FAILURE_CONTEXT,
+    clear_run_failure_context,
+    format_hpc_restart_command,
+    format_restart_command,
+    log_restart_instructions_on_failure,
+    set_run_failure_context,
+)
 from pilates.runtime import restart as restart_runtime
 from pilates.runtime import scenario_runtime
+from pilates.runtime.run_notifications import (
+    ConsistRunNotifier,
+    RunNotificationContext,
+    register_consist_run_notification_hooks,
+)
+from pilates.runtime.run_publishers import (
+    ConsistRunPublisher,
+    register_consist_run_publishers,
+)
+from pilates.runtime.storage_probe import log_local_storage_info_if_enabled
 from pilates.workflows._profile import ensure_runtime_flags_initialized
 from pilates.workflows.coupler_schema import build_coupler_schema
-from pilates.workflows.surface import EnabledWorkflowSurface, build_enabled_workflow_surface
+from pilates.workflows.surface import (
+    EnabledWorkflowSurface,
+    build_enabled_workflow_surface,
+)
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -73,21 +95,53 @@ from pilates.workflows.stages.supply_demand_resume import (
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
-from workflow_state import WorkflowState
+from workflow_state import WorkflowState  # noqa: E402
 
-from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts
-from consist.types import CacheOptions
+from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts  # noqa: E402
+from consist.types import CacheOptions  # noqa: E402
 
 logging.basicConfig(
     stream=sys.stdout,
     level=logging.DEBUG,
     format="%(asctime)s %(name)s - %(levelname)s - %(message)s",
 )
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
 _SCENARIO_NAME_TEMPLATE = "{func_name}__y{year}__i{iteration}__phase_{phase}"
-_RUN_FAILURE_CONTEXT: Dict[str, Any] = {}
+_RUN_FAILURE_CONTEXT = RUN_FAILURE_CONTEXT
+
+
+@dataclass(frozen=True)
+class PreparedRunContext:
+    """
+    Runtime objects resolved before bootstrap and scenario execution begin.
+
+    This keeps the launcher lifecycle focused on orchestration while preserving
+    the existing storage, tracker, workspace, and failure-context setup order.
+    """
+
+    settings: PilatesConfig
+    state: WorkflowState
+    surface: EnabledWorkflowSurface
+    workspace: Workspace
+    runtime_context: WorkflowRuntimeContext
+    tracker: Any
+    snapshot_manager: ConsistDbSnapshotManager
+    run_name: str
+    scenario_id: str
+    seed: Optional[int]
+    cache_epoch: int
+    is_restart_run: bool
+    archive_run_dir: str
+    local_run_dir: str
+    archive_state_path: str
+    local_state_path: str
+    local_consist_db_path: Optional[str]
+    archive_consist_db_path: Optional[str]
+    run_notifier: Optional[ConsistRunNotifier]
+    run_publisher: Optional[ConsistRunPublisher]
 
 
 def _resolve_scenario_id(settings: PilatesConfig) -> str:
@@ -99,10 +153,7 @@ def _resolve_seed(settings: PilatesConfig) -> Optional[int]:
 
 
 def _set_run_failure_context(**kwargs: Any) -> None:
-    for key, value in kwargs.items():
-        if value is None:
-            continue
-        _RUN_FAILURE_CONTEXT[key] = value
+    set_run_failure_context(**kwargs)
 
 
 def _format_restart_command(
@@ -110,18 +161,10 @@ def _format_restart_command(
     settings: Optional[Any],
     archive_state_path: Optional[str],
 ) -> Optional[str]:
-    config_path = None
-    if settings is not None:
-        config_path = getattr(settings, "settings_file", None)
-    if not config_path and not archive_state_path:
-        return None
-
-    command = ["python", "run.py"]
-    if config_path:
-        command.extend(["-c", str(config_path)])
-    if archive_state_path:
-        command.extend(["-S", str(archive_state_path)])
-    return " ".join(shlex.quote(part) for part in command)
+    return format_restart_command(
+        settings=settings,
+        archive_state_path=archive_state_path,
+    )
 
 
 def _format_hpc_restart_command(
@@ -129,51 +172,14 @@ def _format_hpc_restart_command(
     settings: Optional[Any],
     archive_state_path: Optional[str],
 ) -> Optional[str]:
-    config_path = None
-    if settings is not None:
-        config_path = getattr(settings, "settings_file", None)
-    if not config_path and not archive_state_path:
-        return None
-
-    command = ["./hpc/job_runner.sh"]
-    if config_path:
-        command.extend(["-c", str(config_path)])
-    command.extend(["-a", "<slurm_account>"])
-    if archive_state_path:
-        command.extend(["-s", str(archive_state_path)])
-    return " ".join(shlex.quote(part) for part in command)
-
-
-def _log_restart_instructions_on_failure() -> None:
-    settings = _RUN_FAILURE_CONTEXT.get("settings")
-    state = _RUN_FAILURE_CONTEXT.get("state")
-    archive_run_dir = _RUN_FAILURE_CONTEXT.get("archive_run_dir")
-    local_run_dir = _RUN_FAILURE_CONTEXT.get("local_run_dir")
-    archive_state_path = _RUN_FAILURE_CONTEXT.get("archive_state_path")
-    if archive_state_path is None and state is not None:
-        archive_state_path = getattr(state, "run_info_path", None)
-
-    command = _format_restart_command(
+    return format_hpc_restart_command(
         settings=settings,
         archive_state_path=archive_state_path,
     )
-    if command is None:
-        return
 
-    logger.error("Run failed. Restart command:")
-    logger.error("  %s", command)
-    if archive_run_dir:
-        command_hpc = _format_hpc_restart_command(
-            settings=settings,
-            archive_state_path=archive_state_path,
-        )
-        logger.error("  HPC command: %s", command_hpc)
-    if archive_state_path:
-        logger.error("  state file: %s", archive_state_path)
-    if archive_run_dir:
-        logger.error("  archive run dir: %s", archive_run_dir)
-    if local_run_dir:
-        logger.error("  local run dir: %s", local_run_dir)
+
+def _log_restart_instructions_on_failure() -> None:
+    log_restart_instructions_on_failure(logger=logger)
 
 
 def _merge_tag_list(existing: Any, additions: Sequence[str]) -> List[str]:
@@ -218,7 +224,7 @@ def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
     if not output_directory:
         raise ValueError("output_directory not found in config")
     archive_root = os.path.realpath(os.path.expandvars(output_directory))
-    local_workspace_root = getattr(settings.run, "local_workspace_root", None)
+    local_workspace_root = settings.run.local_workspace_root
     if local_workspace_root:
         local_root = os.path.realpath(os.path.expandvars(local_workspace_root))
     else:
@@ -293,6 +299,7 @@ def _build_scenario_runtime_contract(
         surface=surface,
     )
 
+
 def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
     return (
         Path(workspace.full_path)
@@ -301,139 +308,8 @@ def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path
     )
 
 
-def _atlas_static_input_key(relpath: str) -> str:
-    normalized_relpath = relpath.replace("\\", "/")
-    rel_no_ext = os.path.splitext(normalized_relpath)[0]
-    return sanitize_artifact_key(rel_no_ext) or rel_no_ext
-
-
-def _iter_existing_atlas_static_inputs(
-    settings: PilatesConfig,
-    atlas_input_dir: str,
-):
-    for relpath in atlas_static_input_relpaths(settings):
-        normalized_relpath = relpath.replace("\\", "/")
-        path = os.path.join(atlas_input_dir, normalized_relpath)
-        if not os.path.exists(path):
-            continue
-        yield normalized_relpath, _atlas_static_input_key(normalized_relpath), path
-
-
-def build_atlas_static_inputs_fallback(workspace: Workspace) -> Dict[str, str]:
-    """
-    Enumerate static ATLAS inputs from the mutable input directory.
-
-    This fallback is used when Initialization was skipped (e.g., restart) and the
-    in-memory RecordStore of copied inputs is unavailable. It may include files
-    produced by prior ATLAS preprocess runs.
-    """
-    atlas_input_dir = workspace.get_atlas_mutable_input_dir()
-    if not os.path.exists(atlas_input_dir):
-        return {}
-
-    settings = getattr(workspace, "settings", None)
-    if settings is not None:
-        inputs: Dict[str, str] = {}
-        for _relpath, key, path in _iter_existing_atlas_static_inputs(
-            settings, atlas_input_dir
-        ):
-            inputs.setdefault(key, path)
-        if inputs:
-            return inputs
-
-    inputs: Dict[str, str] = {}
-    for root, _, files in os.walk(atlas_input_dir):
-        for filename in sorted(files):
-            path = os.path.join(root, filename)
-            relpath = os.path.relpath(path, atlas_input_dir)
-            key = _atlas_static_input_key(relpath)
-            inputs.setdefault(key, path)
-    return inputs
-
-
-def _read_mount_table() -> Dict[str, str]:
-    mounts: Dict[str, str] = {}
-    try:
-        with open("/proc/mounts", "r", encoding="utf-8") as handle:
-            for line in handle:
-                parts = line.split()
-                if len(parts) >= 3:
-                    mountpoint = parts[1]
-                    fstype = parts[2]
-                    mounts[mountpoint] = fstype
-    except OSError:
-        return {}
-    return mounts
-
-
-def _mount_for_path(path: str, mounts: Dict[str, str]) -> str:
-    path = os.path.realpath(path)
-    best_match = ""
-    for mountpoint in mounts:
-        if path == mountpoint or path.startswith(mountpoint.rstrip("/") + "/"):
-            if len(mountpoint) > len(best_match):
-                best_match = mountpoint
-    return best_match
-
-
-def _format_bytes(value: int) -> str:
-    size = float(value)
-    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
-        if size < 1024:
-            return f"{size:.1f}{unit}"
-        size /= 1024.0
-    return f"{size:.1f}EiB"
-
-
 def _log_local_storage_info() -> None:
-    mounts = _read_mount_table()
-    hostname = socket.gethostname()
-    job_id = os.environ.get("SLURM_JOB_ID")
-    node_list = os.environ.get("SLURM_NODELIST")
-    logger.info(
-        "Storage probe: host=%s job_id=%s nodelist=%s",
-        hostname,
-        job_id or "n/a",
-        node_list or "n/a",
-    )
-
-    candidates = []
-    for var in ("SLURM_TMPDIR", "TMPDIR", "TMP", "TEMP"):
-        value = os.environ.get(var)
-        if value:
-            candidates.append(value)
-    candidates += [
-        "/tmp",
-        "/var/tmp",
-        "/dev/shm",
-        "/scratch",
-        "/local",
-        "/local_scratch",
-        "/lscratch",
-        "/mnt",
-    ]
-
-    seen = set()
-    for path in candidates:
-        if not path or path in seen:
-            continue
-        seen.add(path)
-        if not os.path.exists(path):
-            continue
-        try:
-            usage = shutil.disk_usage(path)
-        except OSError:
-            continue
-        mountpoint = _mount_for_path(path, mounts)
-        fstype = mounts.get(mountpoint, "unknown")
-        logger.info(
-            "Storage candidate: path=%s mount=%s fstype=%s free=%s total=%s",
-            os.path.realpath(path),
-            mountpoint or "unknown",
-            fstype,
-            _format_bytes(usage.free),
-            _format_bytes(usage.total),
-        )
+    log_local_storage_info_if_enabled()
 
 
 def run_bootstrap_phase(
@@ -504,12 +380,6 @@ def _find_missing_restart_local_artifacts(
     )
 
 
-def _format_missing_artifact_summary(
-    artifacts: Sequence[restart_runtime.RestartArtifactDiagnostic],
-) -> str:
-    return restart_runtime.format_missing_artifact_summary(artifacts)
-
-
 def _read_archive_run_state_year(state_path: str) -> Optional[int]:
     return restart_runtime.read_archive_run_state_year(
         state_path,
@@ -531,53 +401,18 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _restart_frontier_contract(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    surface: Optional[EnabledWorkflowSurface] = None,
-) -> Optional[restart_runtime.RestartFrontierContract]:
-    return restart_runtime.restart_frontier_contract(
-        settings=settings,
-        state=state,
-        workflow_stage=WorkflowState.Stage,
-        surface=surface,
-    )
-
-
-def main(
+def _prepare_run_context(
     *,
     settings: Optional[PilatesConfig] = None,
     state: Optional[WorkflowState] = None,
     clear_failure_context: bool = True,
-):
+) -> PreparedRunContext:
     """
-    Run the PILATES simulation lifecycle using the Consist Scenario API.
-
-    This workflow coordinates multiple land use and transportation microsimulation models
-    across a multi-year planning horizon:
-
-    1. **Initialization**: Copy immutable input data to mutable workspace
-    2. **Land Use Forecasting**: UrbanSim predicts demographic/economic changes
-    3. **Vehicle Ownership**: ATLAS models vehicle fleet evolution
-    4. **Supply/Demand Loop**: Iterates between activity demand (ActivitySim) and
-       traffic assignment (BEAM) until convergence
-    5. **Post-Processing**: Validation and output generation
-
-    Architecture:
-    - **Consist Scenario**: Manages caching of expensive computations and provenance logging
-    - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
-    - **Workflow step builders**: Encapsulate model-specific execution logic
-
-    Caching Strategy:
-    - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
-    - Model outputs: Cached per iteration (convergence check)
-    - Bootstrap: pre-scenario cached run with replay-hydrated declared output paths
-    - Restart: default path is scenario replay plus cache hits; legacy hydration helpers are manual tooling only
+    Resolve the run-local objects needed before bootstrap/scenario execution.
     """
     if clear_failure_context:
-        _RUN_FAILURE_CONTEXT.clear()
-    # 1. PARSE SETTINGS AND SET UP WORKFLOW STATE
+        clear_run_failure_context()
+
     if settings is None:
         settings = parse_args_and_settings()
     ensure_runtime_flags_initialized(settings)
@@ -588,15 +423,14 @@ def main(
 
     _log_local_storage_info()
 
-    # 2. SETUP PATHS
     output_path, local_root = _resolve_run_storage_roots(settings)
 
-    # Split run roots:
-    # - archive_run_dir (scratch) holds Consist run metadata + archived artifacts
-    # - local_run_dir (node-local) holds mutable workspace during execution
-
-    is_restart_run = bool(state.run_info_path)
+    is_restart_run = state.is_restart_run
     if is_restart_run:
+        if not state.run_info_path:
+            raise RuntimeError(
+                "Restart state must provide run_info_path for archive reuse."
+            )
         run_name = os.path.basename(os.path.dirname(state.run_info_path))
         logger.info(f"Restarting run. Reusing output folder: {run_name}")
     else:
@@ -631,21 +465,9 @@ def main(
     _configure_run_storage_environment(
         archive_run_dir=archive_run_dir,
         local_run_dir=local_run_dir,
-        enable_archive_copy=bool(getattr(settings.run, "enable_archive_copy", False)),
+        enable_archive_copy=settings.run.enable_archive_copy,
     )
 
-    # 3. INITIALIZE CONSIST TRACKER
-    # Consist provides provenance tracking and computation caching.
-    # It is required for PILATES execution.
-    #   - Provenance: Full lineage of data transformations (OpenLineage compatible)
-    #   - Caching: Skips expensive computations if inputs unchanged
-    #   - Coupler: Manages artifact passing between steps
-    # Mount Strategy:
-    # - 'inputs': The project root. Source files resolve here.
-    # - 'workspace': The mutable run dir. Destination files resolve here.
-    # NOTE: Do not rely on cwd; production runs may invoke `python run.py` from elsewhere.
-    # `launcher.py` lives at <repo>/pilates/runtime/launcher.py, so repo root is parents[2].
-    # Keep tracker inputs/project_root anchored to the directory containing run.py.
     project_root_abs = str(Path(__file__).resolve().parents[2])
 
     local_consist_db_path, archive_consist_db_path = resolve_consist_db_paths(
@@ -661,11 +483,10 @@ def main(
         archive_run_dir=archive_run_dir,
     )
     if not restored_from_snapshot:
-        shared_db_path = getattr(getattr(settings, "shared", None), "database", None)
         seed_local_consist_db_from_shared(
             settings=settings,
             local_db_path=local_consist_db_path,
-            shared_db_path=getattr(shared_db_path, "path", None),
+            shared_db_path=settings.shared.database.path,
         )
     logger.info(
         "Initializing Consist Tracker in %s (db_path=%s)",
@@ -684,9 +505,9 @@ def main(
         # restart/bootstrap outputs into the mounted local workspace root.
         allow_external_paths=True,
         mounts={
-            "inputs": project_root_abs,  # Immutable Source
-            "workspace": local_run_dir,  # Mutable Destination
-            "scratch": str(Path(output_path).resolve()),  # For temp files
+            "inputs": project_root_abs,
+            "workspace": local_run_dir,
+            "scratch": str(Path(output_path).resolve()),
         },
         project_root=project_root_abs,
         schemas=_get_consist_schemas(),
@@ -697,6 +518,22 @@ def main(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
+    run_event_context = RunNotificationContext.from_env(
+        run_name=run_name,
+        scenario_id=scenario_id,
+        seed=run_seed,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+        settings_file=settings.settings_file,
+    )
+    run_notifier = register_consist_run_notification_hooks(
+        tracker,
+        context=run_event_context,
+    )
+    run_publisher = register_consist_run_publishers(
+        tracker,
+        context=run_event_context,
+    )
     snapshot_manager = ConsistDbSnapshotManager(
         settings=settings,
         tracker=tracker,
@@ -704,14 +541,7 @@ def main(
         archive_run_dir=archive_run_dir,
     )
 
-    # 4. INITIALIZE WORKSPACE
-    trace_fn = getattr(tracker, "trace", None)
-    if not callable(trace_fn):
-        raise RuntimeError(
-            f"Tracker {type(tracker).__name__} does not expose trace(); "
-            "PILATES requires a current Consist tracker contract."
-        )
-    with trace_fn(
+    with tracker.trace(
         name="workspace_setup",
         model="pilates_orchestrator",
         tags=[f"scenario_id:{scenario_id}"],
@@ -728,7 +558,7 @@ def main(
         _enforce_resume_rewind_guardrail(
             state=state,
             archive_state_path=archive_state_path,
-            allow_rewind_resume=bool(getattr(settings, "allow_rewind_resume", False)),
+            allow_rewind_resume=settings.allow_rewind_resume,
         )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
@@ -741,24 +571,45 @@ def main(
         surface=surface,
     )
 
-    emit_consist_audit_event(
+    return PreparedRunContext(
+        settings=settings,
+        state=state,
+        surface=surface,
         workspace=workspace,
-        event_type="run_context",
+        runtime_context=runtime_context,
+        tracker=tracker,
+        snapshot_manager=snapshot_manager,
+        run_name=run_name,
         scenario_id=scenario_id,
         seed=run_seed,
-        settings_file=getattr(settings, "settings_file", None),
-        run_name=run_name,
-        workspace_root=workspace.full_path,
-        local_run_dir=local_run_dir,
+        cache_epoch=cache_epoch,
+        is_restart_run=is_restart_run,
         archive_run_dir=archive_run_dir,
-        archive_state_path=archive_state_path if is_restart_run else None,
-        restart_run=is_restart_run,
-        data_initialized=bool(state.data_initialized),
-        bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(settings),
+        local_run_dir=local_run_dir,
+        archive_state_path=archive_state_path,
+        local_state_path=local_state_path,
+        local_consist_db_path=local_consist_db_path,
+        archive_consist_db_path=archive_consist_db_path,
+        run_notifier=run_notifier,
+        run_publisher=run_publisher,
     )
-    restart_query_facet: Dict[str, Any] = {"scenario_id": scenario_id}
-    if run_seed is not None:
-        restart_query_facet["seed"] = run_seed
+
+
+def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, Any]]:
+    """
+    Run restart preflight, bootstrap initialization, and post-bootstrap checks.
+
+    This keeps `main()` focused on the top-level lifecycle while preserving the
+    launcher-level wrapper seams used by tests and runtime integrations.
+    """
+    settings = prepared.settings
+    state = prepared.state
+    surface = prepared.surface
+    workspace = prepared.workspace
+    tracker = prepared.tracker
+    scenario_id = prepared.scenario_id
+    run_seed = prepared.seed
+    is_restart_run = prepared.is_restart_run
 
     if state.data_initialized:
         restart_missing_artifacts_initial = _find_missing_restart_local_artifacts(
@@ -767,37 +618,11 @@ def main(
             workspace=workspace,
             surface=surface,
         )
-        if restart_missing_artifacts_initial:
-            blocking_missing = [
-                item
-                for item in restart_missing_artifacts_initial
-                if not surface.is_restart_prebootstrap_deferred_artifact_key(
-                    item.get("key", "")
-                )
-            ]
-            deferred_missing = [
-                item
-                for item in restart_missing_artifacts_initial
-                if surface.is_restart_prebootstrap_deferred_artifact_key(
-                    item.get("key", "")
-                )
-            ]
-            if blocking_missing:
-                logger.warning(
-                    "Restart diagnostic found missing local workspace inputs while "
-                    "data_initialized=True: %s",
-                    _format_missing_artifact_summary(blocking_missing),
-                )
-            if deferred_missing:
-                logger.info(
-                    "Restart diagnostic deferring bootstrap-owned workspace inputs "
-                    "until bootstrap hydration: %s",
-                    _format_missing_artifact_summary(deferred_missing),
-                )
+        restart_runtime.log_prebootstrap_missing_artifacts(
+            restart_missing_artifacts_initial,
+            surface=surface,
+        )
 
-    # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
-    # Initialization runs before entering scenario step execution so bootstrap
-    # lifecycle can evolve independently from normal model steps.
     cr.set_tracker(tracker)
     bootstrap_result: Optional[Dict[str, Any]] = None
     should_run_bootstrap = is_restart_run or not state.data_initialized
@@ -825,102 +650,168 @@ def main(
             state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
-    if bootstrap_result is not None:
-        cache_miss_explanation = bootstrap_result.get("cache_miss_explanation")
-        if isinstance(cache_miss_explanation, dict):
-            logger.info(
-                "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
-                "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s "
-                "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
-                bootstrap_result.get("bootstrap_cache_hit"),
-                bootstrap_result.get("cache_probe_hit"),
-                bootstrap_result.get("replay_hydration_complete"),
-                bootstrap_result.get("fallback_rerun_triggered"),
-                bootstrap_result.get("run_reference"),
-                bootstrap_result.get("staged_artifact_summary"),
-                cache_miss_explanation.get("reason"),
-                cache_miss_explanation.get("candidate_run_id"),
-            )
-        else:
-            logger.info(
-                "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
-                "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s",
-                bootstrap_result.get("bootstrap_cache_hit"),
-                bootstrap_result.get("cache_probe_hit"),
-                bootstrap_result.get("replay_hydration_complete"),
-                bootstrap_result.get("fallback_rerun_triggered"),
-                bootstrap_result.get("run_reference"),
-                bootstrap_result.get("staged_artifact_summary"),
-            )
+    bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
+
     if is_restart_run:
-        restart_missing_artifacts_after_bootstrap = _find_missing_restart_local_artifacts(
+        restart_missing_artifacts_after_bootstrap = (
+            _find_missing_restart_local_artifacts(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                surface=surface,
+            )
+        )
+        restart_runtime.enforce_postbootstrap_missing_artifacts(
+            restart_missing_artifacts_after_bootstrap,
+            settings=settings,
+        )
+
+    return bootstrap_result
+
+
+def _emit_pre_scenario_failure(
+    prepared: PreparedRunContext,
+    error: Exception,
+) -> None:
+    """Emit a synthetic scenario-level failure for launcher failures before scenario start."""
+    failure_run = Run(
+        id=prepared.run_name,
+        model_name="pilates_orchestrator",
+        tags=["scenario_header", "launcher_failure"],
+        status="failed",
+        description="PILATES launcher failed before entering the scenario context.",
+        phase="launcher",
+        meta={"launcher_failure": True},
+    )
+    if prepared.run_notifier is not None:
+        prepared.run_notifier.on_run_failed(failure_run, error)
+    if prepared.run_publisher is not None:
+        prepared.run_publisher.on_run_failed(failure_run, error)
+
+
+def main(
+    *,
+    settings: Optional[PilatesConfig] = None,
+    state: Optional[WorkflowState] = None,
+    clear_failure_context: bool = True,
+):
+    """
+    Run the PILATES simulation lifecycle using the Consist Scenario API.
+
+    This workflow coordinates multiple land use and transportation microsimulation models
+    across a multi-year planning horizon:
+
+    1. **Initialization**: Copy immutable input data to mutable workspace
+    2. **Land Use Forecasting**: UrbanSim predicts demographic/economic changes
+    3. **Vehicle Ownership**: ATLAS models vehicle fleet evolution
+    4. **Supply/Demand Loop**: Iterates between activity demand (ActivitySim) and
+       traffic assignment (BEAM) until convergence
+    5. **Post-Processing**: Validation and output generation
+
+    Architecture:
+    - **Consist Scenario**: Manages caching of expensive computations and provenance logging
+    - **Coupler**: Passes artifacts (outputs) between models via `scenario.coupler`
+    - **Workflow step builders**: Encapsulate model-specific execution logic
+
+    Caching Strategy:
+    - ActivitySim compilation: Cached across iterations (inputs unchanged = skip compile)
+    - Model outputs: Cached per iteration (convergence check)
+    - Bootstrap: pre-scenario cached run with replay-hydrated declared output paths
+    - Restart: default path is scenario replay plus cache hits; legacy hydration helpers are manual tooling only
+    """
+    prepared = _prepare_run_context(
+        settings=settings,
+        state=state,
+        clear_failure_context=clear_failure_context,
+    )
+    settings = prepared.settings
+    state = prepared.state
+    surface = prepared.surface
+    workspace = prepared.workspace
+    runtime_context = prepared.runtime_context
+    tracker = prepared.tracker
+    snapshot_manager = prepared.snapshot_manager
+    run_name = prepared.run_name
+    scenario_id = prepared.scenario_id
+    run_seed = prepared.seed
+    cache_epoch = prepared.cache_epoch
+    is_restart_run = prepared.is_restart_run
+    archive_run_dir = prepared.archive_run_dir
+    local_run_dir = prepared.local_run_dir
+    archive_state_path = prepared.archive_state_path
+    local_consist_db_path = prepared.local_consist_db_path
+    archive_consist_db_path = prepared.archive_consist_db_path
+
+    try:
+        emit_consist_audit_event(
+            workspace=workspace,
+            event_type="run_context",
+            scenario_id=scenario_id,
+            seed=run_seed,
+            settings_file=settings.settings_file,
+            run_name=run_name,
+            workspace_root=workspace.full_path,
+            local_run_dir=local_run_dir,
+            archive_run_dir=archive_run_dir,
+            archive_state_path=archive_state_path if is_restart_run else None,
+            restart_run=is_restart_run,
+            data_initialized=bool(state.data_initialized),
+            bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(
+                settings
+            ),
+        )
+
+        # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
+        # Initialization runs before entering scenario step execution so bootstrap
+        # lifecycle can evolve independently from normal model steps.
+        _run_bootstrap_sequence(prepared)
+
+        # 6. START SCENARIO CONTEXT
+        # The scenario context is where all model execution happens. Each step runs inside
+        # scenario.run(), which handles:
+        #   - Caching checks (skip if inputs identical to previous run)
+        #   - Provenance logging (inputs, outputs, dependencies)
+        #   - Coupler coordination (step outputs → coupler → next step inputs)
+        # The coupler is a shared dict-like object for passing artifacts between steps.
+        scenario_contract = _build_scenario_runtime_contract(
             settings=settings,
             state=state,
             workspace=workspace,
+            scenario_id=scenario_id,
+            seed=run_seed,
+            cache_epoch=cache_epoch,
             surface=surface,
         )
-        if restart_missing_artifacts_after_bootstrap:
-            logger.warning(
-                "Restart diagnostic still sees missing local workspace inputs "
-                "after restart bootstrap: %s",
-                _format_missing_artifact_summary(
-                    restart_missing_artifacts_after_bootstrap
-                ),
-            )
-        if restart_missing_artifacts_after_bootstrap and bool(
-            getattr(getattr(settings, "run", None), "restart_strict", False)
-        ):
-            raise RuntimeError(
-                "Strict restart preflight failed; required restart artifacts are "
-                "still missing after restart bootstrap. missing="
-                + _format_missing_artifact_summary(
-                    restart_missing_artifacts_after_bootstrap
-                )
-            )
+        scenario_kwargs = scenario_contract["scenario_kwargs"]
+        schema_steps_all = scenario_contract["schema_steps_all"]
+        schema_steps_enabled = scenario_contract["schema_steps_enabled"]
+        coupler_schema = scenario_contract["coupler_schema"]
+        required_output_keys = scenario_contract["required_output_keys"]
 
-    # 6. START SCENARIO CONTEXT
-    # The scenario context is where all model execution happens. Each step runs inside
-    # scenario.run(), which handles:
-    #   - Caching checks (skip if inputs identical to previous run)
-    #   - Provenance logging (inputs, outputs, dependencies)
-    #   - Coupler coordination (step outputs → coupler → next step inputs)
-    # The coupler is a shared dict-like object for passing artifacts between steps.
-    scenario_contract = _build_scenario_runtime_contract(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        scenario_id=scenario_id,
-        seed=run_seed,
-        cache_epoch=cache_epoch,
-        surface=surface,
-    )
-    scenario_kwargs = scenario_contract["scenario_kwargs"]
-    schema_steps_all = scenario_contract["schema_steps_all"]
-    schema_steps_enabled = scenario_contract["schema_steps_enabled"]
-    coupler_schema = scenario_contract["coupler_schema"]
-    required_output_keys = scenario_contract["required_output_keys"]
+        preview_count = 25
+        logger.info(
+            "Scenario output contract: declared_keys=%d require_outputs=%d "
+            "(enabled_steps=%d/%d). Preview: %s",
+            len(coupler_schema),
+            len(required_output_keys),
+            len(schema_steps_enabled),
+            len(schema_steps_all),
+            required_output_keys[:preview_count],
+        )
+        logger.info(
+            "Scenario Consist defaults: step_tags=%s step_facet=%s",
+            scenario_kwargs.get("step_tags"),
+            scenario_kwargs.get("step_facet"),
+        )
+        scenario_tags = _merge_tag_list(
+            ["pilates_simulation"],
+            [f"scenario_id:{scenario_id}"]
+            + ([f"seed:{run_seed}"] if run_seed is not None else []),
+        )
+    except Exception as exc:
+        _emit_pre_scenario_failure(prepared, exc)
+        raise
 
-    preview_count = 25
-    logger.info(
-        "Scenario output contract: declared_keys=%d require_outputs=%d "
-        "(enabled_steps=%d/%d). Preview: %s",
-        len(coupler_schema),
-        len(required_output_keys),
-        len(schema_steps_enabled),
-        len(schema_steps_all),
-        required_output_keys[:preview_count],
-    )
-    logger.info(
-        "Scenario Consist defaults: step_tags=%s step_facet=%s tracker_trace_enabled=%s",
-        scenario_kwargs.get("step_tags"),
-        scenario_kwargs.get("step_facet"),
-        callable(getattr(tracker, "trace", None)),
-    )
-    scenario_tags = _merge_tag_list(
-        ["pilates_simulation"],
-        [f"scenario_id:{scenario_id}"]
-        + ([f"seed:{run_seed}"] if run_seed is not None else []),
-    )
     try:
         with cr.scenario(
             run_name,
@@ -1060,6 +951,14 @@ def main(
     finally:
         snapshot_ok = snapshot_manager.final_snapshot()
         flush_archive_queue(timeout=300)
+        emit_artifact_lifecycle_audit_event(
+            workspace=workspace,
+            event_type="final_shutdown",
+            snapshot_ok=snapshot_ok,
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
+            local_to_scratch_recovery_roots_written=0,
+        )
         stop_archive_worker(timeout=30)
         if not snapshot_ok:
             mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)

@@ -17,7 +17,7 @@ import requests
 from shapely.geometry import Polygon
 from tqdm import tqdm
 import os
-from typing import TYPE_CHECKING, Dict, Any
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -354,7 +354,11 @@ def get_zone_from_points(
     # Spatial join
     intx = gpd.sjoin(gdf, zones_gdf.reset_index(), how="left", predicate="intersects")
 
-    assert len(intx) == len(gdf)
+    if len(intx) != len(gdf):
+        raise ValueError(
+            "Spatial join changed row count while assigning zone IDs: "
+            f"{len(gdf)} input rows, {len(intx)} joined rows."
+        )
 
     return intx[zone_id_col]
 

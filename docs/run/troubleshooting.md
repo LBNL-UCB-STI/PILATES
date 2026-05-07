@@ -5,6 +5,11 @@ summary: Common startup, runtime, restart, data, and HPC failures in the current
 
 # Troubleshooting
 
+Use this page to decide whether a failure is a config/path problem, a missing
+staged input, a restart-state issue, or something that needs model-specific
+debugging. Start with the earliest error in the log; later model errors are
+often downstream of a missing bootstrap or staging artifact.
+
 ## Startup And Install
 
 - If `python run.py` fails before the workflow starts, check that the config path passed with `-c/--config` exists and parses.
@@ -18,6 +23,7 @@ summary: Common startup, runtime, restart, data, and HPC failures in the current
 - If `restart_strict` is true, PILATES can fail after bootstrap when required restart artifacts are still missing.
 - If you expected rewind-style resume, make sure `--allow-rewind-resume` was passed on the command line.
 - If the launcher prints a restart command on failure, use that command as the next recovery step.
+- If a cache hit did not restore the file you expected, check whether that file is a declared workflow output or only model-local scratch.
 
 ## Data Layout
 

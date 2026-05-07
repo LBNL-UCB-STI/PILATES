@@ -18,12 +18,13 @@ integration drift is caught and what the expected startup failure looks like.
 from __future__ import annotations
 
 import re
+
 import pytest
 from consist import define_step
 
 from pilates.workflows.artifact_keys import (
-    BEAM_HOUSEHOLDS_IN,
     BEAM_FULL_SKIMS,
+    BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
@@ -91,14 +92,12 @@ def _declared_schema_steps():
 
 
 def test_validate_workflow_step_contracts_passes_for_current_setup():
-    """Happy-path: current declared steps satisfy all contract invariants."""
     step_shared.validate_workflow_step_contracts(
         declared_steps=_declared_schema_steps()
     )
 
 
 def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatch):
-    """Removing a tracked output class is detected as holder/output drift."""
     patched_classes = dict(step_shared.STEP_OUTPUTS_CLASSES)
     patched_classes.pop("beam_run", None)
     monkeypatch.setattr(step_shared, "STEP_OUTPUTS_CLASSES", patched_classes)
@@ -110,8 +109,9 @@ def test_validate_workflow_step_contracts_detects_holder_output_drift(monkeypatc
 
 
 def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monkeypatch):
-    """Dependencies referencing unknown steps fail validation."""
-    patched_deps = {key: dict(value) for key, value in step_shared.STEP_DEPENDENCIES.items()}
+    patched_deps = {
+        key: dict(value) for key, value in step_shared.STEP_DEPENDENCIES.items()
+    }
     beam_run_spec = dict(patched_deps["beam_run"])
     beam_run_spec["depends_on"] = ["not_a_real_step"]
     patched_deps["beam_run"] = beam_run_spec
@@ -141,7 +141,6 @@ def test_validate_step_ready_enforces_untracked_activitysim_compile_inputs():
 
 
 def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
-    """New declared steps must be tracked or explicitly allowlisted."""
     @define_step(model="unexpected_new_step")
     def _extra_step(*args, **kwargs):
         return None
@@ -153,7 +152,6 @@ def test_validate_workflow_step_contracts_flags_untracked_declared_steps():
 
 
 def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
-    """Allowlist supports intentional transitional or non-tracked step models."""
     @define_step(model="intentional_untracked_step")
     def _extra_step(*args, **kwargs):
         return None
@@ -165,7 +163,6 @@ def test_validate_workflow_step_contracts_allows_explicit_untracked_allowlist():
 
 
 def test_validate_workflow_step_contracts_reports_output_contract_conflicts():
-    """Tracked-step metadata outputs must match canonical StepOutputs declarations."""
     steps = _declared_schema_steps()
 
     @define_step(model="urbansim_run", outputs=["metadata_override"])
@@ -187,7 +184,6 @@ def test_validate_workflow_step_contracts_reports_output_contract_conflicts():
 
 
 def test_validate_workflow_step_contracts_flags_missing_canonical_outputs_when_metadata_declares_outputs():
-    """Tracked metadata outputs without canonical declared_outputs are rejected."""
     steps = _declared_schema_steps()
 
     @define_step(model="beam_run", outputs=["beam_linkstats"])
@@ -209,12 +205,6 @@ def test_validate_workflow_step_contracts_flags_missing_canonical_outputs_when_m
 
 
 def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
-    """
-    Tracked BEAM steps must keep explicit canonical output contracts.
-
-    Compatibility exceptions should remain rare; keep this allowlist empty
-    unless a BEAM step truly cannot expose stable canonical keys.
-    """
     allowed_empty = frozenset()
     expected = {
         "beam_preprocess": (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
@@ -232,8 +222,6 @@ def test_tracked_beam_step_output_classes_define_explicit_canonical_outputs():
 
 
 def test_validate_workflow_step_contracts_requires_rationale_for_required_outputs_override():
-    """Deprecated StepRef.required_outputs override requires rationale at validation time."""
-
     @define_step(model="dummy_step")
     def _dummy_step(*args, **kwargs):
         return None
@@ -251,8 +239,6 @@ def test_validate_workflow_step_contracts_requires_rationale_for_required_output
 
 
 def test_validate_workflow_step_contracts_accepts_rationalized_required_outputs_override():
-    """Compatibility override remains allowed when rationale is provided."""
-
     @define_step(model="dummy_step")
     def _dummy_step(*args, **kwargs):
         return None

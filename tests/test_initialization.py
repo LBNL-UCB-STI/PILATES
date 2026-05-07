@@ -88,6 +88,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
     beam and urbansim models using the dummy preprocessor.
     """
     from pilates.utils import consist_runtime as cr
+
     cr.set_enabled(False)
 
     try:
@@ -109,7 +110,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
                 start_year=2020,
             ),
             shared=SimpleNamespace(
-                database=SimpleNamespace(use_consist=False),
+                database=SimpleNamespace(),
                 skims=SimpleNamespace(zone_type="block_group"),
                 geography=SimpleNamespace(
                     zones=SimpleNamespace(
@@ -118,7 +119,7 @@ def test_initialization_runs_beam_and_urbansim(monkeypatch):
                         zone_type="block_group",
                         canonical_id_col="zone_key",
                     )
-                )
+                ),
             ),
         )
 
@@ -168,7 +169,7 @@ def test_initialization_runs_beam_when_only_traffic_assignment_is_set(monkeypatc
                 start_year=2020,
             ),
             shared=SimpleNamespace(
-                database=SimpleNamespace(use_consist=False),
+                database=SimpleNamespace(),
                 geography=SimpleNamespace(zones=None),
             ),
         )
@@ -275,9 +276,7 @@ def test_initialization_logs_copy_records(monkeypatch, tmp_path):
     output_path.write_text("dest")
 
     factory = DummyLoggingModelFactory(input_path, output_path)
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", lambda: factory
-    )
+    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
 
     logged_inputs = []
     logged_outputs = []
@@ -420,6 +419,7 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
     from pilates.utils import consist_runtime as cr
 
     cr.set_enabled(False)
+
     class _CountingPreprocessor:
         def __init__(self, model_name, calls):
             self.model_name = model_name
@@ -442,9 +442,7 @@ def test_initialization_copies_urbansim_bootstrap_inputs_once_when_urbansim_and_
             return _CountingPreprocessor(model_name, self.calls)
 
     factory = _CountingFactory()
-    monkeypatch.setattr(
-        "pilates.generic.initialization.ModelFactory", lambda: factory
-    )
+    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
 
     workspace = DummyWorkspace()
     workspace.activitysim_mutable_dir = str(tmp_path / "asim")
@@ -484,6 +482,7 @@ def test_initialization_passes_workspace_to_activitysim_copy(monkeypatch, tmp_pa
     from pilates.utils import consist_runtime as cr
 
     cr.set_enabled(False)
+
     class _ActivitySimPreprocessor:
         def __init__(self, calls):
             self.calls = calls
@@ -675,7 +674,11 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
         init = Initialization("init", None)
         copied_records = init.run(settings, workspace)
 
-        assert [call[0] for call in factory.calls] == ["beam", "urbansim", "activitysim"]
+        assert [call[0] for call in factory.calls] == [
+            "beam",
+            "urbansim",
+            "activitysim",
+        ]
         summary = build_bootstrap_artifact_summary(workspace, copied_records)
         assert "beam" in summary["models"]
         assert "activitysim" in summary["models"]

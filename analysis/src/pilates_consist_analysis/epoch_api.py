@@ -86,10 +86,7 @@ class Epoch:
             "available_tables": ",".join(self.tables.available()),
         }
         row.update(
-            {
-                f"{model}_run_id": run_id
-                for model, run_id in self.run_ids().items()
-            }
+            {f"{model}_run_id": run_id for model, run_id in self.run_ids().items()}
         )
         return pd.DataFrame([row])
 

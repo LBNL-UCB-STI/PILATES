@@ -2,15 +2,22 @@
 Pydantic models for PILATES configuration.
 
 This module defines the structure and validation for PILATES configuration files.
-The models use the new hierarchical structure designed for better config hashing
-and provenance tracking.
+Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
 """
 
 import os
 import logging
+import warnings
 from dataclasses import dataclass, field as dataclass_field
 from typing import Dict, List, Optional, Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    PrivateAttr,
+    field_validator,
+    model_validator,
+)
 import yaml
 
 logger = logging.getLogger(__name__)
@@ -290,9 +297,7 @@ class ZoneSourceConfig(BaseModel):
         ...,
         description="The geographic resolution of zones (e.g., 'taz', 'block_group')",
     )
-    source_file: str = Field(
-        ..., description="Path to a zone geometry source file."
-    )
+    source_file: str = Field(..., description="Path to a zone geometry source file.")
     canonical_id_col: str = Field(
         ..., description="Column in source_file with the canonical zone ID."
     )
@@ -367,10 +372,24 @@ class DatabaseConfig(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _warn_deprecated_use_consist(cls, data):
+        if isinstance(data, dict) and "use_consist" in data:
+            warnings.warn(
+                "shared.database.use_consist is deprecated and ignored; "
+                "Consist is mandatory in PILATES. Use run.consist_hashing_strategy "
+                "or lineage/detail settings for performance tuning instead.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+        return data
+
     @model_validator(mode="after")
     def _coalesce_snapshot_path(self):
         if self.snapshot_path and not self.shapshot_path:
             self.shapshot_path = self.snapshot_path
+        self.use_consist = True
         return self
 
     @field_validator("path")
@@ -728,7 +747,7 @@ class PostprocessingConfig(BaseModel):
             "memory": self.memory,
             "discard_plans_every_year": self.discard_plans_every_year,
             "max_plans_memory": self.max_plans_memory,
-            "simulated_hwy_paths": list(self.simulated_hwy_paths or []),
+            "simulated_hwy_paths": list(self.simulated_hwy_paths),
         }
 
 

@@ -15,6 +15,9 @@ from pilates.workflows.planning import (
 from pilates.workflows.surface import build_enabled_workflow_surface
 
 
+SEATTLE_ACTIVITYSIM_BEAM = "scenarios/seattle/settings-new-asim-seattle-null.yaml"
+
+
 def _build_plan(settings, *, include_postprocessing=False):
     return build_static_execution_plan(
         settings,
@@ -24,7 +27,7 @@ def _build_plan(settings, *, include_postprocessing=False):
 
 
 def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file():
-    plan = build_static_execution_plan_from_file("settings-seattle-consist-local.yaml")
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     assert plan.metadata["years"] == [{"year": 2018, "forecast_year": 2018}]
     assert [step.step_name for step in plan.step_runs[:7]] == [
@@ -55,7 +58,7 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
 
 
 def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_steps():
-    settings = load_config("settings-seattle-consist-local.yaml")
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.land_use_enabled = False
     settings.vehicle_ownership_model_enabled = False
     settings.activity_demand_enabled = True
@@ -87,9 +90,7 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     ]
 
     atlas_preprocess_runs = [
-        step
-        for step in first_year_steps
-        if step.step_name == "atlas_preprocess"
+        step for step in first_year_steps if step.step_name == "atlas_preprocess"
     ]
     assert [step.atlas_year for step in atlas_preprocess_runs] == _atlas_sub_years(
         2017,
@@ -146,7 +147,10 @@ def test_static_execution_plan_filters_future_atlas_adopt_snapshots_by_subyear()
     assert "adopt/baseline/new_vehicles_biannual_values_2017" in preprocess_outputs_2021
     assert "adopt/baseline/new_vehicles_biannual_values_2019" in preprocess_outputs_2021
     assert "adopt/baseline/new_vehicles_biannual_values_2021" in preprocess_outputs_2021
-    assert "adopt/baseline/new_vehicles_biannual_values_2023" not in preprocess_outputs_2021
+    assert (
+        "adopt/baseline/new_vehicles_biannual_values_2023"
+        not in preprocess_outputs_2021
+    )
     assert "adopt/baseline/used_vehicles_2023" not in preprocess_outputs_2021
 
     atlas_run_2021 = next(
@@ -182,11 +186,17 @@ def test_static_execution_plan_threads_atlas_vehicles2_from_atlas_postprocess():
     plan = _build_plan(settings, include_postprocessing=False)
 
     vehicles2_artifacts = [
-        artifact for artifact in plan.artifacts if artifact.canonical_key == "atlas_vehicles2_output"
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == "atlas_vehicles2_output"
     ]
     assert vehicles2_artifacts
-    assert all(artifact.producer_step_run_id is not None for artifact in vehicles2_artifacts)
-    assert all("external" not in artifact.instance_key for artifact in vehicles2_artifacts)
+    assert all(
+        artifact.producer_step_run_id is not None for artifact in vehicles2_artifacts
+    )
+    assert all(
+        "external" not in artifact.instance_key for artifact in vehicles2_artifacts
+    )
 
 
 def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
@@ -211,7 +221,9 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
     assert artifact.forecast_year is None
 
     consuming_edges = [
-        edge for edge in plan.edges if edge.source == artifact.id and edge.kind == "consumes"
+        edge
+        for edge in plan.edges
+        if edge.source == artifact.id and edge.kind == "consumes"
     ]
     consuming_step_names = {
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
@@ -241,7 +253,9 @@ def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
     assert artifact.external is True
 
     consuming_edges = [
-        edge for edge in plan.edges if edge.source == artifact.id and edge.kind == "consumes"
+        edge
+        for edge in plan.edges
+        if edge.source == artifact.id and edge.kind == "consumes"
     ]
     consuming_step_names = {
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
@@ -270,7 +284,8 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
         for artifact in plan.artifacts
         if artifact.canonical_key == "usim_datastore_h5"
         and artifact.producer_step_run_id is not None
-        and steps_by_id[artifact.producer_step_run_id].step_name == "activitysim_postprocess"
+        and steps_by_id[artifact.producer_step_run_id].step_name
+        == "activitysim_postprocess"
     )
     forecast_output_artifact = next(
         artifact
@@ -285,10 +300,14 @@ def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints
     assert forecast_output_artifact.path_role == "forecast_output_datastore"
 
     assert base_artifact.resolved_path_hint is not None
-    assert current_handoff_artifact.resolved_path_hint == base_artifact.resolved_path_hint
+    assert (
+        current_handoff_artifact.resolved_path_hint == base_artifact.resolved_path_hint
+    )
     assert base_artifact.producer_step_run_id is None
     assert forecast_output_artifact.resolved_path_hint is not None
-    assert forecast_output_artifact.resolved_path_hint != base_artifact.resolved_path_hint
+    assert (
+        forecast_output_artifact.resolved_path_hint != base_artifact.resolved_path_hint
+    )
 
     assert "same physical input-slot path" in str(current_handoff_artifact.path_notes)
 
@@ -311,7 +330,7 @@ def test_static_execution_plan_renders_mermaid_without_contract_gaps():
 
 
 def test_static_execution_plan_renders_html_wrapper():
-    plan = build_static_execution_plan_from_file("settings-seattle-consist-local.yaml")
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     html = render_plan_html(plan)
 
@@ -332,7 +351,7 @@ def test_static_execution_plan_renders_html_wrapper():
 
 
 def test_renderers_can_hide_terminal_artifacts():
-    plan = build_static_execution_plan_from_file("settings-seattle-consist-local.yaml")
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     html = render_plan_html(plan, hide_terminal_artifacts=True)
     mermaid = render_plan_mermaid(plan, hide_terminal_artifacts=True)
@@ -347,18 +366,20 @@ def test_renderers_can_hide_terminal_artifacts():
 def test_hide_terminal_artifacts_keeps_only_valid_edges():
     from pilates.workflows.lineage_render import _filtered_plan_for_render
 
-    plan = build_static_execution_plan_from_file("settings-seattle-consist-local.yaml")
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
     filtered = _filtered_plan_for_render(plan, hide_terminal_artifacts=True)
     node_ids = {step.id for step in filtered.step_runs} | {
         artifact.id for artifact in filtered.artifacts
     }
 
     assert filtered.artifacts
-    assert all(edge.source in node_ids and edge.target in node_ids for edge in filtered.edges)
+    assert all(
+        edge.source in node_ids and edge.target in node_ids for edge in filtered.edges
+    )
 
 
 def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_keys():
-    plan = build_static_execution_plan_from_file("settings-seattle-consist-local.yaml")
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     zarr_instances = {
         artifact.instance_key
@@ -371,9 +392,11 @@ def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_key
 
 
 def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule():
-    settings = load_config("settings-seattle-consist-local.yaml")
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.run.supply_demand_iters = 3
-    settings.beam.full_skim = FullSkimsCreatorConfig(run_schedule="after_final_iteration")
+    settings.beam.full_skim = FullSkimsCreatorConfig(
+        run_schedule="after_final_iteration"
+    )
 
     plan = _build_plan(settings, include_postprocessing=False)
 
@@ -387,7 +410,7 @@ def test_static_execution_plan_honors_after_final_iteration_full_skim_schedule()
 
 
 def test_static_execution_plan_supports_beam_only_run():
-    settings = load_config("settings-seattle-consist-local.yaml")
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
     settings.run.models.activity_demand = None
     settings.activity_demand_enabled = False
     settings.run.models.land_use = None

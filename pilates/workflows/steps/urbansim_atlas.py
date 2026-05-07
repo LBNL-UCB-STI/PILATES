@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Sequence
 
 import pandas as pd
 from consist.types import H5ChildSpec
@@ -246,9 +246,7 @@ def _recover_atlas_postprocess_outputs(
         step_logger=logger,
         log_context="UrbanSim/ATLAS cached output recovery",
     )
-    expected_outputs = AtlasPostprocessor.expected_outputs(
-        settings, state, workspace
-    )
+    expected_outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
     if ATLAS_VEHICLES2_OUTPUT not in recovered_paths:
         vehicles2_path = artifact_to_existing_path(
             expected_outputs.get(ATLAS_VEHICLES2_OUTPUT),
@@ -622,7 +620,9 @@ def make_urbansim_run_step(
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
-                description=(f"UrbanSim forecast datastore output for year {forecast_year}"),
+                description=(
+                    f"UrbanSim forecast datastore output for year {forecast_year}"
+                ),
                 coupler=coupler,
                 step_name="urbansim_run",
                 profile_file_schema=True,
@@ -771,6 +771,17 @@ def make_urbansim_postprocess_step(
                 }
             else:
                 merged_child_specs = None
+            merged_meta = _urbansim_output_facet_meta(
+                USIM_DATASTORE_H5, forecast_year=forecast_year
+            )
+            merged_meta.setdefault("facet", {}).update(
+                {
+                    "source_role": f"{USIM_INPUT_MERGED_PREFIX}{forecast_year}",
+                    "snapshot_role": "usim_input_merged",
+                    "snapshot_reason": "post_merge_handoff",
+                    "storage_event": "merged_h5_output",
+                }
+            )
             log_and_set_output(
                 key=USIM_DATASTORE_H5,
                 path=str(outputs.usim_datastore_h5),
@@ -786,9 +797,7 @@ def make_urbansim_postprocess_step(
                 h5_tables_used=list(merged_table_keys.keys()),
                 child_specs=merged_child_specs,
                 child_selection="include_only" if merged_child_specs else "all",
-                **_urbansim_output_facet_meta(
-                    USIM_DATASTORE_H5, forecast_year=forecast_year
-                ),
+                **merged_meta,
             )
 
     step_func = build_standard_step(
@@ -1051,9 +1060,7 @@ def make_atlas_postprocess_step(
             raise RuntimeError(
                 "UrbanSim config is required for ATLAS postprocess logging."
             )
-        expected_inputs = AtlasPostprocessor.expected_inputs(
-            settings, state, workspace
-        )
+        expected_inputs = AtlasPostprocessor.expected_inputs(settings, state, workspace)
         usim_output_path = expected_inputs.get("usim_datastore_h5")
         if usim_output_path is not None:
             usim_output_path = Path(usim_output_path)
@@ -1108,7 +1115,8 @@ def make_atlas_postprocess_step(
             record_items=(
                 (short_name, path, description)
                 for short_name, path, description in outputs._iter_record_items()
-                if short_name not in {USIM_H5_UPDATED, USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5}
+                if short_name
+                not in {USIM_H5_UPDATED, USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5}
             ),
             log_fn=lambda key, path, description, **meta: log_output_only(
                 key=key,
@@ -1171,6 +1179,7 @@ def make_atlas_postprocess_step(
             output_recoverer=_recover_atlas_postprocess_outputs,
             output_paths=AtlasPostprocessor.expected_outputs,
             input_binding="none",
+            cache_mode="overwrite",
             cache_hydration="metadata",
             step_logger=logger,
         ),

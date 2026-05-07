@@ -15,7 +15,11 @@ from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
-from pilates.beam.outputs import BeamPostprocessOutputs, BeamPreprocessOutputs, BeamRunOutputs
+from pilates.beam.outputs import (
+    BeamPostprocessOutputs,
+    BeamPreprocessOutputs,
+    BeamRunOutputs,
+)
 from pilates.generic.model_factory import ModelFactory
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -42,7 +46,9 @@ from pilates.workflows.stages.supply_demand import (
     _run_activity_demand_phase,
     _run_traffic_assignment_phase,
 )
-from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage as _run_vehicle_ownership_stage
+from pilates.workflows.stages.vehicle_ownership import (
+    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
+)
 from pilates.workflows.steps import StepOutputsHolder
 from tests.test_stage_contracts import _write_file
 from tests.workflow_contract_harness import build_runtime_context
@@ -50,7 +56,9 @@ from tests.workflow_contract_harness import build_runtime_context
 pytest_plugins = ("tests.test_stage_contracts",)
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
     context = context or build_runtime_context(
         settings=settings,
         state=state,
@@ -77,7 +85,9 @@ def _coupler_keys(coupler) -> set[str]:
 def _assert_coupler_contains(coupler, expected_keys: set[str]) -> None:
     observed = _coupler_keys(coupler)
     missing = expected_keys - observed
-    assert not missing, f"Missing coupler keys: {sorted(missing)}; observed={sorted(observed)}"
+    assert not missing, (
+        f"Missing coupler keys: {sorted(missing)}; observed={sorted(observed)}"
+    )
 
 
 def test_land_use_boundary_publishes_urbansim_datastore_family(stage_env):
@@ -209,12 +219,19 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
 
     def _scenario_run_with_activitysim_upstream(**kwargs):
         input_keys = kwargs.get("input_keys") or []
-        if "beam_plans_asim_out" in input_keys and outputs_holder.activitysim_run is not None:
-            for key, value in outputs_holder.activitysim_run.to_record_store().to_mapping().items():
+        if (
+            "beam_plans_asim_out" in input_keys
+            and outputs_holder.activitysim_run is not None
+        ):
+            for key, value in (
+                outputs_holder.activitysim_run.to_record_store().to_mapping().items()
+            ):
                 stage_env["coupler"].set(key, value)
         return original_scenario_run(**kwargs)
 
-    monkeypatch.setattr(stage_env["scenario"], "run", _scenario_run_with_activitysim_upstream)
+    monkeypatch.setattr(
+        stage_env["scenario"], "run", _scenario_run_with_activitysim_upstream
+    )
 
     _run_activity_demand_phase(
         scenario=stage_env["scenario"],
@@ -320,7 +337,9 @@ def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
 
     def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "activitysim":
-            raise AssertionError("activitysim_preprocess should be skipped on exact rewind")
+            raise AssertionError(
+                "activitysim_preprocess should be skipped on exact rewind"
+            )
         return original_get_preprocessor(self, model_name, state)
 
     def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
@@ -358,7 +377,10 @@ def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
     )
 
     assert outputs_holder.activitysim_preprocess is not None
-    assert outputs_holder.activitysim_preprocess.households_table == data_dir / "households.csv"
+    assert (
+        outputs_holder.activitysim_preprocess.households_table
+        == data_dir / "households.csv"
+    )
     assert ZARR_SKIMS not in _coupler_keys(stage_env["coupler"])
 
 
@@ -370,7 +392,9 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
     state.current_sub_stage = state.Stage.traffic_assignment
     state.current_inner_iter = 0
 
-    zarr_path = Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    zarr_path = (
+        Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+    )
     _write_file(zarr_path)
     stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
 
@@ -400,7 +424,9 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
         ):
             prepared_inputs = {
                 BEAM_PLANS_IN: Path(activity_demand_outputs["beam_plans_asim_out"]),
-                BEAM_HOUSEHOLDS_IN: Path(activity_demand_outputs["households_asim_out"]),
+                BEAM_HOUSEHOLDS_IN: Path(
+                    activity_demand_outputs["households_asim_out"]
+                ),
                 BEAM_PERSONS_IN: Path(activity_demand_outputs["persons_asim_out"]),
             }
             return BeamPreprocessOutputs(
@@ -412,10 +438,13 @@ def test_traffic_assignment_boundary_publishes_beam_key_family(
         def run(self, input_store, workspace, *, extra_inputs=None):
             output_dir = Path(workspace.get_beam_output_dir())
             run_outputs = {
-                f"linkstats_parquet_{state.forecast_year}_0": output_dir / "linkstats.parquet",
+                f"linkstats_parquet_{state.forecast_year}_0": output_dir
+                / "linkstats.parquet",
                 f"beam_plans_out_{state.forecast_year}_0": output_dir / "plans.xml",
-                f"events_parquet_{state.forecast_year}_0": output_dir / "events.parquet",
-                f"raw_od_skims_zarr_{state.forecast_year}_0": output_dir / "od_skims.zarr",
+                f"events_parquet_{state.forecast_year}_0": output_dir
+                / "events.parquet",
+                f"raw_od_skims_zarr_{state.forecast_year}_0": output_dir
+                / "od_skims.zarr",
             }
             for path in run_outputs.values():
                 _write_file(path)

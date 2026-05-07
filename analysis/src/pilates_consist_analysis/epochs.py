@@ -216,7 +216,9 @@ def build_epoch_panel(
         missing_iteration,
         "Runs missing iteration were excluded from epoch panel.",
     )
-    _warn_if_nonzero(missing_model, "Runs missing model were excluded from epoch panel.")
+    _warn_if_nonzero(
+        missing_model, "Runs missing model were excluded from epoch panel."
+    )
 
     epochs: list[SimulationEpoch] = []
     for (year, iteration, run_scenario_id), run_map in sorted(
@@ -264,7 +266,11 @@ def _collect_runs(tracker: Any, models: Optional[Sequence[str]] = None) -> list[
             for model in model_values:
                 try:
                     collected.extend(
-                        list(tracker.run_set(label=f"epochs-{model}", model=model, limit=200000))
+                        list(
+                            tracker.run_set(
+                                label=f"epochs-{model}", model=model, limit=200000
+                            )
+                        )
                     )
                 except Exception:
                     continue
@@ -274,11 +280,17 @@ def _collect_runs(tracker: Any, models: Optional[Sequence[str]] = None) -> list[
             except Exception:
                 pass
 
-    if not collected and hasattr(tracker, "queries") and hasattr(tracker.queries, "find_runs"):
+    if (
+        not collected
+        and hasattr(tracker, "queries")
+        and hasattr(tracker.queries, "find_runs")
+    ):
         if model_values:
             for model in model_values:
                 try:
-                    collected.extend(list(tracker.queries.find_runs(model=model, limit=200000)))
+                    collected.extend(
+                        list(tracker.queries.find_runs(model=model, limit=200000))
+                    )
                 except Exception:
                     continue
         else:

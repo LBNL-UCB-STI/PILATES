@@ -165,7 +165,9 @@ class EnabledWorkflowSurface:
     def step_surface(self, step_name: str) -> Optional[StepRuntimeSurface]:
         return self.step_surfaces.get(step_name)
 
-    def enabled_schema_step_names(self, *, include_optional: bool = True) -> FrozenSet[str]:
+    def enabled_schema_step_names(
+        self, *, include_optional: bool = True
+    ) -> FrozenSet[str]:
         """Return the enabled schema-step set used by planning/runtime callers."""
         return (
             self.enabled_step_names
@@ -252,7 +254,9 @@ def _enabled_stage_names(profile: WorkflowProfile) -> FrozenSet[str]:
 def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
     keys = []
     models = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand = getattr(models, "activity_demand", None) if models is not None else None
+    activity_demand = (
+        getattr(models, "activity_demand", None) if models is not None else None
+    )
     land_use = getattr(models, "land_use", None) if models is not None else None
     vehicle_ownership = (
         getattr(models, "vehicle_ownership", None) if models is not None else None
@@ -465,7 +469,9 @@ def _validate_surface_invariants(
         surface = step_surfaces[step_name]
         step_spec = workflow_step_spec_for_step_name(step_name)
         if step_spec is None:
-            raise RuntimeError(f"Enabled workflow surface references unknown step '{step_name}'.")
+            raise RuntimeError(
+                f"Enabled workflow surface references unknown step '{step_name}'."
+            )
         for dependency in step_spec.depends_on:
             if dependency in enabled_step_names:
                 continue
@@ -480,7 +486,9 @@ def _validate_surface_invariants(
             raise RuntimeError(
                 f"Enabled step '{step_name}' depends on disabled step '{dependency}'."
             )
-        known_inputs = set(_ordered_unique(surface.required_input_keys, surface.optional_input_keys))
+        known_inputs = set(
+            _ordered_unique(surface.required_input_keys, surface.optional_input_keys)
+        )
         unknown = sorted(
             key
             for key, policy in surface.input_role_policies.items()
@@ -512,7 +520,10 @@ def build_enabled_workflow_surface(
     profile = workflow_profile_from_flags(enabled_flags)
     run_mode = (
         RunMode.RESTART
-        if bool(getattr(state, "is_restart_run", False) or getattr(state, "run_info_path", None))
+        if bool(
+            getattr(state, "is_restart_run", False)
+            or getattr(state, "run_info_path", None)
+        )
         else RunMode.FRESH
     )
 

@@ -77,7 +77,9 @@ def test_select_latest_linkstats_path_accepts_parquet_and_csv_keys(tmp_path):
 
     records = RecordStore(
         recordList=[
-            FileRecord(file_path=str(parquet_path), short_name="linkstats_parquet_2018_0"),
+            FileRecord(
+                file_path=str(parquet_path), short_name="linkstats_parquet_2018_0"
+            ),
             FileRecord(file_path=str(csv_path), short_name="linkstats_2018_0"),
             FileRecord(
                 file_path=str(
@@ -107,7 +109,9 @@ def test_select_latest_linkstats_path_uses_parquet_when_csv_absent(tmp_path):
 
     records = RecordStore(
         recordList=[
-            FileRecord(file_path=str(parquet_path), short_name="linkstats_parquet_2018_0")
+            FileRecord(
+                file_path=str(parquet_path), short_name="linkstats_parquet_2018_0"
+            )
         ]
     )
 

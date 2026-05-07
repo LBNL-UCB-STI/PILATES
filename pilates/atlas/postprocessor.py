@@ -13,7 +13,10 @@ from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import artifact_to_existing_path, enqueue_archive_copy
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    enqueue_archive_copy,
+)
 from pilates.utils.state_access import uses_input_datastore
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -174,9 +177,7 @@ def _prepare_vehicle_type_mapping(mapping_csv_path: str) -> pd.DataFrame:
 
 
 def _nearest_modelyear_subset(mapping: pd.DataFrame, modelyear: int) -> pd.DataFrame:
-    nearest_year = (
-        (mapping["modelyear"] - modelyear).abs().sort_values().index[0]
-    )
+    nearest_year = (mapping["modelyear"] - modelyear).abs().sort_values().index[0]
     target_year = int(mapping.loc[nearest_year, "modelyear"])
     return mapping.loc[mapping["modelyear"] == target_year]
 
@@ -287,7 +288,9 @@ def atlas_add_vehileTypeId(
             else df["pred_power"]
         )
     df["_fuel_key"] = (
-        fuel_source.map(_normalize_fuel_for_mapping) if fuel_source is not None else None
+        fuel_source.map(_normalize_fuel_for_mapping)
+        if fuel_source is not None
+        else None
     )
     df["_bodytype_key"] = (
         df["bodytype"].map(_normalize_bodytype_for_mapping)
@@ -296,7 +299,9 @@ def atlas_add_vehileTypeId(
     )
     df["vehicleTypeId"] = pd.Series(index=df.index, dtype="object")
 
-    grouped = df.groupby(["_fuel_key", "_bodytype_key", "modelyear"], sort=False, dropna=False)
+    grouped = df.groupby(
+        ["_fuel_key", "_bodytype_key", "modelyear"], sort=False, dropna=False
+    )
     for (fuel_key, bodytype_key, modelyear), vehicle_subset in grouped:
         candidates = _select_vehicle_type_candidates(
             mapping,
@@ -382,9 +387,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         """
         Declare the input paths/artifacts this postprocessor expects from the workflow.
         """
-        usim_output_path = resolve_atlas_usim_datastore_path(
-            settings, state, workspace
-        )
+        usim_output_path = resolve_atlas_usim_datastore_path(settings, state, workspace)
         atlas_output_dir = workspace.get_atlas_output_dir()
         return {
             ATLAS_OUTPUT_DIR: (
@@ -413,12 +416,12 @@ class AtlasPostprocessor(GenericPostprocessor):
             - See `pilates/atlas/inputs.py` for the corresponding input
               descriptions used by ATLAS and downstream models.
         """
-        usim_output_path = resolve_atlas_usim_datastore_path(
-            settings, state, workspace
-        )
+        usim_output_path = resolve_atlas_usim_datastore_path(settings, state, workspace)
         output_year = getattr(state, "year", getattr(state, "forecast_year", None))
         vehicles2_path = (
-            os.path.join(workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv")
+            os.path.join(
+                workspace.get_atlas_output_dir(), f"vehicles2_{output_year}.csv"
+            )
             if output_year is not None
             else None
         )
@@ -489,13 +492,18 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
         # Perform the update
-        update_succeeded = self.atlas_update_h5_vehicle(
+        updated_households_table = self.atlas_update_h5_vehicle(
             settings, output_year, str(usim_h5_file), str(atlas_hh_path)
         )
-        if not update_succeeded:
+        if not updated_households_table:
             raise RuntimeError(
                 "ATLAS postprocess failed to update UrbanSim HDF5 with vehicle ownership"
             )
+        self._validate_updated_h5_table(
+            h5_file_path=str(usim_h5_file),
+            table_path=updated_households_table,
+            output_year=output_year,
+        )
         logger.info(
             "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
         )
@@ -560,7 +568,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         output_year: int,
         h5_file_path: str,
         household_v_csv_path: str,
-    ) -> bool:
+    ) -> Optional[str]:
         """Update the UrbanSim HDF5 file with vehicle ownership data from ATLAS.
 
         Reads vehicle ownership data from the given CSV file and updates the 'cars'
@@ -576,7 +584,7 @@ class AtlasPostprocessor(GenericPostprocessor):
             logger.error(
                 f"[AtlasPostprocessor] Missing input files for H5 update. H5: {h5_file_path}, CSV: {household_v_csv_path}"
             )
-            return False
+            return None
 
         logger.info(f"ATLAS is updating urbansim outputs for Year {output_year}")
 
@@ -610,7 +618,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                 olddf = h5[key]
             except KeyError:
                 logger.error(f"Table '{key}' not found in HDF5 file: {h5_file_path}")
-                return False
+                return None
 
             olddf.index = olddf.index.astype(int)
             atlas_ids = pd.Index(df.index.astype(int))
@@ -628,7 +636,7 @@ class AtlasPostprocessor(GenericPostprocessor):
                     missing_in_h5.tolist()[:10],
                     missing_in_atlas.tolist()[:10],
                 )
-                return False
+                return None
 
             olddf = olddf.reindex(atlas_ids)
             olddf["cars"] = df["cars"].values
@@ -639,4 +647,23 @@ class AtlasPostprocessor(GenericPostprocessor):
                     olddf[col] = olddf[col].astype(str)
             h5[key] = olddf
             logger.info(f"ATLAS update h5 datastore table {key} - done")
-            return True
+            return key if str(key).startswith("/") else f"/{key}"
+
+    @staticmethod
+    def _validate_updated_h5_table(
+        *,
+        h5_file_path: str,
+        table_path: str,
+        output_year: int,
+    ) -> None:
+        normalized_table_path = (
+            table_path if str(table_path).startswith("/") else f"/{table_path}"
+        )
+        with pd.HDFStore(h5_file_path, mode="r") as store:
+            if normalized_table_path not in store:
+                raise RuntimeError(
+                    "ATLAS postprocess reported an updated UrbanSim H5 table that "
+                    "is not present after write. "
+                    f"h5_path={h5_file_path} year={output_year} "
+                    f"table={normalized_table_path} available={sorted(store.keys())}"
+                )

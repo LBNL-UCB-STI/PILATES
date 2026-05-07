@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Mapping, Optional
 
 from consist.types import CacheOptions
 
@@ -54,9 +54,7 @@ def _warn_on_bootstrap_fast_hashing(settings: PilatesConfig) -> None:
     run_cfg = getattr(settings, "run", None)
     if not bool(getattr(run_cfg, "bootstrap_cache_enabled", True)):
         return
-    hashing_strategy = str(
-        getattr(run_cfg, "consist_hashing_strategy", "fast")
-    ).lower()
+    hashing_strategy = str(getattr(run_cfg, "consist_hashing_strategy", "fast")).lower()
     if hashing_strategy != "fast":
         return
     logger.warning(
@@ -78,6 +76,44 @@ def build_bootstrap_run_reference(
     if materialization_run_id:
         reference["materialization_run_id"] = materialization_run_id
     return reference
+
+
+def log_bootstrap_result_summary(
+    bootstrap_result: Optional[Mapping[str, Any]],
+    *,
+    log: Optional[logging.Logger] = None,
+) -> None:
+    if bootstrap_result is None:
+        return
+
+    output_logger = log or logger
+    cache_miss_explanation = bootstrap_result.get("cache_miss_explanation")
+    if isinstance(cache_miss_explanation, dict):
+        output_logger.info(
+            "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+            "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s "
+            "cache_miss_reason=%s cache_miss_candidate_run_id=%s",
+            bootstrap_result.get("bootstrap_cache_hit"),
+            bootstrap_result.get("cache_probe_hit"),
+            bootstrap_result.get("replay_hydration_complete"),
+            bootstrap_result.get("fallback_rerun_triggered"),
+            bootstrap_result.get("run_reference"),
+            bootstrap_result.get("staged_artifact_summary"),
+            cache_miss_explanation.get("reason"),
+            cache_miss_explanation.get("candidate_run_id"),
+        )
+        return
+
+    output_logger.info(
+        "Bootstrap phase complete: cache_hit=%s probe_hit=%s "
+        "replay_hydration_complete=%s fallback_rerun=%s run_ref=%s summary=%s",
+        bootstrap_result.get("bootstrap_cache_hit"),
+        bootstrap_result.get("cache_probe_hit"),
+        bootstrap_result.get("replay_hydration_complete"),
+        bootstrap_result.get("fallback_rerun_triggered"),
+        bootstrap_result.get("run_reference"),
+        bootstrap_result.get("staged_artifact_summary"),
+    )
 
 
 def _bootstrap_output_paths(
@@ -146,7 +182,9 @@ def _bootstrap_required_workspace_artifacts(
         if callable(get_asim_configs_dir):
             asim_configs_dir = get_asim_configs_dir()
             main_configs_dir = (
-                getattr(getattr(settings, "activitysim", None), "main_configs_dir", None)
+                getattr(
+                    getattr(settings, "activitysim", None), "main_configs_dir", None
+                )
                 or "configs"
             )
             for dirname in required_asim_config_dirs(main_configs_dir):
@@ -230,10 +268,7 @@ def _format_missing_bootstrap_workspace_artifacts(
 ) -> str:
     if not artifacts:
         return "none"
-    return ", ".join(
-        f"{item.get('key')}:{item.get('path')}"
-        for item in artifacts
-    )
+    return ", ".join(f"{item.get('key')}:{item.get('path')}" for item in artifacts)
 
 
 def seed_bootstrap_artifacts_to_coupler(
@@ -280,7 +315,9 @@ def run_bootstrap_phase(
     seed: Optional[int],
     surface: Any = None,
     initialization_cls: type[Initialization] = Initialization,
-    build_bootstrap_artifact_summary_fn: Callable[..., Dict[str, Any]] = build_bootstrap_artifact_summary,
+    build_bootstrap_artifact_summary_fn: Callable[
+        ..., Dict[str, Any]
+    ] = build_bootstrap_artifact_summary,
     build_step_consist_kwargs_fn: Callable[..., Dict[str, Any]],
     merge_tag_list_fn: Callable[..., list[str]],
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
@@ -317,7 +354,9 @@ def run_bootstrap_phase(
         cache_probe_hit = bool(cache_hit)
         fallback_rerun_triggered = bool(fallback_rerun)
         if replay_hydration_complete is None:
-            replay_hydration_complete = not fallback_rerun_triggered if cache_probe_hit else False
+            replay_hydration_complete = (
+                not fallback_rerun_triggered if cache_probe_hit else False
+            )
         result = {
             "bootstrap_cache_hit": cache_hit,
             "cache_probe_hit": cache_probe_hit,
@@ -453,9 +492,7 @@ def run_bootstrap_phase(
         logger.warning(
             "BOOTSTRAP CACHE HIT replay hydration left required workspace "
             "artifacts missing: %s",
-            _format_missing_bootstrap_workspace_artifacts(
-                missing_workspace_artifacts
-            ),
+            _format_missing_bootstrap_workspace_artifacts(missing_workspace_artifacts),
         )
         logger.warning(
             "BOOTSTRAP fallback rerun triggered because replay hydration did not "
@@ -512,7 +549,11 @@ def assert_bootstrap_output_invariant(
     copied_total = (
         summary.get("copied_records_total") if isinstance(summary, dict) else None
     )
-    if isinstance(summary, dict) and isinstance(copied_total, int) and copied_total >= 0:
+    if (
+        isinstance(summary, dict)
+        and isinstance(copied_total, int)
+        and copied_total >= 0
+    ):
         return
 
     diagnostics = {

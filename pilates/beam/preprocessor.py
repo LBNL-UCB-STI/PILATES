@@ -40,6 +40,7 @@ from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
+
 def _record_store_from_artifact_mappings(
     *,
     activity_demand_outputs: Optional[Mapping[str, Any]],
@@ -98,6 +99,7 @@ def _record_store_from_artifact_mappings(
         },
     )
     return combined
+
 
 # Mappings for BEAM configuration parameters
 beam_param_map = {
@@ -233,7 +235,9 @@ class BeamPreprocessor(GenericPreprocessor):
             atlas_output_dir = workspace.get_atlas_output_dir()
         beam_config = getattr(getattr(settings, "beam", None), "config", None)
         beam_config_path = (
-            os.path.join(workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config)
+            os.path.join(
+                workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config
+            )
             if beam_config
             else None
         )
@@ -243,7 +247,9 @@ class BeamPreprocessor(GenericPreprocessor):
             if forecast_year is not None:
                 for candidate in (
                     os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
-                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
+                    os.path.join(
+                        atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"
+                    ),
                 ):
                     if os.path.exists(candidate):
                         atlas_vehicle_input = candidate
@@ -591,7 +597,9 @@ class BeamPreprocessor(GenericPreprocessor):
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
             source_path=source_path,
             preferred_format=(
-                getattr(getattr(self.settings, "activitysim", None), "file_format", None)
+                getattr(
+                    getattr(self.settings, "activitysim", None), "file_format", None
+                )
                 or "csv"
             ),
         )
@@ -687,6 +695,7 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace=workspace,
             settings=self.settings,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
+            state=self.state,
         )
 
     @staticmethod

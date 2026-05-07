@@ -74,7 +74,9 @@ def build_linkstats_dataset(
         limit=limit,
     )
     if artifacts_df.empty:
-        return LinkstatsDataset(artifacts=artifacts_df, summary=pd.DataFrame(), deltas=pd.DataFrame())
+        return LinkstatsDataset(
+            artifacts=artifacts_df, summary=pd.DataFrame(), deltas=pd.DataFrame()
+        )
 
     summarize_kwargs: Dict[str, Any] = {
         "tracker": tracker,
@@ -88,9 +90,13 @@ def build_linkstats_dataset(
 
     summary_df = ca.summarize_linkstats_artifacts(artifacts_df, **summarize_kwargs)
     if summary_df.empty:
-        return LinkstatsDataset(artifacts=artifacts_df, summary=summary_df, deltas=pd.DataFrame())
+        return LinkstatsDataset(
+            artifacts=artifacts_df, summary=summary_df, deltas=pd.DataFrame()
+        )
     deltas_df = ca.summarize_linkstats_deltas(summary_df, tracker=tracker)
-    return LinkstatsDataset(artifacts=artifacts_df, summary=summary_df, deltas=deltas_df)
+    return LinkstatsDataset(
+        artifacts=artifacts_df, summary=summary_df, deltas=deltas_df
+    )
 
 
 def write_linkstats_dataset(

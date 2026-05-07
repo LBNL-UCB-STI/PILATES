@@ -49,7 +49,10 @@ from .runtime import (
     resolve_db_path,
     run_tagging_to_frame,
 )
-from .skim_analysis import build_skim_convergence_dataset, write_skim_convergence_dataset
+from .skim_analysis import (
+    build_skim_convergence_dataset,
+    write_skim_convergence_dataset,
+)
 
 
 def _repo_root_default() -> Path:
@@ -117,7 +120,9 @@ def _parse_metadata_items(items: Optional[list[str]]) -> Optional[dict[str, Any]
         if not value:
             continue
         if "=" not in value:
-            raise ValueError(f"Invalid metadata filter '{value}'. Use key=value format.")
+            raise ValueError(
+                f"Invalid metadata filter '{value}'. Use key=value format."
+            )
         key, raw_value = value.split("=", 1)
         key = key.strip()
         if not key:
@@ -305,7 +310,9 @@ def cmd_equilibrium_metrics(args: argparse.Namespace) -> int:
     if args.deltas_csv:
         deltas_path = Path(args.deltas_csv).expanduser().resolve()
     else:
-        deltas_path = Path(args.dataset_dir).expanduser().resolve() / "linkstats_deltas.csv"
+        deltas_path = (
+            Path(args.dataset_dir).expanduser().resolve() / "linkstats_deltas.csv"
+        )
     deltas_df = pd.read_csv(deltas_path)
     metrics = compute_equilibrium_metrics(deltas_df)
     output = write_equilibrium_metrics(metrics, args.output_json)
@@ -523,7 +530,9 @@ def cmd_list_run_artifacts(args: argparse.Namespace) -> int:
     if args.output_json:
         output_json = Path(args.output_json).expanduser().resolve()
         output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(frame.to_json(orient="records", indent=2), encoding="utf-8")
+        output_json.write_text(
+            frame.to_json(orient="records", indent=2), encoding="utf-8"
+        )
         print(output_json)
     if not args.output_csv and not args.output_json:
         if frame.empty:
@@ -630,7 +639,9 @@ def cmd_epoch_panel(args: argparse.Namespace) -> int:
     if args.output_json:
         output_json = Path(args.output_json).expanduser().resolve()
         output_json.parent.mkdir(parents=True, exist_ok=True)
-        output_json.write_text(frame.to_json(orient="records", indent=2), encoding="utf-8")
+        output_json.write_text(
+            frame.to_json(orient="records", indent=2), encoding="utf-8"
+        )
         print(output_json)
     if not args.output_csv and not args.output_json:
         if frame.empty:
@@ -648,9 +659,13 @@ def cmd_compare_scenarios(args: argparse.Namespace) -> int:
     left = _build_compare_runset(tracker, args, side="left")
     right = _build_compare_runset(tracker, args, side="right")
     if len(left) == 0:
-        raise ValueError("Left run set resolved to zero runs. Refine filters or specify --left-run-id.")
+        raise ValueError(
+            "Left run set resolved to zero runs. Refine filters or specify --left-run-id."
+        )
     if len(right) == 0:
-        raise ValueError("Right run set resolved to zero runs. Refine filters or specify --right-run-id.")
+        raise ValueError(
+            "Right run set resolved to zero runs. Refine filters or specify --right-run-id."
+        )
     try:
         comparison = compare_scenarios(
             tracker,
@@ -738,15 +753,24 @@ def _add_compare_side_runset_args(parser: argparse.ArgumentParser, side: str) ->
         default=None,
         help=f"Explicit run id for {side} side; repeatable. Overrides {side} filters when provided.",
     )
-    parser.add_argument(f"--{side}-model", default=None, help=f"Run model filter for {side} side.")
-    parser.add_argument(f"--{side}-year", type=int, default=None, help=f"Run year filter for {side} side.")
+    parser.add_argument(
+        f"--{side}-model", default=None, help=f"Run model filter for {side} side."
+    )
+    parser.add_argument(
+        f"--{side}-year",
+        type=int,
+        default=None,
+        help=f"Run year filter for {side} side.",
+    )
     parser.add_argument(
         f"--{side}-iteration",
         type=int,
         default=None,
         help=f"Run iteration filter for {side} side.",
     )
-    parser.add_argument(f"--{side}-status", default=None, help=f"Run status filter for {side} side.")
+    parser.add_argument(
+        f"--{side}-status", default=None, help=f"Run status filter for {side} side."
+    )
     parser.add_argument(
         f"--{side}-parent-id",
         default=None,
@@ -786,7 +810,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    discover = subparsers.add_parser("discover-runs", help="List runs matching filters.")
+    discover = subparsers.add_parser(
+        "discover-runs", help="List runs matching filters."
+    )
     _add_tracker_args(discover)
     discover.add_argument("--model", default=None)
     discover.add_argument("--status", default=None)
@@ -809,8 +835,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="linkstats_unmodified_phys_sim_iter_parquet",
     )
     dataset.add_argument("--namespace", default="beam")
-    dataset.add_argument("--grouped-mode", default="hybrid", choices=["hybrid", "hot_only", "cold_only"])
-    dataset.add_argument("--grouped-missing-files", default="warn", choices=["warn", "error", "ignore"])
+    dataset.add_argument(
+        "--grouped-mode", default="hybrid", choices=["hybrid", "hot_only", "cold_only"]
+    )
+    dataset.add_argument(
+        "--grouped-missing-files", default="warn", choices=["warn", "error", "ignore"]
+    )
     dataset.add_argument("--grouped-schema-id", default=None)
     dataset.add_argument(
         "--traveltime-weighting",
@@ -837,7 +867,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--grouped-missing-files", default="warn", choices=["warn", "error", "ignore"]
     )
     asim_dataset.add_argument("--grouped-schema-id", default=None)
-    asim_dataset.add_argument("--no-latest-per-iteration", action="store_true", default=False)
+    asim_dataset.add_argument(
+        "--no-latest-per-iteration", action="store_true", default=False
+    )
     asim_dataset.add_argument("--limit", type=int, default=10000)
     asim_dataset.add_argument("--output-dir", required=True)
     asim_dataset.set_defaults(func=cmd_build_asim_trips_dataset)
@@ -846,8 +878,12 @@ def build_parser() -> argparse.ArgumentParser:
         "equilibrium-metrics",
         help="Compute first-pass equilibrium diagnostics from linkstats deltas.",
     )
-    eq.add_argument("--dataset-dir", default=None, help="Directory containing linkstats_deltas.csv.")
-    eq.add_argument("--deltas-csv", default=None, help="Explicit path to linkstats_deltas.csv.")
+    eq.add_argument(
+        "--dataset-dir", default=None, help="Directory containing linkstats_deltas.csv."
+    )
+    eq.add_argument(
+        "--deltas-csv", default=None, help="Explicit path to linkstats_deltas.csv."
+    )
     eq.add_argument("--output-json", required=True)
     eq.set_defaults(func=cmd_equilibrium_metrics)
 
@@ -878,8 +914,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Build OpenMatrix skim convergence dataset across runs/iterations.",
     )
     _add_tracker_args(skim)
-    skim.add_argument("--concept-key", action="append", default=None, help="Explicit concept key; repeatable.")
-    skim.add_argument("--run-id", action="append", default=None, help="Optional run id filter; repeatable.")
+    skim.add_argument(
+        "--concept-key",
+        action="append",
+        default=None,
+        help="Explicit concept key; repeatable.",
+    )
+    skim.add_argument(
+        "--run-id",
+        action="append",
+        default=None,
+        help="Optional run id filter; repeatable.",
+    )
     skim.add_argument("--year", type=int, default=None)
     skim.add_argument("--iteration", type=int, default=None)
     skim.add_argument("--key-contains", default="skim")
@@ -892,7 +938,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Export portable Consist bundle for selected run ids.",
     )
     _add_tracker_args(export)
-    export.add_argument("--run-id", action="append", required=True, help="Run id to include; repeatable.")
+    export.add_argument(
+        "--run-id",
+        action="append",
+        required=True,
+        help="Run id to include; repeatable.",
+    )
     export.add_argument("--out-path", required=True)
     export.add_argument("--include-data", action="store_true", default=False)
     export.add_argument("--include-snapshots", action="store_true", default=False)
@@ -1043,9 +1094,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Field/facet grouping keys for latest selection; repeatable.",
     )
     export_scenario.add_argument("--no-converged", action="store_true", default=False)
-    export_scenario.add_argument("--no-include-data", action="store_true", default=False)
-    export_scenario.add_argument("--include-snapshots", action="store_true", default=False)
-    export_scenario.add_argument("--no-include-children", action="store_true", default=False)
+    export_scenario.add_argument(
+        "--no-include-data", action="store_true", default=False
+    )
+    export_scenario.add_argument(
+        "--include-snapshots", action="store_true", default=False
+    )
+    export_scenario.add_argument(
+        "--no-include-children", action="store_true", default=False
+    )
     export_scenario.add_argument("--dry-run", action="store_true", default=False)
     export_scenario.set_defaults(func=cmd_export_scenario_db)
 
@@ -1057,7 +1114,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_sql.add_argument("--sql", default=None, help="Inline SQL query text.")
     export_sql.add_argument("--sql-file", default=None, help="Path to SQL file.")
     export_sql.add_argument("--output-path", required=True)
-    export_sql.add_argument("--output-format", choices=["csv", "parquet"], default="csv")
+    export_sql.add_argument(
+        "--output-format", choices=["csv", "parquet"], default="csv"
+    )
     export_sql.add_argument("--limit", type=int, default=None)
     export_sql.set_defaults(func=cmd_export_sql)
 
@@ -1071,7 +1130,9 @@ def build_parser() -> argparse.ArgumentParser:
     export_asim.add_argument("--year", type=int, default=None)
     export_asim.add_argument("--iteration", type=int, default=None)
     export_asim.add_argument("--no-converged", action="store_true", default=False)
-    export_asim.add_argument("--output-format", choices=["csv", "parquet"], default="csv")
+    export_asim.add_argument(
+        "--output-format", choices=["csv", "parquet"], default="csv"
+    )
     export_asim.add_argument("--skip-trips", action="store_true", default=False)
     export_asim.add_argument("--skip-persons", action="store_true", default=False)
     export_asim.add_argument(
@@ -1096,8 +1157,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Persons column rename old:new; repeatable.",
     )
-    export_asim.add_argument("--trips-where", default=None, help="Optional SQL WHERE clause for trips.")
-    export_asim.add_argument("--persons-where", default=None, help="Optional SQL WHERE clause for persons.")
+    export_asim.add_argument(
+        "--trips-where", default=None, help="Optional SQL WHERE clause for trips."
+    )
+    export_asim.add_argument(
+        "--persons-where", default=None, help="Optional SQL WHERE clause for persons."
+    )
     export_asim.set_defaults(func=cmd_export_asim_inputs)
 
     epoch_panel = subparsers.add_parser(
@@ -1185,7 +1250,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    if args.command == "equilibrium-metrics" and not args.dataset_dir and not args.deltas_csv:
+    if (
+        args.command == "equilibrium-metrics"
+        and not args.dataset_dir
+        and not args.deltas_csv
+    ):
         parser.error("equilibrium-metrics requires --dataset-dir or --deltas-csv.")
     if args.command == "activitysim-equilibrium-metrics":
         if not args.dataset_dir and not args.equilibrium_pairs_csv:

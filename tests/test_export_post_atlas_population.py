@@ -10,9 +10,14 @@ from pilates.scripts import export_post_atlas_population as export_script
 
 
 def test_artifact_path_resolves_tracker_uri() -> None:
-    tracker = SimpleNamespace(resolve_uri=lambda uri: uri.replace("workspace://", "/tmp/"))
+    tracker = SimpleNamespace(
+        resolve_uri=lambda uri: uri.replace("workspace://", "/tmp/")
+    )
     artifact = SimpleNamespace(container_uri="workspace://atlas/vehicles2_2025.csv")
-    assert export_script._artifact_path(artifact, tracker) == "/tmp/atlas/vehicles2_2025.csv"
+    assert (
+        export_script._artifact_path(artifact, tracker)
+        == "/tmp/atlas/vehicles2_2025.csv"
+    )
 
 
 def test_normalize_export_frame_promotes_expected_index() -> None:
@@ -51,8 +56,14 @@ def test_match_scenario_step_run_id_prefers_atlas_postprocess_name() -> None:
 
 
 def test_schema_for_artifact_key_uses_registry_mappings() -> None:
-    assert export_script._schema_for_artifact_key("atlas_households_csv").__name__ == "AtlasHousehold"
-    assert export_script._schema_for_artifact_key("householdv_2025").__name__ == "HouseholdVAtlasOut"
+    assert (
+        export_script._schema_for_artifact_key("atlas_households_csv").__name__
+        == "AtlasHousehold"
+    )
+    assert (
+        export_script._schema_for_artifact_key("householdv_2025").__name__
+        == "HouseholdVAtlasOut"
+    )
 
 
 def test_build_export_manifest_records_unique_scenario_run_id(tmp_path: Path) -> None:
@@ -140,12 +151,17 @@ def test_build_translation_manifest_records_years_and_source(tmp_path: Path) -> 
     assert manifest["requested_years"] == [2025, 2027]
     assert manifest["years"] == [2025, 2027]
     assert manifest["year_manifests"]["2025"] == "years/2025/table_manifest.json"
-    assert manifest["source"]["source_export_manifest_copy"] == "source_export_manifest.json"
+    assert (
+        manifest["source"]["source_export_manifest_copy"]
+        == "source_export_manifest.json"
+    )
     assert manifest["source"]["source_export_type"] == "post_atlas_population_extract"
     assert manifest["source"]["run_dir"] == "/tmp/run"
 
 
-def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: Path) -> None:
+def test_extract_year_sql_reconstructs_households_and_writes_parquet(
+    tmp_path: Path,
+) -> None:
     run_dir = tmp_path / "run"
     input_year_dir = run_dir / "atlas" / "atlas_input" / "year2025"
     input_year_dir.mkdir(parents=True)
@@ -180,12 +196,18 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: P
     )
 
     class _Tracker:
-        def find_runs(self, *, model=None, phase=None, year=None, status=None, limit=None):
+        def find_runs(
+            self, *, model=None, phase=None, year=None, status=None, limit=None
+        ):
             assert year == 2025
             if model == "atlas_preprocess" and phase == "preprocess":
-                return [SimpleNamespace(id="pre-1", parent_run_id=None, status="completed")]
+                return [
+                    SimpleNamespace(id="pre-1", parent_run_id=None, status="completed")
+                ]
             if model == "atlas_run" and phase == "run":
-                return [SimpleNamespace(id="run-1", parent_run_id=None, status="completed")]
+                return [
+                    SimpleNamespace(id="run-1", parent_run_id=None, status="completed")
+                ]
             if model == "atlas_postprocess" and phase == "postprocess":
                 return [step_run]
             return []
@@ -235,9 +257,15 @@ def test_extract_year_sql_reconstructs_households_and_writes_parquet(tmp_path: P
 
     conn = duckdb.connect()
     try:
-        households = conn.sql(f"select * from read_parquet('{households_parquet}') order by household_id").fetchall()
-        persons = conn.sql(f"select * from read_parquet('{persons_parquet}') order by person_id").fetchall()
-        vehicles = conn.sql(f"select * from read_parquet('{vehicles_parquet}')").fetchall()
+        households = conn.sql(
+            f"select * from read_parquet('{households_parquet}') order by household_id"
+        ).fetchall()
+        persons = conn.sql(
+            f"select * from read_parquet('{persons_parquet}') order by person_id"
+        ).fetchall()
+        vehicles = conn.sql(
+            f"select * from read_parquet('{vehicles_parquet}')"
+        ).fetchall()
     finally:
         conn.close()
 

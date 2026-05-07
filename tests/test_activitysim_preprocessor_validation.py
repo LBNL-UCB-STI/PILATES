@@ -5,7 +5,9 @@ from pilates.activitysim.preprocessor import _validate_household_person_consiste
 
 
 def test_validate_household_person_consistency_accepts_matching_inputs():
-    households = pd.DataFrame({"persons": [2, 1]}, index=pd.Index([10, 20], name="household_id"))
+    households = pd.DataFrame(
+        {"persons": [2, 1]}, index=pd.Index([10, 20], name="household_id")
+    )
     persons = pd.DataFrame(
         {
             "household_id": [10, 10, 20],
@@ -17,7 +19,9 @@ def test_validate_household_person_consistency_accepts_matching_inputs():
 
 
 def test_validate_household_person_consistency_rejects_households_without_persons():
-    households = pd.DataFrame({"persons": [2, 1]}, index=pd.Index([10, 20], name="household_id"))
+    households = pd.DataFrame(
+        {"persons": [2, 1]}, index=pd.Index([10, 20], name="household_id")
+    )
     persons = pd.DataFrame(
         {
             "household_id": [10, 10],
@@ -30,7 +34,9 @@ def test_validate_household_person_consistency_rejects_households_without_person
 
 
 def test_validate_household_person_consistency_rejects_orphan_person_refs():
-    households = pd.DataFrame({"persons": [2]}, index=pd.Index([10], name="household_id"))
+    households = pd.DataFrame(
+        {"persons": [2]}, index=pd.Index([10], name="household_id")
+    )
     persons = pd.DataFrame(
         {
             "household_id": [10, 99],

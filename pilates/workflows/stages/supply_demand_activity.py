@@ -4,7 +4,7 @@ import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Union
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import (
@@ -20,6 +20,7 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.binding import (
+    ArtifactBindingRule,
     build_binding_plan,
     build_key_only_binding_plan,
 )
@@ -54,11 +55,119 @@ from workflow_state import WorkflowState
 
 logger = logging.getLogger(__name__)
 
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
+
 _ACTIVITYSIM_PILOT_H5_ROLE_KEYS = (
     USIM_POPULATION_SOURCE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_BASE_H5,
 )
+
+
+def _activitysim_population_year(state: WorkflowState) -> int:
+    population_year = getattr(state, "forecast_year", None)
+    if population_year is None:
+        population_year = getattr(state, "year", None)
+    if population_year is None:
+        raise RuntimeError(
+            "WorkflowState.forecast_year or WorkflowState.year must be set before "
+            "ActivitySim population input resolution."
+        )
+    return int(population_year)
+
+
+def _resolve_activitysim_postprocess_h5_role_inputs(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    postprocess_required_keys: tuple[str, ...],
+    postprocess_optional_keys: tuple[str, ...],
+) -> Dict[str, Any]:
+    role_keys = set(postprocess_required_keys) | set(postprocess_optional_keys)
+    if not state.is_enabled(WorkflowState.Stage.land_use):
+        return {}
+
+    explicit_inputs: Dict[str, Any] = {}
+    if USIM_POPULATION_SOURCE_H5 in role_keys:
+        population_binding = build_binding_plan(
+            step_name="activitysim_postprocess",
+            coupler=None,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_POPULATION_SOURCE_H5,
+                    required=USIM_POPULATION_SOURCE_H5 in postprocess_required_keys,
+                    allow_coupler=False,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+                    fallback_provider="activitysim_population_source",
+                ),
+            ),
+            required_keys=(
+                (USIM_POPULATION_SOURCE_H5,)
+                if USIM_POPULATION_SOURCE_H5 in postprocess_required_keys
+                else ()
+            ),
+            optional_keys=(
+                (USIM_POPULATION_SOURCE_H5,)
+                if USIM_POPULATION_SOURCE_H5 in postprocess_optional_keys
+                else ()
+            ),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=state.forecast_year,
+            surface=None,
+        )
+        population_inputs = (
+            population_binding.inputs if population_binding.inputs is not None else {}
+        )
+        population_value = population_inputs.get(USIM_POPULATION_SOURCE_H5)
+        if population_value is not None:
+            explicit_inputs[USIM_POPULATION_SOURCE_H5] = population_value
+
+    if USIM_DATASTORE_CURRENT_H5 in role_keys:
+        # The postprocessor needs two explicit H5 roles: the forecast-year
+        # population source used to build ActivitySim inputs, and the current
+        # datastore being updated for legacy postprocess semantics.
+        current_binding = build_binding_plan(
+            step_name="activitysim_postprocess",
+            coupler=None,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_DATASTORE_CURRENT_H5,
+                    required=USIM_DATASTORE_CURRENT_H5 in postprocess_required_keys,
+                    allow_coupler=False,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+                    fallback_provider="urbansim_inputs_for_year",
+                ),
+            ),
+            required_keys=(
+                (USIM_DATASTORE_CURRENT_H5,)
+                if USIM_DATASTORE_CURRENT_H5 in postprocess_required_keys
+                else ()
+            ),
+            optional_keys=(
+                (USIM_DATASTORE_CURRENT_H5,)
+                if USIM_DATASTORE_CURRENT_H5 in postprocess_optional_keys
+                else ()
+            ),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            year=state.year,
+            surface=None,
+        )
+        current_inputs = (
+            current_binding.inputs if current_binding.inputs is not None else {}
+        )
+        current_value = current_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        if current_value is not None:
+            explicit_inputs[USIM_DATASTORE_CURRENT_H5] = current_value
+
+    return explicit_inputs
 
 
 @dataclass
@@ -231,6 +340,7 @@ def _run_activity_demand_phase(
     settings = runtime_context.settings
     state = runtime_context.state
     workspace = runtime_context.workspace
+    population_year = _activitysim_population_year(state)
 
     formatted_print("ACTIVITY DEMAND MODEL")
     stage_runner = StageRunner(
@@ -306,10 +416,9 @@ def _run_activity_demand_phase(
     else:
         preprocess_explicit_inputs: Optional[Dict[str, Union[str, os.PathLike]]] = None
         if not profile.land_use_enabled:
-            population_source = (
-                resolved_usim_inputs.get(USIM_DATASTORE_BASE_H5)
-                or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
-            )
+            population_source = resolved_usim_inputs.get(
+                USIM_DATASTORE_BASE_H5
+            ) or resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
             if population_source is not None:
                 preprocess_explicit_inputs = {
                     USIM_POPULATION_SOURCE_H5: population_source,
@@ -323,7 +432,7 @@ def _run_activity_demand_phase(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=inputs.year,
+            year=population_year,
             surface=runtime_surface,
         )
 
@@ -473,7 +582,7 @@ def _run_activity_demand_phase(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=inputs.year,
+            year=population_year,
             surface=runtime_surface,
         )
         if compile_binding.missing_required:
@@ -503,11 +612,8 @@ def _run_activity_demand_phase(
     final_cache_path = (
         _resolved_existing_numba_cache_path() if requires_numba_cache else "n/a"
     )
-    if (
-        exact_rewind_restore is None
-        and (
-            not final_zarr_path or (requires_numba_cache and not final_cache_path)
-        )
+    if exact_rewind_restore is None and (
+        not final_zarr_path or (requires_numba_cache and not final_cache_path)
     ):
         missing_parts = []
         if not final_zarr_path:
@@ -556,7 +662,7 @@ def _run_activity_demand_phase(
                 settings=settings,
                 state=state,
                 workspace=workspace,
-                year=inputs.year,
+                year=population_year,
                 surface=runtime_surface,
             ),
             year=state.forecast_year,
@@ -586,22 +692,39 @@ def _run_activity_demand_phase(
             coupler=coupler,
             resolved_usim_inputs=resolved_usim_inputs,
         )
+    postprocess_explicit_inputs = _resolve_activitysim_postprocess_h5_role_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        postprocess_required_keys=postprocess_required_keys,
+        postprocess_optional_keys=postprocess_optional_keys,
+    )
+    postprocess_fallback_inputs = {
+        key: value
+        for key, value in resolved_usim_inputs.items()
+        if key not in {USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5}
+    }
     activitysim_postprocess_binding = build_binding_plan(
         step_name="activitysim_postprocess",
         coupler=coupler,
-        fallback_inputs=resolved_usim_inputs,
+        explicit_inputs=postprocess_explicit_inputs or None,
+        fallback_inputs=postprocess_fallback_inputs or None,
         required_keys=postprocess_required_keys,
         optional_keys=postprocess_optional_keys,
         settings=settings,
         state=state,
         workspace=workspace,
-        year=inputs.year,
+        year=state.forecast_year,
         surface=runtime_surface,
     )
     if activitysim_postprocess_binding.missing_required:
         get_value = getattr(coupler, "get", None)
-        coupler_current = get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
-        coupler_population = get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
+        coupler_current = (
+            get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
+        )
+        coupler_population = (
+            get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
+        )
         raise RuntimeError(
             "ActivitySim postprocess could not resolve its required UrbanSim H5 roles: "
             f"{', '.join(activitysim_postprocess_binding.missing_required)}; "

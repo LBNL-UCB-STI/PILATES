@@ -7,18 +7,22 @@ summary: Concrete checklist from copied scenario config to a successful first lo
 
 ## Do This First
 
-1. Pick an active local template from `scenarios/`, such as a `*-local.yaml` file.
+1. Pick a tracked scenario file from `scenarios/`, such as `scenarios/sfbay/settings-sfbay-newconfig-local.yaml`.
 2. Copy it to a working filename in your checkout.
 3. Edit the paths that point at your machine:
    - `run.output_directory`, which is the parent directory where PILATES will create the archive run directory
    - `run.local_workspace_root` if you want the mutable workspace on a different filesystem
    - any model input folders that are still absolute or environment-specific
-4. Confirm the region-specific data trees referenced by the template exist.
+4. Confirm the region-specific data trees referenced by the scenario file exist.
 5. Run:
 
 ```bash
 python run.py -c path/to/your-settings.yaml
 ```
+
+The tracked scenario files are copy/edit starting points, not turnkey
+machine-independent configs. Before the first run, check every local path, data
+root, workspace root, and enabled model choice in your copied file.
 
 ## What The Launcher Does
 
@@ -29,6 +33,10 @@ python run.py -c path/to/your-settings.yaml
 - It resolves a run-specific archive directory under `run.output_directory`.
 - It uses `run.local_workspace_root` as the mutable workspace parent when that field is set; otherwise it uses the archive side.
 - It creates the run-specific archive directory and mutable workspace, then starts the scenario lifecycle.
+
+Bootstrap happens once before the year loop. On restart, bootstrap-owned
+invariants are replayed through the same cached path where possible, so later
+stages do not need a special "manual rebuild" path just because the run resumed.
 
 ## What Counts As Success
 

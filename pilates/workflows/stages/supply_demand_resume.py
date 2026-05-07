@@ -28,6 +28,7 @@ from pilates.workflows.outputs_base import (
     iter_step_output_items,
     step_output_handoff_mapping,
 )
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
@@ -123,9 +124,7 @@ def seed_supply_demand_parent_run_ids_for_resume(
                 model_name=model_name,
                 year=run_year if run_year is not None else fallback_year,
                 iteration=(
-                    run_iteration
-                    if run_iteration is not None
-                    else fallback_iteration
+                    run_iteration if run_iteration is not None else fallback_iteration
                 ),
                 run_id=run_id,
             )
@@ -185,15 +184,37 @@ def _restore_supply_demand_usim_inputs_for_resume(
     restored: Dict[str, str] = {}
     get_value = getattr(coupler, "get", None)
     set_value = getattr(coupler, "set", None)
-    coupler_current = get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
-    coupler_population = get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
-    if coupler_current is None and coupler_population is not None and callable(set_value):
+    coupler_current = (
+        get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else None
+    )
+    coupler_population = (
+        get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else None
+    )
+    if (
+        coupler_current is None
+        and coupler_population is not None
+        and callable(set_value)
+    ):
         set_value(USIM_DATASTORE_CURRENT_H5, coupler_population)
-        coupler_current = get_value(USIM_DATASTORE_CURRENT_H5) if callable(get_value) else coupler_population
-    if coupler_population is None and coupler_current is not None and callable(set_value):
+        coupler_current = (
+            get_value(USIM_DATASTORE_CURRENT_H5)
+            if callable(get_value)
+            else coupler_population
+        )
+    if (
+        coupler_population is None
+        and coupler_current is not None
+        and callable(set_value)
+    ):
         set_value(USIM_POPULATION_SOURCE_H5, coupler_current)
-        coupler_population = get_value(USIM_POPULATION_SOURCE_H5) if callable(get_value) else coupler_current
-    resolved_coupler_current = _resolved_existing_restore_path(coupler_current, workspace)
+        coupler_population = (
+            get_value(USIM_POPULATION_SOURCE_H5)
+            if callable(get_value)
+            else coupler_current
+        )
+    resolved_coupler_current = _resolved_existing_restore_path(
+        coupler_current, workspace
+    )
     resolved_coupler_population = _resolved_existing_restore_path(
         coupler_population,
         workspace,
@@ -296,7 +317,9 @@ def _restore_activity_demand_outputs_for_resume(
         """
         if ZARR_SKIMS in restored_outputs:
             return restored_outputs
-        processed_outputs = getattr(postprocess_outputs, "processed_outputs", None) or {}
+        processed_outputs = (
+            getattr(postprocess_outputs, "processed_outputs", None) or {}
+        )
         archived_zarr = processed_outputs.get(_ARCHIVED_ZARR_SKIMS_KEY)
         if archived_zarr is None:
             return restored_outputs
@@ -330,9 +353,7 @@ def _restore_activity_demand_outputs_for_resume(
         run_year, run_iteration = _parse_run_id_epoch(run_id)
         remember_restored_run_id(
             model_name="activitysim_run",
-            year=run_year
-            if run_year is not None
-            else getattr(state, "forecast_year", None) or getattr(state, "year", None),
+            year=run_year if run_year is not None else resolve_forecast_year(state),
             iteration=run_iteration
             if run_iteration is not None
             else getattr(state, "current_inner_iter", None),
@@ -351,8 +372,7 @@ def _restore_activity_demand_outputs_for_resume(
         missing_keys = sorted(
             key
             for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS
-            if key not in restored_outputs
-            or not resolved_paths.get(key)
+            if key not in restored_outputs or not resolved_paths.get(key)
         )
         if missing_keys:
             raise RuntimeError(
@@ -360,9 +380,7 @@ def _restore_activity_demand_outputs_for_resume(
                 f"outputs from {source}; missing {missing_keys}"
             )
         return restored_outputs, {
-            key: Path(path)
-            for key, path in resolved_paths.items()
-            if path is not None
+            key: Path(path) for key, path in resolved_paths.items() if path is not None
         }
 
     def _resolved_resume_manifest_path() -> Optional[str]:
@@ -379,8 +397,10 @@ def _restore_activity_demand_outputs_for_resume(
         if not archive_state_path:
             return None
         try:
-            manifest_relative = Path(manifest_path).resolve().relative_to(
-                Path(workspace.full_path).resolve()
+            manifest_relative = (
+                Path(manifest_path)
+                .resolve()
+                .relative_to(Path(workspace.full_path).resolve())
             )
         except Exception:
             return None
@@ -491,14 +511,16 @@ def _restore_activity_demand_outputs_for_resume(
                 )
                 if validated is not None:
                     restored_outputs, resolved_paths = validated
-                    outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-                        usim_datastore_h5=getattr(
-                            postprocess_outputs, "usim_datastore_h5", None
-                        ),
-                        asim_output_dir=getattr(
-                            postprocess_outputs, "asim_output_dir", None
-                        ),
-                        processed_outputs=resolved_paths,
+                    outputs_holder.activitysim_postprocess = (
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=getattr(
+                                postprocess_outputs, "usim_datastore_h5", None
+                            ),
+                            asim_output_dir=getattr(
+                                postprocess_outputs, "asim_output_dir", None
+                            ),
+                            processed_outputs=resolved_paths,
+                        )
                     )
                     _publish_restored_outputs(restored_outputs, resolved_paths)
                     return _resolved_restore_outputs(

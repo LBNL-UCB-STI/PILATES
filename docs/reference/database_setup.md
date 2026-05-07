@@ -32,7 +32,10 @@ PILATES also exposes runtime guardrails around the DB copy and snapshot flow:
 - `run.consist_db_seed_from_shared_on_start`
 - `run.consist_db_seed_strict`
 
-The quickest health check is `get_duckdb_health()` or `print_duckdb_health()` from `pilates.utils.consist_analysis`. Those helpers report whether the DB and WAL exist and whether a read-only open succeeds.
+For archive inspection, use the health surfaces in the analysis package:
+`pilates-consist-analysis db-health`, `AnalysisSession.inspect_db()`,
+`AnalysisSession.assert_db_healthy(...)`, or the lower-level
+`get_db_health(...)` helpers described in [SQL and DuckDB](../analysis/sql_and_duckdb.md).
 
 ## Adjacent Pages
 

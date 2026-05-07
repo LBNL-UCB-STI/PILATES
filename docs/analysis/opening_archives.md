@@ -30,6 +30,32 @@ It resolves the Consist database from one of these paths under that directory wh
 `AnalysisSession.open()` and `open_archive()` both use that same archive resolution path.
 `open_run()` returns the session itself; `open_archive()` wraps the session in an `Archive`.
 
+## Local DB Copy For Notebooks
+
+On HPC, it can be faster and less fragile to copy the archive DuckDB file to
+node-local scratch before starting a notebook. The archive mount should still
+point at the preserved archive run directory; only the DB path changes.
+
+Use the starter notebook:
+
+- repo-local `analysis/notebooks/local_duckdb_scratch_starter.ipynb`
+
+Or copy from a shell first:
+
+```bash
+hpc/copy_duckdb_local.sh --src /path/to/archive/run/.consist/provenance.duckdb
+```
+
+Then pass the copied DB path to `open_archive(...)`:
+
+```python
+archive = open_archive(
+    ARCHIVE_RUN_DIR,
+    project_root=PROJECT_ROOT,
+    db_path=LOCAL_DB_PATH,
+)
+```
+
 ## Fast Mental Model
 
 If you only need the opening rule, it is:

@@ -509,16 +509,10 @@ def golden_stub_env(tmp_path, monkeypatch):
         asim_out_dir / "final_pipeline" / "accessibility" / "final.parquet"
     )
     asim_disagg_accessibility_out_path = (
-        asim_out_dir
-        / "final_pipeline"
-        / "disaggregate_accessibility"
-        / "final.parquet"
+        asim_out_dir / "final_pipeline" / "disaggregate_accessibility" / "final.parquet"
     )
     asim_joint_tour_participants_out_path = (
-        asim_out_dir
-        / "final_pipeline"
-        / "joint_tour_participants"
-        / "final.parquet"
+        asim_out_dir / "final_pipeline" / "joint_tour_participants" / "final.parquet"
     )
     asim_land_use_out_path = (
         asim_out_dir / "final_pipeline" / "land_use" / "final.parquet"
@@ -529,7 +523,9 @@ def golden_stub_env(tmp_path, monkeypatch):
         / "non_mandatory_tour_destination_accessibility"
         / "final.parquet"
     )
-    asim_persons_out_path = asim_out_dir / "final_pipeline" / "persons" / "final.parquet"
+    asim_persons_out_path = (
+        asim_out_dir / "final_pipeline" / "persons" / "final.parquet"
+    )
     asim_tours_out_path = asim_out_dir / "final_pipeline" / "tours" / "final.parquet"
     asim_trips_out_path = asim_out_dir / "final_pipeline" / "trips" / "final.parquet"
     asim_beam_plans_out_path = (
@@ -553,7 +549,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     )
     _write_parquet(
         asim_non_mandatory_accessibility_out_path,
-        pd.DataFrame({"person_id": [11, 21], "destination": [2, 1], "utility": [0.7, 0.4]}),
+        pd.DataFrame(
+            {"person_id": [11, 21], "destination": [2, 1], "utility": [0.7, 0.4]}
+        ),
     )
     _write_parquet(
         asim_households_out_path,
@@ -659,7 +657,9 @@ def golden_stub_env(tmp_path, monkeypatch):
     _write_file(beam_persons_path)
     _write_file(beam_linkstats_path)
 
-    promoted_linkstats = Path(workspace.get_beam_output_dir()) / "promoted_linkstats.csv.gz"
+    promoted_linkstats = (
+        Path(workspace.get_beam_output_dir()) / "promoted_linkstats.csv.gz"
+    )
     promoted_plans = Path(workspace.get_beam_output_dir()) / "promoted_plans.parquet"
     final_skims_omx = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
     _write_file(promoted_linkstats)
@@ -817,7 +817,9 @@ def golden_stub_env(tmp_path, monkeypatch):
                     target_path = iter_dir / f"{clean_name}.parquet"
                     if source_path.exists():
                         shutil.copy2(source_path, target_path)
-                    processed_outputs[normalize_asim_output_key(clean_name)] = target_path
+                    processed_outputs[normalize_asim_output_key(clean_name)] = (
+                        target_path
+                    )
 
                 archived_input_sources = {
                     "asim_input_households_csv_archived": Path(
@@ -836,7 +838,9 @@ def golden_stub_env(tmp_path, monkeypatch):
                         workspace.get_asim_mutable_data_dir()
                     )
                     / "skims.omx",
-                    "asim_input_skims_zarr_archived": Path(workspace.get_asim_output_dir())
+                    "asim_input_skims_zarr_archived": Path(
+                        workspace.get_asim_output_dir()
+                    )
                     / "cache"
                     / "skims.zarr",
                 }
@@ -927,7 +931,9 @@ def golden_stub_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
-def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, tmp_path):
+def test_golden_stub_workflow_stage_contract_with_real_consist(
+    golden_stub_env, tmp_path
+):
     """
     End-to-end narrative test for stage contracts and provenance continuity.
 
@@ -985,10 +991,14 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     coupler_current_h5 = artifact_to_path(coupler.get(USIM_DATASTORE_H5), workspace)
     assert coupler_base_h5 is not None
     assert coupler_current_h5 is not None
-    assert Path(coupler_base_h5).resolve() == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
-    assert Path(coupler_current_h5).resolve() == Path(
-        usim_inputs[USIM_DATASTORE_BASE_H5]
-    ).resolve()
+    assert (
+        Path(coupler_base_h5).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+    )
+    assert (
+        Path(coupler_current_h5).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+    )
 
     # Phase 2: vehicle ownership stage consumes datastore handles and
     # produces Atlas outputs plus ActivitySim-ready tables.
@@ -999,10 +1009,14 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
         build_atlas_static_inputs_fallback=lambda _workspace: {},
         context=golden_stub_env["context"],
     )
-    assert (Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv").exists()
+    assert (
+        Path(workspace.get_atlas_mutable_input_dir()) / "year2017" / "households.csv"
+    ).exists()
     assert (Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv").exists()
     assert not (Path(workspace.get_atlas_output_dir()) / "vehicles2_2019.csv").exists()
-    vehicles2 = pd.read_csv(Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv")
+    vehicles2 = pd.read_csv(
+        Path(workspace.get_atlas_output_dir()) / "vehicles2_2017.csv"
+    )
     assert {
         "household_id",
         "vehicle_id",
@@ -1024,7 +1038,15 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     persons_cols = set(persons.columns)
     assert {"TAZ", "TOTPOP", "TOTHH", "TOTEMP"} <= land_use_cols
     assert {"household_id", "block_id", "income", "persons", "TAZ"} <= households_cols
-    assert {"person_id", "household_id", "age", "TAZ", "ptype", "pemploy", "pstudent"} <= persons_cols
+    assert {
+        "person_id",
+        "household_id",
+        "age",
+        "TAZ",
+        "ptype",
+        "pemploy",
+        "pstudent",
+    } <= persons_cols
     assert int(land_use["TOTPOP"].sum()) == 200
     assert int(households["persons"].sum()) == 3
     assert int((persons["worker"] == 1).sum()) == 2
@@ -1090,11 +1112,41 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     tours_out_cols = set(tours_out.columns)
     trips_out_cols = set(trips_out.columns)
     beam_plans_out_cols = set(beam_plans_out.columns)
-    assert {"household_id", "home_zone_id", "hhsize", "auto_ownership"} <= households_out_cols
-    assert {"person_id", "household_id", "PNUM", "home_zone_id", "is_worker"} <= persons_out_cols
-    assert {"tour_id", "person_id", "household_id", "tour_type", "tour_mode"} <= tours_out_cols
-    assert {"trip_id", "tour_id", "person_id", "household_id", "trip_mode"} <= trips_out_cols
-    assert {"tour_id", "trip_id", "person_id", "PlanElementIndex", "ActivityElement", "ActivityType"} <= beam_plans_out_cols
+    assert {
+        "household_id",
+        "home_zone_id",
+        "hhsize",
+        "auto_ownership",
+    } <= households_out_cols
+    assert {
+        "person_id",
+        "household_id",
+        "PNUM",
+        "home_zone_id",
+        "is_worker",
+    } <= persons_out_cols
+    assert {
+        "tour_id",
+        "person_id",
+        "household_id",
+        "tour_type",
+        "tour_mode",
+    } <= tours_out_cols
+    assert {
+        "trip_id",
+        "tour_id",
+        "person_id",
+        "household_id",
+        "trip_mode",
+    } <= trips_out_cols
+    assert {
+        "tour_id",
+        "trip_id",
+        "person_id",
+        "PlanElementIndex",
+        "ActivityElement",
+        "ActivityType",
+    } <= beam_plans_out_cols
     assert households_out["auto_ownership"].tolist() == [1, 2]
     assert int(persons_out["is_worker"].sum()) == 2
     assert set(tours_out["tour_mode"]) == {"DRIVEALONE", "WALK"}
@@ -1157,16 +1209,16 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(golden_stub_env, 
     assert expected_scenario_output_keys <= set(scenario_outputs)
 
     step_output_keys = {
-        key
-        for step in steps
-        for key in (step.get("outputs") or {}).values()
+        key for step in steps for key in (step.get("outputs") or {}).values()
     }
     assert step_output_keys <= set(scenario_outputs)
 
     for key in expected_scenario_output_keys:
         artifact = scenario_outputs[key]
         artifact_path = getattr(artifact, "path", None)
-        assert artifact_path is not None, f"Artifact {key} did not expose a concrete path"
+        assert artifact_path is not None, (
+            f"Artifact {key} did not expose a concrete path"
+        )
         assert Path(artifact_path).exists(), f"Artifact path for {key} does not exist"
 
     zarr_meta = scenario_outputs[ZARR_SKIMS].meta or {}

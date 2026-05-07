@@ -1,3 +1,15 @@
+"""BEAM workflow steps demonstrating the PILATES-Consist integration pattern.
+
+The binding rules in `pilates.workflows.binding` declare BEAM's required
+inputs, including exact-rewind snapshot artifacts for ActivitySim outputs,
+vehicles, warm starts, and configuration references. The step factories in this
+module convert those bindings into model execution, publish current-role
+outputs through the Consist coupler, and log output-only diagnostic families
+without expanding the handoff surface. Recovery roots remain storage metadata:
+snapshot artifacts describe semantic model boundaries, while archive promotion
+and future Consist recovery policy decide where the bytes can be restored from.
+"""
+
 from __future__ import annotations
 
 import json
@@ -16,7 +28,6 @@ from pilates.beam.config_hocon import (
     load_resolved_beam_config_tree,
 )
 from pilates.config.models import PilatesConfig
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
@@ -30,6 +41,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_INPUT_PLANS_ARCHIVED,
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_INPUT_VEHICLES_ARCHIVED,
+    BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -37,6 +49,7 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for BEAM.
@@ -71,9 +84,7 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-_BEAM_INCLUDE_RE = re.compile(
-    r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))'
-)
+_BEAM_INCLUDE_RE = re.compile(r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))')
 _BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 
 
@@ -177,15 +188,30 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     ),
 }
 
+_BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
+    BEAM_INPUT_PLANS_ARCHIVED: BEAM_PLANS_IN,
+    BEAM_INPUT_HOUSEHOLDS_ARCHIVED: BEAM_HOUSEHOLDS_IN,
+    BEAM_INPUT_PERSONS_ARCHIVED: BEAM_PERSONS_IN,
+    BEAM_INPUT_CONFIG_ARCHIVED: BEAM_CONFIG_FILE,
+    BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: "beam_config_references",
+    BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles_beam_in",
+    BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: LINKSTATS_WARMSTART,
+    BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: "beam_plans_warmstart",
+    BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
+        "beam_experienced_plans_warmstart"
+    ),
+}
+
 
 def _beam_run_snapshot_dir(
     *,
     workspace: Workspace,
     state: WorkflowState,
 ) -> Path:
+    snapshot_year = resolve_forecast_year(state)
     return (
         Path(workspace.get_beam_output_dir())
-        / f"inputs-year-{state.year}-iteration-{state.iteration}"
+        / f"inputs-year-{snapshot_year}-iteration-{state.iteration}"
     )
 
 
@@ -200,12 +226,20 @@ def _beam_input_archive_meta(
         "facet": {
             "artifact_family": "beam_input_archived",
             "input_name": input_name,
+            "source_role": _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP.get(
+                archive_key,
+                input_name,
+            ),
+            "snapshot_role": f"beam_input_{input_name}",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
             "year": year,
             "iteration": iteration,
         },
         "facet_schema_version": "v1",
         "facet_index": True,
     }
+
 
 def _scan_beam_config_includes(root: Path) -> list[Path]:
     seen: set[Path] = set()
@@ -230,6 +264,7 @@ def _scan_beam_config_includes(root: Path) -> list[Path]:
                 continue
             queue.append((current.parent / rel).resolve())
     return ordered
+
 
 def _collect_beam_config_path_references(config_tree: Mapping[str, Any]) -> set[str]:
     refs: set[str] = set()
@@ -375,7 +410,11 @@ def _archive_beam_config_references(
     manifest: Dict[str, str] = {}
     for rel_target, source_path in sorted(
         sources_by_target.items(),
-        key=lambda item: (0 if item[1].is_dir() else 1, len(item[0].parts), item[0].as_posix()),
+        key=lambda item: (
+            0 if item[1].is_dir() else 1,
+            len(item[0].parts),
+            item[0].as_posix(),
+        ),
     ):
         target_path = archive_root / rel_target
         if source_path.is_dir():
@@ -417,29 +456,23 @@ def _resolve_beam_run_warmstart_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> tuple[Optional[tuple[str, str]], Optional[tuple[str, str]]]:
-    plans_match = (
-        _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_OUTPUT_PLANS_XML,
-            workspace=workspace,
-        )
-        or _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_PLANS_OUT,
-            workspace=workspace,
-        )
+    plans_match = _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_OUTPUT_PLANS_XML,
+        workspace=workspace,
+    ) or _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_PLANS_OUT,
+        workspace=workspace,
     )
-    experienced_match = (
-        _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-            workspace=workspace,
-        )
-        or _resolve_existing_coupler_input(
-            coupler=coupler,
-            key=BEAM_EXPERIENCED_PLANS_XML,
-            workspace=workspace,
-        )
+    experienced_match = _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
+        workspace=workspace,
+    ) or _resolve_existing_coupler_input(
+        coupler=coupler,
+        key=BEAM_EXPERIENCED_PLANS_XML,
+        workspace=workspace,
     )
 
     output_root = Path(workspace.get_beam_output_dir()) / settings.run.region
@@ -447,7 +480,11 @@ def _resolve_beam_run_warmstart_inputs(
         scanned_plans_path, scanned_experienced_path = find_last_run_output_plans(
             output_root, "year-"
         )
-        if plans_match is None and scanned_plans_path is not None and scanned_plans_path.exists():
+        if (
+            plans_match is None
+            and scanned_plans_path is not None
+            and scanned_plans_path.exists()
+        ):
             scanned_plans_key = (
                 BEAM_OUTPUT_PLANS_XML
                 if scanned_plans_path.name == "output_plans.xml.gz"
@@ -512,6 +549,7 @@ def _archive_beam_run_inputs(
 ) -> None:
     snapshot_dir = _beam_run_snapshot_dir(workspace=workspace, state=state)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_year = resolve_forecast_year(state)
 
     config_reference_snapshot = _archive_beam_config_references(
         settings=settings,
@@ -528,7 +566,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
@@ -557,7 +595,7 @@ def _archive_beam_run_inputs(
             step_name="beam_run",
             **_beam_input_archive_meta(
                 archive_key=archive_key,
-                year=state.year,
+                year=snapshot_year,
                 iteration=state.iteration,
             ),
         )
@@ -755,8 +793,7 @@ def _execute_beam_postprocess(
         except (TypeError, ValueError):
             parameters = {}
         accepts_zarr_skims = "zarr_skims" in parameters or any(
-            param.kind == inspect.Parameter.VAR_KEYWORD
-            for param in parameters.values()
+            param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
         )
         if accepts_zarr_skims:
             return postprocessor.postprocess(
@@ -814,10 +851,12 @@ def _recover_beam_preprocess_outputs(
     prepared_inputs: Dict[str, Path] = {}
     if step_inputs:
         allowed_keys = {
+            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
             LINKSTATS_WARMSTART,
+            "vehicles_beam_in",
         }
         for key, value in step_inputs.items():
             if key not in allowed_keys:
@@ -895,36 +934,47 @@ def _beam_step_runtime(ctx: Any) -> tuple[Any, Any, Any]:
 
 def _beam_preprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPreprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_preprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.preprocessor import BeamPreprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPreprocessor.expected_outputs(settings, state, workspace)
 
 
 def _beam_run_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
-    return BeamRunner.runtime_expected_inputs(settings, state, workspace)
+    inputs = dict(BeamRunner.runtime_expected_inputs(settings, state, workspace))
+    # The BEAM input directory is a container mount, not a semantic cache input
+    # for beam_run. Population inputs in that tree are logged as explicit
+    # artifacts and the static network remains covered by the BEAM config adapter.
+    inputs.pop(BEAM_MUTABLE_DATA_DIR, None)
+    return inputs
 
 
 def _beam_run_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamRunner.expected_outputs(settings, state, workspace)
 
 
 def _beam_postprocess_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamPostprocessor.expected_inputs(settings, state, workspace)
 
 
 def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.postprocessor import BeamPostprocessor
+
     settings, state, workspace = _beam_step_runtime(ctx)
     expected = BeamPostprocessor.expected_outputs(settings, state, workspace)
     if ZARR_SKIMS in expected:
@@ -934,12 +984,14 @@ def _beam_postprocess_output_paths(ctx: Any) -> Dict[str, Any]:
 
 def _beam_full_skim_inputs(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamFullSkimRunner.expected_inputs(settings, state, workspace)
 
 
 def _beam_full_skim_output_paths(ctx: Any) -> Dict[str, Any]:
     from pilates.beam.runner import BeamFullSkimRunner
+
     settings, state, workspace = _beam_step_runtime(ctx)
     return BeamFullSkimRunner.expected_outputs(settings, state, workspace)
 
@@ -1039,7 +1091,9 @@ def make_beam_preprocess_step(
             model_name="beam",
             phase="preprocess",
             outputs_class=BeamPreprocessOutputs,
-            component_getter=lambda factory, state: factory.get_preprocessor("beam", state),
+            component_getter=lambda factory, state: factory.get_preprocessor(
+                "beam", state
+            ),
             component_executor=lambda component, workspace, outputs_holder, **kwargs: (
                 _execute_beam_preprocess(
                     component,

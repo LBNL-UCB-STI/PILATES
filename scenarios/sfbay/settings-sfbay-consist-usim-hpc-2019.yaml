@@ -250,7 +250,6 @@ shared:
     enabled: true
     type: duckdb
     path: /global/home/users/$USER/scratch/sources/PILATES/pilates/database/provenance_sfbay_short.duckdb
-    use_consist: true
 
 # =============================================================================
 # INFRASTRUCTURE CONFIGURATION
@@ -262,7 +261,7 @@ infrastructure:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
     activitysim: docker://zaneedell/activitysim:0.2.17
-    beam: docker://zaneedell/beam:1.1-beta-v260421
+    beam: docker://zaneedell/beam:1.1-beta-v260422
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7

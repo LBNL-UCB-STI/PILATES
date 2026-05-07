@@ -69,7 +69,9 @@ def _apply_duckdb_runtime_settings(
         threads = max(1, int(duckdb_threads))
         session.exec(text(f"SET threads = {threads}"))
     if duckdb_memory_limit:
-        session.exec(text(f"SET memory_limit = {_sql_literal(str(duckdb_memory_limit))}"))
+        session.exec(
+            text(f"SET memory_limit = {_sql_literal(str(duckdb_memory_limit))}")
+        )
     if duckdb_temp_directory:
         temp_dir = str(Path(duckdb_temp_directory).expanduser().resolve())
         session.exec(text(f"SET temp_directory = {_sql_literal(temp_dir)}"))
@@ -144,7 +146,9 @@ def create_analysis_tracker(
     if not db_path_obj.exists():
         raise FileNotFoundError(f"Consist DB not found: {db_path_obj}")
     if not archive_run_dir_path.exists():
-        raise FileNotFoundError(f"Archive run directory not found: {archive_run_dir_path}")
+        raise FileNotFoundError(
+            f"Archive run directory not found: {archive_run_dir_path}"
+        )
 
     mounts = build_archive_mounts(
         archive_run_dir=archive_run_dir_path,
@@ -242,8 +246,7 @@ def print_duckdb_health(
             print(f"  Open probe error: {info['duckdb_open_error']}")
         else:
             print(
-                "  Open probe: "
-                f"{float(info['duckdb_open_seconds'] or 0.0):.3f} seconds"
+                f"  Open probe: {float(info['duckdb_open_seconds'] or 0.0):.3f} seconds"
             )
     return info
 
@@ -354,7 +357,9 @@ def _facet_map_from_artifact_kv(
             if key_path not in _LINKSTATS_FACET_KEYS:
                 continue
             resolved_ids.add(normalized)
-            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(row)
+            facet_map.setdefault(normalized, {})[key_path] = _decode_artifact_kv_value(
+                row
+            )
         return resolved_ids
 
     def _query_rows(artifact_ids_subset: list[Any], ns: Optional[str]) -> list[Any]:
@@ -363,10 +368,14 @@ def _facet_map_from_artifact_kv(
         rows: list[Any] = []
         for chunk in _chunked(artifact_ids_subset, 1000):
             with db.session_scope() as session:
-                statement = select(ArtifactKV).where(col(ArtifactKV.artifact_id).in_(chunk))
+                statement = select(ArtifactKV).where(
+                    col(ArtifactKV.artifact_id).in_(chunk)
+                )
                 if ns is not None:
                     statement = statement.where(ArtifactKV.namespace == ns)
-                statement = statement.where(col(ArtifactKV.key_path).in_(_LINKSTATS_FACET_KEYS))
+                statement = statement.where(
+                    col(ArtifactKV.key_path).in_(_LINKSTATS_FACET_KEYS)
+                )
                 rows.extend(session.exec(statement).all())
         return rows
 
@@ -568,7 +577,11 @@ def find_linkstats_artifacts(
             continue
         if year is not None and row_year is not None and row_year != int(year):
             continue
-        if iteration is not None and row_iteration is not None and row_iteration != int(iteration):
+        if (
+            iteration is not None
+            and row_iteration is not None
+            and row_iteration != int(iteration)
+        ):
             continue
 
         output_rows.append(
@@ -576,8 +589,12 @@ def find_linkstats_artifacts(
                 "key": key,
                 "artifact_id": str(artifact_id or ""),
                 "run_id": getattr(artifact, "run_id", None),
-                "parent_run_id": parent_map.get(str(getattr(artifact, "run_id", "") or "").strip()),
-                "header_run_id": parent_map.get(str(getattr(artifact, "run_id", "") or "").strip()),
+                "parent_run_id": parent_map.get(
+                    str(getattr(artifact, "run_id", "") or "").strip()
+                ),
+                "header_run_id": parent_map.get(
+                    str(getattr(artifact, "run_id", "") or "").strip()
+                ),
                 "container_uri": getattr(artifact, "container_uri", None),
                 "facet_source": facet_source,
                 "artifact_family": facet.get("artifact_family"),
@@ -594,7 +611,13 @@ def find_linkstats_artifacts(
             frame[column] = pd.to_numeric(frame[column], errors="coerce")
     sort_cols = [
         col
-        for col in ("year", "iteration", "beam_sub_iteration", "phys_sim_iteration", "key")
+        for col in (
+            "year",
+            "iteration",
+            "beam_sub_iteration",
+            "phys_sim_iteration",
+            "key",
+        )
         if col in frame.columns
     ]
     return frame.sort_values(sort_cols, na_position="last").reset_index(drop=True)
@@ -625,8 +648,7 @@ def assign_effective_beam_sub_iteration(
     missing = [col for col in (*group_cols, source_col) if col not in frame.columns]
     if missing:
         raise ValueError(
-            "assign_effective_beam_sub_iteration missing required columns: "
-            f"{missing}"
+            f"assign_effective_beam_sub_iteration missing required columns: {missing}"
         )
 
     frame[source_col] = pd.to_numeric(frame[source_col], errors="coerce")
@@ -762,9 +784,7 @@ def _summarize_linkstats_grouped_view(
     traveltime_weighting: Literal["unweighted", "volume_weighted"] = "unweighted",
 ) -> pd.DataFrame:
     volume_sum_expr = "SUM(CAST(src.volume AS DOUBLE))"
-    vmt_miles_expr = (
-        f"SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE}"
-    )
+    vmt_miles_expr = f"SUM(CAST(src.volume AS DOUBLE) * CAST(src.length AS DOUBLE)) / {_METERS_PER_MILE}"
     freeflow_time_expr = (
         "CASE "
         "WHEN CAST(src.freespeed AS DOUBLE) > 0 "
@@ -1110,13 +1130,21 @@ def _summarize_linkstats_metric_deltas_from_summary(
 
 
 def _resolve_delta_grouped_view_name(summary_df: pd.DataFrame) -> str:
-    required_cols = {"year", "iteration", "phys_sim_iteration", "artifact_id", "view_name"}
+    required_cols = {
+        "year",
+        "iteration",
+        "phys_sim_iteration",
+        "artifact_id",
+        "view_name",
+    }
     missing = sorted(required_cols - set(summary_df.columns))
     if missing:
         raise ValueError(f"summary_df missing required columns: {missing}")
     non_null_views = summary_df["view_name"].dropna().astype(str).unique().tolist()
     if len(non_null_views) != 1:
-        raise ValueError("summary_df must reference exactly one grouped view in 'view_name'")
+        raise ValueError(
+            "summary_df must reference exactly one grouped view in 'view_name'"
+        )
     return non_null_views[0]
 
 
@@ -1537,10 +1565,18 @@ def summarize_linkstats_deltas(
         "view_prev",
         "view_curr",
     ]
-    volume_cols = key_cols + ["group_count", "volume_delta_mean", "volume_delta_abs_mean"]
-    merged = travel_df.merge(volume_df[volume_cols], on=key_cols, how="outer", suffixes=("", "_volume"))
+    volume_cols = key_cols + [
+        "group_count",
+        "volume_delta_mean",
+        "volume_delta_abs_mean",
+    ]
+    merged = travel_df.merge(
+        volume_df[volume_cols], on=key_cols, how="outer", suffixes=("", "_volume")
+    )
     if "group_count_volume" in merged.columns:
-        merged["group_count"] = merged["group_count"].fillna(merged["group_count_volume"])
+        merged["group_count"] = merged["group_count"].fillna(
+            merged["group_count_volume"]
+        )
         merged = merged.drop(columns=["group_count_volume"])
     return merged
 
@@ -1621,8 +1657,12 @@ def _resolve_link_filter_reference_artifact_ids(
     """
     Resolve reference artifacts used to compute link-volume coverage.
     """
-    artifact_ids = artifact_index_df.get("artifact_id", pd.Series(dtype=str)).astype(str).tolist()
-    artifact_ids = [artifact_id.strip() for artifact_id in artifact_ids if artifact_id.strip()]
+    artifact_ids = (
+        artifact_index_df.get("artifact_id", pd.Series(dtype=str)).astype(str).tolist()
+    )
+    artifact_ids = [
+        artifact_id.strip() for artifact_id in artifact_ids if artifact_id.strip()
+    ]
     if not artifact_ids:
         return []
     if strategy == "first":
@@ -1634,7 +1674,9 @@ def _resolve_link_filter_reference_artifact_ids(
     raise ValueError(f"Unsupported link_filter_strategy: {strategy}")
 
 
-def _linkstats_metric_row_expr(metric: Literal["speed_mph", "traveltime_sec", "delay_ratio"]) -> str:
+def _linkstats_metric_row_expr(
+    metric: Literal["speed_mph", "traveltime_sec", "delay_ratio"],
+) -> str:
     if metric == "speed_mph":
         return (
             "CASE "
@@ -1731,7 +1773,9 @@ def build_linkstats_hourly_pca_matrix(
         "/ SUM(CAST(src.volume AS DOUBLE)) "
         f"ELSE AVG({metric_row_expr}) END"
     )
-    volume_filter_sql = "AND CAST(src.volume AS DOUBLE) > 0" if exclude_zero_volume else ""
+    volume_filter_sql = (
+        "AND CAST(src.volume AS DOUBLE) > 0" if exclude_zero_volume else ""
+    )
 
     artifact_values_sql = ", ".join(
         f"({_sql_literal(row.artifact_id)}, {int(row.observation_index)})"
@@ -1857,7 +1901,9 @@ def build_linkstats_hourly_pca_matrix(
             "view_name": view_name,
         }
 
-    hour_bin_expr = f"CAST(FLOOR(CAST(src.hour AS DOUBLE) / {int(hour_group_size)}) AS BIGINT)"
+    hour_bin_expr = (
+        f"CAST(FLOOR(CAST(src.hour AS DOUBLE) / {int(hour_group_size)}) AS BIGINT)"
+    )
     matrix_query = text(
         common_cte
         + f"""
@@ -1909,23 +1955,42 @@ def build_linkstats_hourly_pca_matrix(
         dtype=np.dtype(dtype),
     )
     if not matrix_long_df.empty:
-        obs_idx = pd.to_numeric(
-            matrix_long_df["observation_index"],
-            errors="coerce",
-        ).fillna(-1).astype(int).to_numpy()
-        link_idx = pd.to_numeric(
-            matrix_long_df["link_index"],
-            errors="coerce",
-        ).fillna(-1).astype(int).to_numpy()
-        hour_idx = pd.to_numeric(
-            matrix_long_df["hour_bin"],
-            errors="coerce",
-        ).fillna(-1).astype(int).to_numpy()
+        obs_idx = (
+            pd.to_numeric(
+                matrix_long_df["observation_index"],
+                errors="coerce",
+            )
+            .fillna(-1)
+            .astype(int)
+            .to_numpy()
+        )
+        link_idx = (
+            pd.to_numeric(
+                matrix_long_df["link_index"],
+                errors="coerce",
+            )
+            .fillna(-1)
+            .astype(int)
+            .to_numpy()
+        )
+        hour_idx = (
+            pd.to_numeric(
+                matrix_long_df["hour_bin"],
+                errors="coerce",
+            )
+            .fillna(-1)
+            .astype(int)
+            .to_numpy()
+        )
         feature_idx = link_idx * hour_bins + hour_idx
-        values = pd.to_numeric(
-            matrix_long_df["metric_value"],
-            errors="coerce",
-        ).fillna(float(fill_value)).to_numpy(dtype=np.dtype(dtype))
+        values = (
+            pd.to_numeric(
+                matrix_long_df["metric_value"],
+                errors="coerce",
+            )
+            .fillna(float(fill_value))
+            .to_numpy(dtype=np.dtype(dtype))
+        )
 
         valid = (
             (obs_idx >= 0)
@@ -1935,10 +2000,14 @@ def build_linkstats_hourly_pca_matrix(
         )
         matrix[obs_idx[valid], feature_idx[valid]] = values[valid]
 
-    link_index_df["link_index"] = pd.to_numeric(
-        link_index_df["link_index"],
-        errors="coerce",
-    ).fillna(-1).astype(int)
+    link_index_df["link_index"] = (
+        pd.to_numeric(
+            link_index_df["link_index"],
+            errors="coerce",
+        )
+        .fillna(-1)
+        .astype(int)
+    )
     link_index_df["daily_volume"] = pd.to_numeric(
         link_index_df["daily_volume"],
         errors="coerce",

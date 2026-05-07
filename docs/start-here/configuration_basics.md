@@ -22,10 +22,29 @@ summary: Mental model for how PILATES config is organized before the full refere
 
 Those runtime flags are initialized once during launcher startup and then reused through the enabled workflow surface. PILATES no longer expects each subsystem to rebuild its own view of which stages, steps, or restart contracts are active.
 
+## Runtime State And The Two Workspaces
+
+Two runtime concepts show up in nearly every other doc, and it helps to name
+them before reading further:
+
+- **`WorkflowState`** is the persisted record of where a run is in its
+  year/stage/iteration progression. It is reconstructed from
+  `run_state.yaml` inside the archive run directory and is what restart
+  resumes from. You will not normally edit it by hand.
+- **Archive run directory vs. mutable workspace.** PILATES separates the
+  *durable record* of a run (the archive — what gets promoted, queried, and
+  shared) from the *fast scratch space* models actually read and write
+  during execution (the mutable workspace).
+  - On a single laptop they typically point at the same filesystem, and you
+    can ignore the distinction.
+  - On a cluster you usually want the archive on a durable shared filesystem
+    and the workspace on faster local or scratch storage. See
+    [HPC Overview](../run/hpc_overview.md) for the recommended split.
+
 ## The Practical Config Split
 
 - `run.output_directory` sets the parent directory where the launcher creates the archive run directory for each run.
-- `run.local_workspace_root` sets the parent directory for the mutable workspace when you want it to differ from the archive side.
+- `run.local_workspace_root` sets the parent directory for the mutable workspace when you want it to differ from the archive side. Leave it unset to colocate workspace and archive (typical on a laptop).
 - `run.recovery_archive_roots` sets optional colder post-run archive destinations for promotion after the run finishes.
 - `run.output_run_name` is part of the generated run-directory name.
 - `run.enable_archive_copy`, `run.bootstrap_cache_enabled`, `run.restart_strict`, and the Consist DB snapshot fields change runtime behavior, not model science.

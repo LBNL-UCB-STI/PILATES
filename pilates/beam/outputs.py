@@ -77,7 +77,9 @@ class _BeamPostprocessExpectedOutputsValidator:
                     metadata={"activity_demand_model": activity_demand_model},
                 )
             )
-        if (write_omx or land_use_model == "urbansim") and outputs.final_skims_omx is None:
+        if (
+            write_omx or land_use_model == "urbansim"
+        ) and outputs.final_skims_omx is None:
             results.append(
                 ValidationResult(
                     message=(
@@ -163,7 +165,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BeamPreprocessOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         prepared_inputs: Dict[str, Path] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
@@ -235,9 +237,7 @@ class BeamRunOutputs(StepOutputsBase):
             return (year, iteration, sub_iteration)
         return None
 
-    def _latest_raw_output_for_prefix(
-        self, prefix: str
-    ) -> Optional[Tuple[str, Path]]:
+    def _latest_raw_output_for_prefix(self, prefix: str) -> Optional[Tuple[str, Path]]:
         best_key: Optional[str] = None
         best_path: Optional[Path] = None
         best_rank: Optional[Tuple[int, int, int]] = None
@@ -311,9 +311,7 @@ class BeamRunOutputs(StepOutputsBase):
     def promoted_experienced_plans_xml_for_publication(
         self,
     ) -> Optional[Tuple[str, Path]]:
-        return self._latest_publication_output_for_prefix(
-            BEAM_EXPERIENCED_PLANS_XML
-        )
+        return self._latest_publication_output_for_prefix(BEAM_EXPERIENCED_PLANS_XML)
 
     def iter_linkstats_parquet_outputs(self) -> Iterable[Tuple[str, Path]]:
         for key, path in self.raw_outputs.items():
@@ -419,7 +417,7 @@ class BeamRunOutputs(StepOutputsBase):
         BeamRunOutputs
             Parsed outputs.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         raw_outputs: Dict[str, Path] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
@@ -494,7 +492,7 @@ class BeamPostprocessOutputs(StepOutputsBase):
         """
         Build outputs from a RecordStore.
         """
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         values: Dict[str, Any] = {}
         zarr_path = artifact_to_path(mapping.get(ZARR_SKIMS), workspace)
         if zarr_path is not None:
@@ -552,7 +550,7 @@ class BeamFullSkimOutputs(StepOutputsBase):
     def from_record_store(
         cls, record_store: RecordStore, workspace: "Workspace"
     ) -> "BeamFullSkimOutputs":
-        mapping = record_store.to_mapping() if record_store is not None else {}
+        mapping = record_store.to_mapping()
         path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
         if path is None:
             raise ValueError("Missing beam_full_skims in record store.")

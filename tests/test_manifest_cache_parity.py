@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 from types import SimpleNamespace
+from typing import Optional
 
 import yaml
 import pytest
@@ -89,14 +90,20 @@ class DummyWorkspace:
 
 
 class DummyScenario:
-    def __init__(self, *, cache_hit: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        cache_hit: bool = False,
+        cached_outputs: Optional[dict[str, object]] = None,
+    ) -> None:
         self.cache_hit = cache_hit
+        self.cached_outputs = cached_outputs or {}
         self.calls = []
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
         if self.cache_hit:
-            return SimpleNamespace(cache_hit=True)
+            return SimpleNamespace(cache_hit=True, outputs=self.cached_outputs)
 
         fn = kwargs["fn"]
         runtime_kwargs = kwargs["execution_options"].runtime_kwargs
@@ -166,14 +173,15 @@ def _snapshot_state(
     outputs = holder.get_attribute(step_name)
     assert outputs is not None
     mapping = {
-        key: str(value)
-        for key, value in outputs.to_record_store().to_mapping().items()
+        key: str(value) for key, value in outputs.to_record_store().to_mapping().items()
     }
     return {
         "type": type(outputs).__name__,
         "serialized": serialize_step_outputs(outputs),
         "mapping": mapping,
-        "coupler": {key: str(artifact_to_path(coupler.get(key), None)) for key in coupler_keys},
+        "coupler": {
+            key: str(artifact_to_path(coupler.get(key), None)) for key in coupler_keys
+        },
     }
 
 
@@ -499,6 +507,146 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
     assert manifest_result["scenario"].calls == []
     assert cache_result["snapshot"] == fresh_snapshot
     assert manifest_result["snapshot"] == fresh_snapshot
+
+
+def test_activitysim_postprocess_cache_hit_recovers_from_cached_output_paths(tmp_path):
+    workspace = DummyWorkspace(tmp_path / "current")
+    cached_root = tmp_path / "cached_run"
+    cached_iter_dir = cached_root / "activitysim" / "output" / "year-2018-iteration-0"
+    cached_inputs_dir = (
+        cached_root / "activitysim" / "output" / "inputs-year-2018-iteration-0"
+    )
+    households = cached_iter_dir / "households.parquet"
+    persons = cached_iter_dir / "persons.parquet"
+    beam_plans = cached_iter_dir / "beam_plans.parquet"
+    archived_households = cached_inputs_dir / "households.csv"
+    archived_persons = cached_inputs_dir / "persons.csv"
+    archived_land_use = cached_inputs_dir / "land_use.csv"
+    archived_zarr = cached_inputs_dir / "skims.zarr"
+    for path in (
+        households,
+        persons,
+        beam_plans,
+        archived_households,
+        archived_persons,
+        archived_land_use,
+        archived_zarr,
+    ):
+        _write_file(path)
+
+    usim_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_2018.h5"
+    _write_file(usim_h5)
+    Path(workspace.get_asim_output_dir()).mkdir(parents=True)
+    assert not (
+        Path(workspace.get_asim_output_dir()) / "year-2018-iteration-0"
+    ).exists()
+
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
+    holder = StepOutputsHolder()
+    holder.activitysim_run = object()
+    coupler = DummyCoupler()
+    step = make_activitysim_postprocess_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    cached_outputs = {
+        "households_asim_out": str(households),
+        "persons_asim_out": str(persons),
+        "beam_plans_asim_out": str(beam_plans),
+        "asim_input_households_csv_archived": str(archived_households),
+        "asim_input_persons_csv_archived": str(archived_persons),
+        "asim_input_land_use_csv_archived": str(archived_land_use),
+        "asim_input_skims_zarr_archived": str(archived_zarr),
+    }
+    run_manifested_steps(
+        stage_name="activitysim_postprocess_cache_recovery",
+        steps=[
+            StepRef(
+                name="activitysim_postprocess",
+                step_func=step,
+                inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
+            )
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=tmp_path / "manifest.yaml"),
+        scenario=DummyScenario(cache_hit=True, cached_outputs=cached_outputs),
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="parity",
+        iteration=0,
+    )
+
+    recovered = holder.activitysim_postprocess
+    assert recovered is not None
+    assert recovered.processed_outputs["households_asim_out"] == households
+    assert recovered.processed_outputs["persons_asim_out"] == persons
+    assert recovered.processed_outputs["beam_plans_asim_out"] == beam_plans
+    assert (
+        recovered.processed_outputs["asim_input_skims_zarr_archived"] == archived_zarr
+    )
+
+
+def test_activitysim_run_cache_hit_recovers_from_cached_output_paths(tmp_path):
+    workspace = DummyWorkspace(tmp_path / "current")
+    cached_root = tmp_path / "cached_run"
+    cached_iter_dir = cached_root / "activitysim" / "output" / "year-2018-iteration-0"
+    households = cached_iter_dir / "households.parquet"
+    persons = cached_iter_dir / "persons.parquet"
+    beam_plans = cached_iter_dir / "beam_plans.parquet"
+    zarr_skims = cached_root / "activitysim" / "output" / "cache" / "skims.zarr"
+    for path in (households, persons, beam_plans, zarr_skims):
+        _write_file(path)
+
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    asim_output_dir.mkdir(parents=True)
+    assert not (asim_output_dir / "final_pipeline").exists()
+    assert not (asim_output_dir / "year-2018-iteration-0").exists()
+
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
+    holder = StepOutputsHolder()
+    holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=Path(workspace.get_asim_mutable_data_dir()) / "land_use.csv",
+        households_table=Path(workspace.get_asim_mutable_data_dir()) / "households.csv",
+        persons_table=Path(workspace.get_asim_mutable_data_dir()) / "persons.csv",
+    )
+    coupler = DummyCoupler()
+    step = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    cached_outputs = {
+        "households_asim_out": str(households),
+        "persons_asim_out": str(persons),
+        "beam_plans_asim_out": str(beam_plans),
+        ZARR_SKIMS: str(zarr_skims),
+    }
+    run_manifested_steps(
+        stage_name="activitysim_run_cache_recovery",
+        steps=[StepRef(name="activitysim_run", step_func=step)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=tmp_path / "manifest.yaml"),
+        scenario=DummyScenario(cache_hit=True, cached_outputs=cached_outputs),
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="parity",
+        iteration=0,
+    )
+
+    recovered = holder.activitysim_run
+    assert recovered is not None
+    assert recovered.raw_outputs["households_asim_out"] == households
+    assert recovered.raw_outputs["persons_asim_out"] == persons
+    assert recovered.raw_outputs["beam_plans_asim_out"] == beam_plans
+    assert recovered.source_input_paths[ZARR_SKIMS] == zarr_skims
 
 
 def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifest(

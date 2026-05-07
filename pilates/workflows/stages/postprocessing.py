@@ -3,13 +3,11 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
-from workflow_state import WorkflowState
 
 from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
 from pilates.workflows.steps import (

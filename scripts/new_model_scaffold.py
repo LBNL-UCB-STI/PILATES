@@ -171,7 +171,9 @@ def _resolve_catalog_options(
 ) -> CatalogScaffoldOptions:
     default_catalog_stage = _MAJOR_STAGE_TO_CATALOG_STAGE.get(major_stage, major_stage)
     stage_name = _normalize_optional_arg(catalog_stage_arg) or default_catalog_stage
-    default_enablement = _CATALOG_STAGE_ENABLEMENT_DEFAULTS.get(stage_name, (None, None))
+    default_enablement = _CATALOG_STAGE_ENABLEMENT_DEFAULTS.get(
+        stage_name, (None, None)
+    )
     enabled_flag_attr = _normalize_optional_arg(enabled_flag_attr_arg)
     enabled_model_attr = _normalize_optional_arg(enabled_model_attr_arg)
     if enabled_flag_attr is None and enabled_flag_attr_arg is None:
@@ -215,7 +217,9 @@ def _resolve_stage_patch_plan_options(
     target_module = Path(
         _normalize_optional_arg(stage_target_module_arg) or default_target_module
     )
-    stage_function = _normalize_optional_arg(stage_target_function_arg) or _MAJOR_STAGE_TO_STAGE_FUNCTION.get(
+    stage_function = _normalize_optional_arg(
+        stage_target_function_arg
+    ) or _MAJOR_STAGE_TO_STAGE_FUNCTION.get(
         major_stage,
         f"run_{major_stage}_stage",
     )
@@ -378,7 +382,9 @@ def _next_catalog_order(text: str) -> int:
     return max(matches) + 10
 
 
-def _upsert_model_factory(repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool) -> Tuple[Path, bool]:
+def _upsert_model_factory(
+    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
+) -> Tuple[Path, bool]:
     path = repo_root / "pilates/generic/model_factory.py"
     text = _read_text(path)
     original = text
@@ -414,7 +420,9 @@ def _upsert_model_factory(repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool)
     return path, changed
 
 
-def _upsert_steps_init(repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool) -> Tuple[Path, bool]:
+def _upsert_steps_init(
+    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
+) -> Tuple[Path, bool]:
     path = repo_root / "pilates/workflows/steps/__init__.py"
     text = _read_text(path)
     original = text
@@ -470,7 +478,9 @@ def _upsert_steps_init(repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool) ->
     return path, changed
 
 
-def _insert_block_before(text: str, *, anchor: str, block: str, dedupe_token: str) -> str:
+def _insert_block_before(
+    text: str, *, anchor: str, block: str, dedupe_token: str
+) -> str:
     if dedupe_token in text:
         return text
     idx = text.find(anchor)
@@ -479,7 +489,9 @@ def _insert_block_before(text: str, *, anchor: str, block: str, dedupe_token: st
     return text[:idx] + block + text[idx:]
 
 
-def _upsert_steps_shared(repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool) -> Tuple[Path, bool]:
+def _upsert_steps_shared(
+    repo_root: Path, spec: ScaffoldSpec, *, dry_run: bool
+) -> Tuple[Path, bool]:
     path = repo_root / "pilates/workflows/steps/shared.py"
     text = _read_text(path)
     original = text
@@ -536,9 +548,13 @@ def _workflow_spec_optional_lines(
 ) -> str:
     lines: List[str] = []
     if catalog_options.enabled_flag_attr is not None:
-        lines.append(f'        enabled_flag_attr="{catalog_options.enabled_flag_attr}",')
+        lines.append(
+            f'        enabled_flag_attr="{catalog_options.enabled_flag_attr}",'
+        )
     if catalog_options.enabled_model_attr is not None:
-        lines.append(f'        enabled_model_attr="{catalog_options.enabled_model_attr}",')
+        lines.append(
+            f'        enabled_model_attr="{catalog_options.enabled_model_attr}",'
+        )
     if provenance_ref is not None:
         lines.append(f"        provenance={provenance_ref},")
     if not lines:
@@ -576,7 +592,7 @@ def _upsert_workflow_catalog(
     if catalog_options.provenance_builder_key is not None:
         provenance_ref = spec.provenance_constant_name
         provenance_block = (
-            f'{provenance_ref} = WorkflowStepProvenanceSpec('
+            f"{provenance_ref} = WorkflowStepProvenanceSpec("
             f'builder_key="{catalog_options.provenance_builder_key}")\n\n'
         )
         text = _insert_once(
@@ -643,8 +659,9 @@ def _upsert_workflow_catalog(
 
 
 def _render_preprocessor(spec: ScaffoldSpec) -> str:
-    return dedent(
-        f'''
+    return (
+        dedent(
+            f'''
         from __future__ import annotations
 
         from typing import TYPE_CHECKING, Tuple
@@ -676,12 +693,15 @@ def _render_preprocessor(spec: ScaffoldSpec) -> str:
                 """Build and return {spec.class_prefix} preprocess artifacts."""
                 return RecordStore()
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_runner(spec: ScaffoldSpec) -> str:
-    return dedent(
-        f'''
+    return (
+        dedent(
+            f'''
         from __future__ import annotations
 
         from typing import TYPE_CHECKING
@@ -704,12 +724,15 @@ def _render_runner(spec: ScaffoldSpec) -> str:
                 """Run {spec.class_prefix} and return raw output artifacts."""
                 return RecordStore()
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_postprocessor(spec: ScaffoldSpec) -> str:
-    return dedent(
-        f'''
+    return (
+        dedent(
+            f'''
         from __future__ import annotations
 
         from typing import Optional, TYPE_CHECKING
@@ -733,12 +756,15 @@ def _render_postprocessor(spec: ScaffoldSpec) -> str:
                 """Transform raw outputs into publishable artifacts."""
                 return raw_outputs
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_outputs(spec: ScaffoldSpec) -> str:
-    return dedent(
-        f'''
+    return (
+        dedent(
+            f'''
         from __future__ import annotations
 
         from dataclasses import dataclass, field
@@ -851,12 +877,15 @@ def _render_outputs(spec: ScaffoldSpec) -> str:
                     processed_outputs=processed_outputs,
                 )
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_step_module(spec: ScaffoldSpec) -> str:
-    return dedent(
-        f'''
+    return (
+        dedent(
+            f'''
         from __future__ import annotations
 
         from typing import Any, Callable
@@ -940,9 +969,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="preprocess",
                     outputs_class={spec.preprocess_output_class},
                     component_getter=lambda factory, state: factory.get_preprocessor(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_preprocess,
                     outputs_holder_key="{spec.holder_prefix}_preprocess",
@@ -984,9 +1011,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="run",
                     outputs_class={spec.run_output_class},
                     component_getter=lambda factory, state: factory.get_runner(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_run,
                     outputs_holder_key="{spec.holder_prefix}_run",
@@ -1028,9 +1053,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                     phase="postprocess",
                     outputs_class={spec.postprocess_output_class},
                     component_getter=lambda factory, state: factory.get_postprocessor(
-                        "{spec.model}",
-                        state,
-                        WorkflowState.Stage.{spec.major_stage},
+                        "{spec.model}", state
                     ),
                     component_executor=_execute_{spec.model}_postprocess,
                     outputs_holder_key="{spec.holder_prefix}_postprocess",
@@ -1040,7 +1063,9 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
                 ),
             )
         '''
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _stage_template_relative_path(spec: ScaffoldSpec, pattern: str) -> Path:
@@ -1115,7 +1140,11 @@ def _extract_top_level_function_block(
         if not stripped:
             continue
         line_indent = len(line) - len(line.lstrip())
-        if line_indent <= def_indent and line.lstrip() == line and not stripped.startswith("#"):
+        if (
+            line_indent <= def_indent
+            and line.lstrip() == line
+            and not stripped.startswith("#")
+        ):
             end_index = index
             break
     return "".join(lines[start_index:end_index])
@@ -1256,10 +1285,9 @@ def _first_matching_pattern_anchor(
     *,
     pattern: str,
 ) -> Optional[str]:
-    return (
-        _first_matching_anchor_regex_line(text, _anchor_regexes_for_pattern(pattern))
-        or _first_matching_anchor_line(text, _anchor_candidates_for_pattern(pattern))
-    )
+    return _first_matching_anchor_regex_line(
+        text, _anchor_regexes_for_pattern(pattern)
+    ) or _first_matching_anchor_line(text, _anchor_candidates_for_pattern(pattern))
 
 
 def _render_stage_patch_plan(
@@ -1270,7 +1298,9 @@ def _render_stage_patch_plan(
     patch_options: StagePatchPlanOptions,
     stage_patterns: Sequence[str],
 ) -> str:
-    target_path = _resolve_stage_patch_target_path(repo_root, patch_options.target_module)
+    target_path = _resolve_stage_patch_target_path(
+        repo_root, patch_options.target_module
+    )
     import_anchor = "from pilates.workflows.steps import ("
     function_anchor = f"def {patch_options.stage_function}("
     per_pattern_anchors: Dict[str, str] = {}
@@ -1328,8 +1358,9 @@ def _render_stage_patch_plan(
         for pattern in stage_patterns
     )
 
-    return dedent(
-        f"""
+    return (
+        dedent(
+            f"""
         # Stage Patch Plan: `{spec.model}`
 
         This patch plan was scaffolded by `scripts/new_model_scaffold.py`.
@@ -1368,12 +1399,15 @@ def _render_stage_patch_plan(
         - [ ] Update `build_binding_plan(...)` explicit/fallback/required mappings for the new model's true dependencies.
         - [ ] Keep `stage_name="{catalog_stage}"` aligned between stage wiring and catalog entries.
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> str:
-    return dedent(
-        f"""
+    return (
+        dedent(
+            f"""
         # Linear stage template for `{spec.model}`
         #
         # Copy/adapt this snippet into the target stage module under
@@ -1426,12 +1460,15 @@ def _render_linear_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> 
             )
         )
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) -> str:
-    return dedent(
-        f"""
+    return (
+        dedent(
+            f"""
         # Iterative stage template for `{spec.model}`
         #
         # Use this when the model should run per-iteration (for example within
@@ -1488,7 +1525,9 @@ def _render_iterative_stage_template(spec: ScaffoldSpec, *, catalog_stage: str) 
                 )
             )
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _render_stage_template(
@@ -1519,8 +1558,9 @@ def _render_checklist(
         if stage_patch_plan_path is not None
         else ""
     )
-    return dedent(
-        f"""
+    return (
+        dedent(
+            f"""
         # Model Integration Checklist: `{spec.model}`
 
         This checklist was scaffolded by `scripts/new_model_scaffold.py`.
@@ -1589,7 +1629,9 @@ def _render_checklist(
         - [ ] Update `docs/extend/adding_a_model.md` and related contributor docs if the integration pattern differs.
         - [ ] Update `docs-internal/consist_migration_checklist.md` if this touches migration work items.
         """
-    ).strip() + "\n"
+        ).strip()
+        + "\n"
+    )
 
 
 def _create_model_files(
@@ -1612,7 +1654,11 @@ def _create_model_files(
         model_dir / "runner.py": _render_runner(spec),
         model_dir / "postprocessor.py": _render_postprocessor(spec),
         model_dir / "outputs.py": _render_outputs(spec),
-        repo_root / "pilates" / "workflows" / "steps" / f"{spec.step_module}.py": _render_step_module(spec),
+        repo_root
+        / "pilates"
+        / "workflows"
+        / "steps"
+        / f"{spec.step_module}.py": _render_step_module(spec),
         repo_root
         / "docs"
         / "checklists"
@@ -1675,7 +1721,10 @@ def _parse_args() -> argparse.Namespace:
             "supply_demand_loop",
             "postprocessing",
         ],
-        help="WorkflowState.Stage enum used in generated step factory component_getter lambdas",
+        help=(
+            "Major workflow stage used to infer default catalog metadata and "
+            "stage-template guidance"
+        ),
     )
     parser.add_argument(
         "--catalog-stage",

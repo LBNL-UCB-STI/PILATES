@@ -31,6 +31,5 @@ def test_runtime_code_does_not_use_legacy_identity_kwargs():
 
     assert not offenders, (
         "Legacy identity kwargs are prohibited in active runtime code.\n"
-        "Use adapter= and identity_inputs= metadata instead.\n"
-        + "\n".join(offenders)
+        "Use adapter= and identity_inputs= metadata instead.\n" + "\n".join(offenders)
     )

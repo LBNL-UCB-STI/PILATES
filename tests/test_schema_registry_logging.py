@@ -127,7 +127,9 @@ def test_log_h5_container_batches_artifact_writes_when_available(monkeypatch, tm
             self.persistence = _Persistence()
 
         def log_h5_container(self, *args, **kwargs):
-            events.append(("log_h5_container", kwargs.get("key"), kwargs.get("direction")))
+            events.append(
+                ("log_h5_container", kwargs.get("key"), kwargs.get("direction"))
+            )
             return {"path": args[0], "key": kwargs.get("key")}
 
     monkeypatch.setattr(cr, "current_tracker", lambda: _Tracker())
@@ -381,7 +383,9 @@ def test_log_h5_table_attaches_declared_schema_metadata(monkeypatch):
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -406,11 +410,15 @@ def test_log_h5_table_attaches_declared_schema_metadata(monkeypatch):
     assert meta["declared_schema_table"] == "ToursAsimOut"
 
 
-def test_log_h5_table_activitysim_postprocess_households_key_attaches_schema(monkeypatch):
+def test_log_h5_table_activitysim_postprocess_households_key_attaches_schema(
+    monkeypatch,
+):
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -437,7 +445,9 @@ def test_log_h5_table_activitysim_postprocess_persons_key_attaches_schema(monkey
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -614,12 +624,16 @@ def test_log_output_beam_plans_out_fk_targets_are_registered(monkeypatch, caplog
     assert "target table is not registered in schema registry" not in caplog.text
 
 
-def test_log_output_accessibility_asim_out_fk_targets_are_registered(monkeypatch, caplog):
+def test_log_output_accessibility_asim_out_fk_targets_are_registered(
+    monkeypatch, caplog
+):
     calls = []
     _install_consist_stub(monkeypatch, calls)
 
     with caplog.at_level("WARNING"):
-        cr.log_output("/tmp/accessibility.parquet", key="accessibility_asim_out", enabled=True)
+        cr.log_output(
+            "/tmp/accessibility.parquet", key="accessibility_asim_out", enabled=True
+        )
 
     assert calls
     _, resolved_key, meta = calls[0]
@@ -647,7 +661,9 @@ def test_log_output_final_vehicles_fk_targets_are_registered(monkeypatch, caplog
     _install_consist_stub(monkeypatch, calls)
 
     with caplog.at_level("WARNING"):
-        cr.log_output("/tmp/final_vehicles.csv.gz", key="final_vehicles_2023_0", enabled=True)
+        cr.log_output(
+            "/tmp/final_vehicles.csv.gz", key="final_vehicles_2023_0", enabled=True
+        )
 
     assert calls
     _, resolved_key, meta = calls[0]
@@ -661,7 +677,9 @@ def test_log_output_route_history_fk_targets_are_registered(monkeypatch, caplog)
     _install_consist_stub(monkeypatch, calls)
 
     with caplog.at_level("WARNING"):
-        cr.log_output("/tmp/route_history.csv.gz", key="route_history_2023_0", enabled=True)
+        cr.log_output(
+            "/tmp/route_history.csv.gz", key="route_history_2023_0", enabled=True
+        )
 
     assert calls
     _, resolved_key, meta = calls[0]
@@ -676,7 +694,9 @@ def test_log_h5_table_activitysim_postprocess_persons_fk_targets_are_registered(
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -706,7 +726,9 @@ def test_log_h5_table_atlas_postprocess_households_fk_targets_are_registered(
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -736,7 +758,9 @@ def test_log_h5_table_urbansim_postprocess_persons_fk_targets_are_registered(
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 
@@ -766,7 +790,9 @@ def test_log_h5_table_urbansim_postprocess_work_locations_fk_targets_are_registe
     calls = []
 
     class _TrackerStub:
-        def log_h5_table(self, path, key=None, table_path=None, direction="input", **meta):
+        def log_h5_table(
+            self, path, key=None, table_path=None, direction="input", **meta
+        ):
             calls.append((path, key, table_path, direction, meta))
             return types.SimpleNamespace(meta={"table_path": table_path})
 

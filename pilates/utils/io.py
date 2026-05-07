@@ -72,9 +72,7 @@ def apply_runtime_flags(settings: Any, enabled_flags: Dict[str, bool]) -> None:
 def get_land_use_model(settings: Any) -> Optional[str]:
     """Resolve the configured land-use model across legacy/new schemas."""
     return get_setting(
-        settings,
-        "run.models.land_use",
-        default=get_setting(settings, "land_use_model"),
+        settings, "run.models.land_use", default=get_setting(settings, "land_use_model")
     )
 
 

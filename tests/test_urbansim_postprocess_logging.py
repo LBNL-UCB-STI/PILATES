@@ -48,9 +48,15 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     _write_h5_tables(
         merged_h5,
         {
-            "households": pd.DataFrame({"cars": [1]}, index=pd.Index([1], name="household_id")),
-            "persons": pd.DataFrame({"age": [40]}, index=pd.Index([1], name="person_id")),
-            "land_use": pd.DataFrame({"TOTEMP": [10]}, index=pd.Index(["1"], name="TAZ")),
+            "households": pd.DataFrame(
+                {"cars": [1]}, index=pd.Index([1], name="household_id")
+            ),
+            "persons": pd.DataFrame(
+                {"age": [40]}, index=pd.Index([1], name="person_id")
+            ),
+            "land_use": pd.DataFrame(
+                {"TOTEMP": [10]}, index=pd.Index(["1"], name="TAZ")
+            ),
         },
     )
 
@@ -70,6 +76,11 @@ def test_urbansim_postprocess_logs_merged_h5_tables(monkeypatch, tmp_path):
     assert set_output_keys == ["usim_datastore_h5"]
     assert len(publish_calls) == 1
     assert publish_calls[0]["child_selection"] == "include_only"
+    assert publish_calls[0]["facet"]["artifact_family"] == "usim_datastore_h5"
+    assert publish_calls[0]["facet"]["source_role"] == "usim_input_merged_2023"
+    assert publish_calls[0]["facet"]["snapshot_role"] == "usim_input_merged"
+    assert publish_calls[0]["facet"]["snapshot_reason"] == "post_merge_handoff"
+    assert publish_calls[0]["facet"]["storage_event"] == "merged_h5_output"
     assert {
         path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
     } == {
@@ -109,14 +120,20 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
             output_only_meta.append(meta),
         ),
     )
-    monkeypatch.setattr(steps_urbansim_atlas, "log_and_set_output", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        steps_urbansim_atlas, "log_and_set_output", lambda **_kwargs: None
+    )
 
     archive_h5 = tmp_path / "input_data_for_2023_outputs.h5"
     _write_h5_tables(
         archive_h5,
         {
-            "households": pd.DataFrame({"cars": [1]}, index=pd.Index([1], name="household_id")),
-            "parcels": pd.DataFrame({"acres": [0.5]}, index=pd.Index([10], name="parcel_id")),
+            "households": pd.DataFrame(
+                {"cars": [1]}, index=pd.Index([1], name="household_id")
+            ),
+            "parcels": pd.DataFrame(
+                {"acres": [0.5]}, index=pd.Index([10], name="parcel_id")
+            ),
         },
     )
 
@@ -138,6 +155,11 @@ def test_urbansim_postprocess_logs_archived_h5_tables(monkeypatch, tmp_path):
     assert output_only_keys == ["usim_input_archive_2023"]
     assert len(output_only_meta) == 1
     assert output_only_meta[0]["child_selection"] == "include_only"
+    assert output_only_meta[0]["facet"]["artifact_family"] == "usim_input_archive"
+    assert output_only_meta[0]["facet"]["source_role"] == "usim_datastore_h5"
+    assert output_only_meta[0]["facet"]["snapshot_role"] == "usim_input_archive"
+    assert output_only_meta[0]["facet"]["snapshot_reason"] == "pre_merge_input"
+    assert output_only_meta[0]["facet"]["storage_event"] == "snapshot_move"
     assert {
         path: spec.key for path, spec in output_only_meta[0]["child_specs"].items()
     } == {

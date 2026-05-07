@@ -21,6 +21,7 @@ if TYPE_CHECKING:
     from pilates.workflows.surface import EnabledWorkflowSurface
     from workflow_state import WorkflowState
 
+
 def build_urbansim_inputs(
     settings: PilatesConfig,
     state: "WorkflowState",
@@ -113,11 +114,12 @@ def build_urbansim_inputs(
             .get(region)
         )
         if region_id:
-            omx_path = Path(workspace.get_usim_mutable_data_dir()) / f"skims_mpo_{region_id}.omx"
+            omx_path = (
+                Path(workspace.get_usim_mutable_data_dir())
+                / f"skims_mpo_{region_id}.omx"
+            )
             if omx_path.exists():
                 inputs[OMX_SKIMS] = str(omx_path)
-                descriptions[OMX_SKIMS] = (
-                    f"UrbanSim OMX skims fallback for year {year}"
-                )
+                descriptions[OMX_SKIMS] = f"UrbanSim OMX skims fallback for year {year}"
 
     return inputs, descriptions

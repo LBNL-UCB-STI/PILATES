@@ -74,9 +74,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     assert publish_meta[0]["child_selection"] == "include_only"
     assert {
         path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
-    } == {
-        "/2023/households": "atlas_postprocess_usim_households_table_updated"
-    }
+    } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
 
 
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
@@ -128,16 +126,12 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
     assert calls[0][2]["child_selection"] == "include_only"
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
 
-def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
-    monkeypatch, tmp_path
-):
+def test_atlas_postprocess_logs_selected_start_year_h5_as_input(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_build_standard_step(*, spec, **_kwargs):
@@ -195,16 +189,12 @@ def test_atlas_postprocess_logs_selected_start_year_h5_as_input(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(base_h5)
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/households": "atlas_postprocess_usim_households_table_input"
     }
 
 
-def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
-    monkeypatch, tmp_path
-):
+def test_atlas_postprocess_logs_year_scoped_start_subyear_table(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_build_standard_step(*, spec, **_kwargs):
@@ -262,9 +252,7 @@ def test_atlas_postprocess_logs_year_scoped_start_subyear_table(
     assert len(calls) == 1
     assert calls[0][0] == "usim_datastore_h5"
     assert calls[0][1] == str(year_scoped_h5)
-    assert {
-        path: spec.key for path, spec in calls[0][2]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
 
@@ -334,19 +322,17 @@ def test_atlas_postprocess_logs_resolved_fallback_households_table(
         holder=SimpleNamespace(),
     )
 
-    assert {
-        path: spec.key for path, spec in input_calls[0]["child_specs"].items()
-    } == {
+    assert {path: spec.key for path, spec in input_calls[0]["child_specs"].items()} == {
         "/2024/households": "atlas_postprocess_usim_households_table_input"
     }
     assert {
         path: spec.key for path, spec in output_calls[0]["child_specs"].items()
-    } == {
-        "/2024/households": "atlas_postprocess_usim_households_table_updated"
-    }
+    } == {"/2024/households": "atlas_postprocess_usim_households_table_updated"}
 
 
-def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, tmp_path):
+def test_atlas_postprocess_enqueues_restart_critical_intermediates(
+    monkeypatch, tmp_path
+):
     calls = []
     monkeypatch.setattr(
         atlas_postprocessor,
@@ -363,7 +349,9 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
 
     usim_h5 = usim_dir / "model_data_2023.h5"
     usim_h5.write_text("h5")
-    (atlas_output_dir / "householdv_2023.csv").write_text("household_id,nvehicles\n1,1\n")
+    (atlas_output_dir / "householdv_2023.csv").write_text(
+        "household_id,nvehicles\n1,1\n"
+    )
     (atlas_output_dir / "vehicles_2023.csv").write_text(
         "bodytype,pred_power,modelyear\nsedan,gas,2020\n"
     )
@@ -390,7 +378,14 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(monkeypatch, 
 
     postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
     monkeypatch.setattr(
-        postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: True
+        postprocessor,
+        "atlas_update_h5_vehicle",
+        lambda *args, **kwargs: "/2023/households",
+    )
+    monkeypatch.setattr(
+        postprocessor,
+        "_validate_updated_h5_table",
+        lambda **_kwargs: None,
     )
 
     postprocessor._postprocess(
@@ -457,9 +452,14 @@ def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
     def _fake_update(settings, output_year, h5_file_path, household_v_csv_path):
         seen["h5_file_path"] = h5_file_path
         seen["household_v_csv_path"] = household_v_csv_path
-        return True
+        return "/households"
 
     monkeypatch.setattr(postprocessor, "atlas_update_h5_vehicle", _fake_update)
+    monkeypatch.setattr(
+        postprocessor,
+        "_validate_updated_h5_table",
+        lambda **_kwargs: None,
+    )
 
     outputs = postprocessor._postprocess(
         AtlasRunOutputs(
@@ -505,7 +505,7 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
     )
     postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
     monkeypatch.setattr(
-        postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: False
+        postprocessor, "atlas_update_h5_vehicle", lambda *args, **kwargs: None
     )
 
     with pytest.raises(RuntimeError, match="failed to update UrbanSim HDF5"):
@@ -544,6 +544,45 @@ def test_atlas_update_h5_vehicle_rejects_household_id_set_mismatch(tmp_path, cap
             household_v_csv_path=str(hh_csv),
         )
 
-    assert updated is False
+    assert updated is None
     assert "missing_in_h5=1" in caplog.text
     assert "missing_in_atlas=1" in caplog.text
+
+
+def test_atlas_update_h5_vehicle_returns_updated_table_path(tmp_path):
+    h5_path = tmp_path / "model_data_2023.h5"
+    hh_csv = tmp_path / "householdv_2023.csv"
+
+    pd.DataFrame(
+        {"cars": [0], "hh_cars": ["none"]},
+        index=pd.Index([1], name="household_id"),
+    ).to_hdf(str(h5_path), key="/2023/households", mode="w")
+    hh_csv.write_text("household_id,nvehicles\n1,2\n", encoding="utf-8")
+
+    postprocessor = atlas_postprocessor.AtlasPostprocessor(
+        "atlas",
+        SimpleNamespace(is_start_year=lambda: False),
+    )
+
+    updated = postprocessor.atlas_update_h5_vehicle(
+        settings=SimpleNamespace(),
+        output_year=2023,
+        h5_file_path=str(h5_path),
+        household_v_csv_path=str(hh_csv),
+    )
+
+    assert updated == "/2023/households"
+
+
+def test_atlas_postprocess_validates_reported_updated_table_exists(tmp_path):
+    h5_path = tmp_path / "model_data_2023.h5"
+    pd.DataFrame({"cars": [0]}, index=pd.Index([1], name="household_id")).to_hdf(
+        str(h5_path), key="/households", mode="w"
+    )
+
+    with pytest.raises(RuntimeError, match="not present after write"):
+        atlas_postprocessor.AtlasPostprocessor._validate_updated_h5_table(
+            h5_file_path=str(h5_path),
+            table_path="/2023/households",
+            output_year=2023,
+        )

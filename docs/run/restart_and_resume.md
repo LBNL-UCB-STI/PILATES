@@ -5,6 +5,20 @@ summary: Replay-first restart model, cache-hit behavior, and operator expectatio
 
 # Restart and Resume
 
+## Two Words To Get Straight First
+
+- **Replay** means re-entering the scenario from the archived state. It is not
+  re-running the same code blindly; the launcher reconstructs `WorkflowState`,
+  rebuilds the enabled workflow surface, and lets each step decide whether it
+  needs to do work.
+- **Cache hit** means Consist sees that a step's declared identity (code,
+  configured inputs, input digests) matches an earlier execution and returns
+  the recorded outputs instead of recomputing them. A cache hit is what makes
+  replay cheap; without one, the step runs.
+
+The combination — "replay-first restart with cache hits where the identity
+matches" — is what the rest of this page describes.
+
 ## What Restart Means Now
 
 - The launcher treats a run with `state.run_info_path` as a restart run.

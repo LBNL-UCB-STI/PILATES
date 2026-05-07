@@ -39,7 +39,12 @@ this staged handoff chain for each forecast boundary.
 
 ### Runtime assembly
 
-`pilates/runtime/launcher.py` owns startup, runtime-flag initialization, `WorkflowState` restore/create, enabled-surface construction, restart hydration, Consist scenario/step setup, the yearly stage loop, and workflow contract validation. It also creates the coupler schema and publishes bootstrap artifacts before the first major stage runs.
+`pilates/runtime/launcher.py` owns startup, runtime-flag initialization, `WorkflowState` restore/create, enabled-surface construction, restart preflight, bootstrap, Consist scenario setup, the yearly stage loop, and shutdown. It also builds the scenario contract, declares the coupler schema, and publishes bootstrap artifacts before the first major stage runs.
+
+The launcher should stay model-agnostic. If you are adding behavior specific to
+ATLAS, BEAM, ActivitySim, UrbanSim, or postprocessing, the right home is usually
+the model package, a workflow step factory, binding, or the stage that owns that
+boundary.
 
 ### Workflow catalog
 
@@ -47,11 +52,20 @@ this staged handoff chain for each forecast boundary.
 
 ### Enabled workflow surface
 
-`pilates/workflows/surface.py` turns initialized runtime flags, the static catalog, and the current `WorkflowState` into one run-shape projection. Planning, binding, schema filtering, restart preflight, and runtime output validation consume that surface instead of rebuilding their own model-enablement views.
+The enabled workflow surface is a runtime projection that decides which stages
+and steps are active for the current run, given settings-derived runtime flags
+plus `WorkflowState`. `pilates/workflows/surface.py` turns those inputs and the
+static catalog into one run-shape projection. Planning, binding, schema
+filtering, restart preflight, and runtime output validation consume that surface
+instead of rebuilding their own model-enablement views.
 
 ### Step factories
 
 `pilates/workflows/steps/*.py` builds concrete step callables. Each factory binds a live coupler and outputs holder, calls the model component from `ModelFactory`, validates the returned typed outputs, and publishes the result into the holder and the coupler.
+
+The step factory is the narrow execution seam between workflow policy and model
+mechanics. It should make the boundary explicit without turning into another
+stage loop.
 
 ### Typed outputs
 
@@ -60,6 +74,10 @@ this staged handoff chain for each forecast boundary.
 ### Model adapters
 
 `pilates/generic/model_factory.py` maps lowercased model names to preprocessor, runner, and postprocessor classes. The factory is the switch point between workflow orchestration and model-local logic.
+
+Model adapter packages own model-local behavior: file preparation, model
+execution, model-local callbacks, and interpretation of raw model outputs. They
+should not decide global stage enablement or restart policy.
 
 ## Adjacent Pages
 

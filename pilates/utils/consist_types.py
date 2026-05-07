@@ -1,10 +1,17 @@
 from __future__ import annotations
 
-from typing import Any, Callable, ContextManager, Dict, Mapping, Optional, Protocol, runtime_checkable
+from typing import (
+    Any,
+    ContextManager,
+    Dict,
+    Mapping,
+    Optional,
+    Protocol,
+    runtime_checkable,
+)
 
 from consist.protocols import (
     ArtifactLike as ConsistArtifactLike,
-    RunResultLike,
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )

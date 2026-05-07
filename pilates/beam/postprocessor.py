@@ -349,9 +349,10 @@ def find_beam_iterations(beam_output_dir):
 
 
 def find_iteration_file(
-    iteration_path: str, iteration: int, file: str, file_type: str = ""
+    iteration_path: str, iteration: int, file: str, file_type: Optional[str] = None
 ) -> Optional[str]:
-    path = os.path.join(iteration_path, f"{iteration}.{file}{file_type}")
+    suffix = file_type if file_type is not None else ""
+    path = os.path.join(iteration_path, f"{iteration}.{file}{suffix}")
     if os.path.exists(path):
         logger.debug(f"Found file at {path}")
         return path
@@ -1382,9 +1383,9 @@ def _merge_zarr_trip_counts(
             int
         )
         prev_failed = np.ceil(previous_weight * prev_failed + failed).astype(int)
-        allSkims[key_completed].data[
-            :
-        ] = prev_completed  # Use [:] to modify data in place
+        allSkims[key_completed].data[:] = (
+            prev_completed  # Use [:] to modify data in place
+        )
         allSkims[key_failed].data[:] = prev_failed  # Use [:] to modify data in place
         logger.info(
             f"Now we have {prev_completed[any_observed].sum():.0f} completed trips and {prev_failed[any_observed].sum():.0f} failed trips"
@@ -1411,9 +1412,9 @@ def _merge_zarr_trip_counts_slice(
         prev_completed_tp = np.ceil(
             previous_weight * prev_completed_tp + completed_tp
         ).astype(int)
-        prev_failed_tp = np.ceil(
-            previous_weight * prev_failed_tp + failed_tp
-        ).astype(int)
+        prev_failed_tp = np.ceil(previous_weight * prev_failed_tp + failed_tp).astype(
+            int
+        )
         allSkims[key_completed].data[:, :, tp_idx] = prev_completed_tp
         allSkims[key_failed].data[:, :, tp_idx] = prev_failed_tp
     else:
@@ -1606,9 +1607,7 @@ def _consolidate_tnc_data_zarr(
         return {}
 
     # Group TNC provider variables from partialSkims by (base_mode, measure)
-    grouped_sources = (
-        {}
-    )  # Key: (base_mode, measure), Value: list of (provider, period, omx_key)
+    grouped_sources = {}  # Key: (base_mode, measure), Value: list of (provider, period, omx_key)
 
     for omx_key in all_partial_vars:
         # Split key into measure_part and period (e.g., TNC_SINGLE_UBER_IWAIT__AM -> TNC_SINGLE_UBER_IWAIT, AM)
@@ -2984,20 +2983,18 @@ def _merge_beam_skims_to_zarr(
             logger.warning(
                 "Correcting 'otaz' coordinates to be 0-based before final save."
             )
-            skims_ds.coords["otaz"].data[:] = expected_coords
+            skims_ds = skims_ds.assign_coords(otaz=expected_coords)
             otaz_corrected = True
         if not np.array_equal(skims_ds.coords["dtaz"].values, expected_coords):
             logger.warning(
                 "Correcting 'dtaz' coordinates to be 0-based before final save."
             )
-            skims_ds.coords["dtaz"].data[:] = expected_coords
+            skims_ds = skims_ds.assign_coords(dtaz=expected_coords)
             dtaz_corrected = True
 
         skims_ds = zone_utils.normalize_dimension_coords_for_zarr(skims_ds)
 
-        skims_ds.to_zarr(
-            all_skims_path, mode="a", consolidated=False, zarr_format=2
-        )
+        skims_ds.to_zarr(all_skims_path, mode="a", consolidated=False, zarr_format=2)
 
         import zarr
 
@@ -3147,9 +3144,9 @@ def _process_all_tnc_logic_zarr(
                         for provider_mode in provider_modes:
                             provider_var = f"{provider_mode}_{measure}"
                             if provider_var in partial_skims_ds.data_vars:
-                                provider_data_tp = partial_skims_ds[
-                                    provider_var
-                                ].data[:, :, tp_idx]
+                                provider_data_tp = partial_skims_ds[provider_var].data[
+                                    :, :, tp_idx
+                                ]
                                 provider_completed_tp = completed_failed_dict_all[
                                     provider_mode
                                 ][0][:, :, tp_idx]
@@ -3186,7 +3183,9 @@ def _process_all_tnc_logic_zarr(
                             ] = vals_update
 
                         if to_cancel is not None and to_cancel.any():
-                            skims_ds[target_var_name].data[:, :, tp_idx][to_cancel] = 0.0
+                            skims_ds[target_var_name].data[:, :, tp_idx][to_cancel] = (
+                                0.0
+                            )
 
             tnc_modes_processed.add(target_mode)
 
@@ -3295,9 +3294,7 @@ def _process_all_tnc_logic(
     consolidate_tnc_fleets = get_setting(settings, "consolidate_tnc_fleets", True)
     processed_vars = set()
     tnc_modes_to_postprocess = set()
-    completed_failed_dict_for_postprocess = (
-        {}
-    )  # Counts for the modes that will be post-processed
+    completed_failed_dict_for_postprocess = {}  # Counts for the modes that will be post-processed
 
     if consolidate_tnc_fleets:
         logger.info("TNC fleet consolidation enabled.")
@@ -3316,11 +3313,7 @@ def _process_all_tnc_logic(
         # The consolidated variables (RH_*) are now in skims_ds.
         # We need to get their names to return them as handled.
         for target_mode in consolidated_modes:
-            for (
-                measure
-            ) in (
-                skims_ds.data_vars
-            ):  # Iterate through ALL skims_ds vars to find the ones belonging to this mode
+            for measure in skims_ds.data_vars:  # Iterate through ALL skims_ds vars to find the ones belonging to this mode
                 if measure.startswith(f"{target_mode}_"):
                     processed_vars.add(measure)
 
@@ -3584,14 +3577,10 @@ def trim_inaccessible_ods_zarr(all_skims_path, settings):
         # Calculate completed and failed transit trips BY ZONE for each period
         completedTransitTripsByOandD_3d = completedTransitTrips_3d.sum(
             axis=1
-        ) + completedTransitTrips_3d.sum(
-            axis=0
-        )  # Shape (zones, periods)
+        ) + completedTransitTrips_3d.sum(axis=0)  # Shape (zones, periods)
         failedTransitTripsByOandD_3d = failedTransitTrips_3d.sum(
             axis=1
-        ) + failedTransitTrips_3d.sum(
-            axis=0
-        )  # Shape (zones, periods)
+        ) + failedTransitTrips_3d.sum(axis=0)  # Shape (zones, periods)
 
         # Determine which zones to delete for each period
         # Condition: (Total trips > 1000) & (Failed transit trips > 200) & (Completed transit trips == 0)
@@ -3895,7 +3884,6 @@ class BeamPostprocessor(GenericPostprocessor):
             merged_sources = []
             merged_any = False
             for it, it_skim in enumerate(all_skims_found):
-
                 raw_od_skims_path = os.path.join(
                     workspace.full_path,
                     it_skim,
@@ -4025,7 +4013,9 @@ class BeamPostprocessor(GenericPostprocessor):
 
         return BeamPostprocessOutputs(
             zarr_skims=Path(zarr_path) if zarr_path is not None else None,
-            final_skims_omx=Path(final_omx_path) if final_omx_path is not None else None,
+            final_skims_omx=Path(final_omx_path)
+            if final_omx_path is not None
+            else None,
             split_events=split_events,
             split_event_links=split_event_links,
         )

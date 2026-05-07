@@ -313,9 +313,14 @@ class TestRunContainerConsistDelegation:
         def _check_env(**_kwargs):
             expected_base = str(run_tmp / ".container_runtime")
             assert os.environ["TMPDIR"] == expected_base
-            assert os.environ["APPTAINER_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert (
+                os.environ["APPTAINER_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            )
             assert os.environ["APPTAINER_TMPDIR"] == expected_base + "/.apptainer/tmp"
-            assert os.environ["SINGULARITY_CACHEDIR"] == expected_base + "/.apptainer/cache"
+            assert (
+                os.environ["SINGULARITY_CACHEDIR"]
+                == expected_base + "/.apptainer/cache"
+            )
             assert os.environ["SINGULARITY_TMPDIR"] == expected_base + "/.apptainer/tmp"
             return True
 

@@ -165,9 +165,7 @@ def build_mermaid_erd(*, include_columns: bool = True) -> str:
         unique_relationships
     ):
         label = f"{source_column} -> {target_column}".replace('"', "'")
-        lines.append(
-            f'    {source_table} }}o--|| {target_table} : "{label}"'
-        )
+        lines.append(f'    {source_table} }}o--|| {target_table} : "{label}"')
 
     return "\n".join(lines) + "\n"
 
@@ -193,25 +191,22 @@ def build_graphviz_dot(*, include_columns: bool = True) -> str:
             table_columns = columns_by_table.get(table_name, [])
             table_title = _escape_dot_html(table_name)
             row_lines = [
-                "        <TR><TD BGCOLOR=\"lightgray\"><B>"
-                f"{table_title}</B></TD></TR>"
+                f'        <TR><TD BGCOLOR="lightgray"><B>{table_title}</B></TD></TR>'
             ]
             if table_columns:
                 for col in table_columns:
                     col_name = _escape_dot_html(col.name)
                     col_type = _escape_dot_html(_sanitize_type(col.type_name))
                     row_lines.append(
-                        "        <TR><TD ALIGN=\"LEFT\">"
+                        '        <TR><TD ALIGN="LEFT">'
                         f"{col_name} : {col_type}</TD></TR>"
                     )
             else:
                 row_lines.append(
-                    "        <TR><TD ALIGN=\"LEFT\">placeholder : TEXT</TD></TR>"
+                    '        <TR><TD ALIGN="LEFT">placeholder : TEXT</TD></TR>'
                 )
             lines.append(f'    "{table_name}" [shape=plain, label=<')
-            lines.append(
-                "      <TABLE BORDER=\"1\" CELLBORDER=\"0\" CELLSPACING=\"0\">"
-            )
+            lines.append('      <TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0">')
             lines.extend(row_lines)
             lines.append("      </TABLE>")
             lines.append("    >];")
@@ -231,9 +226,7 @@ def build_graphviz_dot(*, include_columns: bool = True) -> str:
         unique_relationships
     ):
         label = _escape_dot_html(f"{source_column} -> {target_column}")
-        lines.append(
-            f'    "{source_table}" -> "{target_table}" [label="{label}"];'
-        )
+        lines.append(f'    "{source_table}" -> "{target_table}" [label="{label}"];')
 
     lines.append("}")
     return "\n".join(lines) + "\n"
@@ -252,7 +245,10 @@ def build_cytoscape_html(*, include_columns: bool = True) -> str:
     for table_name in sorted(entity_names):
         columns = columns_by_table.get(table_name, [])
         columns_payload = (
-            [{"name": col.name, "type": _sanitize_type(col.type_name)} for col in columns]
+            [
+                {"name": col.name, "type": _sanitize_type(col.type_name)}
+                for col in columns
+            ]
             if include_columns
             else []
         )

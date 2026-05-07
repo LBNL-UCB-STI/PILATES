@@ -4,25 +4,11 @@ from types import SimpleNamespace
 
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    ActivitySimPostprocessOutputs,
-    ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
 from pilates.beam.outputs import (
-    BeamFullSkimOutputs,
-    BeamPostprocessOutputs,
     BeamPreprocessOutputs,
     BeamRunOutputs,
-)
-from pilates.urbansim.outputs import (
-    UrbanSimPostprocessOutputs,
-    UrbanSimPreprocessOutputs,
-    UrbanSimRunOutputs,
-)
-from pilates.atlas.outputs import (
-    AtlasPostprocessOutputs,
-    AtlasPreprocessOutputs,
-    AtlasRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -39,17 +25,13 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_PLANS_XML,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_PLANS_OUT,
     FINAL_SKIMS_OMX,
-    LINKSTATS,
     LINKSTATS_WARMSTART,
     OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
-    USIM_H5_UPDATED,
-    USIM_INPUT_NEXT,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -66,7 +48,10 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 FINAL_SKIMS_OMX,
                 OMX_SKIMS,
             ),
-            "optional_output_keys": ("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
+            "optional_output_keys": (
+                "usim_skims_input_updated",
+                USIM_DATASTORE_BASE_H5,
+            ),
             "dynamic_input_families": (),
             "output_keys": (
                 USIM_DATASTORE_H5,
@@ -211,9 +196,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_input_keys": (ASIM_SHARROW_CACHE_DIR,),
             "optional_output_keys": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
             "dynamic_input_families": (),
-            "output_keys": (
-                *ActivitySimRunOutputs.required_output_keys(),
-            ),
+            "output_keys": (*ActivitySimRunOutputs.required_output_keys(),),
             "dynamic_output_families": (),
             "holder_inputs": ("activitysim_preprocess",),
             "upstream_step_inputs": ("activitysim_preprocess",),
@@ -260,9 +243,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_input_keys": (LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
             "optional_output_keys": ("vehicles_beam_in", LINKSTATS_WARMSTART),
             "dynamic_input_families": (),
-            "output_keys": (
-                *BeamPreprocessOutputs.required_output_keys(),
-            ),
+            "output_keys": (*BeamPreprocessOutputs.required_output_keys(),),
             "dynamic_output_families": (),
             "holder_inputs": ("activitysim_postprocess",),
             "upstream_step_inputs": ("activitysim_postprocess",),
@@ -283,9 +264,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 *catalog._BEAM_RUN_ARCHIVE_OUTPUT_KEYS,
             ),
             "dynamic_input_families": (),
-            "output_keys": (
-                *BeamRunOutputs.declared_output_keys(),
-            ),
+            "output_keys": (*BeamRunOutputs.declared_output_keys(),),
             "dynamic_output_families": (
                 "linkstats_{year}_{iteration}",
                 "linkstats_parquet_{year}_{iteration}",
@@ -311,9 +290,7 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 "raw_od_skims_{year}_{iteration}",
                 "raw_od_skims_zarr_{year}_{iteration}",
             ),
-            "output_keys": (
-                ZARR_SKIMS,
-            ),
+            "output_keys": (ZARR_SKIMS,),
             "dynamic_output_families": (
                 "events_parquet_{year}_{iteration}",
                 "path_traversal_links_{year}_{iteration}",
@@ -563,8 +540,13 @@ def test_beam_catalog_dynamic_families_capture_runtime_fan_out():
     assert beam_postprocess is not None
 
     assert "beam_output_*" in beam_run.dynamic_output_families
-    assert "events_parquet_{year}_{iteration}" in beam_postprocess.dynamic_output_families
-    assert "path_traversal_links_{year}_{iteration}" in beam_postprocess.dynamic_output_families
+    assert (
+        "events_parquet_{year}_{iteration}" in beam_postprocess.dynamic_output_families
+    )
+    assert (
+        "path_traversal_links_{year}_{iteration}"
+        in beam_postprocess.dynamic_output_families
+    )
 
 
 def test_atlas_preprocess_audit_contract_uses_settings_specialized_optional_outputs():

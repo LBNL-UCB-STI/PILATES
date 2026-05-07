@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
 
 import pytest
 
@@ -9,7 +10,9 @@ from pilates.config import PilatesConfig
 from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
 
 
-def _minimal_config(tmp_path: Path, *, recovery_roots: list[str] | None = None) -> PilatesConfig:
+def _minimal_config(
+    tmp_path: Path, *, recovery_roots: list[str] | None = None
+) -> PilatesConfig:
     return PilatesConfig(
         **{
             "run": {
@@ -49,7 +52,6 @@ def _minimal_config(tmp_path: Path, *, recovery_roots: list[str] | None = None) 
                     "enabled": True,
                     "type": "duckdb",
                     "path": str(tmp_path / "shared.duckdb"),
-                    "use_consist": True,
                 },
             },
             "infrastructure": {
@@ -79,22 +81,48 @@ def _make_tracker(consist, run_dir: Path):
 
 def _seed_run_archive(consist, run_dir: Path):
     tracker = _make_tracker(consist, run_dir)
-    output_path = run_dir / "outputs" / "result.txt"
+    _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="promote_run",
+        model="demo",
+        key="demo_output",
+        relative_path="outputs/result.txt",
+        content="result-data",
+    )
+
+    run = tracker.find_runs(model="demo", limit=10)[0]
+    return tracker, str(run.id), run_dir / "outputs" / "result.txt"
+
+
+def _seed_output_run(
+    tracker,
+    run_dir: Path,
+    *,
+    run_name: str,
+    model: str,
+    key: str,
+    relative_path: str,
+    content: str,
+) -> tuple[str, Path]:
+    output_path = run_dir / relative_path
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text("result-data", encoding="utf-8")
+    output_path.write_text(content, encoding="utf-8")
     (run_dir / "run_state.yaml").write_text("stage: done\n", encoding="utf-8")
     manifest_dir = run_dir / ".workflow" / "manifests"
     manifest_dir.mkdir(parents=True, exist_ok=True)
     (manifest_dir / "manifest_2020_0.yaml").write_text("done: true\n", encoding="utf-8")
 
-    with tracker.start_run("promote_run", model="demo"):
-        tracker.log_artifact(str(output_path), key="demo_output", direction="output")
+    with tracker.start_run(run_name, model=model):
+        tracker.log_artifact(str(output_path), key=key, direction="output")
 
-    run = tracker.find_runs(model="demo", limit=10)[0]
-    return tracker, str(run.id), output_path
+    run = tracker.find_runs(model=model, limit=10)[0]
+    return str(run.id), output_path
 
 
-def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(tmp_path):
+def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
+    tmp_path,
+):
     consist = pytest.importorskip("consist")
     recovery_root = tmp_path / "nfs"
     settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
@@ -124,7 +152,9 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         try:
             promoted_run = promoted_tracker.find_runs(model="demo", limit=10)[0]
             promoted_outputs = promoted_tracker.get_run_outputs(str(promoted_run.id))
-            assert promoted_outputs["demo_output"].recovery_roots == [str(promoted.resolve())]
+            assert promoted_outputs["demo_output"].recovery_roots == [
+                str(promoted.resolve())
+            ]
         finally:
             promoted_tracker.db.engine.dispose()
 
@@ -138,10 +168,88 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         assert hydrated["demo_output"].path is not None
         assert hydrated["demo_output"].path.read_text(encoding="utf-8") == "result-data"
 
-        marker = json.loads((run_dir / ".consist" / "recovery_promotion.json").read_text(encoding="utf-8"))
+        marker = json.loads(
+            (run_dir / ".consist" / "recovery_promotion.json").read_text(
+                encoding="utf-8"
+            )
+        )
         assert marker["source_run_dir"] == str(run_dir)
         assert marker["roots"][0]["status"] == "promoted"
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+    main_run_dir = tmp_path / "main-catalog"
+    main_tracker = _make_tracker(consist, main_run_dir)
+    main_db_path = main_run_dir / ".consist" / "provenance.duckdb"
+
+    try:
+        old_run_id, _old_path = _seed_output_run(
+            main_tracker,
+            main_run_dir,
+            run_name="historical_root",
+            model="history",
+            key="old_output",
+            relative_path="outputs/old-result.txt",
+            content="old-result-data",
+        )
+    finally:
+        main_tracker.db.engine.dispose()
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    local_db_path = run_dir / ".consist" / "provenance.duckdb"
+    local_db_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(main_db_path, local_db_path)
+
+    tracker = _make_tracker(consist, run_dir)
+    new_run_id, _new_path = _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+    promoted = recovery_root / run_dir.name
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            merge_main_db=str(main_db_path),
+        )
+
+        assert result.success is True
+        assert result.root_run_id == new_run_id
+        assert result.scoped_run_ids == [new_run_id]
+        assert result.merge_result is not None
+        assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
+        assert result.merge_result["merge_result"]["runs_skipped"] == []
+
+        old_outputs = tracker.get_run_outputs(old_run_id)
+        new_outputs = tracker.get_run_outputs(new_run_id)
+        assert str(promoted.resolve()) not in (
+            old_outputs["old_output"].recovery_roots or []
+        )
+        assert new_outputs["new_output"].recovery_roots == [str(promoted.resolve())]
+
+        merged_tracker = _make_tracker(consist, main_run_dir)
+        try:
+            merged_run_ids = {
+                str(run.id) for run in merged_tracker.find_runs(limit=100)
+            }
+            assert old_run_id in merged_run_ids
+            assert new_run_id in merged_run_ids
+        finally:
+            merged_tracker.db.engine.dispose()
     finally:
         tracker.db.engine.dispose()
 

@@ -1,9 +1,3 @@
-from __future__ import annotations
-
-import logging
-import os
-from pathlib import Path
-
 """
 Workflow binding-layer data structures.
 
@@ -16,13 +10,33 @@ derive their artifact universe from the catalog by reference so runtime binding
 does not become a second manually maintained semantic registry.
 """
 
+from __future__ import annotations
+
+import logging
+import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Literal
+from pathlib import Path
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    Iterable,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+)
 
 from consist.types import BindingResult
 
+from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
-from pilates.utils.coupler_helpers import artifact_to_path, resolve_input_precedence
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    artifact_to_path,
+    resolve_input_precedence,
+)
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
@@ -78,6 +92,19 @@ def _workflow_stage_enabled(state: Any, stage_name: str) -> bool:
     except Exception:
         return False
 
+
+def _requires_exact_activitysim_population_year(state: Any) -> bool:
+    if not _workflow_stage_enabled(state, "land_use"):
+        return False
+    is_start_year = getattr(state, "is_start_year", None)
+    if not callable(is_start_year):
+        return False
+    try:
+        return not bool(is_start_year())
+    except Exception:
+        return False
+
+
 @dataclass(frozen=True)
 class ArtifactBindingRule:
     """
@@ -91,7 +118,9 @@ class ArtifactBindingRule:
     allow_fallback: bool = False
     preferred_keys: tuple[str, ...] = ()
     fallback_provider: Optional[str] = None
-    pass_mode: Literal["auto", "input_key_only", "explicit_only", "metadata_only"] = "auto"
+    pass_mode: Literal["auto", "input_key_only", "explicit_only", "metadata_only"] = (
+        "auto"
+    )
 
 
 @dataclass(frozen=True)
@@ -220,19 +249,33 @@ class BindingPlan:
     metadata: Optional[Dict[str, Any]] = None
 
     def stepref_inputs(self) -> Optional[Dict[str, Any]]:
-        return dict(self.inputs or {}) or None
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        return inputs if inputs else None
 
     def stepref_input_keys(self) -> Optional[list[str]]:
-        return list(self.input_keys or []) or None
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        return input_keys if input_keys else None
 
     def stepref_optional_input_keys(self) -> Optional[list[str]]:
-        return list(self.optional_input_keys or []) or None
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
+        return optional_input_keys if optional_input_keys else None
 
     def to_binding_result(self) -> BindingResult:
+        inputs = dict(self.inputs) if self.inputs is not None else {}
+        input_keys = list(self.input_keys) if self.input_keys is not None else []
+        optional_input_keys = (
+            list(self.optional_input_keys)
+            if self.optional_input_keys is not None
+            else []
+        )
         return BindingResult(
-            inputs=dict(self.inputs or {}) or None,
-            input_keys=list(self.input_keys or []) or None,
-            optional_input_keys=list(self.optional_input_keys or []) or None,
+            inputs=inputs if inputs else None,
+            input_keys=input_keys if input_keys else None,
+            optional_input_keys=optional_input_keys if optional_input_keys else None,
             metadata=dict(self.metadata) if self.metadata else None,
         )
 
@@ -424,14 +467,43 @@ def beam_preprocess_binding_plan(
         workspace=workspace,
         surface=surface,
     )
+    # When BEAM is consuming the ActivitySim outputs from the current phase,
+    # keep the ATLAS vehicles2 selection anchored to that same local year before
+    # considering older coupler state from a restart/recovery path.
+    prefer_current_atlas_inputs = bool(
+        resolved_profile.activity_demand_enabled
+        and activity_demand_outputs is not None
+        and atlas_inputs
+    )
+    if prefer_current_atlas_inputs:
+        for key, value in atlas_inputs.items():
+            explicit_inputs.setdefault(key, value)
+
     get_value = getattr(coupler, "get", None)
+    restored_atlas_vehicle = None
     if callable(get_value):
         restored_atlas_vehicle = artifact_to_path(
             get_value(ATLAS_VEHICLES2_OUTPUT), workspace
         )
+        current_atlas_vehicle = (
+            atlas_inputs.get(ATLAS_VEHICLES2_OUTPUT) if atlas_inputs else None
+        )
+        if (
+            prefer_current_atlas_inputs
+            and restored_atlas_vehicle
+            and current_atlas_vehicle
+            and os.fspath(restored_atlas_vehicle) != os.fspath(current_atlas_vehicle)
+        ):
+            logger.warning(
+                "BEAM preprocess is using current ActivitySim-year ATLAS vehicles2 "
+                "instead of an existing coupler %s value: selected=%s ignored=%s",
+                ATLAS_VEHICLES2_OUTPUT,
+                current_atlas_vehicle,
+                restored_atlas_vehicle,
+            )
         if restored_atlas_vehicle:
             explicit_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, restored_atlas_vehicle)
-    if atlas_inputs:
+    if atlas_inputs and not prefer_current_atlas_inputs:
         for key, value in atlas_inputs.items():
             explicit_inputs.setdefault(key, value)
 
@@ -478,42 +550,12 @@ def urbansim_datastore_selection_rules(
     )
 
 
-def _archive_fallback_path(
-    *,
-    state: Any,
-    workspace: Any,
-    local_path: Path,
-) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
-    full_path = getattr(workspace, "full_path", None)
-    if not run_info_path or full_path is None:
-        return None
-    archive_run_dir = Path(run_info_path).expanduser().resolve().parent
-    local_root = Path(full_path).expanduser().resolve()
-    try:
-        rel = local_path.expanduser().resolve().relative_to(local_root)
-    except Exception:
-        return None
-    return archive_run_dir / rel
-
-
-def _first_existing_path(*paths: Optional[Path]) -> Optional[Path]:
-    for path in paths:
-        if path is not None and path.exists():
-            return path
-    return None
-
-
 def _candidate_paths_metadata(
     *paths_by_semantic_key: tuple[str, Sequence[Optional[Path]]],
 ) -> Dict[str, list[str]]:
     metadata: Dict[str, list[str]] = {}
     for semantic_key, paths in paths_by_semantic_key:
-        ordered_paths = [
-            str(path)
-            for path in paths
-            if path is not None and str(path)
-        ]
+        ordered_paths = [str(path) for path in paths if path is not None and str(path)]
         if ordered_paths:
             metadata[semantic_key] = list(dict.fromkeys(ordered_paths))
     return metadata
@@ -536,13 +578,15 @@ def _urbansim_datastore_candidates_for_year(
     from pilates.urbansim import postprocessor as usim_post
 
     usim_data_dir = Path(get_usim_dir())
-    input_path = usim_data_dir / usim_post.get_usim_datastore_fname(settings, io="input")
-    input_archive_path = _archive_fallback_path(
+    input_path = usim_data_dir / usim_post.get_usim_datastore_fname(
+        settings, io="input"
+    )
+    input_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=input_path,
     )
-    base_path = _first_existing_path(input_path, input_archive_path)
+    base_path = first_existing_path(input_path, input_archive_path)
     candidate_paths = _candidate_paths_metadata(
         (USIM_DATASTORE_BASE_H5, (input_path, input_archive_path)),
     )
@@ -583,12 +627,12 @@ def _urbansim_datastore_candidates_for_year(
     output_path = usim_data_dir / usim_post.get_usim_datastore_fname(
         settings, io="output", year=year
     )
-    output_archive_path = _archive_fallback_path(
+    output_archive_path = archive_fallback_path(
         state=state,
         workspace=workspace,
         local_path=output_path,
     )
-    current_path = _first_existing_path(output_path, output_archive_path)
+    current_path = first_existing_path(output_path, output_archive_path)
     candidate_paths.update(
         _candidate_paths_metadata(
             (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
@@ -682,9 +726,14 @@ def _activitysim_population_source(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
                             year=_target_population_year(),
+                            require_exact_year=(
+                                _requires_exact_activitysim_population_year(state)
+                            ),
                         )
                     )
                 except Exception as exc:
+                    if _requires_exact_activitysim_population_year(state):
+                        raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "
                         "for %s: %s",
@@ -735,9 +784,13 @@ def _activitysim_population_source(
     if isinstance(raw_candidate_paths, Mapping):
         pop_paths = raw_candidate_paths.get(USIM_POPULATION_SOURCE_H5)
         if isinstance(pop_paths, Sequence) and not isinstance(pop_paths, (str, bytes)):
-            ordered = [str(path) for path in pop_paths if path is not None and str(path)]
+            ordered = [
+                str(path) for path in pop_paths if path is not None and str(path)
+            ]
             if ordered:
-                candidate_paths[USIM_POPULATION_SOURCE_H5] = list(dict.fromkeys(ordered))
+                candidate_paths[USIM_POPULATION_SOURCE_H5] = list(
+                    dict.fromkeys(ordered)
+                )
     selected = candidates.get(USIM_POPULATION_SOURCE_H5)
     if selected:
         return _with_population_tables({USIM_POPULATION_SOURCE_H5: selected})
@@ -800,8 +853,12 @@ def _beam_preprocess_warmstart_inputs(
     get_value = getattr(coupler, "get", None)
     if callable(get_value):
         value = get_value(LINKSTATS_WARMSTART)
-        warmstart_path = artifact_to_path(value, workspace)
-        if warmstart_path and os.path.exists(warmstart_path):
+        warmstart_path = artifact_to_existing_path(
+            value,
+            workspace,
+            materialize_from_archive=True,
+        )
+        if warmstart_path:
             return {LINKSTATS_WARMSTART: warmstart_path}
 
     warmstart_path = resolve_initial_linkstats_path(settings, workspace)
@@ -843,6 +900,34 @@ def _beam_preprocess_atlas_inputs(
     return None
 
 
+def _beam_preprocess_config_input(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, Any]]:
+    if get_traffic_assignment_model(settings) != "beam":
+        return None
+
+    try:
+        from pilates.beam.config_hocon import beam_primary_config_path
+
+        local_path = beam_primary_config_path(settings, workspace=workspace)
+    except Exception:
+        return None
+
+    archive_path = archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=local_path,
+    )
+    selected = first_existing_path(local_path, archive_path)
+    if selected is None:
+        return None
+    return {BEAM_CONFIG_FILE: str(selected)}
+
+
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
@@ -850,6 +935,7 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "beam_preprocess_exchange_inputs": _beam_preprocess_exchange_inputs,
     "beam_preprocess_warmstart_inputs": _beam_preprocess_warmstart_inputs,
     "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
+    "beam_preprocess_config_input": _beam_preprocess_config_input,
 }
 
 
@@ -958,6 +1044,8 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=BEAM_CONFIG_FILE,
                 required=True,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_config_input",
             ),
         ),
     }
@@ -1047,9 +1135,7 @@ def _split_candidate_paths_metadata(
         ):
             continue
         ordered_paths = [
-            str(path)
-            for path in candidate_paths
-            if path is not None and str(path)
+            str(path) for path in candidate_paths if path is not None and str(path)
         ]
         if ordered_paths:
             candidate_paths_by_semantic_key[semantic_key] = list(
@@ -1085,8 +1171,8 @@ def _resolve_rule_binding(
         if rule.allow_fallback or rule.fallback_provider
         else None
     )
-    rule_fallback_inputs, candidate_paths_by_semantic_key = _split_candidate_paths_metadata(
-        rule_fallback_inputs
+    rule_fallback_inputs, candidate_paths_by_semantic_key = (
+        _split_candidate_paths_metadata(rule_fallback_inputs)
     )
     scoped_coupler = coupler if rule.allow_coupler else None
 
@@ -1150,11 +1236,7 @@ def build_binding_plan(
         else (
             runtime_surface.required_input_keys
             if runtime_surface is not None
-            else (
-                rule.semantic_key
-                for rule in rule_lookup.values()
-                if rule.required
-            )
+            else (rule.semantic_key for rule in rule_lookup.values() if rule.required)
         )
     )
     optional_semantic_keys = tuple(
@@ -1164,9 +1246,7 @@ def build_binding_plan(
             runtime_surface.optional_input_keys
             if runtime_surface is not None
             else (
-                rule.semantic_key
-                for rule in rule_lookup.values()
-                if not rule.required
+                rule.semantic_key for rule in rule_lookup.values() if not rule.required
             )
         )
     )
@@ -1187,10 +1267,9 @@ def build_binding_plan(
     def _default_rule(semantic_key: str, *, required: bool) -> ArtifactBindingRule:
         return ArtifactBindingRule(semantic_key=semantic_key, required=required)
 
-    for semantic_key, is_required in (
-        [(key, True) for key in required_semantic_keys]
-        + [(key, False) for key in optional_semantic_keys]
-    ):
+    for semantic_key, is_required in [(key, True) for key in required_semantic_keys] + [
+        (key, False) for key in optional_semantic_keys
+    ]:
         rule = rule_lookup.get(semantic_key) or _default_rule(
             semantic_key, required=is_required
         )
@@ -1218,23 +1297,27 @@ def build_binding_plan(
                 fallback_provider=rule.fallback_provider,
                 pass_mode=rule.pass_mode,
             )
-        source, selected_key, value, matched_candidate, candidate_paths = _resolve_rule_binding(
-            rule=rule,
-            coupler=coupler,
-            explicit_inputs=explicit_inputs,
-            fallback_inputs=fallback_inputs,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            year=year,
-            surface=surface,
+        source, selected_key, value, matched_candidate, candidate_paths = (
+            _resolve_rule_binding(
+                rule=rule,
+                coupler=coupler,
+                explicit_inputs=explicit_inputs,
+                fallback_inputs=fallback_inputs,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                year=year,
+                surface=surface,
+            )
         )
         source_by_key[semantic_key] = source
         if candidate_paths:
             candidate_paths_by_semantic_key.update(candidate_paths)
         if selected_key is not None:
             coupler_key_by_key[semantic_key] = selected_key
-            selected_key_by_semantic_key[semantic_key] = matched_candidate or selected_key
+            selected_key_by_semantic_key[semantic_key] = (
+                matched_candidate or selected_key
+            )
         if source != "missing" and rule.pass_mode == "metadata_only":
             resolved_values_by_semantic_key[semantic_key] = value
         elif source == "coupler" and selected_key is not None:
@@ -1397,7 +1480,9 @@ def _bootstrap_beam_exchange_inputs(
             key = getattr(record, "short_name", None)
             if key not in allowed_keys:
                 continue
-            path = record.get_absolute_path(base_path=getattr(workspace, "full_path", None))
+            path = record.get_absolute_path(
+                base_path=getattr(workspace, "full_path", None)
+            )
             if not path or not os.path.exists(path):
                 continue
             artifacts[key] = path
@@ -1424,7 +1509,9 @@ def _bootstrap_beam_warmstart_artifacts(
     return {LINKSTATS_WARMSTART: warmstart_path}
 
 
-def bootstrap_stage_boundary_durability_policy() -> tuple[StageBoundaryDurabilityRule, ...]:
+def bootstrap_stage_boundary_durability_policy() -> tuple[
+    StageBoundaryDurabilityRule, ...
+]:
     """
     Stage-boundary durability policy for bootstrap seeding.
 
@@ -1487,7 +1574,8 @@ def _restart_urbansim_required_artifacts(
     region = getattr(getattr(settings, "run", None), "region", None)
     urbansim_cfg = getattr(settings, "urbansim", None)
     if (
-        current_stage in {
+        current_stage
+        in {
             None,
             workflow_stage.land_use,
         }
@@ -1502,7 +1590,9 @@ def _restart_urbansim_required_artifacts(
         if region_id:
             required.update(
                 {
-                    "omx_skims": os.path.join(usim_data_dir, f"skims_mpo_{region_id}.omx"),
+                    "omx_skims": os.path.join(
+                        usim_data_dir, f"skims_mpo_{region_id}.omx"
+                    ),
                     "hh_size": os.path.join(usim_data_dir, f"hsize_ct_{region_id}.csv"),
                     "income_rates": os.path.join(
                         usim_data_dir, f"income_rates_{region_id}.csv"
@@ -1617,7 +1707,10 @@ def _restart_atlas_required_artifacts(
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
     if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
         return None
-    if getattr(state, "current_major_stage", None) != workflow_stage.vehicle_ownership_model:
+    if (
+        getattr(state, "current_major_stage", None)
+        != workflow_stage.vehicle_ownership_model
+    ):
         return None
 
     get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
@@ -1643,7 +1736,9 @@ def _restart_atlas_required_artifacts(
     return required or None
 
 
-def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirementRule, ...]:
+def restart_required_local_artifact_policy() -> tuple[
+    RestartArtifactRequirementRule, ...
+]:
     """
     Stage-aware restart artifact policy.
 
@@ -1687,7 +1782,11 @@ def restart_required_local_artifact_policy() -> tuple[RestartArtifactRequirement
         ),
         RestartArtifactRequirementRule(
             name="beam_restart_inputs",
-            semantic_keys=("beam_mutable_data_dir", "beam_region_input_dir", "beam_primary_config_file"),
+            semantic_keys=(
+                "beam_mutable_data_dir",
+                "beam_region_input_dir",
+                "beam_primary_config_file",
+            ),
             resolve=_restart_beam_required_artifacts,
             notes=(
                 "BEAM restart should preserve the mutable input tree and primary "

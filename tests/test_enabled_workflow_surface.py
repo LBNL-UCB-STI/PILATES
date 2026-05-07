@@ -153,7 +153,9 @@ def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():
     )
 
     assert "beam_mutable_data_dir" in surface.bootstrap_owned_artifact_keys
-    assert "beam_region_input_dir" in surface.restart_prebootstrap_deferred_artifact_keys
+    assert (
+        "beam_region_input_dir" in surface.restart_prebootstrap_deferred_artifact_keys
+    )
     assert USIM_DATASTORE_BASE_H5 in surface.bootstrap_owned_artifact_keys
     assert USIM_DATASTORE_BASE_H5 in surface.restart_prebootstrap_deferred_artifact_keys
     assert any(

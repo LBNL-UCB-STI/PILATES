@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
@@ -114,12 +113,14 @@ def build_activitysim_inputs(
                 )
 
     land_use_enabled = surface.profile.land_use_enabled
+    population_year = getattr(state, "forecast_year", None)
+    if population_year is None:
+        population_year = year
 
     explicit_usim_inputs: Dict[str, Any] = {}
     if usim_inputs and not land_use_enabled:
-        population_source = (
-            usim_inputs.get(USIM_DATASTORE_BASE_H5)
-            or usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        population_source = usim_inputs.get(USIM_DATASTORE_BASE_H5) or usim_inputs.get(
+            USIM_DATASTORE_CURRENT_H5
         )
         if population_source is not None:
             explicit_usim_inputs[USIM_POPULATION_SOURCE_H5] = population_source
@@ -131,6 +132,10 @@ def build_activitysim_inputs(
         artifact_rules=activitysim_population_source_selection_rules(),
         required_keys=[USIM_POPULATION_SOURCE_H5],
         fallback_inputs=usim_inputs,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=population_year,
         surface=surface,
     )
     selected_usim_key = selected_candidate_key(
@@ -147,20 +152,20 @@ def build_activitysim_inputs(
             inputs[USIM_POPULATION_SOURCE_H5] = usim_value
             descriptions[USIM_POPULATION_SOURCE_H5] = {
                 USIM_POPULATION_SOURCE_H5: (
-                    f"UrbanSim population-source datastore for ActivitySim year {year}, iter {iteration}"
+                    f"UrbanSim population-source datastore for ActivitySim population year {population_year}, iter {iteration}"
                 ),
                 USIM_FORECAST_OUTPUT: (
-                    f"UrbanSim forecast datastore used as the ActivitySim population source for year {year}, iter {iteration}"
+                    f"UrbanSim forecast datastore used as the ActivitySim population source for population year {population_year}, iter {iteration}"
                 ),
                 USIM_DATASTORE_CURRENT_H5: (
-                    f"UrbanSim current datastore used as the ActivitySim population source for year {year}, iter {iteration}"
+                    f"UrbanSim current datastore used as the ActivitySim population source for population year {population_year}, iter {iteration}"
                 ),
                 USIM_DATASTORE_BASE_H5: (
-                    f"UrbanSim base datastore used as the ActivitySim population source for year {year}, iter {iteration}"
+                    f"UrbanSim base datastore used as the ActivitySim population source for population year {population_year}, iter {iteration}"
                 ),
             }.get(
                 selected_usim_key,
-                f"UrbanSim datastore used as the ActivitySim population source for year {year}, iter {iteration}",
+                f"UrbanSim datastore used as the ActivitySim population source for population year {population_year}, iter {iteration}",
             )
 
     zarr_skims_input = None

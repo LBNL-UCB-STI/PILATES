@@ -95,8 +95,14 @@ def test_assign_effective_beam_sub_iteration_promotes_null_to_max_plus_one():
 
     normalized = assign_effective_beam_sub_iteration(frame)
     ps1 = normalized[normalized["phys_sim_iteration"] == 1]
-    assert sorted(ps1["beam_sub_iteration_effective"].dropna().astype(int).tolist()) == [0, 1, 2]
-    assert sorted(ps1["beam_sub_iteration_ordinal"].dropna().astype(int).tolist()) == [1, 2, 3]
+    assert sorted(
+        ps1["beam_sub_iteration_effective"].dropna().astype(int).tolist()
+    ) == [0, 1, 2]
+    assert sorted(ps1["beam_sub_iteration_ordinal"].dropna().astype(int).tolist()) == [
+        1,
+        2,
+        3,
+    ]
 
     ps2 = normalized[normalized["phys_sim_iteration"] == 2]
     assert ps2["beam_sub_iteration_effective"].isna().all()
@@ -142,9 +148,7 @@ def test_prepare_linkstats_pca_artifact_index_orders_rows():
 def test_resolve_link_filter_reference_artifact_ids():
     import pandas as pd
 
-    artifact_index_df = pd.DataFrame(
-        {"artifact_id": ["a1", "a2", "a3"]}
-    )
+    artifact_index_df = pd.DataFrame({"artifact_id": ["a1", "a2", "a3"]})
 
     assert _resolve_link_filter_reference_artifact_ids(
         artifact_index_df,
@@ -431,7 +435,9 @@ def test_summarize_linkstats_artifacts_uses_grouped_view_helpers(monkeypatch):
         return "v_linkstats_grouped_test"
 
     def _fake_summarize_grouped(*, tracker, view_name, **kwargs):
-        calls.append(("summarize_grouped", view_name, kwargs.get("traveltime_weighting")))
+        calls.append(
+            ("summarize_grouped", view_name, kwargs.get("traveltime_weighting"))
+        )
         import pandas as pd
 
         return pd.DataFrame(
@@ -520,7 +526,15 @@ def test_summarize_linkstats_artifacts_passes_volume_weighted_option(monkeypatch
     import pandas as pd
 
     artifacts_df = pd.DataFrame(
-        [{"artifact_id": "a1", "key": "k1", "year": 2018, "iteration": 0, "phys_sim_iteration": 1}]
+        [
+            {
+                "artifact_id": "a1",
+                "key": "k1",
+                "year": 2018,
+                "iteration": 0,
+                "phys_sim_iteration": 1,
+            }
+        ]
     )
     _ = summarize_linkstats_artifacts(
         artifacts_df,

@@ -37,20 +37,28 @@ ARTIFACT_FAMILIES: dict[str, dict[str, dict[str, str]]] = {
 ARTIFACT_FAMILIES_ENV_VAR = "PILATES_ANALYSIS_ARTIFACT_FAMILIES_JSON"
 
 
-def load_artifact_families_from_json(path: str | Path) -> dict[str, dict[str, dict[str, str]]]:
+def load_artifact_families_from_json(
+    path: str | Path,
+) -> dict[str, dict[str, dict[str, str]]]:
     json_path = Path(path).expanduser()
     try:
         payload = json.loads(json_path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
-        raise RuntimeError(f"Artifact families JSON file not found: {json_path}") from exc
+        raise RuntimeError(
+            f"Artifact families JSON file not found: {json_path}"
+        ) from exc
     except OSError as exc:
-        raise RuntimeError(f"Could not read artifact families JSON file: {json_path}") from exc
+        raise RuntimeError(
+            f"Could not read artifact families JSON file: {json_path}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(
             f"Invalid artifact families JSON in {json_path}: {exc.msg} (line {exc.lineno})"
         ) from exc
     if not isinstance(payload, Mapping):
-        raise RuntimeError(f"Artifact families JSON must contain an object: {json_path}")
+        raise RuntimeError(
+            f"Artifact families JSON must contain an object: {json_path}"
+        )
     return _normalize_artifact_families_mapping(
         payload,
         source=f"artifact families JSON '{json_path}'",
@@ -109,7 +117,9 @@ def _normalize_artifact_families_mapping(
         for raw_logical, raw_spec in raw_logicals.items():
             logical_key = str(raw_logical).strip().lower()
             if not logical_key:
-                raise RuntimeError(f"Invalid empty logical name for model '{model_key}' in {source}.")
+                raise RuntimeError(
+                    f"Invalid empty logical name for model '{model_key}' in {source}."
+                )
             if not isinstance(raw_spec, Mapping):
                 raise RuntimeError(
                     f"Artifact family spec for '{model_key}.{logical_key}' in {source} must be an object."
@@ -257,7 +267,9 @@ class EpochViews:
             if col in output.columns
         ]
         if sort_cols:
-            output = output.sort_values(sort_cols, na_position="last").reset_index(drop=True)
+            output = output.sort_values(sort_cols, na_position="last").reset_index(
+                drop=True
+            )
         return output
 
     def query(self, sql: str) -> pd.DataFrame:
@@ -461,7 +473,9 @@ class EpochViews:
         family_filtered = [
             artifact
             for artifact in run_filtered
-            if _artifact_matches_family(artifact, model=model, artifact_family=artifact_family)
+            if _artifact_matches_family(
+                artifact, model=model, artifact_family=artifact_family
+            )
         ]
         return family_filtered
 
@@ -620,7 +634,9 @@ def _artifact_schema_id(artifact: Any) -> Optional[str]:
     return None
 
 
-def _artifact_matches_family(artifact: Any, *, model: str, artifact_family: str) -> bool:
+def _artifact_matches_family(
+    artifact: Any, *, model: str, artifact_family: str
+) -> bool:
     observed = _artifact_family(artifact, model=model)
     if observed:
         return observed == artifact_family
@@ -712,7 +728,9 @@ def _call_with_supported_kwargs(func: Any, kwargs: Mapping[str, Any]) -> Any:
     )
     if accepts_var_kw:
         return func(**dict(kwargs))
-    filtered = {key: value for key, value in kwargs.items() if key in signature.parameters}
+    filtered = {
+        key: value for key, value in kwargs.items() if key in signature.parameters
+    }
     return func(**filtered)
 
 

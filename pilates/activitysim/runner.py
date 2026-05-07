@@ -150,9 +150,7 @@ def asim_required_run_output_paths(workspace: Workspace) -> Dict[str, str]:
     final_pipeline_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
     return {
         output_key: str(
-            final_pipeline_dir
-            / re.sub(r"_asim_out$", "", output_key)
-            / "final.parquet"
+            final_pipeline_dir / re.sub(r"_asim_out$", "", output_key) / "final.parquet"
         )
         for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
     }
@@ -539,7 +537,9 @@ class ActivitysimRunner(GenericRunner):
         self.state.set_sub_stage_progress("runner")
         staged_extra_inputs: Dict[str, Any] = {}
         for key, value in (extra_inputs or {}).items():
-            input_path = value if isinstance(value, str) else getattr(value, "path", value)
+            input_path = (
+                value if isinstance(value, str) else getattr(value, "path", value)
+            )
             if input_path is None:
                 continue
             staged_extra_inputs[key] = _stage_runtime_input_path(
@@ -811,7 +811,9 @@ class ActivitysimRunner(GenericRunner):
 
         zarr_input_path = None
         for key, value in (extra_inputs or {}).items():
-            input_path = value if isinstance(value, str) else getattr(value, "path", value)
+            input_path = (
+                value if isinstance(value, str) else getattr(value, "path", value)
+            )
             if input_path is None or key != "zarr_skims":
                 continue
             zarr_input_path = str(input_path)

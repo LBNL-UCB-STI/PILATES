@@ -234,7 +234,9 @@ def get_db_health_issues(
         )
 
     if strict:
-        orphan_count = int(inspect_counts.get("inspect_orphaned_artifact_count", 0) or 0)
+        orphan_count = int(
+            inspect_counts.get("inspect_orphaned_artifact_count", 0) or 0
+        )
         if orphan_count > 0:
             issues.append(f"inspect_orphaned_artifact_count={orphan_count}")
         parity_mismatch = int(
@@ -296,12 +298,12 @@ def inspect_run_tagging(tracker: Any) -> Dict[str, Any]:
     missing_counts: Dict[str, int] = {}
 
     for field in ("scenario_id", "year", "iteration", "model"):
-        missing = sum(1 for run in runs if _normalize_text(_run_field(run, field)) is None)
+        missing = sum(
+            1 for run in runs if _normalize_text(_run_field(run, field)) is None
+        )
         missing_counts[field] = int(missing)
         if missing > 0:
-            warnings_out.append(
-                f"run_tagging.{field}.missing={missing}/{total}"
-            )
+            warnings_out.append(f"run_tagging.{field}.missing={missing}/{total}")
 
     grouped: Dict[tuple[Optional[str], Optional[int], Optional[int]], list[Any]] = {}
     for run in runs:
@@ -323,7 +325,8 @@ def inspect_run_tagging(tracker: Any) -> Dict[str, Any]:
         asim_runs = [
             run
             for run in group_runs
-            if "activitysim" in (_normalize_text(_run_field(run, "model")) or "").lower()
+            if "activitysim"
+            in (_normalize_text(_run_field(run, "model")) or "").lower()
         ]
         beam_runs = [
             run
@@ -341,13 +344,20 @@ def inspect_run_tagging(tracker: Any) -> Dict[str, Any]:
 
             for beam_run in beam_runs:
                 checked_beam_runs += 1
-                parent_run_id = _normalize_text(getattr(beam_run, "parent_run_id", None))
+                parent_run_id = _normalize_text(
+                    getattr(beam_run, "parent_run_id", None)
+                )
                 if parent_run_id is None:
                     missing_beam_parent += 1
                 elif parent_run_id != asim_run_id:
                     mismatched_beam_parent += 1
 
-        if scenario_id is None or year is None or iteration is None or int(iteration) <= 0:
+        if (
+            scenario_id is None
+            or year is None
+            or iteration is None
+            or int(iteration) <= 0
+        ):
             continue
         prev_key = (scenario_id, int(year), int(iteration) - 1)
         prev_group_runs = grouped.get(prev_key, [])
@@ -362,8 +372,7 @@ def inspect_run_tagging(tracker: Any) -> Dict[str, Any]:
         prev_beam_ids = {
             run_id
             for run_id in (
-                _normalize_text(getattr(run, "id", None))
-                for run in prev_beam_runs
+                _normalize_text(getattr(run, "id", None)) for run in prev_beam_runs
             )
             if run_id is not None
         }
@@ -446,7 +455,9 @@ def get_run_tagging_issues(
     if beam_checked > 0 and beam_missing > 0:
         issues.append(f"run_tagging.beam_parent_missing={beam_missing}/{beam_checked}")
     if beam_checked > 0 and beam_mismatch > 0:
-        issues.append(f"run_tagging.beam_parent_mismatch={beam_mismatch}/{beam_checked}")
+        issues.append(
+            f"run_tagging.beam_parent_mismatch={beam_mismatch}/{beam_checked}"
+        )
 
     asim_checked = int(linkage_counts.get("asim_parent_checked", 0) or 0)
     asim_missing = int(linkage_counts.get("asim_parent_missing", 0) or 0)
@@ -454,7 +465,9 @@ def get_run_tagging_issues(
     if asim_checked > 0 and asim_missing > 0:
         issues.append(f"run_tagging.asim_parent_missing={asim_missing}/{asim_checked}")
     if asim_checked > 0 and asim_mismatch > 0:
-        issues.append(f"run_tagging.asim_parent_mismatch={asim_mismatch}/{asim_checked}")
+        issues.append(
+            f"run_tagging.asim_parent_mismatch={asim_mismatch}/{asim_checked}"
+        )
 
     return issues
 
@@ -468,7 +481,9 @@ def assert_run_tagging_report(
     issues = get_run_tagging_issues(tagging_report, strict=strict)
     if issues and (strict or raise_on_issues):
         mode = "strict" if strict else "requested"
-        raise RuntimeError(f"Run tagging validation failed ({mode}): {', '.join(issues)}")
+        raise RuntimeError(
+            f"Run tagging validation failed ({mode}): {', '.join(issues)}"
+        )
 
 
 def assert_run_tagging_consistent(
@@ -516,7 +531,9 @@ def run_tagging_to_frame(
         "healthy": len(get_run_tagging_issues(tagging_payload, strict=strict)) == 0,
         "strict": bool(strict),
     }
-    row.update({f"missing_{key}": int(value or 0) for key, value in missing_counts.items()})
+    row.update(
+        {f"missing_{key}": int(value or 0) for key, value in missing_counts.items()}
+    )
     row.update({str(key): int(value or 0) for key, value in linkage_counts.items()})
     return pd.DataFrame([row])
 
@@ -543,7 +560,9 @@ def assert_run_tagging(
     issues = get_run_tagging_issues(report, strict=strict)
     if issues:
         mode = "strict" if strict else "standard"
-        raise RuntimeError(f"Run tagging validation failed ({mode}): {', '.join(issues)}")
+        raise RuntimeError(
+            f"Run tagging validation failed ({mode}): {', '.join(issues)}"
+        )
     return list(report.get("warnings", []) or [])
 
 
@@ -551,11 +570,17 @@ def _collect_runs_for_tag_validation(tracker: Any) -> list[Any]:
     collected: list[Any] = []
     if hasattr(tracker, "run_set"):
         try:
-            collected.extend(list(tracker.run_set(label="tag-validation", limit=200000)))
+            collected.extend(
+                list(tracker.run_set(label="tag-validation", limit=200000))
+            )
         except Exception:
             pass
 
-    if not collected and hasattr(tracker, "queries") and hasattr(tracker.queries, "find_runs"):
+    if (
+        not collected
+        and hasattr(tracker, "queries")
+        and hasattr(tracker.queries, "find_runs")
+    ):
         try:
             collected.extend(list(tracker.queries.find_runs(limit=200000)))
         except Exception:

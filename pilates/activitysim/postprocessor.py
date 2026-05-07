@@ -9,7 +9,10 @@ import os
 from typing import Tuple, Optional, Dict, Any
 
 from pilates.config import PilatesConfig
-from pilates.activitysim.outputs import ActivitySimPostprocessOutputs, ActivitySimRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
@@ -45,7 +48,9 @@ def _activitysim_iteration_output_paths(
         Path(workspace.get_asim_output_dir()) / f"year-{year}-iteration-{iteration}"
     )
     return {
-        output_key: str(iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet")
+        output_key: str(
+            iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet"
+        )
         for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
     }
 
@@ -54,15 +59,20 @@ def _activitysim_archived_input_paths(
     state: WorkflowState,
     workspace: Workspace,
 ) -> Dict[str, str]:
-    year = getattr(state, "year", getattr(state, "current_year", None))
+    year = getattr(state, "forecast_year", None)
+    if year is None:
+        year = getattr(state, "year", getattr(state, "current_year", None))
     if year is None:
         return {}
     iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", 0))
     archived_inputs_dir = (
-        Path(workspace.get_asim_output_dir()) / f"inputs-year-{year}-iteration-{iteration}"
+        Path(workspace.get_asim_output_dir())
+        / f"inputs-year-{year}-iteration-{iteration}"
     )
     return {
-        "asim_input_households_csv_archived": str(archived_inputs_dir / "households.csv"),
+        "asim_input_households_csv_archived": str(
+            archived_inputs_dir / "households.csv"
+        ),
         "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
         "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
         "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
@@ -78,6 +88,25 @@ def _default_usim_datastore_output_path(
         datastore_name = get_usim_datastore_fname(settings, io="input")
     except Exception:
         return None
+    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
+
+
+def _forecast_usim_datastore_output_path(
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Optional[str]:
+    forecast_year = getattr(state, "forecast_year", None)
+    if forecast_year is None:
+        return _default_usim_datastore_output_path(settings, workspace)
+    try:
+        datastore_name = get_usim_datastore_fname(
+            settings,
+            io="output",
+            year=forecast_year,
+        )
+    except Exception:
+        return _default_usim_datastore_output_path(settings, workspace)
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
@@ -207,11 +236,7 @@ def _detect_h5_prefix(
 
     for candidate_prefix in candidate_prefixes:
         if all(
-            (
-                f"{candidate_prefix}/{table_name}"
-                if candidate_prefix
-                else table_name
-            )
+            (f"{candidate_prefix}/{table_name}" if candidate_prefix else table_name)
             in normalized_keys
             for table_name in required_tables
         ):
@@ -281,10 +306,9 @@ def _prepare_updated_tables(
     required_cols = {}
     usim_tables = {}
 
-    vehicle_ownership_model = (
-        getattr(getattr(settings, "run", None), "models", None)
-        and getattr(settings.run.models, "vehicle_ownership", None)
-    )
+    vehicle_ownership_model = getattr(
+        getattr(settings, "run", None), "models", None
+    ) and getattr(settings.run.models, "vehicle_ownership", None)
     use_asim_auto_ownership = vehicle_ownership_model != "atlas"
 
     def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
@@ -324,9 +348,9 @@ def _prepare_updated_tables(
             if persons_df.index.name == "person_id":
                 sample_person_ids = persons_df.index[invalid_mask].tolist()[:10]
             elif "person_id" in persons_df.columns:
-                sample_person_ids = (
-                    persons_df.loc[invalid_mask, "person_id"].tolist()[:10]
-                )
+                sample_person_ids = persons_df.loc[invalid_mask, "person_id"].tolist()[
+                    :10
+                ]
             logger.warning(
                 "Dropping %s ActivitySim persons rows with missing/invalid household_id "
                 "before writing the updated UrbanSim persons table. Sample person_ids=%s",
@@ -364,9 +388,9 @@ def _prepare_updated_tables(
             return pd.DataFrame(index=pd.Index([], name="person_id"))
 
         key_cols = ["household_id", "member_id"]
-        persons[key_cols] = persons[key_cols].apply(
-            pd.to_numeric, errors="coerce"
-        ).astype("Int64")
+        persons[key_cols] = (
+            persons[key_cols].apply(pd.to_numeric, errors="coerce").astype("Int64")
+        )
 
         logger.warning(
             "ASim persons output is missing person_id; falling back to household_id/member_id "
@@ -375,9 +399,9 @@ def _prepare_updated_tables(
         )
 
         usim_lookup = usim_persons.reset_index()[["person_id"] + key_cols].copy()
-        usim_lookup[key_cols] = usim_lookup[key_cols].apply(
-            pd.to_numeric, errors="coerce"
-        ).astype("Int64")
+        usim_lookup[key_cols] = (
+            usim_lookup[key_cols].apply(pd.to_numeric, errors="coerce").astype("Int64")
+        )
         duplicate_mask = usim_lookup.duplicated(key_cols, keep=False)
         if duplicate_mask.any():
             logger.warning(
@@ -551,6 +575,7 @@ def create_usim_input_data(
     asim_source_paths: list,
     current_input_store_path: str,
     population_source_store_path: Optional[str],
+    target_store_path: Optional[str] = None,
 ) -> Tuple[str, Optional[FileRecord]]:
     """
     Creates UrbanSim input data for the next iteration.
@@ -564,7 +589,8 @@ def create_usim_input_data(
     on to the next iteration if they were not found in the UrbanSim *outputs*.
     """
     forecast_year = state.forecast_year
-    input_store_path = current_input_store_path
+    input_store_path = target_store_path or current_input_store_path
+    os.makedirs(os.path.dirname(input_store_path), exist_ok=True)
     input_datastore_name = os.path.basename(input_store_path)
     archive_fname = "input_data_for_{0}_outputs.h5".format(forecast_year)
     archive_path = os.path.join(os.path.dirname(input_store_path), archive_fname)
@@ -573,7 +599,9 @@ def create_usim_input_data(
         population_source_store_path and os.path.exists(population_source_store_path)
     )
     source_store_path = (
-        input_store_path if fallback_to_current_input else population_source_store_path
+        current_input_store_path
+        if fallback_to_current_input
+        else population_source_store_path
     )
     source_store_label = (
         "current UrbanSim input datastore"
@@ -581,6 +609,7 @@ def create_usim_input_data(
         else "UrbanSim population-source datastore"
     )
 
+    archived_input_store_path: Optional[str] = None
     if os.path.exists(input_store_path):
         logger.info(
             "Moving urbansim inputs from the previous iteration to {0}".format(
@@ -588,12 +617,19 @@ def create_usim_input_data(
             )
         )
         os.rename(input_store_path, archive_path)
+        archived_input_store_path = archive_path
         if fallback_to_current_input or (
             source_store_path
             and os.path.abspath(source_store_path) == os.path.abspath(input_store_path)
         ):
             source_store_path = archive_path
-    elif not os.path.exists(archive_path):
+    elif os.path.exists(archive_path):
+        archived_input_store_path = archive_path
+    elif current_input_store_path and os.path.exists(current_input_store_path):
+        archived_input_store_path = current_input_store_path
+    elif source_store_path and os.path.exists(source_store_path):
+        archived_input_store_path = source_store_path
+    else:
         logger.warning(
             "No input data found at {0} or {1}. Cannot create next iteration inputs.".format(
                 input_store_path, archive_path
@@ -638,7 +674,7 @@ def create_usim_input_data(
     logger.info("ActivitySim output tables: %s", list(asim_output_dict.keys()))
 
     # load last iter UrbanSim input data
-    og_input_store = pd.HDFStore(archive_path, mode="r")
+    og_input_store = pd.HDFStore(archived_input_store_path, mode="r")
 
     # load last iter UrbanSim output/current data
     same_source_as_archive = os.path.abspath(usim_output_store_path) == os.path.abspath(
@@ -658,7 +694,7 @@ def create_usim_input_data(
     )
 
     # instantiate empty .h5 store (e.g. custom_mpo_321487234_model_data.h5)
-    new_input_store = pd.HDFStore(input_store_path)
+    new_input_store = pd.HDFStore(input_store_path, mode="w")
     assert len(new_input_store.keys()) == 0
 
     # Keep track of which tables have already been added (i.e. updated)
@@ -827,7 +863,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         )
         asim_output_dir = inputs.get("asim_output_dir")
         inputs["asim_output_dir"] = (
-            asim_output_dir if asim_output_dir and os.path.exists(asim_output_dir) else None
+            asim_output_dir
+            if asim_output_dir and os.path.exists(asim_output_dir)
+            else None
         )
         zarr_path = inputs.get(ZARR_SKIMS)
         inputs[ZARR_SKIMS] = (
@@ -869,7 +907,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         """
         outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _default_usim_datastore_output_path(settings, workspace),
+            USIM_DATASTORE_H5: _forecast_usim_datastore_output_path(
+                settings,
+                state,
+                workspace,
+            ),
         }
         outputs.update(_activitysim_iteration_output_paths(state, workspace))
         outputs.update(_activitysim_archived_input_paths(state, workspace))
@@ -952,7 +994,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         # Archive ActivitySim inputs for this iteration
         # This ensures Consist can find input files at stable paths for hybrid views
         inputs_folder_name = "inputs-year-{0}-iteration-{1}".format(
-            year, replanning_iteration_number
+            forecast_year, replanning_iteration_number
         )
         inputs_folder_path = os.path.join(
             workspace.get_asim_output_dir(), inputs_folder_name
@@ -1084,6 +1126,11 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
                 current_input_store_path=current_input_h5_path,
                 population_source_store_path=population_source_h5_path,
+                target_store_path=_forecast_usim_datastore_output_path(
+                    settings,
+                    self.state,
+                    workspace,
+                ),
             )
             if usim_record:
                 usim_datastore_h5 = next_usim_input_path
@@ -1108,9 +1155,9 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.debug("ASim output already archived: %s", target)
                 processed_outputs[output_key] = target
                 if content_hash is None:
-                    content_hash = _resolve_content_hash(source) or _resolve_content_hash(
-                        target
-                    )
+                    content_hash = _resolve_content_hash(
+                        source
+                    ) or _resolve_content_hash(target)
                 if content_hash:
                     processed_output_hashes[output_key] = content_hash
                 continue

@@ -8,9 +8,6 @@ from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
 from pilates.workflows.artifact_keys import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_PERSONS_IN,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.steps import (
@@ -65,10 +62,7 @@ class DummyWorkspace:
 
 def _fixture_root() -> Path:
     return (
-        Path(__file__).resolve().parent
-        / "fixtures"
-        / "consist"
-        / "activitysim_small"
+        Path(__file__).resolve().parent / "fixtures" / "consist" / "activitysim_small"
     )
 
 
@@ -165,7 +159,9 @@ def test_activitysim_run_metadata_adapter_is_none_when_config_root_missing(
 ):
     pytest.importorskip("consist")
 
-    workspace = DummyWorkspace(tmp_path / "missing_configs_root", tmp_path / "asim_data")
+    workspace = DummyWorkspace(
+        tmp_path / "missing_configs_root", tmp_path / "asim_data"
+    )
     settings = _make_settings()
     _wire_common(monkeypatch)
 
@@ -224,6 +220,79 @@ def test_activitysim_run_metadata_adapter_includes_overlay_config_roots_when_pre
     ]
 
 
+def test_activitysim_run_metadata_filters_adapter_covered_identity_inputs(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    fixture_root = _fixture_root()
+    workspace = DummyWorkspace(fixture_root, tmp_path / "asim_data")
+    settings = _make_settings()
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": [
+                ("asim_mutable_configs", Path("/tmp/asim/configs")),
+                (
+                    "asim_mutable_configs/settings.yaml",
+                    Path("/tmp/asim/configs/settings.yaml"),
+                ),
+                ("external_marker", Path("/tmp/external")),
+            ],
+        },
+    )
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    assert meta.adapter(ctx) is not None
+    assert meta.identity_inputs(ctx) == [("external_marker", Path("/tmp/external"))]
+
+
+def test_activitysim_run_metadata_keeps_identity_inputs_when_adapter_missing(
+    monkeypatch, tmp_path
+):
+    pytest.importorskip("consist")
+
+    workspace = DummyWorkspace(
+        tmp_path / "missing_configs_root", tmp_path / "asim_data"
+    )
+    settings = _make_settings()
+    identity_inputs = [("asim_mutable_configs", Path("/tmp/asim/configs"))]
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "identity_inputs": list(identity_inputs),
+        },
+    )
+
+    step_fn = make_activitysim_run_step(
+        coupler=DummyCoupler(),
+        outputs_holder=StepOutputsHolder(),
+    )
+    meta = step_fn.__consist_step__
+    ctx = _make_step_context(
+        step_fn=step_fn,
+        model=meta.model,
+        context_settings=settings,
+        runtime_workspace=workspace,
+    )
+
+    assert meta.adapter(ctx) is None
+    assert meta.identity_inputs(ctx) == identity_inputs
+
+
 def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
     monkeypatch, tmp_path
 ):
@@ -257,9 +326,7 @@ def test_activitysim_preprocess_does_not_canonicalize_in_step_body(
     population_source_h5.write_text("stub", encoding="utf-8")
 
     step_fn = make_activitysim_preprocess_step(
-        coupler=DummyCoupler(
-            {USIM_POPULATION_SOURCE_H5: str(population_source_h5)}
-        ),
+        coupler=DummyCoupler({USIM_POPULATION_SOURCE_H5: str(population_source_h5)}),
         outputs_holder=StepOutputsHolder(),
     )
     step_fn(settings=settings, state=state, workspace=workspace)

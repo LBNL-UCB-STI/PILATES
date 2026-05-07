@@ -124,7 +124,10 @@ def test_log_output_only_passes_child_specs_to_h5_container(monkeypatch):
     meta = calls[0][3]
     assert meta["child_selection"] == "include_only"
     assert meta["child_specs"]["/2023/households"].key == "usim_households_2023"
-    assert meta["child_specs"]["/2023/households"].metadata["h5_table_name"] == "households"
+    assert (
+        meta["child_specs"]["/2023/households"].metadata["h5_table_name"]
+        == "households"
+    )
 
 
 def test_log_beam_r5_osm_input_skips_when_config_cache_tables_missing(monkeypatch):

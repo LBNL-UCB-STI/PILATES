@@ -70,7 +70,7 @@ def _calculate_optimal_parallelism(cpu_ratio: float = 0.8) -> int:
     try:
         import psutil  # type: ignore
 
-        memory_gb = psutil.virtual_memory().available / (1024 ** 3)
+        memory_gb = psutil.virtual_memory().available / (1024**3)
         memory_based = max(1, int(memory_gb / 2))
     except Exception:
         pass
@@ -99,7 +99,7 @@ def _map_host_path_to_container(
 
 
 def _select_latest_linkstats_path(
-    records: RecordStore,
+    records: Optional[RecordStore],
     abs_beam_input: str,
     abs_beam_output: str,
 ) -> Optional[str]:
@@ -702,7 +702,9 @@ class BeamFullSkimRunner(GenericRunner):
         beam_cfg = getattr(settings, "beam", None)
         skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
         if skim_cfg is None:
-            raise RuntimeError("BEAM full skim requested but beam.full_skim is not set.")
+            raise RuntimeError(
+                "BEAM full skim requested but beam.full_skim is not set."
+            )
         if getattr(skim_cfg, "run_schedule", "disabled") == "disabled":
             raise RuntimeError(
                 "BEAM full skim requested but beam.full_skim.run_schedule is disabled."

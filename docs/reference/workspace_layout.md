@@ -7,7 +7,16 @@ summary: Stable path semantics for local workspace, archive roots, and run-local
 
 ## Current Path Model
 
-PILATES uses `Workspace.full_path` as the root of the run-specific mutable workspace. If no output path is configured, PILATES runs in place in the current working directory. Otherwise it resolves the workspace under the configured output path and folder name.
+The normal launcher path requires `run.output_directory`. PILATES uses that
+field as the parent for the durable archive run directory. If
+`run.local_workspace_root` is unset, the mutable workspace is created under the
+same root; if it is set, the mutable workspace is created under that separate
+root. In both cases, the launcher creates a run-specific folder named from the
+region, `run.output_run_name`, and the startup timestamp.
+
+`Workspace.full_path` is the root of that run-specific mutable workspace. The
+lower-level `Workspace` class still has an in-place fallback for direct test or
+helper use, but that is not the supported `python run.py -c ...` runtime path.
 
 The workspace owns model-facing mutable directories such as:
 

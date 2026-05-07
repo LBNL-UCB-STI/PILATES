@@ -321,7 +321,9 @@ def test_migrate_config_file_writes_hierarchical_yaml_with_expected_sections(tmp
         encoding="utf-8",
     )
 
-    assert migrate_config_file(str(legacy_path), str(output_path), validate=True) is True
+    assert (
+        migrate_config_file(str(legacy_path), str(output_path), validate=True) is True
+    )
 
     written = output_path.read_text(encoding="utf-8")
     assert written.startswith("# PILATES Configuration File (Hierarchical Format)\n")
@@ -334,10 +336,15 @@ def test_migrate_config_file_writes_hierarchical_yaml_with_expected_sections(tmp
     assert migrated["run"]["region"] == "seattle"
     assert migrated["beam"]["memory"] == "${BEAM_MEMORY}"
     assert migrated["urbansim"]["region_id"] == "53199100"
-    assert migrated["activitysim"]["region_mappings"]["region_to_subdir"]["seattle"] == "seattle"
+    assert (
+        migrated["activitysim"]["region_mappings"]["region_to_subdir"]["seattle"]
+        == "seattle"
+    )
 
 
-def test_migrate_config_file_validation_error_logs_and_still_writes(tmp_path, monkeypatch, caplog):
+def test_migrate_config_file_validation_error_logs_and_still_writes(
+    tmp_path, monkeypatch, caplog
+):
     legacy_path = tmp_path / "legacy.yaml"
     output_path = tmp_path / "migrated.yaml"
     legacy_path.write_text(
@@ -410,7 +417,9 @@ def test_migrate_config_file_returns_false_on_invalid_input(tmp_path):
     output_path = tmp_path / "migrated.yaml"
     legacy_path.write_text("[not valid yaml", encoding="utf-8")
 
-    assert migrate_config_file(str(legacy_path), str(output_path), validate=False) is False
+    assert (
+        migrate_config_file(str(legacy_path), str(output_path), validate=False) is False
+    )
     assert not output_path.exists()
 
 

@@ -5,7 +5,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any, Callable, Dict, Mapping, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
 from consist.types import H5ChildSpec
 
@@ -17,6 +17,7 @@ from pilates.activitysim.runner import (
     asim_sharrow_cache_dir,
     persist_sharrow_cache_enabled,
 )
+from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
@@ -24,6 +25,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     resolve_existing_path,
 )
+from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
@@ -36,7 +38,8 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 
 # Model-specific step factories for ActivitySim.
@@ -68,6 +71,7 @@ from .shared import (
     log_and_set_output,
     log_input_only,
     log_output_only,
+    recovered_cached_paths,
     resolve_artifact_from_value,
 )
 from pilates.workflows.input_resolution import (
@@ -77,6 +81,9 @@ from pilates.workflows.input_resolution import (
 from pilates.workflows.tracker_outputs import merge_canonical_output_mappings
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from pilates.workflows.surface import EnabledWorkflowSurface
 
 _ACTIVITYSIM_POPULATION_TABLE_KEYS = (
     USIM_POPULATION_HOUSEHOLDS_TABLE,
@@ -132,9 +139,12 @@ def _filter_kwargs_for_callable(
         parameters = inspect.signature(func).parameters
     except (TypeError, ValueError):
         return kwargs
-    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()):
+    if any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
+    ):
         return kwargs
     return {key: value for key, value in kwargs.items() if key in parameters}
+
 
 def _execute_activitysim_preprocess(
     preprocessor: Any,
@@ -164,7 +174,9 @@ def _execute_activitysim_preprocess(
             USIM_POPULATION_BLOCKS_TABLE,
         }
     }
-    callable_kwargs = _filter_kwargs_for_callable(preprocessor.preprocess, filtered_kwargs)
+    callable_kwargs = _filter_kwargs_for_callable(
+        preprocessor.preprocess, filtered_kwargs
+    )
     if (
         "population_source_h5_path" in filtered_kwargs
         and "population_source_h5_path" not in callable_kwargs
@@ -173,7 +185,10 @@ def _execute_activitysim_preprocess(
             key: value
             for key, value in (
                 ("usim_datastore_h5", filtered_kwargs["population_source_h5_path"]),
-                ("usim_datastore_base_h5", filtered_kwargs["population_source_h5_path"]),
+                (
+                    "usim_datastore_base_h5",
+                    filtered_kwargs["population_source_h5_path"],
+                ),
             )
             if key in inspect.signature(preprocessor.preprocess).parameters
         }
@@ -217,8 +232,7 @@ def _execute_activitysim_postprocess(
         )
     runtime_kwargs = _strip_component_runtime_kwargs(kwargs)
     runtime_kwargs.setdefault(
-        "population_source_h5_path",
-        runtime_kwargs.get("usim_population_source_h5")
+        "population_source_h5_path", runtime_kwargs.get("usim_population_source_h5")
     )
     runtime_kwargs.setdefault(
         "current_input_h5_path",
@@ -234,14 +248,19 @@ def _execute_activitysim_postprocess(
             "current_input_h5_path",
         }
     }
-    callable_kwargs = _filter_kwargs_for_callable(postprocessor.postprocess, filtered_kwargs)
+    callable_kwargs = _filter_kwargs_for_callable(
+        postprocessor.postprocess, filtered_kwargs
+    )
     legacy_postprocess_kwargs: Dict[str, Any] = {}
     if (
         filtered_kwargs.get("current_input_h5_path") is not None
         and "current_input_h5_path" not in callable_kwargs
-        and "usim_datastore_h5" in inspect.signature(postprocessor.postprocess).parameters
+        and "usim_datastore_h5"
+        in inspect.signature(postprocessor.postprocess).parameters
     ):
-        legacy_postprocess_kwargs["usim_datastore_h5"] = filtered_kwargs["current_input_h5_path"]
+        legacy_postprocess_kwargs["usim_datastore_h5"] = filtered_kwargs[
+            "current_input_h5_path"
+        ]
     callable_kwargs.update(legacy_postprocess_kwargs)
     return postprocessor.postprocess(
         upstream,
@@ -337,11 +356,21 @@ def _resolve_activitysim_preprocess_runtime_inputs(
     step_inputs: Optional[Mapping[str, Any]] = None,
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Dict[str, Any]:
+    def _requires_exact_population_year() -> bool:
+        land_use_enabled = get_setting(settings, "run.models.land_use") is not None
+        is_start_year = getattr(state, "is_start_year", None)
+        if not land_use_enabled or not callable(is_start_year):
+            return False
+        try:
+            return not bool(is_start_year())
+        except Exception:
+            return False
+
     if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs:
         population_source_value = step_inputs[USIM_POPULATION_SOURCE_H5]
         resolution = None
     else:
-        step_year = getattr(state, "year", getattr(state, "forecast_year", None))
+        step_year = resolve_forecast_year(state)
         resolution = build_binding_plan(
             step_name="activitysim_preprocess",
             coupler=coupler,
@@ -393,8 +422,11 @@ def _resolve_activitysim_preprocess_runtime_inputs(
                 h5_path=population_source_h5_path,
                 year=target_year,
                 provided_paths=provided_table_paths,
+                require_exact_year=_requires_exact_population_year(),
             )
         except Exception as exc:
+            if _requires_exact_population_year():
+                raise
             logger.debug(
                 "Skipping ActivitySim population table resolution for %s: %s",
                 population_source_h5_path,
@@ -437,6 +469,16 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         population_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_POPULATION_SOURCE_H5,
+                    required=False,
+                    allow_coupler=True,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+                    fallback_provider="activitysim_population_source",
+                ),
+            ),
             settings=settings,
             state=state,
             workspace=workspace,
@@ -444,13 +486,24 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             surface=surface,
         )
     if not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs:
+        current_year = getattr(state, "year", getattr(state, "current_year", None))
         current_resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
+            artifact_rules=(
+                ArtifactBindingRule(
+                    semantic_key=USIM_DATASTORE_CURRENT_H5,
+                    required=False,
+                    allow_coupler=True,
+                    allow_fallback=True,
+                    preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+                    fallback_provider="urbansim_inputs_for_year",
+                ),
+            ),
             settings=settings,
             state=state,
             workspace=workspace,
-            year=state.year,
+            year=current_year,
             surface=surface,
         )
     population_source_value = (
@@ -523,7 +576,8 @@ def _recover_activitysim_preprocess_outputs(
         for key, path in ActivitysimPreprocessor.expected_outputs(
             settings, state, workspace
         ).items()
-        if key in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
+        if key
+        in {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN, ASIM_OMX_SKIMS}
         and isinstance(path, str)
     }
     recovered_inputs: Dict[str, Path] = {}
@@ -578,10 +632,36 @@ def _recover_activitysim_run_outputs(
 ) -> Optional[ActivitySimRunOutputs]:
     del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    cached_paths = recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+        step_logger=logger,
+        log_context="ActivitySim run cached output recovery",
+    )
     raw_outputs: Dict[str, Path] = {}
     raw_output_hashes: Dict[str, str] = {}
     source_input_paths: Dict[str, Path] = {}
     source_input_hashes: Dict[str, str] = {}
+    asim_output_keys = set(ASIM_OUTPUT_KEY_MAP.values())
+    for short_name, fpath in cached_paths.items():
+        normalized_name = normalize_asim_output_key(short_name)
+        if normalized_name not in asim_output_keys:
+            continue
+        raw_outputs[normalized_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_activitysim_run_cached_value(
+                key=normalized_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=normalized_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            raw_output_hashes[normalized_name] = content_hash
 
     final_pipeline = Path(
         _existing_local_path(asim_output_dir / "final_pipeline", workspace)
@@ -653,9 +733,14 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
-    runner_expected_inputs = ActivitysimRunner.expected_inputs(settings, state, workspace)
+    runner_expected_inputs = ActivitysimRunner.expected_inputs(
+        settings, state, workspace
+    )
     runtime_zarr_candidate = Path(
-        cast(str, runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace))
+        cast(
+            str,
+            runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace),
+        )
     )
     zarr_candidate = Path(
         _existing_local_path(runtime_zarr_candidate, workspace)
@@ -673,6 +758,21 @@ def _recover_activitysim_run_outputs(
             key=ZARR_SKIMS,
             workspace=workspace,
             fallback_path=zarr_candidate,
+        )
+        if content_hash:
+            source_input_hashes[ZARR_SKIMS] = content_hash
+    elif ZARR_SKIMS in cached_paths:
+        source_input_paths[ZARR_SKIMS] = cached_paths[ZARR_SKIMS]
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=ZARR_SKIMS,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=ZARR_SKIMS,
+            workspace=workspace,
+            fallback_path=cached_paths[ZARR_SKIMS],
         )
         if content_hash:
             source_input_hashes[ZARR_SKIMS] = content_hash
@@ -699,6 +799,13 @@ def _recover_activitysim_postprocess_outputs(
 ) -> Optional[ActivitySimPostprocessOutputs]:
     del outputs_holder
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    cached_paths = recovered_cached_paths(
+        cached_outputs=cached_outputs,
+        run_id=run_id,
+        workspace=workspace,
+        step_logger=logger,
+        log_context="ActivitySim postprocess cached output recovery",
+    )
     iter_dir = Path(
         _existing_local_path(
             asim_output_dir / f"year-{state.year}-iteration-{state.iteration}",
@@ -708,12 +815,34 @@ def _recover_activitysim_postprocess_outputs(
     )
     processed_outputs: Dict[str, Path] = {}
     processed_output_hashes: Dict[str, str] = {}
-    if iter_dir.exists():
-        required_outputs = {
-            "persons_asim_out",
-            "households_asim_out",
-            "beam_plans_asim_out",
-        }
+    required_outputs = {
+        "persons_asim_out",
+        "households_asim_out",
+        "beam_plans_asim_out",
+    }
+    asim_output_keys = set(ASIM_OUTPUT_KEY_MAP.values())
+    for short_name, fpath in cached_paths.items():
+        normalized_name = normalize_asim_output_key(short_name)
+        if normalized_name not in asim_output_keys:
+            continue
+        processed_outputs[normalized_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=normalized_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=normalized_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            processed_output_hashes[normalized_name] = content_hash
+
+    if not required_outputs.issubset(set(processed_outputs)):
+        if not iter_dir.exists():
+            return None
         available_outputs = {
             normalize_asim_output_key(path.stem) for path in iter_dir.glob("*.parquet")
         }
@@ -735,15 +864,18 @@ def _recover_activitysim_postprocess_outputs(
             )
             if content_hash:
                 processed_output_hashes[short_name] = content_hash
-    else:
-        return None
 
+    archived_input_year = resolve_forecast_year(state)
     inputs_dir = Path(
         _existing_local_path(
-            asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}",
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}",
             workspace,
         )
-        or (asim_output_dir / f"inputs-year-{state.year}-iteration-{state.iteration}")
+        or (
+            asim_output_dir
+            / f"inputs-year-{archived_input_year}-iteration-{state.iteration}"
+        )
     )
     if inputs_dir.exists():
         archived_inputs = {
@@ -787,6 +919,31 @@ def _recover_activitysim_postprocess_outputs(
             if content_hash:
                 processed_output_hashes[short_name] = content_hash
 
+    for short_name in (
+        "asim_input_households_csv_archived",
+        "asim_input_persons_csv_archived",
+        "asim_input_land_use_csv_archived",
+        "asim_input_skims_omx_archived",
+        "asim_input_skims_zarr_archived",
+    ):
+        if short_name in processed_outputs or short_name not in cached_paths:
+            continue
+        fpath = cached_paths[short_name]
+        processed_outputs[short_name] = fpath
+        content_hash = _resolved_content_hash(
+            value=_resolve_cached_value(
+                key=short_name,
+                coupler=coupler,
+                cached_outputs=cached_outputs,
+                run_id=run_id,
+            ),
+            key=short_name,
+            workspace=workspace,
+            fallback_path=fpath,
+        )
+        if content_hash:
+            processed_output_hashes[short_name] = content_hash
+
     usim_path = None
     land_use_enabled = False
     is_enabled = getattr(state, "is_enabled", None)
@@ -800,7 +957,9 @@ def _recover_activitysim_postprocess_outputs(
             USIM_POPULATION_SOURCE_H5,
             USIM_DATASTORE_CURRENT_H5,
         )
-        if not step_inputs or any(key not in step_inputs for key in required_land_use_keys):
+        if not step_inputs or any(
+            key not in step_inputs for key in required_land_use_keys
+        ):
             return None
         usim_path = _existing_artifact_path(
             step_inputs[USIM_DATASTORE_CURRENT_H5], workspace
@@ -814,6 +973,8 @@ def _recover_activitysim_postprocess_outputs(
             usim_path = _existing_artifact_path(
                 step_inputs[USIM_DATASTORE_BASE_H5], workspace
             )
+    if not usim_path and USIM_DATASTORE_H5 in cached_paths:
+        usim_path = str(cached_paths[USIM_DATASTORE_H5])
     usim_existing = _existing_local_path(usim_path, workspace)
     if not processed_outputs and not usim_existing:
         return None
@@ -1064,9 +1225,11 @@ def make_activitysim_preprocess_step(
         )
         usim_path = runtime_inputs["population_source_h5_path"]
         if usim_path and os.path.exists(usim_path):
-            input_key = USIM_POPULATION_SOURCE_H5
+            population_year = resolve_forecast_year(state)
             input_desc = (
-                f"UrbanSim population-source datastore for ActivitySim year {state.year}"
+                "UrbanSim population-source datastore for ActivitySim "
+                f"population year {population_year} "
+                f"(workflow year {getattr(state, 'year', None)})"
             )
             table_config = (
                 (USIM_POPULATION_HOUSEHOLDS_TABLE, "households"),
@@ -1094,7 +1257,9 @@ def make_activitysim_preprocess_step(
                     and table_path.startswith(f"/{start_year}/")
                     else "resolved"
                 )
-                artifact_key = f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                artifact_key = (
+                    f"activitysim_preprocess_usim_{table_name}_table_{key_suffix}"
+                )
                 child_specs[table_path] = H5ChildSpec(
                     key=artifact_key,
                     description=(
@@ -1317,9 +1482,9 @@ def make_activitysim_run_step(
         )
         if zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
-            content_hash = artifact_fingerprint(
-                zarr_value
-            ) or compile_input_hashes.get(ZARR_SKIMS)
+            content_hash = artifact_fingerprint(zarr_value) or compile_input_hashes.get(
+                ZARR_SKIMS
+            )
             if content_hash:
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
 
@@ -1423,7 +1588,6 @@ def make_activitysim_postprocess_step(
                 "WorkflowState.forecast_year must be set before ActivitySim postprocess."
             )
         asim_input_dir = workspace.get_asim_mutable_data_dir()
-        asim_output_dir = workspace.get_asim_output_dir()
         asim_input_sources = [
             (
                 ASIM_HOUSEHOLDS_IN,

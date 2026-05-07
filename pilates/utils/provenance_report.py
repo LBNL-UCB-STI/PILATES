@@ -104,7 +104,8 @@ def build_provenance_report(tracker: Any, run_id: str) -> str:
     if run is None:
         raise ValueError(f"Run not found: {run_id}")
 
-    steps = (run.meta or {}).get("steps", []) if getattr(run, "meta", None) else []
+    run_meta = getattr(run, "meta", None)
+    steps = run_meta.get("steps", []) if run_meta is not None else []
     lines = [
         "# Provenance Report",
         "",

@@ -17,7 +17,9 @@ from tests.workflow_contract_harness import CouplerStub, build_runtime_context
 pytest_plugins = ("tests.test_stage_contracts",)
 
 
-def run_land_use_stage(*, context=None, settings=None, state=None, workspace=None, **kwargs):
+def run_land_use_stage(
+    *, context=None, settings=None, state=None, workspace=None, **kwargs
+):
     context = context or build_runtime_context(
         settings=settings,
         state=state,
@@ -109,11 +111,14 @@ def test_land_use_stage_persists_year_scoped_run_ids_and_restores_from_manifest(
     assert restored_outputs.urbansim_postprocess is not None
     assert restored_coupler.get(USIM_DATASTORE_H5) is not None
     assert restored_coupler.get(USIM_DATASTORE_BASE_H5) is not None
-    assert restored_usim_inputs[USIM_DATASTORE_CURRENT_H5] == first_usim_inputs[
-        USIM_DATASTORE_CURRENT_H5
-    ]
+    assert (
+        restored_usim_inputs[USIM_DATASTORE_CURRENT_H5]
+        == first_usim_inputs[USIM_DATASTORE_CURRENT_H5]
+    )
 
-    manifest_a_after_restore = yaml.safe_load(manifest_path_a.read_text(encoding="utf-8"))
+    manifest_a_after_restore = yaml.safe_load(
+        manifest_path_a.read_text(encoding="utf-8")
+    )
     assert {
         step: manifest_a_after_restore[step]["run_id"] for step in expected_steps
     } == run_ids_a

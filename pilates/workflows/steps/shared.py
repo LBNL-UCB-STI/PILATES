@@ -313,8 +313,6 @@ def _artifact_content_hash(value: Any) -> Optional[str]:
         if content_hash:
             return str(content_hash)
     return None
-
-
 def _log_step_records(
     *,
     record_items: Any,
@@ -423,8 +421,6 @@ def _log_named_h5_tables(
                 )
     except OSError:
         logger.debug("Skipping named HDF5 table logging for unreadable file %s", path)
-
-
 def _parse_prefixed_iteration_key(
     short_name: str, prefix: str
 ) -> Optional[Dict[str, Any]]:
@@ -542,10 +538,25 @@ def _activitysim_output_facet_meta(
     iteration: int,
 ) -> Dict[str, Any]:
     family = None
+    snapshot_meta: Dict[str, Any] = {}
     if short_name.endswith("_asim_out"):
         family = short_name[: -len("_asim_out")]
     elif short_name.startswith("asim_input_") and short_name.endswith("_archived"):
         family = "asim_input_archived"
+        input_name = short_name.removeprefix("asim_input_").removesuffix("_archived")
+        source_role_map = {
+            "households_csv": ASIM_HOUSEHOLDS_IN,
+            "persons_csv": ASIM_PERSONS_IN,
+            "land_use_csv": ASIM_LAND_USE_IN,
+            "skims_omx": ASIM_OMX_SKIMS,
+            "skims_zarr": ZARR_SKIMS,
+        }
+        snapshot_meta = {
+            "source_role": source_role_map.get(input_name, input_name),
+            "snapshot_role": f"asim_input_{input_name}",
+            "snapshot_reason": "exact_rewind",
+            "storage_event": "snapshot_copy",
+        }
     elif short_name == ZARR_SKIMS:
         family = "zarr_skims"
     if family is None:
@@ -553,6 +564,7 @@ def _activitysim_output_facet_meta(
     return {
         "facet": {
             "artifact_family": family,
+            **snapshot_meta,
             "year": year,
             "iteration": iteration,
         },
@@ -566,10 +578,23 @@ def _urbansim_output_facet_meta(
     *,
     forecast_year: int,
 ) -> Dict[str, Any]:
+    snapshot_meta: Dict[str, Any] = {}
     if short_name.startswith(USIM_INPUT_ARCHIVE_PREFIX):
         family = "usim_input_archive"
+        snapshot_meta = {
+            "source_role": USIM_DATASTORE_H5,
+            "snapshot_role": "usim_input_archive",
+            "snapshot_reason": "pre_merge_input",
+            "storage_event": "snapshot_move",
+        }
     elif short_name.startswith(USIM_INPUT_MERGED_PREFIX):
         family = "usim_input_merged"
+        snapshot_meta = {
+            "source_role": "usim_input_archive",
+            "snapshot_role": "usim_input_merged",
+            "snapshot_reason": "post_merge_handoff",
+            "storage_event": "merged_h5_output",
+        }
     elif short_name == USIM_FORECAST_OUTPUT:
         family = "usim_forecast_output"
     elif short_name == USIM_DATASTORE_H5:
@@ -581,6 +606,7 @@ def _urbansim_output_facet_meta(
     return {
         "facet": {
             "artifact_family": family,
+            **snapshot_meta,
             "year": forecast_year,
         },
         "facet_schema_version": "v1",
@@ -1122,8 +1148,7 @@ def _invoke_contract_provider(
     accepts_single_context = (
         not accepts_var_kwargs
         and len(required_positional_params) == 1
-        and required_positional_params[0].name
-        not in {"settings", "state", "workspace"}
+        and required_positional_params[0].name not in {"settings", "state", "workspace"}
     )
     if accepts_single_context:
         return provider(context)
@@ -1378,8 +1403,12 @@ def validate_workflow_step_contracts(
             step_func = declared_by_model.get(step_name)
             if outputs_class is None or step_func is None:
                 continue
-            required_outputs = list(required_outputs_for_step_outputs_class(outputs_class))
-            declared_outputs = list(declared_outputs_for_step_outputs_class(outputs_class))
+            required_outputs = list(
+                required_outputs_for_step_outputs_class(outputs_class)
+            )
+            declared_outputs = list(
+                declared_outputs_for_step_outputs_class(outputs_class)
+            )
             step_meta = getattr(step_func, "__consist_step__", None)
             metadata_outputs = _normalize_output_keys(
                 getattr(step_meta, "outputs", None)
@@ -1410,7 +1439,9 @@ def validate_workflow_step_contracts(
                         direction="input",
                         provider_name="input_paths",
                         provider=input_paths_provider,
-                        required_keys=tuple(spec.input_keys) if spec is not None else (),
+                        required_keys=tuple(spec.input_keys)
+                        if spec is not None
+                        else (),
                         optional_keys=tuple(spec.optional_input_keys)
                         if spec is not None
                         else (),
@@ -1426,7 +1457,9 @@ def validate_workflow_step_contracts(
                         direction="output",
                         provider_name="output_paths",
                         provider=output_paths_provider,
-                        required_keys=tuple(spec.output_keys) if spec is not None else (),
+                        required_keys=tuple(spec.output_keys)
+                        if spec is not None
+                        else (),
                         optional_keys=tuple(spec.optional_output_keys)
                         if spec is not None
                         else (),
@@ -1612,12 +1645,9 @@ def _make_typed_step_function(
         if input_logger is not None:
             input_logger_kwargs: Dict[str, Any] = {}
             input_logger_signature = pyinspect.signature(input_logger)
-            if (
-                "step_inputs" in input_logger_signature.parameters
-                or any(
-                    param.kind == pyinspect.Parameter.VAR_KEYWORD
-                    for param in input_logger_signature.parameters.values()
-                )
+            if "step_inputs" in input_logger_signature.parameters or any(
+                param.kind == pyinspect.Parameter.VAR_KEYWORD
+                for param in input_logger_signature.parameters.values()
             ):
                 input_logger_kwargs["step_inputs"] = dict(kwargs)
             extra_kwargs = dict(
@@ -1918,7 +1948,10 @@ def make_default_recoverer(
                 raise RuntimeError(
                     "make_default_recoverer requires dir_getter when dir_field is set"
                 )
-            init_kwargs[dir_field] = Path(dir_getter(workspace))
+            dir_value = dir_getter(workspace)
+            init_kwargs[dir_field] = (
+                dir_value if isinstance(dir_value, Path) else Path(dir_value)
+            )
         if primary_path_field is not None:
             primary_path: Optional[Path] = None
             if primary_path_resolver is not None:

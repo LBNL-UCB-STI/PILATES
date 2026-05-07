@@ -6,7 +6,7 @@ import logging
 import os
 import shlex
 from collections.abc import Mapping, Sequence
-from typing import Optional, List, Union, Dict, Any, Generic, TypeVar
+from typing import Optional, List, Union, Any, Generic, TypeVar
 
 from pilates.config import PilatesConfig
 from pilates.generic.model import Model
@@ -202,8 +202,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                             os.path.commonpath([abs_path, local_root]) == local_root
                         )
                         in_archive = (
-                            os.path.commonpath([abs_path, archive_root])
-                            == archive_root
+                            os.path.commonpath([abs_path, archive_root]) == archive_root
                         )
                     except ValueError:
                         continue
