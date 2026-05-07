@@ -6,6 +6,7 @@ import pytest
 
 from pilates.activitysim import preprocessor as asim_preprocessor
 from pilates.utils.usim_h5 import (
+    allow_root_population_tables_for_target_year_datastore,
     reconcile_usim_population_table_paths,
     resolve_usim_population_table_paths,
 )
@@ -166,6 +167,23 @@ def test_resolve_usim_population_table_paths_rejects_root_tables_when_exact_year
             year=2021,
             require_exact_year=True,
         )
+
+
+def test_allow_root_population_tables_for_target_year_datastore_matches_filename_year(
+    tmp_path,
+) -> None:
+    assert allow_root_population_tables_for_target_year_datastore(
+        str(tmp_path / "model_data_2021.h5"),
+        2021,
+    )
+    assert not allow_root_population_tables_for_target_year_datastore(
+        str(tmp_path / "model_data_2019.h5"),
+        2021,
+    )
+    assert not allow_root_population_tables_for_target_year_datastore(
+        str(tmp_path / "custom_mpo_06197001_model_data.h5"),
+        2021,
+    )
 
 
 def test_reconcile_usim_population_table_paths_prefers_target_year_over_stale_root(

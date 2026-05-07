@@ -26,7 +26,10 @@ from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
 from pilates.utils.settings_helper import get as get_setting
-from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    allow_root_population_tables_for_target_year_datastore,
+    reconcile_usim_population_table_paths,
+)
 from pilates.config.models import PilatesConfig
 from pilates.generic.model_factory import ModelFactory
 from pilates.utils.consist_runtime import artifact_fingerprint
@@ -411,6 +414,12 @@ def _resolve_activitysim_preprocess_runtime_inputs(
         target_year = getattr(state, "forecast_year", None)
         if target_year is None:
             target_year = getattr(state, "year", None)
+        require_exact_year = _requires_exact_population_year()
+        if allow_root_population_tables_for_target_year_datastore(
+            population_source_h5_path,
+            target_year,
+        ):
+            require_exact_year = False
         try:
             provided_table_paths = {
                 table_key: runtime_inputs[table_key]
@@ -422,10 +431,10 @@ def _resolve_activitysim_preprocess_runtime_inputs(
                 h5_path=population_source_h5_path,
                 year=target_year,
                 provided_paths=provided_table_paths,
-                require_exact_year=_requires_exact_population_year(),
+                require_exact_year=require_exact_year,
             )
         except Exception as exc:
-            if _requires_exact_population_year():
+            if require_exact_year:
                 raise
             logger.debug(
                 "Skipping ActivitySim population table resolution for %s: %s",

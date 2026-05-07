@@ -532,10 +532,10 @@ def test_activitysim_preprocess_binding_prefers_explicit_population_source_over_
     assert plan.source_by_key[USIM_POPULATION_SOURCE_H5] == "explicit"
 
 
-def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_start_year(
+def test_activitysim_preprocess_binding_rejects_stale_root_only_h5_for_non_start_year(
     tmp_path,
 ):
-    h5_path = tmp_path / "model_data_2021.h5"
+    h5_path = tmp_path / "model_data_2019.h5"
     with pd.HDFStore(h5_path, mode="w") as store:
         for table_name in ("households", "persons", "jobs", "blocks"):
             store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
@@ -557,6 +557,40 @@ def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_st
             workspace=SimpleNamespace(),
             year=2021,
         )
+
+
+def test_activitysim_preprocess_binding_accepts_same_year_root_only_h5_for_non_start_year(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    state = SimpleNamespace(
+        year=2021,
+        forecast_year=2021,
+        Stage=SimpleNamespace(land_use="land_use"),
+        is_enabled=lambda stage: stage == "land_use",
+        is_start_year=lambda: False,
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_preprocess",
+        fallback_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+        settings=SimpleNamespace(),
+        state=state,
+        workspace=SimpleNamespace(),
+        year=2021,
+    )
+
+    assert plan.inputs[USIM_POPULATION_SOURCE_H5] == str(h5_path)
+    assert plan.metadata["resolved_values_by_semantic_key"][
+        USIM_POPULATION_HOUSEHOLDS_TABLE
+    ] == "/households"
+    assert plan.metadata["resolved_values_by_semantic_key"][
+        USIM_POPULATION_PERSONS_TABLE
+    ] == "/persons"
 
 
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(

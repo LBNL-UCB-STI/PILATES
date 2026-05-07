@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Dict, Mapping, Optional
 
 import pandas as pd
@@ -21,6 +23,23 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_JOBS_TABLE: "jobs",
     USIM_POPULATION_BLOCKS_TABLE: "blocks",
 }
+
+
+def allow_root_population_tables_for_target_year_datastore(
+    h5_path: str,
+    year: Optional[int],
+) -> bool:
+    """
+    Return whether root population tables can represent ``year`` for this file.
+
+    UrbanSim and ATLAS can publish year-specific datastores such as
+    ``model_data_2021.h5`` whose population tables live at the H5 root. This
+    should not be treated like a stale root fallback from an older datastore.
+    """
+    if year is None:
+        return False
+    name = Path(str(h5_path)).name
+    return re.search(rf"(?:^|[_-]){int(year)}(?:\.h5$|[_-])", name) is not None
 
 
 def resolve_usim_h5_table_key(

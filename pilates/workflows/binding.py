@@ -40,7 +40,10 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    allow_root_population_tables_for_target_year_datastore,
+    resolve_usim_population_table_paths,
+)
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
@@ -721,18 +724,23 @@ def _activitysim_population_source(
         if isinstance(selected, (str, os.PathLike)):
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
+                target_year = _target_population_year()
+                require_exact_year = _requires_exact_activitysim_population_year(
+                    state
+                ) and not allow_root_population_tables_for_target_year_datastore(
+                    selected_path,
+                    target_year,
+                )
                 try:
                     mapping.update(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
-                            year=_target_population_year(),
-                            require_exact_year=(
-                                _requires_exact_activitysim_population_year(state)
-                            ),
+                            year=target_year,
+                            require_exact_year=require_exact_year,
                         )
                     )
                 except Exception as exc:
-                    if _requires_exact_activitysim_population_year(state):
+                    if require_exact_year:
                         raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "

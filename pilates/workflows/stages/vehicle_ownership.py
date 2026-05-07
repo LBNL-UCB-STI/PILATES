@@ -21,7 +21,10 @@ from pilates.atlas.inputs import (
     atlas_static_input_keys_for_interval,
 )
 from pilates.utils.input_logging import log_inputs
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    allow_root_population_tables_for_target_year_datastore,
+    resolve_usim_population_table_paths,
+)
 from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.orchestration import (
@@ -57,15 +60,19 @@ def _validate_population_h5_for_activitysim_year(
     year: int,
     context: str,
 ) -> None:
+    h5_path = os.fspath(path)
     resolved = resolve_usim_population_table_paths(
-        h5_path=os.fspath(path),
+        h5_path=h5_path,
         year=year,
-        require_exact_year=True,
+        require_exact_year=not allow_root_population_tables_for_target_year_datastore(
+            h5_path,
+            year,
+        ),
     )
     logger.info(
         "Validated ActivitySim population H5 for %s: path=%s year=%s tables=%s",
         context,
-        os.fspath(path),
+        h5_path,
         year,
         resolved,
     )
