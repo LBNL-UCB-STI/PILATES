@@ -1,11 +1,17 @@
 import types
 from types import SimpleNamespace
 
+import pytest
 from consist.types import H5ChildSpec
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils import coupler_helpers as ch
 from pilates.workflows.steps import shared as steps_shared
+
+_H5_PARENT_POLICY = {
+    "container_recovery_unit": "parent_file",
+    "child_recovery_policy": "descriptive_only",
+}
 
 
 def _install_consist_stub(monkeypatch, calls):
@@ -38,6 +44,7 @@ def test_log_output_only_uses_h5_container_when_flagged(monkeypatch):
         path="/tmp/data.h5",
         description="test",
         h5_container=True,
+        **_H5_PARENT_POLICY,
     )
 
     assert calls
@@ -68,6 +75,7 @@ def test_h5_container_filter_excludes_flattened_pandas_internal_names(monkeypatc
         path="/tmp/data.h5",
         description="test",
         h5_container=True,
+        **_H5_PARENT_POLICY,
     )
 
     assert calls
@@ -88,6 +96,7 @@ def test_log_output_only_preserves_h5_table_paths_metadata(monkeypatch):
         path="/tmp/data.h5",
         description="test",
         h5_tables_used=["households", "/2023/persons"],
+        **_H5_PARENT_POLICY,
     )
 
     assert calls
@@ -117,6 +126,7 @@ def test_log_output_only_passes_child_specs_to_h5_container(monkeypatch):
         h5_tables_used=["/2023/households"],
         child_specs=child_specs,
         child_selection="include_only",
+        **_H5_PARENT_POLICY,
     )
 
     assert calls
@@ -128,6 +138,37 @@ def test_log_output_only_passes_child_specs_to_h5_container(monkeypatch):
         meta["child_specs"]["/2023/households"].metadata["h5_table_name"]
         == "households"
     )
+
+
+def test_h5_container_requires_explicit_recovery_policy(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    with pytest.raises(ValueError, match="explicit recovery policy"):
+        ch.log_output_only(
+            key="usim_datastore_h5",
+            path="/tmp/data.h5",
+            description="test",
+            h5_container=True,
+        )
+
+    assert calls == []
+
+
+def test_h5_recovery_policy_fields_are_preserved_for_lifecycle_metadata():
+    fields = ch._artifact_lifecycle_fields_from_meta(
+        {
+            "h5_container": True,
+            "container_recovery_unit": "parent_file",
+            "child_recovery_policy": "descriptive_only",
+            "representation_policy": "native_h5",
+        }
+    )
+
+    assert fields["h5_container"] is True
+    assert fields["container_recovery_unit"] == "parent_file"
+    assert fields["child_recovery_policy"] == "descriptive_only"
+    assert fields["representation_policy"] == "native_h5"
 
 
 def test_log_beam_r5_osm_input_skips_when_config_cache_tables_missing(monkeypatch):

@@ -2064,7 +2064,7 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(
     assert BEAM_PERSONS_IN in run_input_keys
 
 
-def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
+def test_find_completed_beam_run_for_restart_uses_matching_target_with_run_scope(
     stage_env,
     tmp_path,
 ):
@@ -2075,53 +2075,18 @@ def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
     archive_run_dir.mkdir(parents=True)
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
     cache_epoch = getattr(settings.run, "cache_epoch", 2)
+    run_id = (
+        f"{Path(workspace.full_path).name}"
+        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
+    )
 
     class _Tracker:
         def __init__(self):
             self.calls = []
 
-        def find_runs(self, **kwargs):
+        def find_matching_run(self, **kwargs):
             self.calls.append(kwargs)
-            return [
-                SimpleNamespace(id="other-run__step_func__y2018__i0__phase_run_x"),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        "__step_func__y9999__i0__phase_run_wrong"
-                    ),
-                    model="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year + 2,
-                    iteration=0,
-                    meta={"cache_epoch": cache_epoch},
-                    updated_at="2099-01-01T00:00:00",
-                ),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        "__step_func__y9999__i0__phase_run_unproven"
-                    ),
-                    updated_at="2099-01-02T00:00:00",
-                ),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
-                    ),
-                    meta={
-                        "model": "beam_run",
-                        "stage": "beam",
-                        "phase": "run",
-                        "cache_epoch": cache_epoch,
-                    },
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    updated_at="2026-01-01T00:00:00",
-                ),
-            ]
+            return SimpleNamespace(id=run_id)
 
     tracker = _Tracker()
     run = _find_completed_beam_run_for_restart(
@@ -2134,15 +2099,18 @@ def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
     )
 
     assert run is not None
-    assert str(run.id).startswith(f"{Path(workspace.full_path).name}__")
+    assert run.id == run_id
     assert tracker.calls[0]["model"] == "beam_run"
     assert tracker.calls[0]["stage"] == "beam"
     assert tracker.calls[0]["phase"] == "run"
     assert tracker.calls[0]["status"] == "completed"
     assert tracker.calls[0]["iteration"] == 0
+    assert tracker.calls[0]["year"] == state.forecast_year
+    assert tracker.calls[0]["cache_epoch"] == cache_epoch
+    assert tracker.calls[0]["run_scope"] == Path(workspace.full_path).name
 
 
-def test_find_completed_beam_run_for_restart_rejects_unproven_same_prefix_candidate(
+def test_find_completed_beam_run_for_restart_returns_none_when_no_match(
     stage_env,
     tmp_path,
 ):
@@ -2154,15 +2122,8 @@ def test_find_completed_beam_run_for_restart_rejects_unproven_same_prefix_candid
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        f"__step_func__y{state.forecast_year}__i0__phase_run_unproven"
-                    )
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return None
 
     run = _find_completed_beam_run_for_restart(
         tracker=_Tracker(),
@@ -2366,19 +2327,8 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
             return "materialized_fs=2 missing_source=1"
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2496,19 +2446,8 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         def __init__(self):
             self.hydrate_calls = []
 
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2620,19 +2559,8 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     }
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=2017,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id

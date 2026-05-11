@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
@@ -12,7 +11,7 @@ from pilates.runtime.context import (
     WorkflowRuntimeContext,
     ensure_workflow_runtime_context,
 )
-from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.runtime.restart import restart_target_for_step
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import (
@@ -61,9 +60,6 @@ if TYPE_CHECKING:
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
 _BEAM_VEHICLES_IN = "vehicles_beam_in"
-_STEP_RUN_ID_TARGET_RE = re.compile(
-    r"__step_func__y(?P<year>\d+)__i(?P<iteration>-?\d+)__phase_(?P<phase>[A-Za-z0-9_]+?)(?:_[0-9a-f]{6,})?$"
-)
 
 
 @dataclass
@@ -456,156 +452,6 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
         return None
 
 
-# TODO(consist): replace this matcher block with tracker.find_matching_run(...)
-# once docs-internal/consist_feature_request_run_matching_query.md lands upstream.
-def _current_run_prefix(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[str]:
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is not None:
-        return archive_run_dir.name
-    full_path = getattr(workspace, "full_path", None)
-    if not full_path:
-        return None
-    return Path(full_path).name
-
-
-def _run_id_matches_current_archive(
-    run: Any,
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> bool:
-    prefix = _current_run_prefix(state=state, workspace=workspace)
-    if not prefix:
-        return True
-    run_id = str(getattr(run, "id", "") or "")
-    if run_id == prefix or run_id.startswith(f"{prefix}__"):
-        return True
-    run_name = str(getattr(run, "name", "") or "")
-    return run_name == prefix or run_name.startswith(f"{prefix}__")
-
-
-def _candidate_direct_attr(run: Any, name: str) -> Any:
-    if isinstance(run, Mapping) and name in run:
-        return run.get(name)
-    return getattr(run, name, None)
-
-
-def _nested_mapping_values(run: Any) -> Iterable[Mapping[str, Any]]:
-    for container_name in (
-        "meta",
-        "metadata",
-        "facet",
-        "facets",
-        "step_facet",
-        "run_facet",
-    ):
-        value = _candidate_direct_attr(run, container_name)
-        if isinstance(value, Mapping):
-            yield value
-
-
-def _candidate_attr(run: Any, *names: str) -> Any:
-    for name in names:
-        value = _candidate_direct_attr(run, name)
-        if value not in (None, ""):
-            return value
-    for values in _nested_mapping_values(run):
-        for name in names:
-            value = values.get(name)
-            if value not in (None, ""):
-                return value
-    return None
-
-
-def _run_id_proven_target_value(run: Any, key: str) -> Any:
-    run_id = str(_candidate_direct_attr(run, "id") or "")
-    if not run_id:
-        return None
-    match = _STEP_RUN_ID_TARGET_RE.search(run_id)
-    if match is None:
-        return None
-    if key in {"year", "iteration", "phase"}:
-        return match.group(key)
-    return None
-
-
-def _candidate_value_matches(actual: Any, expected: Any) -> bool:
-    if expected in (None, ""):
-        return True
-    if actual in (None, ""):
-        return False
-    try:
-        return int(actual) == int(expected)
-    except (TypeError, ValueError):
-        return str(actual).strip().lower() == str(expected).strip().lower()
-
-
-def _run_matches_completed_beam_target(run: Any, target: Mapping[str, Any]) -> bool:
-    aliases = {
-        "model": ("model", "model_name"),
-        "stage": ("stage", "stage_name"),
-        "phase": ("phase",),
-        "status": ("status",),
-        "year": ("year",),
-        "iteration": ("iteration",),
-        "cache_epoch": ("cache_epoch",),
-    }
-    for key, names in aliases.items():
-        actual = _candidate_attr(run, *names)
-        if actual in (None, ""):
-            actual = _run_id_proven_target_value(run, key)
-        if not _candidate_value_matches(actual, target.get(key)):
-            return False
-    return True
-
-
-def _run_timestamp_value(run: Any) -> Optional[str]:
-    for name in (
-        "completed_at",
-        "ended_at",
-        "end_time",
-        "updated_at",
-        "created_at",
-        "started_at",
-        "start_time",
-        "recorded_at",
-    ):
-        value = _candidate_attr(run, name)
-        if value not in (None, ""):
-            return str(value)
-    return None
-
-
-def _select_completed_beam_candidate(
-    candidates: Iterable[Any],
-    *,
-    target: Mapping[str, Any],
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[Any]:
-    valid = [
-        run
-        for run in candidates
-        if _run_id_matches_current_archive(run, state=state, workspace=workspace)
-        and _run_matches_completed_beam_target(run, target)
-    ]
-    if not valid:
-        return None
-    timestamped = [
-        (timestamp, index, run)
-        for index, run in enumerate(valid)
-        if (timestamp := _run_timestamp_value(run)) is not None
-    ]
-    if timestamped:
-        timestamped.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return timestamped[0][2]
-    return valid[0]
-
-
 def _find_completed_beam_run_for_restart(
     *,
     tracker: Any,
@@ -615,64 +461,19 @@ def _find_completed_beam_run_for_restart(
     year: int,
     iteration: int,
 ) -> Optional[Any]:
-    target: Dict[str, Any] = {
-        "model": "beam_run",
-        "stage": "beam",
-        "phase": "run",
-        "status": "completed",
-        "year": year,
-        "iteration": iteration,
-        "cache_epoch": resolve_cache_epoch(settings),
-    }
+    find_matching_run = getattr(tracker, "find_matching_run", None)
+    if not callable(find_matching_run):
+        raise AttributeError("tracker does not support find_matching_run")
 
-    find_runs = getattr(tracker, "find_runs", None)
-    if callable(find_runs):
-        try:
-            candidates = list(find_runs(limit=100, **target) or [])
-            selection_target = target
-        except TypeError:
-            legacy_target = dict(target)
-            legacy_target.pop("cache_epoch", None)
-            candidates = list(find_runs(limit=100, **legacy_target) or [])
-            selection_target = legacy_target
-        selected = _select_completed_beam_candidate(
-            candidates,
-            target=selection_target,
-            state=state,
-            workspace=workspace,
-        )
-        if selected is not None:
-            return selected
-        if candidates:
-            logger.info(
-                "[BEAM][restart] ignored %d completed beam_run candidate(s) outside current run scope or target attrs prefix=%s",
-                len(candidates),
-                _current_run_prefix(state=state, workspace=workspace),
-            )
-        return None
-
-    find_latest_run = getattr(tracker, "find_latest_run", None)
-    if not callable(find_latest_run):
-        return None
-    try:
-        run = find_latest_run(**target)
-        selection_target = target
-    except TypeError:
-        legacy_target = dict(target)
-        legacy_target.pop("cache_epoch", None)
-        try:
-            run = find_latest_run(**legacy_target)
-            selection_target = legacy_target
-        except Exception:
-            return None
-    except Exception:
-        return None
-    return _select_completed_beam_candidate(
-        [run] if run is not None else [],
-        target=selection_target,
+    target = restart_target_for_step(
+        settings=settings,
+        step_name="beam_run",
+        year=year,
+        iteration=iteration,
         state=state,
         workspace=workspace,
     )
+    return find_matching_run(**target)
 
 
 def _output_path_from_hydration_item(item: Any) -> Optional[Path]:

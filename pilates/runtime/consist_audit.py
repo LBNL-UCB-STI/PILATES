@@ -56,6 +56,10 @@ _LIFECYCLE_ATLAS_PREFIXES = (
 )
 _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES = {
     "beam_input_archived",
+    "usim_datastore_h5",
+    "usim_input_archive",
+    "usim_input_merged",
+    "usim_population_source_h5",
 }
 _LIFECYCLE_H5_POLICY_FAMILIES = {
     "usim_datastore_h5",
@@ -417,6 +421,40 @@ def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
     return "file"
 
 
+def _joined_lifecycle_event(
+    copy_event: Mapping[str, Any],
+    logged_event: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    joined = dict(copy_event)
+    if logged_event is None:
+        return joined
+    for key, value in logged_event.items():
+        if joined.get(key) in (None, ""):
+            joined[key] = value
+    return joined
+
+
+def _is_h5_child_artifact(event: Mapping[str, Any]) -> bool:
+    artifact_driver = str(
+        event.get("artifact_driver")
+        or event.get("driver")
+        or event.get("artifact_type")
+        or ""
+    ).lower()
+    if artifact_driver == "h5_table":
+        return True
+    return bool(event.get("h5_parent_key")) and not bool(event.get("h5_container"))
+
+
+def _h5_parent_policy_allows_registration(event: Mapping[str, Any]) -> bool:
+    if _is_h5_child_artifact(event):
+        return False
+    return (
+        str(event.get("container_recovery_unit") or "") == "parent_file"
+        and str(event.get("child_recovery_policy") or "") == "descriptive_only"
+    )
+
+
 def _lifecycle_missing_required_facets(event: Mapping[str, Any]) -> list[str]:
     family = _lifecycle_family(event)
     if family not in {
@@ -487,6 +525,11 @@ def _lifecycle_core_summary_payload(
         event_type = str(event.get("event_type"))
         if event_type == "artifact_logged":
             logged.setdefault(_copy_match_key(event), (index, event))
+            if _is_h5_child_artifact(event):
+                blocked_families.add(family)
+                blocking_reasons_by_family[family].add("h5_child_table_ineligible")
+                blocker_counts_by_reason["h5_child_table_ineligible"] += 1
+                phase2_blocker_counts_by_reason["h5_child_table_ineligible"] += 1
             if family in {
                 "asim_input_archived",
                 "beam_input_archived",
@@ -536,16 +579,20 @@ def _lifecycle_core_summary_payload(
     source_outside_run_tree = 0
     shallow_directory = 0
     h5_policy = 0
+    child_h5_policy = sum(1 for event in events if _is_h5_child_artifact(event))
+    copied_joined_to_logged = 0
 
     for match_key, (copy_index, copy_event) in copied.items():
-        family = _lifecycle_family(copy_event)
-        families_seen.add(family)
         local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
         path = str(copy_event.get("src") or copy_event.get("path") or "")
         dest = str(copy_event.get("dest") or _archive_path_for_local(path) or "")
         reasons: list[str] = []
         logged_entry = logged.get(match_key)
-        path_kind = _lifecycle_path_kind(path, copy_event)
+        logged_event = logged_entry[1] if logged_entry is not None else None
+        joined_event = _joined_lifecycle_event(copy_event, logged_event)
+        family = _lifecycle_family(joined_event)
+        families_seen.add(family)
+        path_kind = _lifecycle_path_kind(path, joined_event)
 
         if not _path_under_root(path, local_root):
             source_outside_run_tree += 1
@@ -561,7 +608,13 @@ def _lifecycle_core_summary_payload(
         if path_kind == "directory":
             shallow_directory += 1
             reasons.append("shallow_directory_signature")
-        if path_kind == "h5" or family in _LIFECYCLE_H5_POLICY_FAMILIES:
+        if logged_event is not None:
+            copied_joined_to_logged += 1
+        if _is_h5_child_artifact(joined_event):
+            reasons.append("h5_child_table_ineligible")
+        elif (path_kind == "h5" or family in _LIFECYCLE_H5_POLICY_FAMILIES) and not (
+            _h5_parent_policy_allows_registration(joined_event)
+        ):
             h5_policy += 1
             reasons.append("h5_parent_child_policy")
         if family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
@@ -595,8 +648,11 @@ def _lifecycle_core_summary_payload(
         blocker_counts_by_reason["deferred_policy"] += 1
     for family in sorted(families_seen):
         if family in _LIFECYCLE_H5_POLICY_FAMILIES:
-            blocked_families.add(family)
-            blocking_reasons_by_family[family].add("h5_parent_child_policy")
+            if family not in _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES:
+                blocked_families.add(family)
+                blocking_reasons_by_family[family].add("phase2_policy_deferred")
+                blocker_counts_by_reason["phase2_policy_deferred"] += 1
+                phase2_blocker_counts_by_reason["phase2_policy_deferred"] += 1
         elif family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
             blocked_families.add(family)
             blocking_reasons_by_family[family].add("shallow_directory_signature")
@@ -628,8 +684,10 @@ def _lifecycle_core_summary_payload(
         "copied_artifacts_blocked_archive_bytes_missing": archive_bytes_missing,
         "copied_artifacts_blocked_artifact_logging_after_copying": copy_before_log,
         "copied_artifacts_blocked_source_outside_run_tree": source_outside_run_tree,
+        "copied_artifacts_joined_to_logged_artifacts": copied_joined_to_logged,
         "directory_artifacts_blocked_shallow_directory_signatures": shallow_directory,
         "h5_parent_child_artifacts_requiring_policy": h5_policy,
+        "h5_child_table_artifacts_ineligible": child_h5_policy,
         "copy_only_promotions_db_tracker_metadata_unavailable": copy_only_promotions,
         "local_to_scratch_recovery_roots_written": local_to_scratch_recovery_root_writes,
         "atlas_observe_only_deferred": True,

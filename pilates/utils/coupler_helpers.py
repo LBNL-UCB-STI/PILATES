@@ -93,6 +93,10 @@ _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS = {
     field: f"artifact_{field}" for field in _ARTIFACT_LIFECYCLE_RESERVED_FIELDS
 }
 _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS["event_type"] = "artifact_event_type"
+_H5_CONTAINER_RECOVERY_POLICY_FIELDS = (
+    "container_recovery_unit",
+    "child_recovery_policy",
+)
 
 
 def _is_noop_artifact(candidate: Any) -> bool:
@@ -430,6 +434,9 @@ def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, A
         "h5_tables_used",
         "h5_table_paths",
         "h5_table_count",
+        "container_recovery_unit",
+        "child_recovery_policy",
+        "representation_policy",
     ):
         if key in meta:
             add_field(key, meta[key])
@@ -1544,6 +1551,16 @@ def _log_with_optional_h5_container(
     requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        missing_policy_fields = [
+            field
+            for field in _H5_CONTAINER_RECOVERY_POLICY_FIELDS
+            if meta.get(field) is None
+        ]
+        if missing_policy_fields:
+            raise ValueError(
+                "H5 container logging requires explicit recovery policy fields "
+                f"for key {key!r}: {', '.join(missing_policy_fields)}"
+            )
         if tables_used:
             normalized_paths = sorted(
                 {

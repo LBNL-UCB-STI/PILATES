@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
@@ -359,46 +360,93 @@ def _resolve_root_run_id(
     return resolved, _expand_run_subtree(resolved, runs)
 
 
-def _all_output_artifacts(
+def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
+    container_uri = getattr(artifact, "container_uri", None)
+    if not container_uri:
+        return None
+    fs = getattr(tracker, "fs", None)
+    get_relative = getattr(fs, "get_remappable_relative_path", None)
+    if not callable(get_relative):
+        return None
+    relative = get_relative(container_uri)
+    if relative is None:
+        return None
+    return Path(relative)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _run_output_content_hashes(
     tracker: Any,
     *,
+    source_run_dir: Path,
+    run_id: str,
+) -> dict[str, str]:
+    content_hashes: dict[str, str] = {}
+    outputs = tracker.get_run_outputs(str(run_id))
+    for key, artifact in outputs.items():
+        relative_path = _artifact_relative_path(tracker, artifact)
+        if relative_path is None:
+            continue
+        source_path = source_run_dir / relative_path
+        if not source_path.is_file():
+            continue
+        content_hashes[str(key)] = _sha256_file(source_path)
+    return content_hashes
+
+
+def _register_verified_run_output_recovery_copies(
+    tracker: Any,
+    *,
+    source_run_dir: Path,
+    recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
-) -> list[Any]:
-    artifacts: list[Any] = []
-    seen_artifact_ids: set[str] = set()
+) -> int:
+    register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
+    if not callable(register_copies):
+        logger.warning(
+            "Consist tracker does not expose register_run_output_recovery_copies; "
+            "skipping verified recovery-copy metadata registration."
+        )
+        return 0
+
     selected_run_ids = (
         list(run_ids)
         if run_ids is not None
         else [str(run.id) for run in _all_runs(tracker)]
     )
+    registered = 0
     for run_id in selected_run_ids:
-        run_artifacts = tracker.get_artifacts_for_run(str(run_id))
-        run_outputs = run_artifacts.outputs if run_artifacts.outputs is not None else {}
-        for artifact in list(run_outputs.values()):
-            artifact_id = str(getattr(artifact, "id", ""))
-            if artifact_id and artifact_id in seen_artifact_ids:
-                continue
-            if artifact_id:
-                seen_artifact_ids.add(artifact_id)
-            artifacts.append(artifact)
-    return artifacts
-
-
-def _update_artifact_recovery_roots(
-    tracker: Any,
-    recovery_run_dir: Path,
-    *,
-    run_ids: Optional[Iterable[str]] = None,
-) -> int:
-    updated = 0
-    for artifact in _all_output_artifacts(tracker, run_ids=run_ids):
-        tracker.set_artifact_recovery_roots(
-            artifact,
-            [str(recovery_run_dir)],
-            append=True,
+        content_hashes = _run_output_content_hashes(
+            tracker,
+            source_run_dir=source_run_dir,
+            run_id=str(run_id),
         )
-        updated += 1
-    return updated
+        result = register_copies(
+            str(run_id),
+            str(recovery_run_dir),
+            verify=True,
+            append=True,
+            content_hashes=content_hashes or None,
+        )
+        registered_for_run = getattr(result, "registered", {})
+        registered += len(registered_for_run)
+        blocked = getattr(result, "blocked", {})
+        if blocked:
+            logger.info(
+                "Verified recovery-copy registration blocked %d output(s) for "
+                "run %s: %s",
+                len(blocked),
+                run_id,
+                getattr(result, "summary", blocked),
+            )
+    return registered
 
 
 def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None:
@@ -665,12 +713,13 @@ def promote_run_to_recovery_roots(
                     entry.verified = True
 
                 if not verify_only and working_tracker is not None:
-                    _update_artifact_recovery_roots(
+                    metadata_updates = _register_verified_run_output_recovery_copies(
                         working_tracker,
-                        destination_run_dir,
+                        source_run_dir=source_run_dir,
+                        recovery_run_dir=destination_run_dir,
                         run_ids=scoped_run_ids or None,
                     )
-                    entry.artifact_metadata_updated = True
+                    entry.artifact_metadata_updated = metadata_updates > 0
 
                 if not verify_only:
                     successful_destinations.append(destination_run_dir)

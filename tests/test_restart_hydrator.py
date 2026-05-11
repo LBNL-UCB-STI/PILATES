@@ -66,15 +66,15 @@ class DummyTracker:
         self.runs_by_target = dict(runs_by_target)
         self.outputs_by_run = dict(outputs_by_run)
         self.materialized_by_run = dict(materialized_by_run or {})
-        self.find_latest_run_calls = []
+        self.find_matching_run_calls = []
         self.materialize_run_output_calls = []
 
-    def find_latest_run(self, **kwargs):
-        self.find_latest_run_calls.append(dict(kwargs))
+    def find_matching_run(self, **kwargs):
+        self.find_matching_run_calls.append(dict(kwargs))
         key = _query_key(**kwargs)
         run_id = self.runs_by_target.get(key)
         if run_id is None:
-            raise ValueError(f"no run for target {kwargs}")
+            return None
         return SimpleNamespace(id=run_id)
 
     def get_run_outputs(self, run_id):
@@ -125,6 +125,7 @@ def _state(
 def _query_key(**kwargs):
     items = dict(kwargs)
     items.setdefault("cache_epoch", DEFAULT_CACHE_EPOCH)
+    items.setdefault("run_scope", "archive")
     if "facet" in items and items["facet"] is not None:
         items["facet"] = tuple(sorted(items["facet"].items()))
     return tuple(sorted(items.items()))
@@ -289,10 +290,14 @@ def test_hydrate_missing_restart_artifacts_hydrates_traffic_assignment_inputs(tm
         ("persons_asim_out",),
         ("zarr_skims",),
     }
-    assert tracker.find_latest_run_calls
+    assert tracker.find_matching_run_calls
     assert all(
         call.get("cache_epoch") == DEFAULT_CACHE_EPOCH
-        for call in tracker.find_latest_run_calls
+        for call in tracker.find_matching_run_calls
+    )
+    assert all(
+        call.get("run_scope") == "archive"
+        for call in tracker.find_matching_run_calls
     )
 
 
@@ -411,7 +416,7 @@ def test_hydrate_missing_restart_artifacts_noops_when_coupler_already_has_contra
         "rewind_restore": False,
         "overlay_root": None,
     }
-    assert tracker.find_latest_run_calls == []
+    assert tracker.find_matching_run_calls == []
     assert tracker.materialize_run_output_calls == []
     assert coupler.get("beam_plans_asim_out") == str(beam_plans)
     assert coupler.get("households_asim_out") == str(households)
@@ -463,7 +468,7 @@ def test_hydrate_missing_restart_artifacts_copies_archive_workflow_manifests(
     assert copied_manifest.read_text(encoding="utf-8") == archive_manifest.read_text(
         encoding="utf-8"
     )
-    assert tracker.find_latest_run_calls == []
+    assert tracker.find_matching_run_calls == []
     assert tracker.materialize_run_output_calls == []
 
 

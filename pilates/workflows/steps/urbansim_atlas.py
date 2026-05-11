@@ -550,6 +550,8 @@ def make_urbansim_preprocess_step(
                 step_name="urbansim_preprocess",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_BASE_H5, forecast_year=forecast_year
@@ -627,6 +629,8 @@ def make_urbansim_run_step(
                 step_name="urbansim_run",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
                     USIM_DATASTORE_H5, forecast_year=forecast_year
@@ -642,6 +646,8 @@ def make_urbansim_run_step(
                 step_name="urbansim_run",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 **_urbansim_output_facet_meta(
                     USIM_FORECAST_OUTPUT, forecast_year=forecast_year
@@ -739,6 +745,8 @@ def make_urbansim_postprocess_step(
                     step_name="urbansim_postprocess",
                     profile_file_schema=True,
                     h5_container=True,
+                    container_recovery_unit="parent_file",
+                    child_recovery_policy="descriptive_only",
                     hash_tables="if_unchanged",
                     h5_tables_used=list(archive_table_keys.keys()),
                     child_specs=child_specs,
@@ -793,6 +801,8 @@ def make_urbansim_postprocess_step(
                 step_name="urbansim_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 h5_tables_used=list(merged_table_keys.keys()),
                 child_specs=merged_child_specs,
@@ -1080,6 +1090,8 @@ def make_atlas_postprocess_step(
                 ),
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 h5_tables_used=[households_table_path],
                 child_specs={
@@ -1144,6 +1156,8 @@ def make_atlas_postprocess_step(
                 step_name="atlas_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 h5_tables_used=[households_table_path],
                 child_specs={

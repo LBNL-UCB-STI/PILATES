@@ -579,6 +579,115 @@ def test_artifact_lifecycle_summary_defers_usim_h5_snapshots_explicitly(
     )
 
 
+def test_artifact_lifecycle_summary_allows_policy_eligible_usim_h5_parent(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "usim_input_merged_2030.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_input_merged_2030",
+        path=str(source),
+        artifact_family="usim_input_merged",
+        source_role="usim_input_archive",
+        snapshot_role="usim_input_merged",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
+    )
+    assert ch.archive_copy_now(key="usim_input_merged_2030", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["copied_artifacts_joined_to_logged_artifacts"] == 1
+    assert (
+        summary["copied_artifacts_eligible_for_recovery_root_registration"] == 1
+    )
+    assert "usim_input_merged" in summary["safe_families_for_phase2"]
+    assert "usim_input_merged" not in summary["blocked_families_for_phase2"]
+    assert "h5_parent_child_policy" not in summary["blocker_counts_by_reason"]
+
+
+@pytest.mark.parametrize(
+    "key, family",
+    [
+        ("usim_input_archive_2030", "usim_input_archive"),
+        ("usim_input_merged_2030", "usim_input_merged"),
+        ("usim_datastore_h5", "usim_datastore_h5"),
+        ("usim_population_source_h5", "usim_population_source_h5"),
+    ],
+)
+def test_artifact_lifecycle_summary_starts_h5_phase2_eligibility(
+    monkeypatch, tmp_path, key, family
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / f"{key}.h5"
+    _write_file(source, "h5")
+    fields = {
+        "event_type": "artifact_logged",
+        "key": key,
+        "path": str(source),
+        "artifact_family": family,
+        "year": 2030,
+        "h5_container": True,
+        "container_recovery_unit": "parent_file",
+        "child_recovery_policy": "descriptive_only",
+    }
+    if family in {"usim_input_archive", "usim_input_merged"}:
+        fields.update(
+            {
+                "source_role": "usim_datastore_h5",
+                "snapshot_role": family,
+                "snapshot_reason": "exact_rewind",
+                "storage_event": "snapshot_copy",
+            }
+        )
+    consist_audit.emit_artifact_lifecycle_audit_event(**fields)
+    assert ch.archive_copy_now(key=key, path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert family in summary["safe_families_for_phase2"]
+    assert family not in summary["blocked_families_for_phase2"]
+
+
+def test_artifact_lifecycle_summary_keeps_h5_child_tables_ineligible(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="urbansim_postprocess_usim_households_table_updated",
+        path=str(local_root / "urbansim" / "data" / "model_data.h5"),
+        artifact_family="usim_datastore_h5",
+        artifact_driver="h5_table",
+        h5_parent_key="usim_datastore_h5",
+        h5_table_name="households",
+        child_recovery_policy="descriptive_only",
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["h5_child_table_artifacts_ineligible"] == 1
+    assert summary["blocking_reasons_by_family"]["usim_datastore_h5"] == [
+        "h5_child_table_ineligible"
+    ]
+    assert "usim_datastore_h5" in summary["blocked_families_for_phase2"]
+
+
 def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     monkeypatch, tmp_path
 ):

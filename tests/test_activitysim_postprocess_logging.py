@@ -577,6 +577,8 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(
     assert len(input_calls) == 1
     assert input_calls[0]["path"] == str(h5_path)
     assert input_calls[0]["child_selection"] == "include_only"
+    assert input_calls[0]["container_recovery_unit"] == "parent_file"
+    assert input_calls[0]["child_recovery_policy"] == "descriptive_only"
     assert input_calls[0]["child_specs"]["/2025/households"].key == (
         "activitysim_preprocess_usim_households_table_input"
     )
@@ -790,6 +792,8 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(
     assert len(publish_calls) == 1
     assert publish_calls[0]["key"] == "usim_datastore_h5"
     assert publish_calls[0]["child_selection"] == "include_only"
+    assert publish_calls[0]["container_recovery_unit"] == "parent_file"
+    assert publish_calls[0]["child_recovery_policy"] == "descriptive_only"
     assert {
         path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
     } == {

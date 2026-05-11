@@ -72,6 +72,8 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
     assert len(publish_meta) == 1
     assert publish_meta[0]["child_selection"] == "include_only"
+    assert publish_meta[0]["container_recovery_unit"] == "parent_file"
+    assert publish_meta[0]["child_recovery_policy"] == "descriptive_only"
     assert {
         path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
     } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
@@ -126,6 +128,8 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
     assert calls[0][2]["child_selection"] == "include_only"
+    assert calls[0][2]["container_recovery_unit"] == "parent_file"
+    assert calls[0][2]["child_recovery_policy"] == "descriptive_only"
     assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
