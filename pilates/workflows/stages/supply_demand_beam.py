@@ -747,6 +747,121 @@ def _try_restore_completed_beam_run_for_restart(
     return outputs
 
 
+def _beam_run_output_keys(outputs: BeamRunOutputs) -> list[str]:
+    raw_outputs = getattr(outputs, "raw_outputs", None)
+    if isinstance(raw_outputs, Mapping):
+        return sorted(str(key) for key in raw_outputs.keys())
+    iter_record_items = getattr(outputs, "_iter_record_items", None)
+    if callable(iter_record_items):
+        return sorted(
+            str(short_name) for short_name, _path, _desc in iter_record_items()
+        )
+    return []
+
+
+def _emit_beam_restart_recovery_readiness_diagnostic(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    outputs: BeamRunOutputs,
+    year: int,
+    iteration: int,
+    include_zarr_skims: bool,
+) -> None:
+    """Log whether a completed BEAM run is ready for restart-side recovery."""
+    output_keys = _beam_run_output_keys(outputs)
+    postprocess_keys = _build_beam_postprocess_input_keys(
+        upstream_keys=output_keys,
+        year=year,
+        iteration=iteration,
+        include_zarr_skims=include_zarr_skims,
+    ) or []
+    publication_keys = [
+        key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in output_keys
+    ]
+    required_keys = list(dict.fromkeys([*postprocess_keys, *publication_keys]))
+
+    matched_run_id: Optional[str] = None
+    matched_output_keys: list[str] = []
+    error: Optional[str] = None
+    target: Dict[str, Any] = {}
+    hydration_api_available = False
+
+    try:
+        tracker = cr.current_tracker()
+        hydrate_run_outputs = getattr(tracker, "hydrate_run_outputs", None)
+        hydration_api_available = callable(hydrate_run_outputs)
+        find_matching_run = getattr(tracker, "find_matching_run", None)
+        if not callable(find_matching_run):
+            raise AttributeError("tracker does not support find_matching_run")
+        target = dict(
+            restart_target_for_step(
+                settings=settings,
+                step_name="beam_run",
+                year=year,
+                iteration=iteration,
+                state=state,
+                workspace=workspace,
+            )
+        )
+        run = find_matching_run(**target)
+        matched_run_id = str(getattr(run, "id", "") or "") if run is not None else None
+        if matched_run_id:
+            try:
+                matched_outputs = load_tracker_run_outputs(
+                    matched_run_id,
+                    tracker=tracker,
+                    logger=logger,
+                    log_context="BEAM restart readiness diagnostic",
+                )
+                matched_output_keys = sorted(str(key) for key in matched_outputs.keys())
+            except Exception as exc:
+                error = f"get_run_outputs_failed:{type(exc).__name__}:{exc}"
+    except Exception as exc:
+        error = f"{type(exc).__name__}:{exc}"
+
+    output_key_source = matched_output_keys or output_keys
+    missing_required = [
+        key for key in required_keys if key not in set(output_key_source)
+    ]
+    matchable = bool(matched_run_id)
+    logger.info(
+        "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
+        "missing_required=%s required_keys=%s output_keys=%s",
+        matchable,
+        matched_run_id,
+        missing_required,
+        required_keys,
+        output_key_source,
+    )
+    _emit_artifact_lifecycle_event(
+        "beam_restart_recovery_readiness",
+        key="beam_restart_recovery_readiness",
+        artifact_family="beam_restart_diagnostic",
+        diagnostic="beam_restart_recovery_readiness",
+        restart_run=bool(getattr(state, "is_restart_run", False)),
+        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
+        forecast_year=getattr(state, "forecast_year", None),
+        iteration=iteration,
+        run_scope=str(target.get("run_scope")) if target else None,
+        query_status=target.get("status") if target else None,
+        matched_run_id=matched_run_id,
+        matchable=matchable,
+        output_keys=output_keys,
+        matched_output_keys=matched_output_keys,
+        required_postprocess_keys=required_keys,
+        missing_required_keys=missing_required,
+        hydration_api_available=hydration_api_available,
+        drift_classification=(
+            "completed_beam_run_recovery_ready"
+            if matchable and not missing_required and error is None
+            else "completed_beam_run_recovery_not_ready"
+        ),
+        diagnostic_error=error,
+    )
+
+
 def _derive_beam_run_input_keys(
     *,
     beam_preprocess_inputs: Mapping[str, Any],
@@ -988,6 +1103,15 @@ def _run_beam_steps(
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
     if recovered_run is None:
+        _emit_beam_restart_recovery_readiness_diagnostic(
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            outputs=upstream_run,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=include_zarr_skims,
+        )
         _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
         upstream_keys=[

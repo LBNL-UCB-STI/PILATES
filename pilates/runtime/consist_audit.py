@@ -346,6 +346,7 @@ def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
         "final_shutdown",
         "promotion_status",
         "beam_restart_binding",
+        "beam_restart_recovery_readiness",
     }:
         return True
     key = str(event.get("key") or "")
