@@ -41,6 +41,7 @@ from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
@@ -694,9 +695,12 @@ def _activitysim_population_source(
     settings: Any,
     state: Any,
     workspace: Any,
-    year: Optional[int],
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    # The population source is intrinsically the artifact for state.forecast_year.
+    # Derive the year from state and ignore any planner-supplied `year` kwarg, so
+    # the same year governs both the datastore filename and the table prefix.
+    target_year = resolve_forecast_year(state)
     explicit_inputs = dict(explicit_fallback_inputs or {})
     candidate_paths: Dict[str, list[str]] = {}
 
@@ -704,17 +708,6 @@ def _activitysim_population_source(
         if candidate_paths:
             mapping[_CANDIDATE_PATHS_METADATA_KEY] = dict(candidate_paths)
         return mapping or None
-
-    def _target_population_year() -> Optional[int]:
-        forecast_year = getattr(state, "forecast_year", None)
-        if forecast_year is not None:
-            return int(forecast_year)
-        if year is not None:
-            return int(year)
-        current_year = getattr(state, "year", getattr(state, "current_year", None))
-        if current_year is not None:
-            return int(current_year)
-        return None
 
     def _with_population_tables(mapping: Dict[str, Any]) -> Optional[Mapping[str, Any]]:
         selected = mapping.get(USIM_POPULATION_SOURCE_H5)
@@ -725,7 +718,7 @@ def _activitysim_population_source(
                     mapping.update(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
-                            year=_target_population_year(),
+                            year=target_year,
                             require_exact_year=(
                                 _requires_exact_activitysim_population_year(state)
                             ),
@@ -776,7 +769,7 @@ def _activitysim_population_source(
         settings=settings,
         state=state,
         workspace=workspace,
-        year=year,
+        year=target_year,
     )
     if not candidates:
         return None

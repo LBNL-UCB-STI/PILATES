@@ -703,26 +703,27 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     population_h5.write_text("population")
     current_h5.write_text("current")
 
-    captured_years = []
-    captured_rule_keys = []
+    captured_calls = []
 
     def _fake_build_binding_plan(**kwargs):
-        year = kwargs["year"]
-        captured_years.append(year)
-        captured_rule_keys.append(
-            tuple(rule.semantic_key for rule in kwargs.get("artifact_rules", ()))
+        captured_calls.append(
+            {
+                "year": kwargs["year"],
+                "rules": tuple(
+                    rule.semantic_key for rule in kwargs.get("artifact_rules", ())
+                ),
+            }
         )
-        if year == forecast_year:
-            return BindingPlan(
-                inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
-                source_by_key={USIM_POPULATION_SOURCE_H5: "fake"},
-            )
-        if year == current_year:
-            return BindingPlan(
-                inputs={USIM_DATASTORE_CURRENT_H5: str(current_h5)},
-                source_by_key={USIM_DATASTORE_CURRENT_H5: "fake"},
-            )
-        raise AssertionError(f"Unexpected binding year: {year}")
+        return BindingPlan(
+            inputs={
+                USIM_POPULATION_SOURCE_H5: str(population_h5),
+                USIM_DATASTORE_CURRENT_H5: str(current_h5),
+            },
+            source_by_key={
+                USIM_POPULATION_SOURCE_H5: "fake",
+                USIM_DATASTORE_CURRENT_H5: "fake",
+            },
+        )
 
     monkeypatch.setattr(
         steps_activitysim,
@@ -747,11 +748,14 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
         coupler=_dummy_coupler(),
     )
 
-    assert captured_years == [forecast_year, current_year]
-    assert captured_rule_keys == [
-        (USIM_POPULATION_SOURCE_H5,),
-        (USIM_DATASTORE_CURRENT_H5,),
-    ]
+    # Single binding-plan call covers both rules; population year is intrinsic
+    # to the provider, so the planner threads `year=current_year`.
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["year"] == current_year
+    assert set(captured_calls[0]["rules"]) == {
+        USIM_POPULATION_SOURCE_H5,
+        USIM_DATASTORE_CURRENT_H5,
+    }
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
     assert runtime_inputs["current_input_h5_path"] == str(current_h5)
 

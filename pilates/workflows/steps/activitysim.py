@@ -463,10 +463,15 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     if not state.is_enabled(WorkflowState.Stage.land_use):
         return runtime_inputs
 
-    population_resolution = None
-    current_resolution = None
-    if not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs:
-        population_resolution = build_binding_plan(
+    # The population provider derives its year intrinsically from state.forecast_year,
+    # so the planner's `year` only governs the `urbansim_inputs_for_year` provider used
+    # for USIM_DATASTORE_CURRENT_H5. One binding call covers both rules.
+    resolution = None
+    needs_population = not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs
+    needs_current = not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs
+    if needs_population or needs_current:
+        current_year = getattr(state, "year", getattr(state, "current_year", None))
+        resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
             artifact_rules=(
@@ -478,19 +483,6 @@ def _resolve_activitysim_postprocess_runtime_inputs(
                     preferred_keys=(USIM_POPULATION_SOURCE_H5,),
                     fallback_provider="activitysim_population_source",
                 ),
-            ),
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            year=state.forecast_year,
-            surface=surface,
-        )
-    if not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs:
-        current_year = getattr(state, "year", getattr(state, "current_year", None))
-        current_resolution = build_binding_plan(
-            step_name="activitysim_postprocess",
-            coupler=coupler,
-            artifact_rules=(
                 ArtifactBindingRule(
                     semantic_key=USIM_DATASTORE_CURRENT_H5,
                     required=False,
@@ -510,7 +502,7 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         step_inputs.get(USIM_POPULATION_SOURCE_H5)
         if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=population_resolution,
+            resolved=resolution,
             key=USIM_POPULATION_SOURCE_H5,
             coupler=coupler,
         )
@@ -519,7 +511,7 @@ def _resolve_activitysim_postprocess_runtime_inputs(
         step_inputs.get(USIM_DATASTORE_CURRENT_H5)
         if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=current_resolution,
+            resolved=resolution,
             key=USIM_DATASTORE_CURRENT_H5,
             coupler=coupler,
         )

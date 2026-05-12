@@ -559,6 +559,61 @@ def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_st
         )
 
 
+def test_activitysim_population_source_uses_forecast_year_when_planner_threads_current_year(
+    tmp_path,
+):
+    """Regression: in a multi-year loop the postprocess planner threads
+    ``year=state.year`` for the current-datastore rule. The population provider
+    must still pick the forecast-year datastore and look up forecast-year tables;
+    otherwise it tries ``model_data_<current_year>.h5`` for ``/<forecast_year>/``
+    tables and raises KeyError. Reproduces the HPC year-2 failure.
+    """
+    forecast_h5 = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(forecast_h5, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="sfbay"),
+        urbansim=SimpleNamespace(
+            input_file_template="custom_mpo_{region_id}_model_data.h5",
+            output_file_template="model_data_{year}.h5",
+            region_mappings={"region_to_region_id": {"sfbay": "06197001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        year=2019,
+        forecast_year=2021,
+        Stage=SimpleNamespace(land_use="land_use"),
+        is_enabled=lambda stage: stage == "land_use",
+        is_start_year=lambda: False,
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path),
+        full_path=str(tmp_path),
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_POPULATION_SOURCE_H5,
+                required=False,
+                allow_coupler=True,
+                allow_fallback=True,
+                preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+                fallback_provider="activitysim_population_source",
+            ),
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.year,  # planner-supplied current_year, not forecast_year
+    )
+
+    assert plan.inputs[USIM_POPULATION_SOURCE_H5] == str(forecast_h5)
+
+
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(
     monkeypatch,
 ):
