@@ -234,6 +234,46 @@ def test_create_usim_input_data_preserves_forecast_year_run_output(tmp_path) -> 
         assert "/2021/jobs" in store
 
 
+def test_create_usim_input_data_rejects_clobbered_year_file(tmp_path) -> None:
+    """Boundary assertion: if model_data_<year>.h5 has root-level
+    tables instead of /<year>/-prefixed ones, create_usim_input_data must raise
+    ValueError rather than silently propagating corrupt inputs to the next loop.
+    """
+    forecast_year = 2021
+    usim_dir = tmp_path / "urbansim" / "data"
+    usim_dir.mkdir(parents=True)
+    canonical_input = usim_dir / "custom_mpo_06197001_model_data.h5"
+    forecast_h5 = usim_dir / f"model_data_{forecast_year}.h5"
+
+    with pd.HDFStore(canonical_input, mode="w") as store:
+        store.put("/blocks", pd.DataFrame({"block_id": [1]}))
+    # Simulate the pre-patch bug: forecast_h5 has root-level layout instead of
+    # /<year>/-prefixed tables.
+    with pd.HDFStore(forecast_h5, mode="w") as store:
+        store.put("/households", pd.DataFrame({"household_id": [1]}))
+        store.put("/persons", pd.DataFrame({"person_id": [10]}))
+
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5")
+    )
+    state = SimpleNamespace(forecast_year=forecast_year)
+
+    with pytest.raises(ValueError, match="H5 layout mismatch"):
+        create_usim_input_data(
+            settings,
+            state,
+            asim_output_dict={
+                "households": pd.DataFrame({"household_id": [2]}),
+                "persons": pd.DataFrame({"person_id": [20]}),
+            },
+            tables_updated_by_asim=["households", "persons"],
+            asim_source_paths=[],
+            current_input_store_path=str(canonical_input),
+            population_source_store_path=str(forecast_h5),
+            target_store_path=str(canonical_input),
+        )
+
+
 def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=_dummy_coupler(),

@@ -650,6 +650,25 @@ def create_usim_input_data(
         )
         return None, None
 
+    # If the source file is named
+    # model_data_<Y>.h5, it must contain /<Y>/-prefixed tables.  A root-level
+    # layout in a year-named file means the file was silently clobbered (e.g.
+    # by a postprocessor that wrote a merged canonical-input store to the wrong
+    # path).  Fail loud here rather than propagating corrupted inputs.
+    _fname_year_match = re.search(
+        r"model_data_(\d+)\.h5$", os.path.basename(source_store_path)
+    )
+    if _fname_year_match:
+        _fname_year = _fname_year_match.group(1)
+        if str(source_prefix) != _fname_year:
+            raise ValueError(
+                f"H5 layout mismatch: {source_store_path!r} is named for year "
+                f"{_fname_year} but its tables are prefixed with "
+                f"{source_prefix!r} instead of '/{_fname_year}/'. "
+                "The file may have been overwritten with a root-level merged "
+                "store by a postprocessor targeting the wrong output path."
+            )
+
     if fallback_to_current_input:
         logger.info(
             "Falling back to %s for ActivitySim postprocess because forecast output is missing: %s",
