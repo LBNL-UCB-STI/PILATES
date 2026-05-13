@@ -169,18 +169,30 @@ def test_activitysim_postprocess_recovery_uses_forecast_year_archived_inputs(
     }
 
 
-def test_create_usim_input_data_writes_forecast_year_target(tmp_path) -> None:
+def test_create_usim_input_data_preserves_forecast_year_run_output(tmp_path) -> None:
+    """Regression: the asim postprocess must NOT use ``model_data_<year>.h5`` as
+    its merged-store write target, because that file is the urbansim run output
+    and contains ``/<year>/``-prefixed tables that the next loop's binding will
+    look up. Writing the merged store there overwrites those tables with a
+    root-level layout, and the next year's activity_demand binding fails with
+    a ``missing=['/2021/households', ...]`` KeyError. The merged store must go
+    to the canonical input filename (``custom_mpo_..._model_data.h5``).
+    """
     current_year = 2019
     forecast_year = 2021
     usim_dir = tmp_path / "urbansim" / "data"
     usim_dir.mkdir(parents=True)
-    current_h5 = usim_dir / f"model_data_{current_year}.h5"
+    canonical_input = usim_dir / "custom_mpo_06197001_model_data.h5"
     forecast_h5 = usim_dir / f"model_data_{forecast_year}.h5"
 
-    with pd.HDFStore(current_h5, mode="w") as store:
-        store.put("/2019/blocks", pd.DataFrame({"block_id": [1]}))
+    # Canonical input store has root-level tables (the previous merged input).
+    with pd.HDFStore(canonical_input, mode="w") as store:
+        store.put("/blocks", pd.DataFrame({"block_id": [1]}))
+        store.put("/jobs", pd.DataFrame({"job_id": [99]}))
+    # Forecast-year run output has /<year>/-prefixed tables.
+    forecast_table_payload = pd.DataFrame({"household_id": [1]})
     with pd.HDFStore(forecast_h5, mode="w") as store:
-        store.put("/2021/households", pd.DataFrame({"household_id": [1]}))
+        store.put("/2021/households", forecast_table_payload)
         store.put("/2021/persons", pd.DataFrame({"person_id": [10]}))
         store.put("/2021/jobs", pd.DataFrame({"job_id": [100]}))
 
@@ -198,21 +210,28 @@ def test_create_usim_input_data_writes_forecast_year_target(tmp_path) -> None:
         },
         tables_updated_by_asim=["households", "persons"],
         asim_source_paths=[],
-        current_input_store_path=str(current_h5),
+        current_input_store_path=str(canonical_input),
         population_source_store_path=str(forecast_h5),
-        target_store_path=str(forecast_h5),
+        target_store_path=str(canonical_input),
     )
 
     archive_h5 = usim_dir / "input_data_for_2021_outputs.h5"
-    assert Path(next_path) == forecast_h5
+    assert Path(next_path) == canonical_input
     assert record.short_name == USIM_DATASTORE_H5
-    assert forecast_h5.exists()
-    assert archive_h5.exists()
-    assert current_h5.exists()
-    with pd.HDFStore(forecast_h5, mode="r") as store:
+    # Merged store written to canonical input filename, root-level layout.
+    assert canonical_input.exists()
+    with pd.HDFStore(canonical_input, mode="r") as store:
         assert "/households" in store
         assert "/persons" in store
         assert "/jobs" in store
+    # Previous canonical input archived (renamed) under the forecast-year archive name.
+    assert archive_h5.exists()
+    # Forecast-year run output left untouched and still has /<year>/-prefixed tables.
+    assert forecast_h5.exists()
+    with pd.HDFStore(forecast_h5, mode="r") as store:
+        assert "/2021/households" in store
+        assert "/2021/persons" in store
+        assert "/2021/jobs" in store
 
 
 def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:

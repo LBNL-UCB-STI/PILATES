@@ -91,23 +91,20 @@ def _default_usim_datastore_output_path(
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
-def _forecast_usim_datastore_output_path(
+def _next_iter_usim_input_store_path(
     settings: PilatesConfig,
-    state: WorkflowState,
     workspace: Workspace,
 ) -> Optional[str]:
-    forecast_year = getattr(state, "forecast_year", None)
-    if forecast_year is None:
-        return _default_usim_datastore_output_path(settings, workspace)
-    try:
-        datastore_name = get_usim_datastore_fname(
-            settings,
-            io="output",
-            year=forecast_year,
-        )
-    except Exception:
-        return _default_usim_datastore_output_path(settings, workspace)
-    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
+    """Path of the canonical USIM input store that the asim postprocess writes
+    the merged next-iteration input to.
+
+    Must match the filename the urbansim postprocess writes to (see
+    ``pilates/urbansim/postprocessor.py:create_next_iter_usim_data``); the two
+    postprocessors are sequential and produce successive versions of the same
+    artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
+    urbansim run output and destroy its ``/<year>/``-prefixed table layout.
+    """
+    return _default_usim_datastore_output_path(settings, workspace)
 
 
 def _load_asim_outputs(
@@ -907,9 +904,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         """
         outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _forecast_usim_datastore_output_path(
+            USIM_DATASTORE_H5: _next_iter_usim_input_store_path(
                 settings,
-                state,
                 workspace,
             ),
         }
@@ -1126,9 +1122,8 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
                 current_input_store_path=current_input_h5_path,
                 population_source_store_path=population_source_h5_path,
-                target_store_path=_forecast_usim_datastore_output_path(
+                target_store_path=_next_iter_usim_input_store_path(
                     settings,
-                    self.state,
                     workspace,
                 ),
             )
