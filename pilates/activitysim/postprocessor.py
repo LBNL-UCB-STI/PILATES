@@ -83,9 +83,10 @@ def _activitysim_archived_input_paths(
 def _default_usim_datastore_output_path(
     settings: PilatesConfig,
     workspace: Workspace,
+    year: Optional[int] = None,
 ) -> Optional[str]:
     try:
-        datastore_name = get_usim_datastore_fname(settings, io="input")
+        datastore_name = get_usim_datastore_fname(settings, io="output", year=year)
     except Exception:
         return None
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
@@ -94,6 +95,7 @@ def _default_usim_datastore_output_path(
 def _next_iter_usim_input_store_path(
     settings: PilatesConfig,
     workspace: Workspace,
+    state: WorkflowState,
 ) -> Optional[str]:
     """Path of the canonical USIM input store that the asim postprocess writes
     the merged next-iteration input to.
@@ -104,7 +106,9 @@ def _next_iter_usim_input_store_path(
     artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
     urbansim run output and destroy its ``/<year>/``-prefixed table layout.
     """
-    return _default_usim_datastore_output_path(settings, workspace)
+    return _default_usim_datastore_output_path(
+        settings, workspace, year=state.forecast_year
+    )
 
 
 def _load_asim_outputs(
@@ -926,6 +930,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             USIM_DATASTORE_H5: _next_iter_usim_input_store_path(
                 settings,
                 workspace,
+                state,
             ),
         }
         outputs.update(_activitysim_iteration_output_paths(state, workspace))
@@ -1144,6 +1149,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 target_store_path=_next_iter_usim_input_store_path(
                     settings,
                     workspace,
+                    self.state,
                 ),
             )
             if usim_record:

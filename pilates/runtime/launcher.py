@@ -836,6 +836,8 @@ def main(
                     scenario=tagged_scenario,
                     workspace=workspace,
                     state=state,
+                    tracker=tracker,
+                    settings=settings,
                 )
             if is_restart_run and state.data_initialized:
                 logger.info(

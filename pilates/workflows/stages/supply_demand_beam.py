@@ -771,12 +771,15 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
 ) -> None:
     """Log whether a completed BEAM run is ready for restart-side recovery."""
     output_keys = _beam_run_output_keys(outputs)
-    postprocess_keys = _build_beam_postprocess_input_keys(
-        upstream_keys=output_keys,
-        year=year,
-        iteration=iteration,
-        include_zarr_skims=include_zarr_skims,
-    ) or []
+    postprocess_keys = (
+        _build_beam_postprocess_input_keys(
+            upstream_keys=output_keys,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=include_zarr_skims,
+        )
+        or []
+    )
     publication_keys = [
         key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in output_keys
     ]

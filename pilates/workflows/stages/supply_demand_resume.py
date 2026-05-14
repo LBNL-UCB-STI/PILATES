@@ -34,6 +34,11 @@ from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
+from pilates.runtime.restart import (
+    restart_target_for_step,
+    _find_matching_run_for_restart_target,
+)
+
 _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     "beam_plans_asim_out",
     "households_asim_out",
@@ -41,10 +46,7 @@ _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
     ZARR_SKIMS,
 )
 _ARCHIVED_ZARR_SKIMS_KEY = "asim_input_skims_zarr_archived"
-_STEP_RUN_ID_EPOCH_PATTERNS = (
-    re.compile(r"__y(?P<year>\d+)__i(?P<iteration>\d+)__"),
-    re.compile(r"_y(?P<year>\d+)_i(?P<iteration>\d+)(?:_|$)"),
-)
+# Removed _STEP_RUN_ID_EPOCH_PATTERNS and _parse_run_id_epoch as they are replaced by semantic matching
 _SUPPLY_DEMAND_MANIFEST_NAME = re.compile(
     r"year_(?P<year>\d+)_iteration_(?P<iteration>\d+)\.yaml$"
 )
@@ -58,19 +60,7 @@ def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optiona
     )
 
 
-def _parse_run_id_epoch(run_id: Any) -> tuple[Optional[int], Optional[int]]:
-    run_id_text = str(run_id or "").strip()
-    if not run_id_text:
-        return None, None
-    for pattern in _STEP_RUN_ID_EPOCH_PATTERNS:
-        match = pattern.search(run_id_text)
-        if match is None:
-            continue
-        try:
-            return int(match.group("year")), int(match.group("iteration"))
-        except (TypeError, ValueError):
-            return None, None
-    return None, None
+# Removed _parse_run_id_epoch
 
 
 def seed_supply_demand_parent_run_ids_for_resume(
@@ -78,6 +68,8 @@ def seed_supply_demand_parent_run_ids_for_resume(
     scenario: Optional[Any],
     workspace: Workspace,
     state: WorkflowState,
+    tracker: Any,
+    settings: PilatesConfig,
 ) -> None:
     remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
     if not callable(remember_restored_run_id):
@@ -111,21 +103,31 @@ def seed_supply_demand_parent_run_ids_for_resume(
             continue
         fallback_year = int(match.group("year"))
         fallback_iteration = int(match.group("iteration"))
-        manifest = load_step_manifest(manifest_path)
+
         for model_name in ("activitysim_run", "beam_run"):
-            step_meta = manifest.get(model_name)
-            if not isinstance(step_meta, Mapping):
+            target = restart_target_for_step(
+                settings=settings,
+                step_name=model_name,
+                year=fallback_year,
+                iteration=fallback_iteration,
+                state=state,
+                workspace=workspace,
+            )
+            run = _find_matching_run_for_restart_target(
+                tracker=tracker,
+                target=target,
+            )
+            if run is None:
                 continue
-            run_id = str(step_meta.get("run_id", "")).strip()
+
+            run_id = str(getattr(run, "id", "")).strip()
             if not run_id or run_id in seen_run_ids:
                 continue
-            run_year, run_iteration = _parse_run_id_epoch(run_id)
+
             remember_restored_run_id(
                 model_name=model_name,
-                year=run_year if run_year is not None else fallback_year,
-                iteration=(
-                    run_iteration if run_iteration is not None else fallback_iteration
-                ),
+                year=fallback_year,
+                iteration=fallback_iteration,
                 run_id=run_id,
             )
             seen_run_ids.add(run_id)
@@ -266,6 +268,7 @@ def _restore_activity_demand_outputs_for_resume(
     outputs_holder: StepOutputsHolder,
     state: WorkflowState,
     settings: PilatesConfig,
+    tracker: Any,
     manifest_path: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
     """
@@ -344,19 +347,43 @@ def _restore_activity_demand_outputs_for_resume(
         remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
         if not callable(remember_restored_run_id):
             return
-        activitysim_run = manifest_data.get("activitysim_run")
-        if not isinstance(activitysim_run, Mapping):
+
+        # We use the manifest just to identify which epoch was produced
+        # but we let Consist find the matching run for that epoch.
+        # First try to get epoch from manifest metadata if available,
+        # otherwise we fallback to the state's current epoch.
+
+        # Since we are already in a manifest-driven restore, the manifest
+        # should have been loaded from a file named year_X_iteration_Y.yaml.
+        # However, the manifest_data passed here is just the content of the manifest.
+        # We can't easily get the filename here unless we pass it in.
+        # Instead, we can try to find a matching run for the current state's epoch
+        # or the epoch implied by the manifest if we can.
+
+        # For now, we'll use the semantic target for the current state's epoch.
+        year = getattr(state, "current_year", None)
+        iteration = getattr(state, "current_inner_iter", None)
+
+        target = restart_target_for_step(
+            settings=settings,
+            step_name="activitysim_run",
+            year=year if year is not None else resolve_forecast_year(state),
+            iteration=iteration,
+            state=state,
+            workspace=workspace,
+        )
+        run = _find_matching_run_for_restart_target(
+            tracker=tracker,
+            target=target,
+        )
+        if run is None:
             return
-        run_id = activitysim_run.get("run_id")
-        if not run_id:
-            return
-        run_year, run_iteration = _parse_run_id_epoch(run_id)
+
+        run_id = str(getattr(run, "id", "")).strip()
         remember_restored_run_id(
             model_name="activitysim_run",
-            year=run_year if run_year is not None else resolve_forecast_year(state),
-            iteration=run_iteration
-            if run_iteration is not None
-            else getattr(state, "current_inner_iter", None),
+            year=year if year is not None else resolve_forecast_year(state),
+            iteration=iteration,
             run_id=run_id,
         )
 

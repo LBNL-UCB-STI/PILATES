@@ -231,10 +231,7 @@ def test_beam_restart_recovery_readiness_diagnostic_reports_matchable_run(
     assert fields["matched_run_id"] == run_id
     assert fields["missing_required_keys"] == []
     assert fields["hydration_api_available"] is True
-    assert (
-        fields["drift_classification"]
-        == "completed_beam_run_recovery_ready"
-    )
+    assert fields["drift_classification"] == "completed_beam_run_recovery_ready"
 
 
 def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):

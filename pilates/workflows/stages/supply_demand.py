@@ -192,6 +192,7 @@ def run_supply_demand_stage(
                 outputs_holder=outputs_holder,
                 state=state,
                 settings=settings,
+                tracker=scenario.tracker,
                 manifest_path=Path(manifest_path),
             )
 

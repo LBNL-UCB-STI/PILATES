@@ -49,8 +49,7 @@ def _signature_accepts_kwargs(
         return False
     parameters = signature.parameters
     accepts_arbitrary_kwargs = any(
-        param.kind == inspect.Parameter.VAR_KEYWORD
-        for param in parameters.values()
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in parameters.values()
     )
     if accepts_arbitrary_kwargs:
         return True
@@ -68,9 +67,7 @@ def check_consist_runtime_capabilities(tracker: Any) -> ConsistCapabilityReport:
         missing.append("tracker.log_h5_container")
     elif not _signature_accepts_kwargs(log_h5_container, _REQUIRED_H5_POLICY_KWARGS):
         missing.append(
-            "tracker.log_h5_container("
-            + ", ".join(_REQUIRED_H5_POLICY_KWARGS)
-            + ")"
+            "tracker.log_h5_container(" + ", ".join(_REQUIRED_H5_POLICY_KWARGS) + ")"
         )
 
     return ConsistCapabilityReport(ok=not missing, missing=tuple(missing))

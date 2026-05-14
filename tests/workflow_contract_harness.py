@@ -3,9 +3,42 @@
 from __future__ import annotations
 
 import inspect
+from types import SimpleNamespace
 from typing import Any, Callable
 
 from pilates.runtime.context import WorkflowRuntimeContext
+
+
+class FakeTracker:
+    """Minimal tracker stub for workflow contract tests."""
+
+    def __init__(self, matching_run: Any = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.matching_run = matching_run
+
+    def find_matching_run(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        if self.matching_run is None:
+            return None
+        if isinstance(self.matching_run, dict):
+            key = (
+                kwargs.get("model_name"),
+                kwargs.get("year"),
+                kwargs.get("iteration"),
+            )
+            if key in self.matching_run:
+                val = self.matching_run[key]
+                return SimpleNamespace(id=val) if isinstance(val, str) else val
+            return None
+        if isinstance(self.matching_run, str):
+            return SimpleNamespace(id=self.matching_run)
+        return self.matching_run
+
+    def get_run_outputs(self, queried_run_id: str) -> dict[str, Any]:
+        return {}
+
+    def hydrate_run_outputs(self, **kwargs: Any) -> Any:
+        return {}
 
 
 class CouplerStub:
@@ -43,8 +76,9 @@ class FakeScenario:
     already be present in the coupler before the step starts.
     """
 
-    def __init__(self, coupler: CouplerStub) -> None:
+    def __init__(self, coupler: CouplerStub, tracker: Any = None) -> None:
         self.coupler = coupler
+        self.tracker = tracker
         self.calls: list[dict[str, Any]] = []
 
     def run(self, **kwargs: Any) -> dict[str, str]:

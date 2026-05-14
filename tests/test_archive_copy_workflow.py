@@ -608,9 +608,7 @@ def test_artifact_lifecycle_summary_allows_policy_eligible_usim_h5_parent(
 
     summary = _lifecycle_summary(local_root)
     assert summary["copied_artifacts_joined_to_logged_artifacts"] == 1
-    assert (
-        summary["copied_artifacts_eligible_for_recovery_root_registration"] == 1
-    )
+    assert summary["copied_artifacts_eligible_for_recovery_root_registration"] == 1
     assert "usim_input_merged" in summary["safe_families_for_phase2"]
     assert "usim_input_merged" not in summary["blocked_families_for_phase2"]
     assert "h5_parent_child_policy" not in summary["blocker_counts_by_reason"]

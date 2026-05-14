@@ -296,8 +296,7 @@ def test_hydrate_missing_restart_artifacts_hydrates_traffic_assignment_inputs(tm
         for call in tracker.find_matching_run_calls
     )
     assert all(
-        call.get("run_scope") == "archive"
-        for call in tracker.find_matching_run_calls
+        call.get("run_scope") == "archive" for call in tracker.find_matching_run_calls
     )
 
 
