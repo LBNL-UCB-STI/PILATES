@@ -79,6 +79,7 @@ def build_urbansim_inputs(
         year=year,
         surface=surface,
         artifact_rules=urbansim_datastore_selection_rules(),
+        restrict_to_inline_rules=True,
         required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
     )
 

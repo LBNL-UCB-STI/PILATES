@@ -104,6 +104,7 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
                     fallback_provider="activitysim_population_source",
                 ),
             ),
+            restrict_to_inline_rules=True,
             required_keys=(
                 (USIM_POPULATION_SOURCE_H5,)
                 if USIM_POPULATION_SOURCE_H5 in postprocess_required_keys
@@ -144,6 +145,7 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
                     fallback_provider="urbansim_inputs_for_year",
                 ),
             ),
+            restrict_to_inline_rules=True,
             required_keys=(
                 (USIM_DATASTORE_CURRENT_H5,)
                 if USIM_DATASTORE_CURRENT_H5 in postprocess_required_keys
@@ -168,6 +170,39 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             explicit_inputs[USIM_DATASTORE_CURRENT_H5] = current_value
 
     return explicit_inputs
+
+
+def _activitysim_postprocess_role_binding_rules(
+    *,
+    postprocess_required_keys: tuple[str, ...],
+    postprocess_optional_keys: tuple[str, ...],
+) -> tuple[ArtifactBindingRule, ...]:
+    role_keys = set(postprocess_required_keys) | set(postprocess_optional_keys)
+    rules: list[ArtifactBindingRule] = []
+    for semantic_key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5):
+        if semantic_key not in role_keys:
+            continue
+        rules.append(
+            ArtifactBindingRule(
+                semantic_key=semantic_key,
+                required=semantic_key in postprocess_required_keys,
+                allow_coupler=False,
+                allow_fallback=False,
+                preferred_keys=(semantic_key,),
+            )
+        )
+    if USIM_DATASTORE_BASE_H5 in role_keys:
+        rules.append(
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_BASE_H5,
+                required=USIM_DATASTORE_BASE_H5 in postprocess_required_keys,
+                allow_coupler=False,
+                allow_fallback=True,
+                preferred_keys=(USIM_DATASTORE_BASE_H5,),
+                fallback_provider="activitysim_input_datastore",
+            )
+        )
+    return tuple(rules)
 
 
 @dataclass
@@ -709,6 +744,11 @@ def _run_activity_demand_phase(
         coupler=coupler,
         explicit_inputs=postprocess_explicit_inputs or None,
         fallback_inputs=postprocess_fallback_inputs or None,
+        artifact_rules=_activitysim_postprocess_role_binding_rules(
+            postprocess_required_keys=postprocess_required_keys,
+            postprocess_optional_keys=postprocess_optional_keys,
+        ),
+        restrict_to_inline_rules=True,
         required_keys=postprocess_required_keys,
         optional_keys=postprocess_optional_keys,
         settings=settings,

@@ -279,7 +279,7 @@ def _prepare_updated_tables(
             resolved_prefix,
             prefix,
         )
-    usim_output_store = pd.HDFStore(usim_output_store_path)
+    usim_output_store = pd.HDFStore(usim_output_store_path, mode="r")
     normalized_usim_keys = _normalized_h5_keys(usim_output_store)
 
     def _resolve_h5_key(table_name: str) -> str:

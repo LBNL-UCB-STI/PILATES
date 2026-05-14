@@ -317,6 +317,7 @@ BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule, ...]:
     """
     Shared population-source datastore preference for ActivitySim input selection.
+    All rules here resolve to forecast-year artifacts.
     """
     return (
         ArtifactBindingRule(
@@ -364,6 +365,7 @@ def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule
 def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
     """
     Backward-compatible wrapper for callers that still use the old helper name.
+    Resolves to the UrbanSim datastore for the requested planner-year.
     """
     return (
         ArtifactBindingRule(
@@ -658,6 +660,12 @@ def _urbansim_inputs_for_year(
     year: Optional[int],
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Planner-year UrbanSim datastore selector.
+
+    This is the one fallback provider that intentionally consumes the caller
+    supplied ``year``; the rule contract is literally "for the requested
+    year", so the binding layer forwards that year unchanged.
+    """
     return _urbansim_datastore_candidates_for_year(
         settings=settings,
         state=state,
@@ -672,6 +680,7 @@ def _activitysim_input_datastore(
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Canonical yearless ActivitySim input datastore role."""
     if settings is None or workspace is None:
         return None
     get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
@@ -697,9 +706,11 @@ def _activitysim_population_source(
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
-    # The population source is intrinsically the artifact for state.forecast_year.
-    # Derive the year from state and ignore any planner-supplied `year` kwarg, so
-    # the same year governs both the datastore filename and the table prefix.
+    """Forecast-year ActivitySim population source.
+
+    Derive the year from ``state.forecast_year`` and ignore any planner-supplied
+    ``year`` kwarg so the datastore filename and HDF5 table prefix stay aligned.
+    """
     target_year = resolve_forecast_year(state)
     explicit_inputs = dict(explicit_fallback_inputs or {})
     candidate_paths: Dict[str, list[str]] = {}
@@ -798,6 +809,7 @@ def _beam_preprocess_exchange_inputs(
     surface: "EnabledWorkflowSurface",
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Yearless BEAM exchange-input fallback delegated to model state."""
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
@@ -840,6 +852,7 @@ def _beam_preprocess_warmstart_inputs(
     surface: Optional["EnabledWorkflowSurface"] = None,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Yearless BEAM warmstart fallback resolved from coupler or workspace."""
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
@@ -868,6 +881,11 @@ def _beam_preprocess_atlas_inputs(
     surface: "EnabledWorkflowSurface",
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Forecast-year ATLAS vehicles2 fallback.
+
+    The provider derives candidate filenames from ``state.forecast_year`` and
+    ``state.forecast_year - 1`` and intentionally ignores planner ``year``.
+    """
     if get_traffic_assignment_model(settings) != "beam":
         return None
     resolved_profile = surface.profile
@@ -900,6 +918,7 @@ def _beam_preprocess_config_input(
     workspace: Any,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
+    """Yearless BEAM config fallback with state-aware archive resolution."""
     if get_traffic_assignment_model(settings) != "beam":
         return None
 
@@ -1205,6 +1224,7 @@ def build_binding_plan(
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
     artifact_rules: Optional[Iterable[ArtifactBindingRule]] = None,
+    restrict_to_inline_rules: bool = False,
     required_keys: Optional[Iterable[str]] = None,
     optional_keys: Optional[Iterable[str]] = None,
     output_paths: Optional[Mapping[str, Any]] = None,
@@ -1216,8 +1236,9 @@ def build_binding_plan(
     surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> BindingPlan:
     spec = binding_spec_for_step_name(step_name, settings=settings)
-    rule_lookup = _binding_rule_lookup(spec)
-    for rule in artifact_rules or ():
+    inline_rules = tuple(artifact_rules or ())
+    rule_lookup = {} if restrict_to_inline_rules else _binding_rule_lookup(spec)
+    for rule in inline_rules:
         rule_lookup[rule.semantic_key] = rule
     if year is None and state is not None:
         year = getattr(state, "year", None)
@@ -1272,9 +1293,16 @@ def build_binding_plan(
                 rule = ArtifactBindingRule(
                     semantic_key=rule.semantic_key,
                     required=is_required,
-                    allow_explicit=role_policy.explicit_inputs_allowed,
-                    allow_coupler=role_policy.coupler_fallback_allowed,
-                    allow_fallback=role_policy.workspace_archive_fallback_allowed,
+                    allow_explicit=(
+                        rule.allow_explicit and role_policy.explicit_inputs_allowed
+                    ),
+                    allow_coupler=(
+                        rule.allow_coupler and role_policy.coupler_fallback_allowed
+                    ),
+                    allow_fallback=(
+                        rule.allow_fallback
+                        and role_policy.workspace_archive_fallback_allowed
+                    ),
                     preferred_keys=rule.preferred_keys,
                     fallback_provider=rule.fallback_provider,
                     pass_mode=rule.pass_mode,

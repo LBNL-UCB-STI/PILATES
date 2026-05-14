@@ -76,6 +76,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workspace import Workspace
 from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
+from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
@@ -92,6 +93,9 @@ from pilates.workflows.stages.supply_demand_beam import (
     _build_beam_postprocess_input_keys,
     _find_completed_beam_run_for_restart,
     _hydrate_completed_beam_run_outputs,
+)
+from pilates.workflows.stages.supply_demand_activity import (
+    _activitysim_postprocess_role_binding_rules,
 )
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
@@ -1740,6 +1744,46 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     assert isinstance(binding, BindingResult)
     assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == str(forecast_h5)
     assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
+
+
+def test_activitysim_postprocess_role_binding_rejects_stale_coupler_h5_roles(
+    stage_env,
+):
+    from pilates.workflows.surface import build_enabled_workflow_surface
+
+    coupler = CouplerStub()
+    coupler.set(USIM_POPULATION_SOURCE_H5, "/tmp/stale_population.h5")
+    coupler.set(USIM_DATASTORE_CURRENT_H5, "/tmp/stale_current.h5")
+    surface = build_enabled_workflow_surface(
+        stage_env["settings"],
+        state=stage_env["state"],
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        coupler=coupler,
+        artifact_rules=_activitysim_postprocess_role_binding_rules(
+            postprocess_required_keys=(
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+            ),
+            postprocess_optional_keys=(),
+        ),
+        restrict_to_inline_rules=True,
+        required_keys=(USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5),
+        settings=stage_env["settings"],
+        state=stage_env["state"],
+        workspace=stage_env["workspace"],
+        year=stage_env["state"].forecast_year,
+        surface=surface,
+    )
+
+    assert plan.inputs == {}
+    assert plan.input_keys == []
+    assert plan.missing_required == [
+        USIM_POPULATION_SOURCE_H5,
+        USIM_DATASTORE_CURRENT_H5,
+    ]
 
 
 def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_use(

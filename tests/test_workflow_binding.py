@@ -8,6 +8,7 @@ import pytest
 from consist import define_step
 
 from pilates.workflows.artifact_keys import (
+    ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_SHARROW_CACHE_DIR,
     BEAM_CONFIG_FILE,
@@ -614,6 +615,90 @@ def test_activitysim_population_source_uses_forecast_year_when_planner_threads_c
     assert plan.inputs[USIM_POPULATION_SOURCE_H5] == str(forecast_h5)
 
 
+def test_beam_preprocess_atlas_inputs_ignore_planner_year_and_prefer_forecast_year(
+    tmp_path,
+):
+    forecast_h5 = tmp_path / "vehicles2_2030.csv"
+    prior_year_h5 = tmp_path / "vehicles2_2029.csv"
+    planner_year_sentinel = tmp_path / "vehicles2_2024.csv"
+    forecast_h5.write_text("forecast")
+    prior_year_h5.write_text("prior")
+    planner_year_sentinel.write_text("planner")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam"))
+    )
+    state = SimpleNamespace(
+        current_inner_iter=0,
+        forecast_year=2030,
+        year=2024,
+    )
+    workspace = SimpleNamespace(get_atlas_output_dir=lambda: str(tmp_path))
+
+    plan = build_binding_plan(
+        step_name="unit_test_beam_preprocess",
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=ATLAS_VEHICLES2_OUTPUT,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_atlas_inputs",
+            ),
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.year,
+        surface=_surface_stub(
+            activity_demand_enabled=False,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(forecast_h5)
+
+
+def test_beam_preprocess_atlas_inputs_falls_back_to_forecast_year_minus_one(
+    tmp_path,
+):
+    prior_year_h5 = tmp_path / "vehicles2_2029.csv"
+    planner_year_sentinel = tmp_path / "vehicles2_2024.csv"
+    prior_year_h5.write_text("prior")
+    planner_year_sentinel.write_text("planner")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam"))
+    )
+    state = SimpleNamespace(
+        current_inner_iter=0,
+        forecast_year=2030,
+        year=2024,
+    )
+    workspace = SimpleNamespace(get_atlas_output_dir=lambda: str(tmp_path))
+
+    plan = build_binding_plan(
+        step_name="unit_test_beam_preprocess",
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=ATLAS_VEHICLES2_OUTPUT,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_atlas_inputs",
+            ),
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.year,
+        surface=_surface_stub(
+            activity_demand_enabled=False,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(prior_year_h5)
+
+
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(
     monkeypatch,
 ):
@@ -640,6 +725,41 @@ def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider
     assert plan.inputs[USIM_DATASTORE_BASE_H5] == "/tmp/input.h5"
     assert plan.source_by_key[USIM_DATASTORE_BASE_H5] == "fallback"
     assert not plan.missing_required
+
+
+def test_build_binding_plan_can_scope_inline_rules_away_from_catalog_step():
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        explicit_inputs={USIM_POPULATION_SOURCE_H5: "/tmp/population.h5"},
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_POPULATION_SOURCE_H5,
+                required=False,
+            ),
+        ),
+        restrict_to_inline_rules=True,
+    )
+
+    assert plan.inputs == {USIM_POPULATION_SOURCE_H5: "/tmp/population.h5"}
+    assert ASIM_LAND_USE_IN not in plan.source_by_key
+    assert not plan.missing_required
+
+
+def test_build_binding_plan_inline_rules_augment_catalog_step_by_default():
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        explicit_inputs={USIM_POPULATION_SOURCE_H5: "/tmp/population.h5"},
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=USIM_POPULATION_SOURCE_H5,
+                required=False,
+            ),
+        ),
+    )
+
+    assert plan.inputs[USIM_POPULATION_SOURCE_H5] == "/tmp/population.h5"
+    assert ASIM_LAND_USE_IN in plan.source_by_key
+    assert ASIM_LAND_USE_IN in plan.missing_required
 
 
 def test_activitysim_postprocess_current_datastore_does_not_fallback_to_local_input(

@@ -130,6 +130,7 @@ def build_activitysim_inputs(
         coupler=coupler,
         explicit_inputs=explicit_usim_inputs or usim_inputs,
         artifact_rules=activitysim_population_source_selection_rules(),
+        restrict_to_inline_rules=True,
         required_keys=[USIM_POPULATION_SOURCE_H5],
         fallback_inputs=usim_inputs,
         settings=settings,
