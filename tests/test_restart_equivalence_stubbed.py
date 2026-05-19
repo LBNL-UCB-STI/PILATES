@@ -904,6 +904,7 @@ def _resume_runtime(
     local_state_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(archive_state_path, local_state_path)
     local_runtime.state = WorkflowState.from_settings(local_runtime.settings)
+    local_runtime.state.is_restart_run = True
     local_runtime.state.file_loc = str(archive_state_path)
     local_runtime.state.mirror_file_loc = str(local_state_path)
     if getattr(local_runtime.state, "run_info_path", None) != str(archive_state_path):
@@ -1299,6 +1300,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         archive_run_dir=Path(archive_runtime.workspace.full_path),
     )
     _resume_runtime(archive_runtime, resumed_runtime)
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", resumed_runtime.workspace.full_path)
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", archive_runtime.workspace.full_path)
 
     surface = build_enabled_workflow_surface(
         resumed_runtime.settings,
@@ -1350,6 +1353,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     scenario=tagged,
                     workspace=resumed_runtime.workspace,
                     state=resumed_runtime.state,
+                    tracker=resumed_runtime.tracker,
+                    settings=resumed_runtime.settings,
                 )
                 restart_runtime.hydrate_missing_restart_artifacts(
                     tracker=resumed_runtime.tracker,
@@ -1388,15 +1393,6 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                         )
                         resumed_runtime.state.complete_step(
                             WorkflowState.Stage.vehicle_ownership_model
-                        )
-                    if not usim_inputs and not resumed_runtime.state.should_run(
-                        WorkflowState.Stage.land_use
-                    ):
-                        usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
-                            coupler=coupler,
-                            workspace=resumed_runtime.workspace,
-                            state=resumed_runtime.state,
-                            settings=resumed_runtime.settings,
                         )
                     if resumed_runtime.state.should_run(
                         WorkflowState.Stage.supply_demand_loop

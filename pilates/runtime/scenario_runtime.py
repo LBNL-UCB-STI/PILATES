@@ -158,13 +158,14 @@ class ScenarioParentLinkProxy:
         model_norm = model_name.lower()
         if model_norm == "beam" or model_norm.startswith("beam_"):
             key = (year, iteration)
-            return self._activitysim_run_ids.get(key) or self._activitysim_step_ids.get(
-                key
-            )
+            exact = self._activitysim_run_ids.get(key)
+            step = self._activitysim_step_ids.get(key)
+            return exact or step
         if (
             model_norm == "activitysim" or model_norm.startswith("activitysim_")
         ) and iteration > 0:
-            return self._beam_run_ids.get((year, iteration - 1))
+            exact = self._beam_run_ids.get((year, iteration - 1))
+            return exact
         return None
 
     def _should_expect_parent(

@@ -146,7 +146,6 @@ def run_supply_demand_stage(
             state=state,
             settings=settings,
         )
-
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")

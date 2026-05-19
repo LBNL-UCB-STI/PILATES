@@ -15,6 +15,7 @@ from typing import Any, Iterable, Optional, Sequence
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
 
 logger = logging.getLogger(__name__)
@@ -226,6 +227,10 @@ def _all_runs(tracker: Any) -> list[Any]:
     return list(tracker.find_runs(limit=100_000))
 
 
+def _run_id_text(run: Any) -> str:
+    return str(run.id).strip() if isinstance(run, RunLike) else ""
+
+
 def _run_tags(run: Any) -> list[str]:
     tags = getattr(run, "tags", None) or []
     if isinstance(tags, str):
@@ -237,7 +242,7 @@ def _run_sort_key(run: Any) -> tuple[str, str]:
     created_at = getattr(run, "created_at", None)
     return (
         str(created_at) if created_at is not None else "",
-        str(getattr(run, "id", "")),
+        _run_id_text(run),
     )
 
 
@@ -277,11 +282,11 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
 
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
     children_by_parent: dict[str, list[str]] = {}
-    available_ids = {str(getattr(run, "id")) for run in runs}
+    available_ids = {_run_id_text(run) for run in runs if _run_id_text(run)}
     if root_run_id not in available_ids:
         raise ValueError(f"root run ID not found in archive DB: {root_run_id}")
     for run in runs:
-        run_id = str(getattr(run, "id"))
+        run_id = _run_id_text(run)
         parent_id = getattr(run, "parent_run_id", None)
         if parent_id is None:
             continue
@@ -322,7 +327,7 @@ def _resolve_root_run_id(
         run
         for run in runs
         if getattr(run, "parent_run_id", None) is None
-        and str(getattr(run, "id")) not in inherited_run_ids
+        and _run_id_text(run) not in inherited_run_ids
     ]
     pilates_candidates = [
         run for run in root_candidates if "pilates_simulation" in set(_run_tags(run))
@@ -342,7 +347,7 @@ def _resolve_root_run_id(
     if len(root_candidates) != 1:
         rendered = [
             {
-                "id": str(getattr(run, "id", "")),
+                "id": _run_id_text(run),
                 "model": str(getattr(run, "model_name", "")),
                 "status": str(getattr(run, "status", "")),
                 "tags": _run_tags(run),
@@ -356,7 +361,7 @@ def _resolve_root_run_id(
             + json.dumps(rendered, sort_keys=True)
         )
 
-    resolved = str(getattr(root_candidates[0], "id"))
+    resolved = _run_id_text(root_candidates[0])
     return resolved, _expand_run_subtree(resolved, runs)
 
 
@@ -419,7 +424,7 @@ def _register_verified_run_output_recovery_copies(
     selected_run_ids = (
         list(run_ids)
         if run_ids is not None
-        else [str(run.id) for run in _all_runs(tracker)]
+        else [_run_id_text(run) for run in _all_runs(tracker) if _run_id_text(run)]
     )
     registered = 0
     for run_id in selected_run_ids:

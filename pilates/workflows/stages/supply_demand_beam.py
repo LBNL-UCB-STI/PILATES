@@ -13,7 +13,12 @@ from pilates.runtime.context import (
 )
 from pilates.runtime.restart import restart_target_for_step
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import (
+    CouplerProtocol,
+    RunLike,
+    ScenarioRestorationLike,
+    ScenarioWithCoupler,
+)
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
     artifact_to_existing_path,
@@ -666,7 +671,7 @@ def _restored_beam_parent_years(
 
 def _try_restore_completed_beam_run_for_restart(
     *,
-    scenario: ScenarioWithCoupler,
+    scenario: ScenarioRestorationLike,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
@@ -683,7 +688,7 @@ def _try_restore_completed_beam_run_for_restart(
     tracker = cr.current_tracker()
     if tracker is None:
         return None
-    run = _find_completed_beam_run_for_restart(
+    run: Optional[RunLike] = _find_completed_beam_run_for_restart(
         tracker=tracker,
         settings=settings,
         state=state,
@@ -694,9 +699,19 @@ def _try_restore_completed_beam_run_for_restart(
     if run is None:
         return None
 
-    run_id = str(getattr(run, "id", "") or "")
+    run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
     if not run_id:
         return None
+    run_year, run_iteration = year, iteration
+    if isinstance(run, RunLike):
+        try:
+            run_year = int(getattr(run, "year", year))
+        except (TypeError, ValueError):
+            run_year = year
+        try:
+            run_iteration = int(getattr(run, "iteration", iteration))
+        except (TypeError, ValueError):
+            run_iteration = iteration
     outputs = _hydrate_completed_beam_run_outputs(
         tracker=tracker,
         run_id=run_id,
@@ -715,15 +730,16 @@ def _try_restore_completed_beam_run_for_restart(
 
     outputs_holder.beam_run = outputs
     _publish_recovered_beam_run_outputs(outputs=outputs, coupler=coupler)
-    remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
-    if callable(remember_restored_run_id):
-        for parent_year in _restored_beam_parent_years(state=state, run_year=year):
-            remember_restored_run_id(
-                model_name="beam_run",
-                year=parent_year,
-                iteration=iteration,
-                run_id=run_id,
-            )
+    for parent_year in _restored_beam_parent_years(
+        state=state,
+        run_year=run_year if run_year is not None else year,
+    ):
+        scenario.remember_restored_run_id(
+            model_name="beam_run",
+            year=parent_year,
+            iteration=run_iteration,
+            run_id=run_id,
+        )
     restored_keys = sorted(outputs.raw_outputs.keys())
     logger.info(
         "[BEAM][restart] restored completed beam_run from Consist run_id=%s hydrated_keys=%s",
@@ -809,7 +825,7 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
             )
         )
         run = find_matching_run(**target)
-        matched_run_id = str(getattr(run, "id", "") or "") if run is not None else None
+        matched_run_id = str(run.id).strip() if isinstance(run, RunLike) else None
         if matched_run_id:
             try:
                 matched_outputs = load_tracker_run_outputs(

@@ -22,7 +22,7 @@ from typing import (
 )
 
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.coupler_namespace import (
     ResolvedCouplerValue,
@@ -1015,9 +1015,9 @@ def resolve_artifact_from_value(
     """
     if value is None:
         return None
-    if hasattr(value, "container_uri") and getattr(value, "key", None):
-        return value
-    if hasattr(value, "uri") and getattr(value, "key", None):
+    if isinstance(value, ArtifactLike):
+        if key and getattr(value, "key", None) != key:
+            value.key = key
         return value
 
     path = artifact_to_path(value, workspace)
@@ -1108,7 +1108,7 @@ def log_coupler_value(
         return
 
     value_type = type(value).__name__
-    has_container_uri = hasattr(value, "container_uri")
+    has_container_uri = isinstance(value, ArtifactLike)
     has_key = hasattr(value, "key")
     path = artifact_to_path(value, workspace)
 

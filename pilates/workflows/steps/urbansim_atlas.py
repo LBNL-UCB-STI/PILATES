@@ -272,6 +272,10 @@ def _recover_atlas_postprocess_outputs(
             usim_datastore_h5 = Path(candidate_path)
     if usim_datastore_h5 is None:
         return None
+
+    recovered_paths = dict(recovered_paths)
+    recovered_paths[USIM_POPULATION_SOURCE_H5] = usim_datastore_h5
+    recovered_paths[USIM_DATASTORE_H5] = usim_datastore_h5
     return AtlasPostprocessOutputs(
         atlas_output_dir=Path(workspace.get_atlas_output_dir()),
         usim_datastore_h5=usim_datastore_h5,
@@ -526,12 +530,22 @@ def make_urbansim_preprocess_step(
                 "UrbanSim config is required for UrbanSim preprocess logging."
             )
         for short_name, path, description in outputs._iter_record_items():
+            # Apply H5 recovery policies to the datastore if it matches
+            h5_meta = {}
+            if short_name == "usim_datastore_h5":
+                h5_meta = {
+                    "profile_file_schema": True,
+                    "h5_container": True,
+                    "container_recovery_unit": "parent_file",
+                    "child_recovery_policy": "descriptive_only",
+                }
             log_and_set_output(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
                 step_name="urbansim_preprocess",
+                **h5_meta,
                 **_urbansim_output_facet_meta(short_name, forecast_year=forecast_year),
             )
         usim_data_dir = outputs.usim_mutable_data_dir

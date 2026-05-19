@@ -38,7 +38,12 @@ from pilates.workflows.catalog import (
     workflow_step_spec_for_step_name,
 )
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import (
+    ArtifactLike,
+    CouplerProtocol,
+    RunLike,
+    ScenarioRestorationLike,
+)
 from pilates.utils.state_access import (
     current_year as state_current_year,
     iteration_index,
@@ -1169,7 +1174,7 @@ def _recover_step_outputs(
 
 def _recovery_run_id_for_step_result(step_result: Any) -> Optional[str]:
     run = getattr(step_result, "run", None)
-    run_id = getattr(run, "id", None)
+    run_id = str(run.id).strip() if isinstance(run, RunLike) else None
     if not getattr(step_result, "cache_hit", False):
         return run_id
     run_meta = getattr(run, "meta", None)
@@ -1291,11 +1296,8 @@ def run_manifested_steps(
                         ),
                         recovery_meta=recovery_meta,
                     )
-                remember_restored_run_id = getattr(
-                    scenario, "remember_restored_run_id", None
-                )
-                if callable(remember_restored_run_id):
-                    remember_restored_run_id(
+                if isinstance(scenario, ScenarioRestorationLike):
+                    scenario.remember_restored_run_id(
                         model_name=model_name,
                         year=resolved_year,
                         iteration=resolved_iteration,
@@ -1722,11 +1724,7 @@ def _update_coupler_from_mapping(
         ) or artifact_to_path(value, workspace)
         if path is None:
             continue
-        artifact = (
-            resolved
-            if (hasattr(resolved, "container_uri") or hasattr(resolved, "uri"))
-            else None
-        )
+        artifact = resolved if isinstance(resolved, ArtifactLike) else None
         set_coupler_from_artifact(
             coupler=coupler,
             key=canonical_key,

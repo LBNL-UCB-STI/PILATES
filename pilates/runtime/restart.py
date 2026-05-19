@@ -24,7 +24,7 @@ from pilates.utils.coupler_helpers import (
     resolve_existing_path,
     set_coupler_from_artifact,
 )
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import CouplerProtocol, RunLike
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -1182,7 +1182,7 @@ def hydrate_rewind_runner_inputs(
             reason="no_completed_run_found",
         )
 
-    run_id = str(getattr(run, "id", "")).strip()
+    run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
     if not run_id:
         _raise_restart_hydration_error(
             summary=summary,
@@ -1458,7 +1458,7 @@ def hydrate_missing_restart_artifacts(
                 reason=f"tracker_query_failed:{exc}",
             )
 
-        run_id = str(getattr(run, "id", "")).strip()
+        run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
         if not run_id:
             _raise_restart_hydration_error(
                 summary=summary,

@@ -416,28 +416,34 @@ def _run_activity_demand_phase(
         resolved_usim_inputs=resolved_usim_inputs,
         surface=runtime_surface,
     )
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and profile.land_use_enabled
+        and missing_restart_roles
+    ):
+        from .supply_demand_resume import (
+            _restore_supply_demand_usim_inputs_for_resume,
+        )
+
+        resolved_usim_inputs.update(
+            _restore_supply_demand_usim_inputs_for_resume(
+                coupler=coupler,
+                workspace=workspace,
+                state=state,
+                settings=settings,
+            )
+        )
+        missing_restart_roles = _surface_restart_missing_explicit_roles(
+            coupler=coupler,
+            resolved_usim_inputs=resolved_usim_inputs,
+            surface=runtime_surface,
+        )
     if missing_restart_roles:
         raise RuntimeError(
             "Restart metadata is missing required post-land-use UrbanSim H5 roles "
             f"for ActivitySim: {', '.join(missing_restart_roles)}. "
             "This restart likely predates the explicit population-source H5 role split."
         )
-    if (
-        bool(getattr(state, "is_restart_run", False))
-        and profile.land_use_enabled
-        and not resolved_usim_inputs
-    ):
-        from .supply_demand_resume import (
-            _restore_supply_demand_usim_inputs_for_resume,
-        )
-
-        for key, value in _restore_supply_demand_usim_inputs_for_resume(
-            coupler=coupler,
-            workspace=workspace,
-            state=state,
-            settings=settings,
-        ).items():
-            resolved_usim_inputs.setdefault(key, value)
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
