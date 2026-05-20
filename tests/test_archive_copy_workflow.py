@@ -433,9 +433,7 @@ def test_artifact_lifecycle_summary_treats_zarr_skims_as_zarr_artifact(
     summary = _lifecycle_summary(local_root)
     assert "zarr_skims" in summary["safe_families_for_phase2"]
     assert "zarr_skims" not in summary["blocked_families_for_phase2"]
-    assert (
-        summary["blocking_reasons_by_family"].get("zarr_skims", []) == []
-    )
+    assert summary["blocking_reasons_by_family"].get("zarr_skims", []) == []
     assert "shallow_directory_signature" not in summary["blocker_counts_by_reason"]
 
 
@@ -1179,9 +1177,7 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(
     assert archived.read_text() == "manifest"
 
 
-def test_workflow_manifest_is_tracked_as_restart_support_only(
-    monkeypatch, tmp_path
-):
+def test_workflow_manifest_is_tracked_as_restart_support_only(monkeypatch, tmp_path):
     local_root = tmp_path / "local" / "run"
     archive_root = tmp_path / "archive" / "run"
     monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")

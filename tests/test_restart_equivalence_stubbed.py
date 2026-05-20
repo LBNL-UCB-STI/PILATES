@@ -44,7 +44,6 @@ from pilates.workflows.stages.supply_demand import (
     run_supply_demand_stage as _run_supply_demand_stage,
 )
 from pilates.workflows.stages.supply_demand_resume import (
-    _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
 from pilates.workflows.stages.vehicle_ownership import (

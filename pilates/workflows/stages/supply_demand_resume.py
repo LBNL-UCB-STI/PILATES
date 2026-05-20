@@ -536,7 +536,9 @@ def _restore_activity_demand_outputs_for_resume(
             exact_run = _find_tracker_run_by_id(tracker=tracker, run_id=exact_run_id)
             run_year, run_iteration = _tracker_run_epoch(
                 exact_run,
-                fallback_year=year if year is not None else resolve_forecast_year(state),
+                fallback_year=year
+                if year is not None
+                else resolve_forecast_year(state),
                 fallback_iteration=iteration,
             )
             scenario.remember_restored_run_id(
