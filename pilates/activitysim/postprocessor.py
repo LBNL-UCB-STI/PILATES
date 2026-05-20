@@ -26,6 +26,7 @@ from pilates.activitysim.runner import (
     asim_staged_input_paths,
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -80,18 +81,6 @@ def _activitysim_archived_input_paths(
     }
 
 
-def _default_usim_datastore_output_path(
-    settings: PilatesConfig,
-    workspace: Workspace,
-    year: Optional[int] = None,
-) -> Optional[str]:
-    try:
-        datastore_name = get_usim_datastore_fname(settings, io="output", year=year)
-    except Exception:
-        return None
-    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
-
-
 def _next_iter_usim_input_store_path(
     settings: PilatesConfig,
     workspace: Workspace,
@@ -106,9 +95,19 @@ def _next_iter_usim_input_store_path(
     artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
     urbansim run output and destroy its ``/<year>/``-prefixed table layout.
     """
-    return _default_usim_datastore_output_path(
-        settings, workspace, year=state.forecast_year
-    )
+    forecast_year = resolve_forecast_year(state)
+    try:
+        if forecast_year is not None and getattr(
+            getattr(settings, "urbansim", None), "output_file_template", None
+        ):
+            datastore_name = get_usim_datastore_fname(
+                settings, io="output", year=forecast_year
+            )
+        else:
+            datastore_name = get_usim_datastore_fname(settings, io="input")
+    except Exception:
+        return None
+    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
 def _load_asim_outputs(
@@ -992,8 +991,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             ActivitySimPostprocessOutputs: Postprocessed output data.
         """
         settings = self.state.full_settings
-        year = self.state.year
-        forecast_year = self.state.forecast_year
+        year = getattr(self.state, "year", getattr(self.state, "current_year", None))
+        forecast_year = resolve_forecast_year(self.state)
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim postprocess."
+            )
         replanning_iteration_number = self.state.current_inner_iter
         logger.info(
             "Running ActivitySim postprocessor for year %s, forecast year %s",

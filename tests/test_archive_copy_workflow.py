@@ -404,6 +404,41 @@ def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
     assert summary["unknown_event_keys"] == []
 
 
+def test_artifact_lifecycle_summary_treats_zarr_skims_as_zarr_artifact(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    zarr_dir = local_root / "activitysim" / "cache" / "skims.zarr"
+    _write_file(zarr_dir / "0" / "values", "zarr")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="zarr_skims",
+        path=str(zarr_dir),
+        artifact_family="zarr_skims",
+        artifact_driver="zarr",
+        source_role="zarr_skims",
+        snapshot_role="zarr_skims",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=0,
+    )
+    assert ch.archive_copy_now(key="zarr_skims", path=str(zarr_dir)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert "zarr_skims" in summary["safe_families_for_phase2"]
+    assert "zarr_skims" not in summary["blocked_families_for_phase2"]
+    assert (
+        summary["blocking_reasons_by_family"].get("zarr_skims", []) == []
+    )
+    assert "shallow_directory_signature" not in summary["blocker_counts_by_reason"]
+
+
 def test_artifact_lifecycle_summary_preserves_attempts_on_run_context(
     monkeypatch, tmp_path
 ):
@@ -1142,6 +1177,34 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(
     archived = archive_root / ".workflow" / "year_2018_iteration_0.yaml"
     assert archived.exists()
     assert archived.read_text() == "manifest"
+
+
+def test_workflow_manifest_is_tracked_as_restart_support_only(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    workspace = DummyWorkspace(local_root)
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="restart",
+    )
+
+    source = local_root / ".workflow" / "year_2018_iteration_0.yaml"
+    _write_file(source, "manifest")
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["restart_support_keys"] == ["workflow_manifest"]
+    assert summary["unknown_event_keys"] == []
+    assert "workflow_manifest" not in summary["blocked_families_for_phase2"]
+    assert "workflow_manifest" not in summary["safe_families_for_phase2"]
 
 
 def test_archive_copy_destination_returns_preserved_relative_path(

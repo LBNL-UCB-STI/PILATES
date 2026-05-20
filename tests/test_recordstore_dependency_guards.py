@@ -144,7 +144,7 @@ def test_update_coupler_from_mapping_materializes_historical_workspace_artifact(
 
     expected_local = current_local / rel_path
     assert expected_local.read_text(encoding="utf-8") == "households"
-    assert coupler.values == {"households_asim_out": artifact}
+    assert coupler.values == {"households_asim_out": str(expected_local)}
 
 
 def test_iter_step_output_items_materializes_direct_typed_output_items(

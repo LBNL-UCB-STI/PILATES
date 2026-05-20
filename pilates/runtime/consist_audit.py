@@ -60,6 +60,7 @@ _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES = {
     "usim_input_archive",
     "usim_input_merged",
     "usim_population_source_h5",
+    "zarr_skims",
 }
 _LIFECYCLE_H5_POLICY_FAMILIES = {
     "usim_datastore_h5",
@@ -73,10 +74,12 @@ _LIFECYCLE_H5_POLICY_FAMILIES = {
 }
 _LIFECYCLE_DIRECTORY_POLICY_FAMILIES = {
     "asim_sharrow_cache_dir",
-    "zarr_skims",
 }
 _LIFECYCLE_OBSERVE_ONLY_FAMILIES = {
     "atlas_observe_only",
+}
+_LIFECYCLE_RESTART_SUPPORT_KEYS = {
+    "workflow_manifest",
 }
 
 
@@ -411,6 +414,15 @@ def _lifecycle_event_has_artifact_identity(event: Mapping[str, Any]) -> bool:
 
 
 def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
+    artifact_driver = str(
+        event.get("artifact_driver")
+        or event.get("driver")
+        or event.get("artifact_type")
+        or ""
+    ).lower()
+    family = _lifecycle_family(event)
+    if family == "zarr_skims" or artifact_driver == "zarr":
+        return "zarr"
     if bool(event.get("h5_container")) or str(path or "").lower().endswith(
         (".h5", ".hdf5")
     ):
@@ -504,6 +516,7 @@ def _lifecycle_core_summary_payload(
     diagnostic_blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
     blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
     phase2_blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
+    restart_support_keys: set[str] = set()
     unknown_event_keys: set[str] = set()
     snapshot_logged = 0
     missing_required = 0
@@ -511,6 +524,10 @@ def _lifecycle_core_summary_payload(
     local_to_scratch_recovery_root_writes = 0
 
     for index, event in enumerate(events):
+        key = str(event.get("key") or "")
+        if key in _LIFECYCLE_RESTART_SUPPORT_KEYS:
+            restart_support_keys.add(key)
+            continue
         family = _lifecycle_family(event)
         if _lifecycle_event_has_artifact_identity(event):
             families_seen.add(family)
@@ -678,6 +695,7 @@ def _lifecycle_core_summary_payload(
             for event_type in sorted({str(event.get("event_type")) for event in events})
         },
         "families_seen": sorted(families_seen),
+        "restart_support_keys": sorted(restart_support_keys),
         "unknown_event_keys": sorted(unknown_event_keys),
         "snapshot_artifacts_logged": snapshot_logged,
         "snapshot_artifacts_missing_required_facets": missing_required,

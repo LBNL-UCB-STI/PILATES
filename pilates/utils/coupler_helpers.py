@@ -403,9 +403,11 @@ def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
         or getattr(current_consist, "id", None)
         or getattr(current_consist, "run_id", None)
     )
+    artifact_driver = getattr(artifact, "driver", None)
     return {
         "artifact_id": getattr(artifact, "id", None),
         "producing_run_id": producing_run_id,
+        "artifact_driver": artifact_driver,
     }
 
 

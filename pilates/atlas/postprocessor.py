@@ -16,6 +16,7 @@ from pilates.workspace import Workspace
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     enqueue_archive_copy,
+    log_output_only,
 )
 from pilates.utils.state_access import uses_input_datastore
 from pilates.workflows.artifact_keys import (
@@ -530,19 +531,33 @@ class AtlasPostprocessor(GenericPostprocessor):
         # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
         atlas_input_root = workspace.get_atlas_mutable_input_dir()
         atlas_year_input_dir = os.path.join(atlas_input_root, f"year{output_year}")
-        enqueue_archive_copy(
-            key=f"atlas_input_year_dir_{output_year}",
-            path=atlas_year_input_dir,
-        )
+        if os.path.exists(atlas_year_input_dir):
+            log_output_only(
+                key=f"atlas_input_year_dir_{output_year}",
+                path=atlas_year_input_dir,
+                description=f"ATLAS year-input snapshot directory for year {output_year}",
+            )
+            enqueue_archive_copy(
+                key=f"atlas_input_year_dir_{output_year}",
+                path=atlas_year_input_dir,
+            )
         for base_dir in (
             atlas_year_input_dir,
             atlas_input_root,
             workspace.get_atlas_output_dir(),
         ):
             for filename in ("vehicles_output.RData", "households_output.RData"):
+                snapshot_path = os.path.join(base_dir, filename)
+                if not os.path.exists(snapshot_path):
+                    continue
+                log_output_only(
+                    key=f"atlas_rdata_{output_year}",
+                    path=snapshot_path,
+                    description=f"ATLAS RData snapshot for year {output_year}",
+                )
                 enqueue_archive_copy(
                     key=f"atlas_rdata_{output_year}",
-                    path=os.path.join(base_dir, filename),
+                    path=snapshot_path,
                 )
 
         return AtlasPostprocessOutputs(

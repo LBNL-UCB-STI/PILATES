@@ -42,7 +42,6 @@ from workflow_state import WorkflowState
 
 from pilates.runtime.restart import (
     restart_target_for_step,
-    _find_matching_run_for_restart_target,
 )
 
 _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS = (
@@ -152,6 +151,17 @@ def _find_tracker_run_by_id(
     return None
 
 
+def _find_matching_run_for_resume_target(
+    *,
+    tracker: Any,
+    target: Mapping[str, Any],
+) -> Optional[Any]:
+    find_matching_run = getattr(tracker, "find_matching_run", None)
+    if not callable(find_matching_run):
+        return None
+    return find_matching_run(**dict(target))
+
+
 # Removed _parse_run_id_epoch
 
 
@@ -247,7 +257,7 @@ def seed_supply_demand_parent_run_ids_for_resume(
                 state=state,
                 workspace=workspace,
             )
-            run: Optional[RunLike] = _find_matching_run_for_restart_target(
+            run: Optional[RunLike] = _find_matching_run_for_resume_target(
                 tracker=tracker,
                 target=target,
             )
@@ -361,12 +371,12 @@ def _restore_supply_demand_usim_inputs_for_resume(
     )
     if base_path:
         restored[USIM_DATASTORE_BASE_H5] = base_path
-    if current_path:
+    if resolved_coupler_population:
+        restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_population
+    elif current_path:
         restored[USIM_DATASTORE_CURRENT_H5] = current_path
     elif resolved_coupler_current:
         restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_current
-    elif resolved_coupler_population:
-        restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_population
     elif base_path:
         restored[USIM_DATASTORE_CURRENT_H5] = base_path
 
@@ -489,10 +499,14 @@ def _restore_activity_demand_outputs_for_resume(
     ) -> Dict[str, Any]:
         result: Dict[str, Any] = {}
         for key, value in restored_outputs.items():
+            resolved_path = resolved_paths.get(key)
+            if resolved_path is not None:
+                result[key] = str(resolved_path)
+                continue
             artifact = _resolve_restored_artifact(
                 key,
                 value,
-                resolved_paths.get(key),
+                resolved_path,
             )
             result[key] = artifact if isinstance(artifact, ArtifactLike) else value
         return result
@@ -541,7 +555,7 @@ def _restore_activity_demand_outputs_for_resume(
             state=state,
             workspace=workspace,
         )
-        run: Optional[RunLike] = _find_matching_run_for_restart_target(
+        run: Optional[RunLike] = _find_matching_run_for_resume_target(
             tracker=tracker,
             target=target,
         )
@@ -733,11 +747,11 @@ def _restore_activity_demand_outputs_for_resume(
                     outputs_holder.activitysim_postprocess = (
                         ActivitySimPostprocessOutputs(
                             usim_datastore_h5=resolved_artifacts.get(
-                                USIM_DATASTORE_H5,
+                                USIM_DATASTORE_CURRENT_H5,
                                 postprocess_outputs.usim_datastore_h5,
                             ),
                             asim_output_dir=postprocess_outputs.asim_output_dir,
-                            processed_outputs=resolved_artifacts,
+                            processed_outputs=resolved_paths,
                         )
                     )
                     _publish_restored_outputs(restored_outputs, resolved_paths)
@@ -773,9 +787,9 @@ def _restore_activity_demand_outputs_for_resume(
                 resolved_paths,
             )
             outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-                usim_datastore_h5=resolved_artifacts.get(USIM_DATASTORE_H5),
+                usim_datastore_h5=resolved_paths.get(USIM_DATASTORE_CURRENT_H5),
                 asim_output_dir=None,
-                processed_outputs=resolved_artifacts,
+                processed_outputs=resolved_paths,
             )
             _publish_restored_outputs(restored_outputs, resolved_paths)
             return resolved_artifacts
@@ -802,9 +816,9 @@ def _restore_activity_demand_outputs_for_resume(
             resolved_paths,
         )
         outputs_holder.activitysim_postprocess = ActivitySimPostprocessOutputs(
-            usim_datastore_h5=resolved_artifacts.get(USIM_DATASTORE_H5),
+            usim_datastore_h5=resolved_paths.get(USIM_DATASTORE_CURRENT_H5),
             asim_output_dir=None,
-            processed_outputs=resolved_artifacts,
+            processed_outputs=resolved_paths,
         )
         _publish_restored_outputs(restored_outputs, resolved_paths)
         return resolved_artifacts
