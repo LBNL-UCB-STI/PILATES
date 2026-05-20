@@ -1100,6 +1100,28 @@ def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
     )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     return {
+        "contract_status_by_family": summary.get("contract_status_by_family", {}),
+        "phase2_candidate_families": summary.get("phase2_candidate_families", []),
+        "safe_families_for_phase2": summary.get("safe_families_for_phase2", []),
+        "blocked_families_for_phase2": summary.get("blocked_families_for_phase2", []),
+        "copied_artifacts_eligible_for_recovery_root_registration": summary.get(
+            "copied_artifacts_eligible_for_recovery_root_registration", 0
+        ),
+        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration": summary.get(
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
+            0,
+        ),
+        "copied_artifacts_blocked_artifact_logging_after_copying": summary.get(
+            "copied_artifacts_blocked_artifact_logging_after_copying", 0
+        ),
+        "directory_artifacts_blocked_shallow_directory_signatures": summary.get(
+            "directory_artifacts_blocked_shallow_directory_signatures", 0
+        ),
+        "snapshot_artifacts_missing_required_facets": summary.get(
+            "snapshot_artifacts_missing_required_facets", 0
+        ),
+        "unknown_event_keys": summary.get("unknown_event_keys", []),
+        "phase2_recommendation": summary.get("phase2_recommendation"),
         "steps_with_incomplete_hydration": summary.get(
             "steps_with_incomplete_hydration", {}
         ),
@@ -1176,6 +1198,48 @@ def _snapshot(
     return out
 
 
+def _assert_audit_contract(snapshot: dict[str, Any]) -> None:
+    audit = snapshot["audit"]
+    metrics = snapshot["metrics"]
+    expected_contract_status = {
+        "asim_sharrow_cache_dir": "deferred",
+        "atlas_observe_only": "deferred",
+        "asim_input_archived": "transitional",
+        "beam_input_archived": "transitional",
+        "usim_datastore_base_h5": "stable",
+        "usim_datastore_h5": "stable",
+        "usim_input_archive": "stable",
+        "usim_population_source_h5": "stable",
+        "usim_forecast_output": "transitional",
+        "usim_year_output_h5": "deferred",
+        "zarr_skims": "stable",
+    }
+    expected_candidates = [
+        "usim_input_archive",
+        "usim_population_source_h5",
+    ]
+    assert audit["contract_status_by_family"] == expected_contract_status
+    assert audit["phase2_candidate_families"] == expected_candidates
+    assert audit["safe_families_for_phase2"] == expected_candidates
+    assert audit["blocked_families_for_phase2"] == []
+    assert (
+        audit["copied_artifacts_blocked_artifact_logging_after_copying"] == 0
+    )
+    assert audit["snapshot_artifacts_missing_required_facets"] == 0
+    assert audit["unknown_event_keys"] == []
+    assert audit["phase2_recommendation"] in {"go", "narrow", "defer"}
+    assert (
+        audit["phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"]
+        <= audit["copied_artifacts_eligible_for_recovery_root_registration"]
+    )
+    assert metrics["restart_hydration_event_count"] == int(
+        audit.get("restart_hydration", {}).get("event_count", 0) or 0
+    )
+    assert metrics["custom_recovery_steps"] == sorted(
+        audit.get("steps_using_custom_recovery", {}).keys()
+    )
+
+
 def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> None:
     def _describe_difference(name: str, expected: Any, actual: Any) -> str:
         if isinstance(expected, dict) and isinstance(actual, dict):
@@ -1234,6 +1298,98 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
         )
     )
+    assert resumed["audit"]["contract_status_by_family"] == baseline["audit"][
+        "contract_status_by_family"
+    ], _describe_difference(
+        "contract_status_by_family",
+        baseline["audit"]["contract_status_by_family"],
+        resumed["audit"]["contract_status_by_family"],
+    )
+    assert resumed["audit"]["phase2_candidate_families"] == baseline["audit"][
+        "phase2_candidate_families"
+    ], _describe_difference(
+        "phase2_candidate_families",
+        baseline["audit"]["phase2_candidate_families"],
+        resumed["audit"]["phase2_candidate_families"],
+    )
+    assert resumed["audit"]["safe_families_for_phase2"] == baseline["audit"][
+        "safe_families_for_phase2"
+    ], _describe_difference(
+        "safe_families_for_phase2",
+        baseline["audit"]["safe_families_for_phase2"],
+        resumed["audit"]["safe_families_for_phase2"],
+    )
+    assert resumed["audit"]["blocked_families_for_phase2"] == baseline["audit"][
+        "blocked_families_for_phase2"
+    ], _describe_difference(
+        "blocked_families_for_phase2",
+        baseline["audit"]["blocked_families_for_phase2"],
+        resumed["audit"]["blocked_families_for_phase2"],
+    )
+    assert (
+        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
+        == baseline["audit"][
+            "copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+    ), _describe_difference(
+        "copied_artifacts_eligible_for_recovery_root_registration",
+        baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
+        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
+    )
+    assert (
+        resumed["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+        == baseline["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+    ), _describe_difference(
+        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
+        baseline["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ],
+        resumed["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ],
+    )
+    assert (
+        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
+        == baseline["audit"][
+            "copied_artifacts_blocked_artifact_logging_after_copying"
+        ]
+    ), _describe_difference(
+        "copied_artifacts_blocked_artifact_logging_after_copying",
+        baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
+        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
+    )
+    assert resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"] == baseline["audit"][
+        "directory_artifacts_blocked_shallow_directory_signatures"
+    ], _describe_difference(
+        "directory_artifacts_blocked_shallow_directory_signatures",
+        baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
+        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
+    )
+    assert resumed["audit"]["snapshot_artifacts_missing_required_facets"] == baseline["audit"][
+        "snapshot_artifacts_missing_required_facets"
+    ], _describe_difference(
+        "snapshot_artifacts_missing_required_facets",
+        baseline["audit"]["snapshot_artifacts_missing_required_facets"],
+        resumed["audit"]["snapshot_artifacts_missing_required_facets"],
+    )
+    assert resumed["audit"]["unknown_event_keys"] == baseline["audit"][
+        "unknown_event_keys"
+    ], _describe_difference(
+        "unknown_event_keys",
+        baseline["audit"]["unknown_event_keys"],
+        resumed["audit"]["unknown_event_keys"],
+    )
+    assert resumed["audit"]["phase2_recommendation"] == baseline["audit"][
+        "phase2_recommendation"
+    ], _describe_difference(
+        "phase2_recommendation",
+        baseline["audit"]["phase2_recommendation"],
+        resumed["audit"]["phase2_recommendation"],
+    )
     assert resumed["audit"]["steps_with_incomplete_hydration"] == {}, (
         _describe_difference(
             "steps_with_incomplete_hydration",
@@ -1278,7 +1434,9 @@ def baseline_snapshot(tmp_path, monkeypatch):
     started = perf_counter()
     _stage_runner(runtime)
     elapsed = perf_counter() - started
-    return _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
+    snapshot = _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
+    _assert_audit_contract(snapshot)
+    return snapshot
 
 
 def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
@@ -1408,11 +1566,13 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     finally:
         cr.set_enabled(None)
     _debug(f"resumed_case:resume_complete boundary={stop_boundary}")
-    return _snapshot(
+    snapshot = _snapshot(
         resumed_runtime,
         mode="restart_hydration",
         elapsed_seconds=elapsed,
     )
+    _assert_audit_contract(snapshot)
+    return snapshot
 
 
 def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
@@ -1438,11 +1598,13 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
     _stage_runner(replay_runtime)
     elapsed = perf_counter() - started
     _debug(f"replay_case:replay_complete boundary={stop_boundary}")
-    return _snapshot(
+    snapshot = _snapshot(
         replay_runtime,
         mode="replay",
         elapsed_seconds=elapsed,
     )
+    _assert_audit_contract(snapshot)
+    return snapshot
 
 
 @pytest.mark.parametrize(

@@ -806,6 +806,7 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
     error: Optional[str] = None
     target: Dict[str, Any] = {}
     hydration_api_available = False
+    cache_identity_drift = False
 
     try:
         tracker = cr.current_tracker()
@@ -840,11 +841,69 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
     except Exception as exc:
         error = f"{type(exc).__name__}:{exc}"
 
+    identity_context = _beam_restart_identity_context(state=state)
+    cache_miss_explanation = identity_context.get("cache_miss_explanation")
+    identity_summary = identity_context.get("identity_summary")
+    drift_components: Dict[str, Any] = {}
+    if isinstance(cache_miss_explanation, Mapping):
+        cache_identity_drift = bool(
+            cache_miss_explanation.get("reason")
+            or cache_miss_explanation.get("mismatched_components")
+            or cache_miss_explanation.get("config_keys_changed")
+            or cache_miss_explanation.get("adapter_identity_changed")
+            or cache_miss_explanation.get("identity_inputs_changed")
+            or cache_miss_explanation.get("input_keys_changed")
+            or cache_miss_explanation.get("missing_input_keys")
+        )
+        for key in (
+            "mismatched_components",
+            "config_keys_changed",
+            "adapter_identity_changed",
+            "identity_inputs_changed",
+            "input_keys_changed",
+            "missing_input_keys",
+        ):
+            value = cache_miss_explanation.get(key)
+            if value:
+                drift_components[key] = value
+    if not cache_identity_drift and isinstance(identity_summary, Mapping):
+        cache_identity_drift = bool(
+            identity_summary.get("reason")
+            or identity_summary.get("mismatched_components")
+            or identity_summary.get("config_keys_changed")
+            or identity_summary.get("adapter_identity_changed")
+            or identity_summary.get("identity_inputs_changed")
+            or identity_summary.get("input_keys_changed")
+            or identity_summary.get("missing_input_keys")
+        )
+        if not drift_components:
+            for key in (
+                "mismatched_components",
+                "config_keys_changed",
+                "adapter_identity_changed",
+                "identity_inputs_changed",
+                "input_keys_changed",
+                "missing_input_keys",
+            ):
+                value = identity_summary.get(key)
+                if value:
+                    drift_components[key] = value
+
     output_key_source = matched_output_keys or output_keys
     missing_required = [
         key for key in required_keys if key not in set(output_key_source)
     ]
     matchable = bool(matched_run_id)
+    if not matchable:
+        readiness_classification = "no_completed_run"
+    elif missing_required:
+        readiness_classification = "missing_inputs"
+    elif cache_identity_drift:
+        readiness_classification = "cache_identity_drift"
+    elif error is not None:
+        readiness_classification = "unknown"
+    else:
+        readiness_classification = "complete"
     logger.info(
         "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
         "missing_required=%s required_keys=%s output_keys=%s",
@@ -865,18 +924,20 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
         iteration=iteration,
         run_scope=str(target.get("run_scope")) if target else None,
         query_status=target.get("status") if target else None,
+        matched_completed_run_id=matched_run_id,
         matched_run_id=matched_run_id,
         matchable=matchable,
         output_keys=output_keys,
         matched_output_keys=matched_output_keys,
+        required_restored_inputs=required_keys,
         required_postprocess_keys=required_keys,
+        missing_restored_inputs=missing_required,
         missing_required_keys=missing_required,
         hydration_api_available=hydration_api_available,
-        drift_classification=(
-            "completed_beam_run_recovery_ready"
-            if matchable and not missing_required and error is None
-            else "completed_beam_run_recovery_not_ready"
-        ),
+        identity_summary=dict(identity_summary or {}),
+        cache_miss_explanation=dict(cache_miss_explanation or {}),
+        identity_drift_components=drift_components,
+        drift_classification=readiness_classification,
         diagnostic_error=error,
     )
 

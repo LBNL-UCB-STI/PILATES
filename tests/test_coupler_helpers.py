@@ -1,6 +1,7 @@
 import pytest
 from types import SimpleNamespace
 
+from pilates.runtime import consist_audit
 from pilates.utils import coupler_helpers
 
 
@@ -576,3 +577,46 @@ def test_log_input_only_logs_with_active_run_and_does_not_enqueue_archive(
 
     assert logged["called"] is True
     assert archived == []
+
+
+def test_emit_artifact_lifecycle_event_requires_existing_summary(
+    monkeypatch, tmp_path
+) -> None:
+    emitted = []
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setattr(
+        consist_audit,
+        "emit_artifact_lifecycle_audit_event",
+        lambda **fields: emitted.append(fields),
+    )
+
+    coupler_helpers._emit_artifact_lifecycle_event(
+        "archive_copy_checkpoint",
+        require_existing_summary=True,
+        key="beam_input_plans_archived",
+        path=str(local_root / "beam" / "output" / "plans.csv.gz"),
+    )
+
+    assert emitted == []
+
+    summary_path = (
+        local_root / ".workflow" / "diagnostics" / "artifact_lifecycle_audit_summary.json"
+    )
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text("{}", encoding="utf-8")
+
+    coupler_helpers._emit_artifact_lifecycle_event(
+        "archive_copy_checkpoint",
+        require_existing_summary=True,
+        key="beam_input_plans_archived",
+        path=str(local_root / "beam" / "output" / "plans.csv.gz"),
+    )
+
+    assert emitted == [
+        {
+            "event_type": "archive_copy_checkpoint",
+            "key": "beam_input_plans_archived",
+            "path": str(local_root / "beam" / "output" / "plans.csv.gz"),
+        }
+    ]
