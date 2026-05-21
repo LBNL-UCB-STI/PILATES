@@ -2,6 +2,7 @@ import os
 import logging
 import re
 import atexit
+import hashlib
 import fnmatch
 from contextlib import contextmanager
 from contextvars import ContextVar
@@ -23,7 +24,9 @@ from typing import (
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
-from pilates.workflows.artifact_key_migrations import resolve_artifact_key
+from pilates.workflows.artifact_key_migrations import (
+    resolve_artifact_key,
+)
 from pilates.workflows.coupler_namespace import (
     ResolvedCouplerValue,
     canonical_artifact_key_from_raw_key,
@@ -70,6 +73,12 @@ _archive_pending_tasks: Dict[
 _archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
+_archive_last_copied_details: Dict[
+    str, tuple[str, str, str, bool, Optional[tuple[int, int, bool]]]
+] = {}
+_archive_last_recovery_root_registration_signature: Dict[
+    str, tuple[int, int, bool]
+] = {}
 _published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
     "published_coupler_keys",
     default=None,
@@ -97,6 +106,10 @@ _H5_CONTAINER_RECOVERY_POLICY_FIELDS = (
     "container_recovery_unit",
     "child_recovery_policy",
 )
+_PHASE2_RECOVERY_ROOT_FAMILIES = {
+    "usim_input_archive",
+    "usim_population_source_h5",
+}
 
 
 def _is_noop_artifact(candidate: Any) -> bool:
@@ -452,6 +465,173 @@ def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, A
     return fields
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _phase2_recovery_root_content_hash(artifact: Any, dest: str) -> str:
+    tracker = cr.current_tracker()
+    if (
+        tracker is not None
+        and getattr(getattr(tracker, "identity", None), "hashing_strategy", None)
+        == "full"
+    ):
+        artifact_hash = getattr(artifact, "hash", None)
+        if artifact_hash:
+            return str(artifact_hash)
+    return _sha256_file(Path(dest))
+
+
+def _phase2_recovery_root_family(key: str) -> Optional[str]:
+    family = canonical_artifact_key_from_raw_key(key)
+    if family.startswith("usim_input_archive_"):
+        family = "usim_input_archive"
+    if family in _PHASE2_RECOVERY_ROOT_FAMILIES:
+        return family
+    return None
+
+
+def _register_phase2_recovery_root_copy(
+    *,
+    key: str,
+    src: str,
+    dest: str,
+    is_dir: bool,
+    signature: Optional[tuple[int, int, bool]],
+) -> int:
+    family = _phase2_recovery_root_family(key)
+    if family is None:
+        return 0
+    if is_dir:
+        logger.debug(
+            "[Archive] Skipping phase 2 recovery-root adoption for directory copy: %s (key=%s)",
+            dest,
+            key,
+        )
+        return 0
+    if not os.path.isfile(dest):
+        logger.warning(
+            "[Archive] Skipping phase 2 recovery-root adoption for non-file copy: %s (key=%s)",
+            dest,
+            key,
+        )
+        return 0
+
+    artifact = _find_current_run_output_artifact(key=key, path=src)
+    if artifact is None:
+        logger.debug(
+            "[Archive] No logged output artifact matched phase 2 recovery-root adoption for key=%s src=%s",
+            key,
+            src,
+        )
+        return 0
+
+    tracker = cr.current_tracker()
+    if tracker is None:
+        logger.debug(
+            "[Archive] No active tracker available for phase 2 recovery-root adoption (key=%s dest=%s)",
+            key,
+            dest,
+        )
+        return 0
+
+    register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
+    if not callable(register_copies):
+        logger.warning(
+            "[Archive] Tracker does not expose register_run_output_recovery_copies; skipping phase 2 recovery-root adoption for key=%s",
+            key,
+        )
+        return 0
+
+    run_id = cr.current_run_id()
+    if not run_id:
+        logger.debug(
+            "[Archive] No active run id available for phase 2 recovery-root adoption (key=%s dest=%s)",
+            key,
+            dest,
+        )
+        return 0
+
+    roots = _archive_roots()
+    if roots is None:
+        return 0
+    _local_root, archive_root = roots
+
+    with _archive_lock:
+        if signature is not None and _archive_last_recovery_root_registration_signature.get(dest) == signature:
+            logger.debug(
+                "[Archive] Skipping duplicate phase 2 recovery-root adoption (already registered): %s (key=%s)",
+                dest,
+                key,
+            )
+            return 0
+
+    content_hash = _phase2_recovery_root_content_hash(artifact, dest)
+    result = register_copies(
+        str(run_id),
+        str(archive_root),
+        verify=True,
+        append=True,
+        content_hashes={str(key): content_hash},
+    )
+    registered = getattr(result, "registered", {}) or {}
+    blocked = getattr(result, "blocked", {}) or {}
+    if not registered:
+        if blocked:
+            logger.info(
+                "[Archive] Phase 2 recovery-root adoption blocked for key=%s: %s",
+                key,
+                getattr(result, "summary", blocked),
+            )
+        return 0
+
+    registered_count = len(registered)
+    with _archive_lock:
+        if signature is not None:
+            _archive_last_recovery_root_registration_signature[dest] = signature
+    logger.info(
+        "[Archive] Adopted phase 2 recovery root for key=%s run_id=%s root=%s registered=%d",
+        key,
+        run_id,
+        archive_root,
+        registered_count,
+    )
+    _emit_artifact_lifecycle_event(
+        "archive_recovery_root_registered",
+        key=key,
+        src=src,
+        path=src,
+        dest=dest,
+        recovery_root=str(archive_root),
+        run_id=str(run_id),
+        artifact_family=family,
+        storage_event="local_to_scratch_recovery_root_adopted",
+        local_to_scratch_recovery_roots_written=registered_count,
+    )
+    return registered_count
+
+
+def _register_phase2_recovery_root_copies() -> int:
+    registered = 0
+    with _archive_lock:
+        copied_details = list(_archive_last_copied_details.items())
+    for dest, (key, src, recorded_dest, is_dir, signature) in copied_details:
+        if dest != recorded_dest:
+            continue
+        registered += _register_phase2_recovery_root_copy(
+            key=key,
+            src=src,
+            dest=dest,
+            is_dir=is_dir,
+            signature=signature,
+        )
+    return registered
+
+
 def _copy_archive_payload(
     *,
     key: str,
@@ -470,6 +650,7 @@ def _copy_archive_payload(
             if _archive_inflight_signature.get(dest) == signature:
                 _archive_inflight_signature.pop(dest, None)
             _archive_last_copied_signature[dest] = signature
+            _archive_last_copied_details[dest] = (key, src, dest, is_dir, signature)
     _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
     _emit_artifact_lifecycle_event(
         "archive_copy_completed",
@@ -721,6 +902,7 @@ def archive_copy_now(
             storage_event="local_to_scratch_copy_already_present",
             local_to_scratch_recovery_roots_written=0,
         )
+        _register_phase2_recovery_root_copies()
         return True
 
     _copy_archive_payload(
@@ -730,6 +912,7 @@ def archive_copy_now(
         is_dir=is_dir,
         signature=signature,
     )
+    _register_phase2_recovery_root_copies()
     return True
 
 
@@ -768,6 +951,7 @@ def flush_archive_queue(
     if timeout is None:
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
+        _register_phase2_recovery_root_copies()
         _emit_artifact_lifecycle_event(
             "archive_copy_checkpoint",
             require_existing_summary=True,
@@ -780,6 +964,7 @@ def flush_archive_queue(
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
+            _register_phase2_recovery_root_copies()
             _emit_artifact_lifecycle_event(
                 "archive_copy_checkpoint",
                 require_existing_summary=True,

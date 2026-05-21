@@ -3,6 +3,7 @@ from types import SimpleNamespace
 import json
 import logging
 import queue
+import hashlib
 
 import pytest
 
@@ -70,6 +71,8 @@ def _reset_archive_state(monkeypatch):
     ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
+    ch._archive_last_copied_details.clear()
+    ch._archive_last_recovery_root_registration_signature.clear()
     consist_audit.reset_consist_audit_state()
     monkeypatch.delenv("PILATES_ENABLE_ARCHIVE_COPY", raising=False)
     monkeypatch.delenv("PILATES_LOCAL_RUN_DIR", raising=False)
@@ -82,6 +85,8 @@ def _reset_archive_state(monkeypatch):
     ch._archive_queued_destinations.clear()
     ch._archive_inflight_signature.clear()
     ch._archive_last_copied_signature.clear()
+    ch._archive_last_copied_details.clear()
+    ch._archive_last_recovery_root_registration_signature.clear()
     consist_audit.reset_consist_audit_state()
 
 
@@ -714,6 +719,221 @@ def test_artifact_lifecycle_summary_starts_h5_phase2_eligibility(
     assert family in summary["phase2_candidate_families"]
     assert family in summary["safe_families_for_phase2"]
     assert family not in summary["blocked_families_for_phase2"]
+
+
+@pytest.mark.parametrize(
+    "key, family, artifact_meta, expected_safe_families",
+    [
+        (
+            "usim_input_archive_2030",
+            "usim_input_archive",
+            {
+                "source_role": "usim_datastore_h5",
+                "snapshot_role": "usim_input_archive",
+                "snapshot_reason": "pre_merge_input",
+                "storage_event": "snapshot_move",
+            },
+            ["usim_input_archive"],
+        ),
+        (
+            "usim_population_source_h5",
+            "usim_population_source_h5",
+            {
+                "source_role": "usim_population_source_h5",
+                "snapshot_role": "usim_population_source_h5",
+                "snapshot_reason": "post_merge_handoff",
+                "storage_event": "merged_h5_output",
+            },
+            ["usim_population_source_h5"],
+        ),
+    ],
+)
+def test_phase2_recovery_root_registration_adopts_only_narrow_h5_families(
+    monkeypatch, tmp_path, key, family, artifact_meta, expected_safe_families
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    registration_calls = []
+
+    tracker = SimpleNamespace(
+        register_run_output_recovery_copies=lambda run_id, recovery_root, **kwargs: (
+            registration_calls.append((run_id, recovery_root, kwargs))
+            or SimpleNamespace(
+                registered={"usim_population_source_h5": object()},
+                blocked={},
+                summary="registered=1",
+            )
+        ),
+    )
+    monkeypatch.setattr(ch.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        ch.cr, "current_run", lambda: SimpleNamespace(id="run-123")
+    )
+    monkeypatch.setattr(ch.cr, "current_run_id", lambda: "run-123")
+    monkeypatch.setattr(
+        ch,
+        "_find_current_run_output_artifact",
+        lambda *, key, path: SimpleNamespace(key=key, container_uri=str(path)),
+    )
+
+    source = local_root / "urbansim" / "data" / "model_data_2030.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key=key,
+        path=str(source),
+        artifact_family=family,
+        **artifact_meta,
+        year=2030,
+        h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
+    )
+    assert ch.archive_copy_now(key=key, path=str(source))
+
+    expected_hash = hashlib.sha256(b"h5").hexdigest()
+    assert registration_calls == [
+        (
+            "run-123",
+            str(archive_root),
+            {
+                "append": True,
+                "content_hashes": {key: expected_hash},
+                "verify": True,
+            },
+        )
+    ]
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["local_to_scratch_recovery_roots_written"] == 1
+    assert summary["phase2_candidate_families"] == [
+        "usim_input_archive",
+        "usim_population_source_h5",
+    ]
+    assert summary["safe_families_for_phase2"] == expected_safe_families
+
+
+def test_phase2_recovery_root_registration_skips_blocked_h5_family(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    registration_calls = []
+    tracker = SimpleNamespace(
+        register_run_output_recovery_copies=lambda *args, **kwargs: registration_calls.append(
+            (args, kwargs)
+        )
+    )
+    monkeypatch.setattr(ch.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        ch.cr, "current_run", lambda: SimpleNamespace(id="run-123")
+    )
+    monkeypatch.setattr(ch.cr, "current_run_id", lambda: "run-123")
+    monkeypatch.setattr(ch, "_find_current_run_output_artifact", lambda **_kwargs: None)
+
+    source = local_root / "urbansim" / "data" / "model_data_2030.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_datastore_h5",
+        path=str(source),
+        artifact_family="usim_datastore_h5",
+        source_role="usim_datastore_h5",
+        snapshot_role="usim_datastore_h5",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
+    )
+    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(source))
+
+    assert registration_calls == []
+    summary = _lifecycle_summary(local_root)
+    assert summary["local_to_scratch_recovery_roots_written"] == 0
+    assert "usim_datastore_h5" not in summary["safe_families_for_phase2"]
+
+
+def test_phase2_recovery_root_registration_prefers_artifact_hash_when_full_hashing(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    registration_calls = []
+    tracker = SimpleNamespace(
+        identity=SimpleNamespace(hashing_strategy="full"),
+        register_run_output_recovery_copies=lambda run_id, recovery_root, **kwargs: (
+            registration_calls.append((run_id, recovery_root, kwargs))
+            or SimpleNamespace(
+                registered={"usim_population_source_h5": object()},
+                blocked={},
+                summary="registered=1",
+            )
+        ),
+    )
+    monkeypatch.setattr(ch.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        ch.cr, "current_run", lambda: SimpleNamespace(id="run-123")
+    )
+    monkeypatch.setattr(ch.cr, "current_run_id", lambda: "run-123")
+
+    source = local_root / "urbansim" / "data" / "model_data_2030.h5"
+    _write_file(source, "h5")
+    artifact = SimpleNamespace(
+        key="usim_population_source_h5",
+        hash="artifact-hash-123",
+        container_uri=str(source),
+    )
+    monkeypatch.setattr(
+        ch,
+        "_find_current_run_output_artifact",
+        lambda *, key, path: artifact,
+    )
+    monkeypatch.setattr(
+        ch,
+        "_sha256_file",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("sha called")),
+    )
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_population_source_h5",
+        path=str(source),
+        artifact_family="usim_population_source_h5",
+        source_role="usim_population_source_h5",
+        snapshot_role="usim_population_source_h5",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
+    )
+    assert ch.archive_copy_now(key="usim_population_source_h5", path=str(source))
+
+    assert registration_calls == [
+        (
+            "run-123",
+            str(archive_root),
+            {
+                "append": True,
+                "content_hashes": {"usim_population_source_h5": "artifact-hash-123"},
+                "verify": True,
+            },
+        )
+    ]
 
 
 def test_artifact_lifecycle_summary_keeps_h5_child_tables_ineligible(
