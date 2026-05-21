@@ -949,16 +949,24 @@ def _read_h5_keys(path: Path) -> set[str]:
 def _assert_land_use_population_source_snapshot_contract(workspace: Workspace) -> None:
     usim_dir = Path(workspace.get_usim_mutable_data_dir())
     snapshot_paths = sorted(usim_dir.glob("*_population_source.h5"))
-    assert snapshot_paths, f"expected at least one population-source snapshot in {usim_dir}"
+    assert snapshot_paths, (
+        f"expected at least one population-source snapshot in {usim_dir}"
+    )
 
     for snapshot_path in snapshot_paths:
         match = re.search(r"(?P<year>\d{4})_population_source\.h5$", snapshot_path.name)
-        assert match is not None, f"could not infer year from snapshot file {snapshot_path.name}"
+        assert match is not None, (
+            f"could not infer year from snapshot file {snapshot_path.name}"
+        )
         current_path = snapshot_path.with_name(
             snapshot_path.name.replace("_population_source.h5", ".h5")
         )
-        assert current_path.exists(), f"missing mutable current datastore {current_path}"
-        assert current_path != snapshot_path, "population source snapshot should be distinct from current datastore"
+        assert current_path.exists(), (
+            f"missing mutable current datastore {current_path}"
+        )
+        assert current_path != snapshot_path, (
+            "population source snapshot should be distinct from current datastore"
+        )
 
         year = match.group("year")
         expected_year_tables = {
@@ -1311,39 +1319,41 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
         )
     )
-    assert resumed["audit"]["contract_status_by_family"] == baseline["audit"][
-        "contract_status_by_family"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["contract_status_by_family"]
+        == baseline["audit"]["contract_status_by_family"]
+    ), _describe_difference(
         "contract_status_by_family",
         baseline["audit"]["contract_status_by_family"],
         resumed["audit"]["contract_status_by_family"],
     )
-    assert resumed["audit"]["phase2_candidate_families"] == baseline["audit"][
-        "phase2_candidate_families"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["phase2_candidate_families"]
+        == baseline["audit"]["phase2_candidate_families"]
+    ), _describe_difference(
         "phase2_candidate_families",
         baseline["audit"]["phase2_candidate_families"],
         resumed["audit"]["phase2_candidate_families"],
     )
-    assert resumed["audit"]["safe_families_for_phase2"] == baseline["audit"][
-        "safe_families_for_phase2"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["safe_families_for_phase2"]
+        == baseline["audit"]["safe_families_for_phase2"]
+    ), _describe_difference(
         "safe_families_for_phase2",
         baseline["audit"]["safe_families_for_phase2"],
         resumed["audit"]["safe_families_for_phase2"],
     )
-    assert resumed["audit"]["blocked_families_for_phase2"] == baseline["audit"][
-        "blocked_families_for_phase2"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["blocked_families_for_phase2"]
+        == baseline["audit"]["blocked_families_for_phase2"]
+    ), _describe_difference(
         "blocked_families_for_phase2",
         baseline["audit"]["blocked_families_for_phase2"],
         resumed["audit"]["blocked_families_for_phase2"],
     )
     assert (
         resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
-        == baseline["audit"][
-            "copied_artifacts_eligible_for_recovery_root_registration"
-        ]
+        == baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
     ), _describe_difference(
         "copied_artifacts_eligible_for_recovery_root_registration",
         baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
@@ -1367,38 +1377,40 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
     )
     assert (
         resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
-        == baseline["audit"][
-            "copied_artifacts_blocked_artifact_logging_after_copying"
-        ]
+        == baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
     ), _describe_difference(
         "copied_artifacts_blocked_artifact_logging_after_copying",
         baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
         resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
     )
-    assert resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"] == baseline["audit"][
-        "directory_artifacts_blocked_shallow_directory_signatures"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
+        == baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
+    ), _describe_difference(
         "directory_artifacts_blocked_shallow_directory_signatures",
         baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
         resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
     )
-    assert resumed["audit"]["snapshot_artifacts_missing_required_facets"] == baseline["audit"][
-        "snapshot_artifacts_missing_required_facets"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["snapshot_artifacts_missing_required_facets"]
+        == baseline["audit"]["snapshot_artifacts_missing_required_facets"]
+    ), _describe_difference(
         "snapshot_artifacts_missing_required_facets",
         baseline["audit"]["snapshot_artifacts_missing_required_facets"],
         resumed["audit"]["snapshot_artifacts_missing_required_facets"],
     )
-    assert resumed["audit"]["unknown_event_keys"] == baseline["audit"][
-        "unknown_event_keys"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["unknown_event_keys"]
+        == baseline["audit"]["unknown_event_keys"]
+    ), _describe_difference(
         "unknown_event_keys",
         baseline["audit"]["unknown_event_keys"],
         resumed["audit"]["unknown_event_keys"],
     )
-    assert resumed["audit"]["phase2_recommendation"] == baseline["audit"][
-        "phase2_recommendation"
-    ], _describe_difference(
+    assert (
+        resumed["audit"]["phase2_recommendation"]
+        == baseline["audit"]["phase2_recommendation"]
+    ), _describe_difference(
         "phase2_recommendation",
         baseline["audit"]["phase2_recommendation"],
         resumed["audit"]["phase2_recommendation"],
@@ -1460,9 +1472,7 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
     if stop_boundary == "after_activitysim_postprocess":
-        _assert_land_use_population_source_snapshot_contract(
-            archive_runtime.workspace
-        )
+        _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     resumed_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
@@ -1599,9 +1609,7 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
     if stop_boundary == "after_activitysim_postprocess":
-        _assert_land_use_population_source_snapshot_contract(
-            archive_runtime.workspace
-        )
+        _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     replay_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"replay_{stop_boundary}"

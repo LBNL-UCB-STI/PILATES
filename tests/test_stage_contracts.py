@@ -586,12 +586,9 @@ def test_land_use_stage_contract(stage_env):
     assert USIM_POPULATION_SOURCE_H5 in usim_inputs
     assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
     assert (
-        usim_inputs[USIM_POPULATION_SOURCE_H5]
-        != usim_inputs[USIM_DATASTORE_CURRENT_H5]
+        usim_inputs[USIM_POPULATION_SOURCE_H5] != usim_inputs[USIM_DATASTORE_CURRENT_H5]
     )
-    assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith(
-        "_population_source.h5"
-    )
+    assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith("_population_source.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 

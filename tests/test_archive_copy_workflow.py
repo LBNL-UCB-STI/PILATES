@@ -564,9 +564,7 @@ def test_artifact_lifecycle_summary_classifies_unknown_keys(monkeypatch, tmp_pat
     assert "unknown" not in summary["blocked_families_for_phase2"]
     assert summary["unknown_event_keys"] == ["beam_input_mystery"]
     assert summary["blocker_counts_by_reason"]["unclassified_family"] == 1
-    assert summary["blocking_reasons_by_family"]["unknown"] == [
-        "unclassified_family"
-    ]
+    assert summary["blocking_reasons_by_family"]["unknown"] == ["unclassified_family"]
 
 
 def test_artifact_lifecycle_summary_keeps_atlas_observe_only_diagnostic(
@@ -652,7 +650,9 @@ def test_artifact_lifecycle_summary_allows_policy_eligible_usim_h5_parent(
         container_recovery_unit="parent_file",
         child_recovery_policy="descriptive_only",
     )
-    assert ch.archive_copy_now(key="usim_population_source_h5", path=str(source)) is True
+    assert (
+        ch.archive_copy_now(key="usim_population_source_h5", path=str(source)) is True
+    )
 
     summary = _lifecycle_summary(local_root)
     assert summary["copied_artifacts_joined_to_logged_artifacts"] == 1
@@ -849,8 +849,7 @@ def test_artifact_lifecycle_summary_uses_first_log_for_copy_order(
         child_recovery_policy="descriptive_only",
     )
     assert (
-        ch.archive_copy_now(key="usim_population_source_h5", path=str(source))
-        is True
+        ch.archive_copy_now(key="usim_population_source_h5", path=str(source)) is True
     )
     consist_audit.emit_artifact_lifecycle_audit_event(
         event_type="artifact_logged",

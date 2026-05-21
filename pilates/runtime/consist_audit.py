@@ -568,9 +568,7 @@ def _lifecycle_core_summary_payload(
                     phase2_blocking_reasons_by_family[family].add(
                         "h5_child_table_ineligible"
                     )
-                    phase2_blocker_counts_by_reason[
-                        "h5_child_table_ineligible"
-                    ] += 1
+                    phase2_blocker_counts_by_reason["h5_child_table_ineligible"] += 1
             if family in {
                 "asim_input_archived",
                 "beam_input_archived",
@@ -683,7 +681,9 @@ def _lifecycle_core_summary_payload(
 
     if phase2_safe_families and phase2_blocked_families:
         recommendation = "narrow"
-        reason = "Some intended Phase 2 candidates look safe, but blocked candidates remain."
+        reason = (
+            "Some intended Phase 2 candidates look safe, but blocked candidates remain."
+        )
     elif phase2_safe_families and not phase2_blocked_families:
         recommendation = "go"
         reason = "All intended Phase 2 candidates passed."

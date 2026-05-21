@@ -601,7 +601,10 @@ def test_emit_artifact_lifecycle_event_requires_existing_summary(
     assert emitted == []
 
     summary_path = (
-        local_root / ".workflow" / "diagnostics" / "artifact_lifecycle_audit_summary.json"
+        local_root
+        / ".workflow"
+        / "diagnostics"
+        / "artifact_lifecycle_audit_summary.json"
     )
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("{}", encoding="utf-8")
