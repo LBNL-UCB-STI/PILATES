@@ -715,7 +715,7 @@ def test_activitysim_preprocess_runtime_inputs_prefers_forecast_year(
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
 
 
-def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(
+def test_activitysim_postprocess_runtime_inputs_requires_current_input_when_land_use_enabled(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -727,21 +727,19 @@ def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_curre
         lambda **_kwargs: BindingPlan(inputs={}, source_by_key={}),
     )
 
-    runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(
-            year=2023,
-            forecast_year=2025,
-            Stage=SimpleNamespace(land_use="land_use"),
-            is_enabled=lambda _stage: True,
-        ),
-        workspace=SimpleNamespace(full_path=str(tmp_path)),
-        coupler=_dummy_coupler(),
-        step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
-    )
-
-    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
-    assert runtime_inputs["current_input_h5_path"] == str(h5_path)
+    with pytest.raises(ValueError, match="usim_datastore_h5"):
+        steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
+            settings=SimpleNamespace(),
+            state=SimpleNamespace(
+                year=2023,
+                forecast_year=2025,
+                Stage=SimpleNamespace(land_use="land_use"),
+                is_enabled=lambda _stage: True,
+            ),
+            workspace=SimpleNamespace(full_path=str(tmp_path)),
+            coupler=_dummy_coupler(),
+            step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+        )
 
 
 @pytest.mark.parametrize(

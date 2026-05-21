@@ -564,6 +564,10 @@ def _candidate_paths_metadata(
     return metadata
 
 
+def _population_source_snapshot_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_population_source{path.suffix}")
+
+
 def _urbansim_datastore_candidates_for_year(
     *,
     settings: Any,
@@ -636,17 +640,53 @@ def _urbansim_datastore_candidates_for_year(
         local_path=output_path,
     )
     current_path = first_existing_path(output_path, output_archive_path)
+    population_source_path = _population_source_snapshot_path(output_path)
+    population_source_archive_path = archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=population_source_path,
+    )
+    population_path = first_existing_path(
+        population_source_path,
+        population_source_archive_path,
+        output_path,
+        output_archive_path,
+    )
+    if population_path is not None and population_path == current_path:
+        logger.warning(
+            "ActivitySim population-source snapshot missing for year %s; "
+            "falling back to the current UrbanSim datastore %s",
+            year,
+            current_path,
+        )
     candidate_paths.update(
         _candidate_paths_metadata(
             (USIM_DATASTORE_CURRENT_H5, (output_path, output_archive_path)),
-            (USIM_FORECAST_OUTPUT, (output_path, output_archive_path)),
-            (USIM_POPULATION_SOURCE_H5, (output_path, output_archive_path)),
+            (
+                USIM_FORECAST_OUTPUT,
+                (
+                    population_source_path,
+                    population_source_archive_path,
+                    output_path,
+                    output_archive_path,
+                ),
+            ),
+            (
+                USIM_POPULATION_SOURCE_H5,
+                (
+                    population_source_path,
+                    population_source_archive_path,
+                    output_path,
+                    output_archive_path,
+                ),
+            ),
         )
     )
     if current_path is not None:
         mapping[USIM_DATASTORE_CURRENT_H5] = str(current_path)
-        mapping[USIM_FORECAST_OUTPUT] = str(current_path)
-        mapping[USIM_POPULATION_SOURCE_H5] = str(current_path)
+    if population_path is not None:
+        mapping[USIM_FORECAST_OUTPUT] = str(population_path)
+        mapping[USIM_POPULATION_SOURCE_H5] = str(population_path)
     if candidate_paths:
         mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
     return mapping or None

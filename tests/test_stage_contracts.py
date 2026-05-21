@@ -583,7 +583,15 @@ def test_land_use_stage_contract(stage_env):
     )
     assert USIM_DATASTORE_BASE_H5 in usim_inputs
     assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    assert USIM_POPULATION_SOURCE_H5 in usim_inputs
     assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
+    assert (
+        usim_inputs[USIM_POPULATION_SOURCE_H5]
+        != usim_inputs[USIM_DATASTORE_CURRENT_H5]
+    )
+    assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith(
+        "_population_source.h5"
+    )
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
@@ -1747,6 +1755,61 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
 
 
+def test_supply_demand_stage_accepts_distinct_land_use_population_snapshot(
+    stage_env,
+    tmp_path,
+):
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    usim_dir = Path(stage_env["workspace"].get_usim_mutable_data_dir())
+    population_snapshot = _write_file(
+        usim_dir
+        / (
+            Path(stage_env["usim_input_path"]).stem
+            + "_population_source"
+            + Path(stage_env["usim_input_path"]).suffix
+        )
+    )
+    handoff = LandUseToSupplyDemandHandoff(
+        usim_datastore_base_h5=stage_env["usim_input_path"],
+        usim_datastore_current_h5=stage_env["usim_input_path"],
+        usim_population_source_h5=str(population_snapshot),
+    )
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        handoff=handoff,
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
+    )
+
+    postprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_postprocess"
+    ]
+    assert postprocess_calls, "Expected an ActivitySim postprocess step call."
+    binding = postprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == str(
+        population_snapshot
+    )
+    assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == stage_env[
+        "usim_input_path"
+    ]
+
+
 def test_activitysim_postprocess_role_binding_rejects_stale_coupler_h5_roles(
     stage_env,
 ):
@@ -1769,6 +1832,7 @@ def test_activitysim_postprocess_role_binding_rejects_stale_coupler_h5_roles(
                 USIM_DATASTORE_CURRENT_H5,
             ),
             postprocess_optional_keys=(),
+            land_use_enabled=True,
         ),
         restrict_to_inline_rules=True,
         required_keys=(USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5),
@@ -1785,6 +1849,43 @@ def test_activitysim_postprocess_role_binding_rejects_stale_coupler_h5_roles(
         USIM_POPULATION_SOURCE_H5,
         USIM_DATASTORE_CURRENT_H5,
     ]
+
+
+def test_restart_activitysim_required_artifacts_warns_when_snapshot_missing(
+    stage_env,
+    caplog,
+):
+    from pilates.workflows import binding as workflow_binding
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    state.is_start_year = lambda: False
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
+    snapshot_h5 = current_h5.with_name(
+        f"{current_h5.stem}_population_source{current_h5.suffix}"
+    )
+    if snapshot_h5.exists():
+        snapshot_h5.unlink()
+
+    caplog.set_level(logging.WARNING)
+    candidates = workflow_binding._urbansim_datastore_candidates_for_year(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.forecast_year,
+    )
+
+    assert candidates is not None
+    assert candidates[USIM_POPULATION_SOURCE_H5] == str(current_h5)
+    assert "population-source snapshot missing" in caplog.text
 
 
 def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_use(
@@ -3482,8 +3583,12 @@ def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_ro
         io="output",
         year=state.forecast_year,
     )
+    population_snapshot = usim_dir / (
+        f"{current_h5.stem}_population_source{current_h5.suffix}"
+    )
     _write_file(base_h5)
     _write_file(current_h5)
+    _write_file(population_snapshot)
 
     restored = _restore_supply_demand_usim_inputs_for_resume(
         coupler=coupler,
@@ -3495,9 +3600,9 @@ def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_ro
     assert restored[USIM_DATASTORE_BASE_H5] == str(base_h5)
     assert restored[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
     assert restored[USIM_FORECAST_OUTPUT] == str(current_h5)
-    assert restored[USIM_POPULATION_SOURCE_H5] == str(current_h5)
+    assert restored[USIM_POPULATION_SOURCE_H5] == str(population_snapshot)
     assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
-    assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(current_h5)
+    assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(population_snapshot)
 
 
 def test_restore_supply_demand_usim_inputs_for_resume_falls_back_to_base_when_output_missing(
@@ -3547,7 +3652,14 @@ def test_restore_supply_demand_usim_inputs_for_resume_promotes_population_source
 
     usim_dir = Path(workspace.get_usim_mutable_data_dir())
     base_h5 = usim_dir / get_usim_datastore_fname(settings, io="input")
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
     _write_file(base_h5)
+    if current_h5.exists():
+        current_h5.unlink()
     coupler.set(USIM_POPULATION_SOURCE_H5, str(base_h5))
 
     restored = _restore_supply_demand_usim_inputs_for_resume(

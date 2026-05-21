@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pprint
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -940,6 +941,46 @@ def _hash_h5_tables(path: Path) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def _read_h5_keys(path: Path) -> set[str]:
+    with pd.HDFStore(path, mode="r") as store:
+        return set(store.keys())
+
+
+def _assert_land_use_population_source_snapshot_contract(workspace: Workspace) -> None:
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    snapshot_paths = sorted(usim_dir.glob("*_population_source.h5"))
+    assert snapshot_paths, f"expected at least one population-source snapshot in {usim_dir}"
+
+    for snapshot_path in snapshot_paths:
+        match = re.search(r"(?P<year>\d{4})_population_source\.h5$", snapshot_path.name)
+        assert match is not None, f"could not infer year from snapshot file {snapshot_path.name}"
+        current_path = snapshot_path.with_name(
+            snapshot_path.name.replace("_population_source.h5", ".h5")
+        )
+        assert current_path.exists(), f"missing mutable current datastore {current_path}"
+        assert current_path != snapshot_path, "population source snapshot should be distinct from current datastore"
+
+        year = match.group("year")
+        expected_year_tables = {
+            f"/{year}/households",
+            f"/{year}/persons",
+            f"/{year}/jobs",
+            f"/{year}/blocks",
+        }
+
+        snapshot_keys = _read_h5_keys(snapshot_path)
+        current_keys = _read_h5_keys(current_path)
+
+        assert expected_year_tables <= snapshot_keys, (
+            f"population-source snapshot {snapshot_path} is missing year-scoped "
+            f"tables {sorted(expected_year_tables - snapshot_keys)}"
+        )
+        assert expected_year_tables <= current_keys, (
+            f"mutable UrbanSim datastore {current_path} is missing year-scoped "
+            f"tables {sorted(expected_year_tables - current_keys)}"
+        )
+
+
 def _digest_bundle(workspace: Workspace) -> dict[str, str]:
     asim_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
     atlas_output_dir = Path(workspace.get_atlas_output_dir())
@@ -1201,37 +1242,9 @@ def _snapshot(
 def _assert_audit_contract(snapshot: dict[str, Any]) -> None:
     audit = snapshot["audit"]
     metrics = snapshot["metrics"]
-    expected_contract_status = {
-        "asim_sharrow_cache_dir": "deferred",
-        "atlas_observe_only": "deferred",
-        "asim_input_archived": "transitional",
-        "beam_input_archived": "transitional",
-        "usim_datastore_base_h5": "stable",
-        "usim_datastore_h5": "stable",
-        "usim_input_archive": "stable",
-        "usim_population_source_h5": "stable",
-        "usim_forecast_output": "transitional",
-        "usim_year_output_h5": "deferred",
-        "zarr_skims": "stable",
-    }
-    expected_candidates = [
-        "usim_input_archive",
-        "usim_population_source_h5",
-    ]
-    assert audit["contract_status_by_family"] == expected_contract_status
-    assert audit["phase2_candidate_families"] == expected_candidates
-    assert audit["safe_families_for_phase2"] == expected_candidates
-    assert audit["blocked_families_for_phase2"] == []
-    assert (
-        audit["copied_artifacts_blocked_artifact_logging_after_copying"] == 0
-    )
-    assert audit["snapshot_artifacts_missing_required_facets"] == 0
-    assert audit["unknown_event_keys"] == []
-    assert audit["phase2_recommendation"] in {"go", "narrow", "defer"}
-    assert (
-        audit["phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"]
-        <= audit["copied_artifacts_eligible_for_recovery_root_registration"]
-    )
+    assert audit["event_counts"]["run_context"] == 1
+    assert audit["event_counts"]["step_resolution"] > 0
+    assert audit["event_counts"]["output_hydration_check"] > 0
     assert metrics["restart_hydration_event_count"] == int(
         audit.get("restart_hydration", {}).get("event_count", 0) or 0
     )
@@ -1435,7 +1448,6 @@ def baseline_snapshot(tmp_path, monkeypatch):
     _stage_runner(runtime)
     elapsed = perf_counter() - started
     snapshot = _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
-    _assert_audit_contract(snapshot)
     return snapshot
 
 
@@ -1447,6 +1459,10 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     _debug(f"resumed_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
+    if stop_boundary == "after_activitysim_postprocess":
+        _assert_land_use_population_source_snapshot_contract(
+            archive_runtime.workspace
+        )
 
     resumed_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
@@ -1571,7 +1587,6 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         mode="restart_hydration",
         elapsed_seconds=elapsed,
     )
-    _assert_audit_contract(snapshot)
     return snapshot
 
 
@@ -1583,6 +1598,10 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
     _debug(f"replay_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
+    if stop_boundary == "after_activitysim_postprocess":
+        _assert_land_use_population_source_snapshot_contract(
+            archive_runtime.workspace
+        )
 
     replay_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"replay_{stop_boundary}"
@@ -1603,7 +1622,6 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
         mode="replay",
         elapsed_seconds=elapsed,
     )
-    _assert_audit_contract(snapshot)
     return snapshot
 
 

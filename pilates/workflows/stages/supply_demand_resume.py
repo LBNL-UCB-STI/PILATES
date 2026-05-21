@@ -65,6 +65,10 @@ def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optiona
     )
 
 
+def _population_source_snapshot_candidate(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_population_source{path.suffix}")
+
+
 def _manifest_activitysim_run_id(
     manifest_data: Optional[Mapping[str, Any]],
 ) -> Optional[str]:
@@ -369,19 +373,31 @@ def _restore_supply_demand_usim_inputs_for_resume(
         workspace=workspace,
         materialize_from_archive=True,
     )
+    population_snapshot_candidate = _population_source_snapshot_candidate(
+        current_candidate
+    )
+    population_snapshot_path = resolve_existing_path(
+        str(population_snapshot_candidate),
+        workspace=workspace,
+        materialize_from_archive=True,
+    )
     if base_path:
         restored[USIM_DATASTORE_BASE_H5] = base_path
-    if resolved_coupler_population:
-        restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_population
+    if resolved_coupler_current:
+        restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_current
     elif current_path:
         restored[USIM_DATASTORE_CURRENT_H5] = current_path
-    elif resolved_coupler_current:
-        restored[USIM_DATASTORE_CURRENT_H5] = resolved_coupler_current
     elif base_path:
         restored[USIM_DATASTORE_CURRENT_H5] = base_path
 
+    # Prefer the population-source role already recovered from the coupler.
+    # On ATLAS restart boundaries this can point at the merged next-iteration
+    # input, which is the correct exact-year source even when a same-year
+    # snapshot file also exists locally.
     if resolved_coupler_population:
         restored[USIM_POPULATION_SOURCE_H5] = resolved_coupler_population
+    elif population_snapshot_path:
+        restored[USIM_POPULATION_SOURCE_H5] = population_snapshot_path
     elif restored.get(USIM_DATASTORE_CURRENT_H5):
         restored[USIM_POPULATION_SOURCE_H5] = restored[USIM_DATASTORE_CURRENT_H5]
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import logging
+import shutil
 from pathlib import Path
 from typing import Dict, Optional, cast, TYPE_CHECKING
 
@@ -46,6 +47,10 @@ if TYPE_CHECKING:
     pass
 
 
+def _population_source_snapshot_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_population_source{path.suffix}")
+
+
 def _build_land_use_manifest_path(workspace: Workspace, year: int) -> Path:
     return Path(workspace.full_path) / ".workflow" / f"land_use_year_{year}.yaml"
 
@@ -70,10 +75,10 @@ def run_land_use_stage(
     - ``usim_datastore_base_h5`` for the static/exogenous baseline role
     - ``usim_datastore_h5`` for the current mutable handoff role
 
-    Those roles may resolve to the same physical H5 in some runs, but the
-    distinction is still preserved for restart-sensitive provenance and
-    downstream contract clarity. The postprocess output datastore, when
-    present, is preferred for the current-role handoff; otherwise the run
+    The forecast/population-source role is snapshotted before postprocess
+    rewrites the mutable current datastore so restart-sensitive provenance can
+    still read an immutable exact-year source. The postprocess output datastore,
+    when present, is preferred for the current-role handoff; otherwise the run
     output datastore is used.
 
     Parameters
@@ -230,8 +235,13 @@ def run_land_use_stage(
     postprocess_outputs = outputs_holder_year.urbansim_postprocess
     run_outputs = outputs_holder_year.urbansim_run
     if run_outputs is not None and run_outputs.usim_datastore_h5:
-        usim_inputs[USIM_FORECAST_OUTPUT] = str(run_outputs.usim_datastore_h5)
-        usim_inputs[USIM_POPULATION_SOURCE_H5] = str(run_outputs.usim_datastore_h5)
+        forecast_output_path = Path(run_outputs.usim_datastore_h5)
+        population_source_snapshot = _population_source_snapshot_path(
+            forecast_output_path
+        )
+        shutil.copy2(forecast_output_path, population_source_snapshot)
+        usim_inputs[USIM_FORECAST_OUTPUT] = str(population_source_snapshot)
+        usim_inputs[USIM_POPULATION_SOURCE_H5] = str(population_source_snapshot)
     if postprocess_outputs is not None and postprocess_outputs.usim_datastore_h5:
         usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(
             postprocess_outputs.usim_datastore_h5
