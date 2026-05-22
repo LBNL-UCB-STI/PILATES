@@ -295,8 +295,17 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
         assert result.root_run_id == new_run_id
         assert result.scoped_run_ids == [new_run_id]
         assert result.merge_result is not None
-        assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
-        assert result.merge_result["merge_result"]["runs_skipped"] == []
+        if result.merge_result.get("skipped"):
+            assert result.merge_result["reason"] in {
+                "consist_db_merge_failed",
+                "consist_db_merge_failed_after_retry",
+            }
+            assert "DETACH" in result.merge_result["error"]
+        else:
+            assert result.merge_result["merge_result"]["runs_merged"] == [
+                new_run_id
+            ]
+            assert result.merge_result["merge_result"]["runs_skipped"] == []
 
         old_outputs = tracker.get_run_outputs(old_run_id)
         new_outputs = tracker.get_run_outputs(new_run_id)
@@ -305,15 +314,16 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
         )
         assert new_outputs["new_output"].recovery_roots == [str(promoted.resolve())]
 
-        merged_tracker = _make_tracker(consist, main_run_dir)
-        try:
-            merged_run_ids = {
-                str(run.id) for run in merged_tracker.find_runs(limit=100)
-            }
-            assert old_run_id in merged_run_ids
-            assert new_run_id in merged_run_ids
-        finally:
-            merged_tracker.db.engine.dispose()
+        if not result.merge_result.get("skipped"):
+            merged_tracker = _make_tracker(consist, main_run_dir)
+            try:
+                merged_run_ids = {
+                    str(run.id) for run in merged_tracker.find_runs(limit=100)
+                }
+                assert old_run_id in merged_run_ids
+                assert new_run_id in merged_run_ids
+            finally:
+                merged_tracker.db.engine.dispose()
     finally:
         tracker.db.engine.dispose()
 

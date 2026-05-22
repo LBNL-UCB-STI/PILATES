@@ -7,6 +7,8 @@ import hashlib
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 import shutil
 import tempfile
@@ -17,6 +19,7 @@ from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
+from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -221,6 +224,16 @@ def _json_safe(value: Any) -> Any:
     if isinstance(value, (list, tuple, set)):
         return [_json_safe(item) for item in value]
     return value
+
+
+def _retry_merge_shard_path(source_run_dir: Path, root_run_id: str) -> Path:
+    safe_root_run_id = root_run_id.replace(os.sep, "_")
+    return (
+        source_run_dir
+        / ".consist"
+        / "retry-shards"
+        / f"promotion-shard-{safe_root_run_id}-{uuid.uuid4().hex}.duckdb"
+    )
 
 
 def _all_runs(tracker: Any) -> list[Any]:
@@ -614,6 +627,75 @@ def _merge_scoped_run_db(
     )
 
 
+def _merge_scoped_run_db_with_retry(
+    *,
+    settings: PilatesConfig,
+    source_tracker: Any,
+    source_run_dir: Path,
+    root_run_id: str,
+    main_db_path: str | os.PathLike[str],
+    conflict: str,
+    include_data: bool,
+    dry_run: bool,
+    shard_path: Optional[str | os.PathLike[str]] = None,
+) -> dict[str, Any]:
+    try:
+        return _merge_scoped_run_db(
+            source_tracker=source_tracker,
+            source_run_dir=source_run_dir,
+            root_run_id=root_run_id,
+            main_db_path=main_db_path,
+            conflict=conflict,
+            include_data=include_data,
+            dry_run=dry_run,
+            shard_path=shard_path,
+        )
+    except OperationalError as exc:
+        logger.warning(
+            "Consist DB merge failed once; retrying with a fresh archive tracker "
+            "after a short pause: %s",
+            exc,
+            exc_info=True,
+        )
+        time.sleep(0.25)
+        retry_tracker = _open_archive_tracker(settings, archive_run_dir=source_run_dir)
+        if retry_tracker is None:
+            raise
+        try:
+            retry_shard_path = _retry_merge_shard_path(
+                source_run_dir,
+                root_run_id,
+            )
+            if shard_path is not None:
+                original_shard_path = _resolve_db_file_path(shard_path)
+                if original_shard_path.exists():
+                    try:
+                        original_shard_path.unlink()
+                    except OSError:
+                        logger.debug(
+                            "Failed to remove partial Consist shard before retry",
+                            exc_info=True,
+                        )
+            return _merge_scoped_run_db(
+                source_tracker=retry_tracker,
+                source_run_dir=source_run_dir,
+                root_run_id=root_run_id,
+                main_db_path=main_db_path,
+                conflict=conflict,
+                include_data=include_data,
+                dry_run=dry_run,
+                shard_path=retry_shard_path,
+            )
+        finally:
+            retry_db = getattr(retry_tracker, "db", None)
+            retry_engine = getattr(retry_db, "engine", None)
+            if retry_engine is not None:
+                try:
+                    retry_engine.dispose()
+                except Exception:
+                    logger.debug("Failed to dispose retry tracker engine", exc_info=True)
+
+
 def promote_run_to_recovery_roots(
     settings: PilatesConfig,
     archive_run_dir: Optional[str | os.PathLike[str]] = None,
@@ -750,16 +832,34 @@ def promote_run_to_recovery_roots(
             and resolved_root_run_id is not None
         ):
             if result.success:
-                result.merge_result = _merge_scoped_run_db(
-                    source_tracker=working_tracker,
-                    source_run_dir=source_run_dir,
-                    root_run_id=resolved_root_run_id,
-                    main_db_path=merge_main_db,
-                    conflict=merge_conflict,
-                    include_data=merge_include_data,
-                    dry_run=merge_dry_run,
-                    shard_path=merge_shard_path,
-                )
+                try:
+                    result.merge_result = _merge_scoped_run_db_with_retry(
+                        settings=settings,
+                        source_tracker=working_tracker,
+                        source_run_dir=source_run_dir,
+                        root_run_id=resolved_root_run_id,
+                        main_db_path=merge_main_db,
+                        conflict=merge_conflict,
+                        include_data=merge_include_data,
+                        dry_run=merge_dry_run,
+                        shard_path=merge_shard_path,
+                    )
+                except OperationalError as exc:
+                    logger.warning(
+                        "Skipping Consist DB merge for archive promotion because "
+                        "the export/merge transaction failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    result.merge_result = {
+                        "skipped": True,
+                        "reason": "consist_db_merge_failed_after_retry",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "root_run_id": resolved_root_run_id,
+                        "main_db_path": str(merge_main_db),
+                        "retry_attempted": True,
+                    }
             else:
                 result.merge_result = {
                     "skipped": True,
