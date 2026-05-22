@@ -3597,9 +3597,11 @@ def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_ro
     assert restored[USIM_DATASTORE_BASE_H5] == str(base_h5)
     assert restored[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
     assert restored[USIM_FORECAST_OUTPUT] == str(current_h5)
-    assert restored[USIM_POPULATION_SOURCE_H5] == str(population_snapshot)
+    # The coupler already carries the exact-year population source, so the
+    # helper should preserve that value even though a local snapshot exists.
+    assert restored[USIM_POPULATION_SOURCE_H5] == str(current_h5)
     assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
-    assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(population_snapshot)
+    assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(current_h5)
 
 
 def test_restore_supply_demand_usim_inputs_for_resume_falls_back_to_base_when_output_missing(
