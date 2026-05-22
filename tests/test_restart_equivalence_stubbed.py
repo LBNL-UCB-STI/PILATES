@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import pprint
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -44,7 +45,6 @@ from pilates.workflows.stages.supply_demand import (
     run_supply_demand_stage as _run_supply_demand_stage,
 )
 from pilates.workflows.stages.supply_demand_resume import (
-    _restore_supply_demand_usim_inputs_for_resume,
     seed_supply_demand_parent_run_ids_for_resume,
 )
 from pilates.workflows.stages.vehicle_ownership import (
@@ -904,6 +904,7 @@ def _resume_runtime(
     local_state_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(archive_state_path, local_state_path)
     local_runtime.state = WorkflowState.from_settings(local_runtime.settings)
+    local_runtime.state.is_restart_run = True
     local_runtime.state.file_loc = str(archive_state_path)
     local_runtime.state.mirror_file_loc = str(local_state_path)
     if getattr(local_runtime.state, "run_info_path", None) != str(archive_state_path):
@@ -938,6 +939,54 @@ def _hash_h5_tables(path: Path) -> str:
             digests[key] = _hash_dataframe(store.get(key))
     payload = json.dumps(digests, sort_keys=True)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _read_h5_keys(path: Path) -> set[str]:
+    with pd.HDFStore(path, mode="r") as store:
+        return set(store.keys())
+
+
+def _assert_land_use_population_source_snapshot_contract(workspace: Workspace) -> None:
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    snapshot_paths = sorted(usim_dir.glob("*_population_source.h5"))
+    assert snapshot_paths, (
+        f"expected at least one population-source snapshot in {usim_dir}"
+    )
+
+    for snapshot_path in snapshot_paths:
+        match = re.search(r"(?P<year>\d{4})_population_source\.h5$", snapshot_path.name)
+        assert match is not None, (
+            f"could not infer year from snapshot file {snapshot_path.name}"
+        )
+        current_path = snapshot_path.with_name(
+            snapshot_path.name.replace("_population_source.h5", ".h5")
+        )
+        assert current_path.exists(), (
+            f"missing mutable current datastore {current_path}"
+        )
+        assert current_path != snapshot_path, (
+            "population source snapshot should be distinct from current datastore"
+        )
+
+        year = match.group("year")
+        expected_year_tables = {
+            f"/{year}/households",
+            f"/{year}/persons",
+            f"/{year}/jobs",
+            f"/{year}/blocks",
+        }
+
+        snapshot_keys = _read_h5_keys(snapshot_path)
+        current_keys = _read_h5_keys(current_path)
+
+        assert expected_year_tables <= snapshot_keys, (
+            f"population-source snapshot {snapshot_path} is missing year-scoped "
+            f"tables {sorted(expected_year_tables - snapshot_keys)}"
+        )
+        assert expected_year_tables <= current_keys, (
+            f"mutable UrbanSim datastore {current_path} is missing year-scoped "
+            f"tables {sorted(expected_year_tables - current_keys)}"
+        )
 
 
 def _digest_bundle(workspace: Workspace) -> dict[str, str]:
@@ -1100,6 +1149,28 @@ def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
     )
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     return {
+        "contract_status_by_family": summary.get("contract_status_by_family", {}),
+        "phase2_candidate_families": summary.get("phase2_candidate_families", []),
+        "safe_families_for_phase2": summary.get("safe_families_for_phase2", []),
+        "blocked_families_for_phase2": summary.get("blocked_families_for_phase2", []),
+        "copied_artifacts_eligible_for_recovery_root_registration": summary.get(
+            "copied_artifacts_eligible_for_recovery_root_registration", 0
+        ),
+        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration": summary.get(
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
+            0,
+        ),
+        "copied_artifacts_blocked_artifact_logging_after_copying": summary.get(
+            "copied_artifacts_blocked_artifact_logging_after_copying", 0
+        ),
+        "directory_artifacts_blocked_shallow_directory_signatures": summary.get(
+            "directory_artifacts_blocked_shallow_directory_signatures", 0
+        ),
+        "snapshot_artifacts_missing_required_facets": summary.get(
+            "snapshot_artifacts_missing_required_facets", 0
+        ),
+        "unknown_event_keys": summary.get("unknown_event_keys", []),
+        "phase2_recommendation": summary.get("phase2_recommendation"),
         "steps_with_incomplete_hydration": summary.get(
             "steps_with_incomplete_hydration", {}
         ),
@@ -1176,6 +1247,20 @@ def _snapshot(
     return out
 
 
+def _assert_audit_contract(snapshot: dict[str, Any]) -> None:
+    audit = snapshot["audit"]
+    metrics = snapshot["metrics"]
+    assert audit["event_counts"]["run_context"] == 1
+    assert audit["event_counts"]["step_resolution"] > 0
+    assert audit["event_counts"]["output_hydration_check"] > 0
+    assert metrics["restart_hydration_event_count"] == int(
+        audit.get("restart_hydration", {}).get("event_count", 0) or 0
+    )
+    assert metrics["custom_recovery_steps"] == sorted(
+        audit.get("steps_using_custom_recovery", {}).keys()
+    )
+
+
 def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> None:
     def _describe_difference(name: str, expected: Any, actual: Any) -> str:
         if isinstance(expected, dict) and isinstance(actual, dict):
@@ -1234,6 +1319,102 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
         )
     )
+    assert (
+        resumed["audit"]["contract_status_by_family"]
+        == baseline["audit"]["contract_status_by_family"]
+    ), _describe_difference(
+        "contract_status_by_family",
+        baseline["audit"]["contract_status_by_family"],
+        resumed["audit"]["contract_status_by_family"],
+    )
+    assert (
+        resumed["audit"]["phase2_candidate_families"]
+        == baseline["audit"]["phase2_candidate_families"]
+    ), _describe_difference(
+        "phase2_candidate_families",
+        baseline["audit"]["phase2_candidate_families"],
+        resumed["audit"]["phase2_candidate_families"],
+    )
+    assert (
+        resumed["audit"]["safe_families_for_phase2"]
+        == baseline["audit"]["safe_families_for_phase2"]
+    ), _describe_difference(
+        "safe_families_for_phase2",
+        baseline["audit"]["safe_families_for_phase2"],
+        resumed["audit"]["safe_families_for_phase2"],
+    )
+    assert (
+        resumed["audit"]["blocked_families_for_phase2"]
+        == baseline["audit"]["blocked_families_for_phase2"]
+    ), _describe_difference(
+        "blocked_families_for_phase2",
+        baseline["audit"]["blocked_families_for_phase2"],
+        resumed["audit"]["blocked_families_for_phase2"],
+    )
+    assert (
+        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
+        == baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
+    ), _describe_difference(
+        "copied_artifacts_eligible_for_recovery_root_registration",
+        baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
+        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
+    )
+    assert (
+        resumed["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+        == baseline["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+    ), _describe_difference(
+        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
+        baseline["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ],
+        resumed["audit"][
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ],
+    )
+    assert (
+        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
+        == baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
+    ), _describe_difference(
+        "copied_artifacts_blocked_artifact_logging_after_copying",
+        baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
+        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
+    )
+    assert (
+        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
+        == baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
+    ), _describe_difference(
+        "directory_artifacts_blocked_shallow_directory_signatures",
+        baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
+        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
+    )
+    assert (
+        resumed["audit"]["snapshot_artifacts_missing_required_facets"]
+        == baseline["audit"]["snapshot_artifacts_missing_required_facets"]
+    ), _describe_difference(
+        "snapshot_artifacts_missing_required_facets",
+        baseline["audit"]["snapshot_artifacts_missing_required_facets"],
+        resumed["audit"]["snapshot_artifacts_missing_required_facets"],
+    )
+    assert (
+        resumed["audit"]["unknown_event_keys"]
+        == baseline["audit"]["unknown_event_keys"]
+    ), _describe_difference(
+        "unknown_event_keys",
+        baseline["audit"]["unknown_event_keys"],
+        resumed["audit"]["unknown_event_keys"],
+    )
+    assert (
+        resumed["audit"]["phase2_recommendation"]
+        == baseline["audit"]["phase2_recommendation"]
+    ), _describe_difference(
+        "phase2_recommendation",
+        baseline["audit"]["phase2_recommendation"],
+        resumed["audit"]["phase2_recommendation"],
+    )
     assert resumed["audit"]["steps_with_incomplete_hydration"] == {}, (
         _describe_difference(
             "steps_with_incomplete_hydration",
@@ -1278,7 +1459,8 @@ def baseline_snapshot(tmp_path, monkeypatch):
     started = perf_counter()
     _stage_runner(runtime)
     elapsed = perf_counter() - started
-    return _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
+    snapshot = _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
+    return snapshot
 
 
 def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
@@ -1289,6 +1471,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     _debug(f"resumed_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
+    if stop_boundary == "after_activitysim_postprocess":
+        _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     resumed_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
@@ -1299,6 +1483,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         archive_run_dir=Path(archive_runtime.workspace.full_path),
     )
     _resume_runtime(archive_runtime, resumed_runtime)
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", resumed_runtime.workspace.full_path)
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", archive_runtime.workspace.full_path)
 
     surface = build_enabled_workflow_surface(
         resumed_runtime.settings,
@@ -1350,6 +1536,8 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                     scenario=tagged,
                     workspace=resumed_runtime.workspace,
                     state=resumed_runtime.state,
+                    tracker=resumed_runtime.tracker,
+                    settings=resumed_runtime.settings,
                 )
                 restart_runtime.hydrate_missing_restart_artifacts(
                     tracker=resumed_runtime.tracker,
@@ -1389,15 +1577,6 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
                         resumed_runtime.state.complete_step(
                             WorkflowState.Stage.vehicle_ownership_model
                         )
-                    if not usim_inputs and not resumed_runtime.state.should_run(
-                        WorkflowState.Stage.land_use
-                    ):
-                        usim_inputs = _restore_supply_demand_usim_inputs_for_resume(
-                            coupler=coupler,
-                            workspace=resumed_runtime.workspace,
-                            state=resumed_runtime.state,
-                            settings=resumed_runtime.settings,
-                        )
                     if resumed_runtime.state.should_run(
                         WorkflowState.Stage.supply_demand_loop
                     ):
@@ -1413,11 +1592,12 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
     finally:
         cr.set_enabled(None)
     _debug(f"resumed_case:resume_complete boundary={stop_boundary}")
-    return _snapshot(
+    snapshot = _snapshot(
         resumed_runtime,
         mode="restart_hydration",
         elapsed_seconds=elapsed,
     )
+    return snapshot
 
 
 def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
@@ -1428,6 +1608,8 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
     _debug(f"replay_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
+    if stop_boundary == "after_activitysim_postprocess":
+        _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     replay_runtime = _make_runtime(
         tmp_path, monkeypatch, name=f"replay_{stop_boundary}"
@@ -1443,11 +1625,12 @@ def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, 
     _stage_runner(replay_runtime)
     elapsed = perf_counter() - started
     _debug(f"replay_case:replay_complete boundary={stop_boundary}")
-    return _snapshot(
+    snapshot = _snapshot(
         replay_runtime,
         mode="replay",
         elapsed_seconds=elapsed,
     )
+    return snapshot
 
 
 @pytest.mark.parametrize(

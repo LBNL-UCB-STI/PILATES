@@ -169,18 +169,30 @@ def test_activitysim_postprocess_recovery_uses_forecast_year_archived_inputs(
     }
 
 
-def test_create_usim_input_data_writes_forecast_year_target(tmp_path) -> None:
+def test_create_usim_input_data_preserves_forecast_year_run_output(tmp_path) -> None:
+    """Regression: the asim postprocess must NOT use ``model_data_<year>.h5`` as
+    its merged-store write target, because that file is the urbansim run output
+    and contains ``/<year>/``-prefixed tables that the next loop's binding will
+    look up. Writing the merged store there overwrites those tables with a
+    root-level layout, and the next year's activity_demand binding fails with
+    a ``missing=['/2021/households', ...]`` KeyError. The merged store must go
+    to the canonical input filename (``custom_mpo_..._model_data.h5``).
+    """
     current_year = 2019
     forecast_year = 2021
     usim_dir = tmp_path / "urbansim" / "data"
     usim_dir.mkdir(parents=True)
-    current_h5 = usim_dir / f"model_data_{current_year}.h5"
+    canonical_input = usim_dir / "custom_mpo_06197001_model_data.h5"
     forecast_h5 = usim_dir / f"model_data_{forecast_year}.h5"
 
-    with pd.HDFStore(current_h5, mode="w") as store:
-        store.put("/2019/blocks", pd.DataFrame({"block_id": [1]}))
+    # Canonical input store has root-level tables (the previous merged input).
+    with pd.HDFStore(canonical_input, mode="w") as store:
+        store.put("/blocks", pd.DataFrame({"block_id": [1]}))
+        store.put("/jobs", pd.DataFrame({"job_id": [99]}))
+    # Forecast-year run output has /<year>/-prefixed tables.
+    forecast_table_payload = pd.DataFrame({"household_id": [1]})
     with pd.HDFStore(forecast_h5, mode="w") as store:
-        store.put("/2021/households", pd.DataFrame({"household_id": [1]}))
+        store.put("/2021/households", forecast_table_payload)
         store.put("/2021/persons", pd.DataFrame({"person_id": [10]}))
         store.put("/2021/jobs", pd.DataFrame({"job_id": [100]}))
 
@@ -198,21 +210,68 @@ def test_create_usim_input_data_writes_forecast_year_target(tmp_path) -> None:
         },
         tables_updated_by_asim=["households", "persons"],
         asim_source_paths=[],
-        current_input_store_path=str(current_h5),
+        current_input_store_path=str(canonical_input),
         population_source_store_path=str(forecast_h5),
-        target_store_path=str(forecast_h5),
+        target_store_path=str(canonical_input),
     )
 
     archive_h5 = usim_dir / "input_data_for_2021_outputs.h5"
-    assert Path(next_path) == forecast_h5
+    assert Path(next_path) == canonical_input
     assert record.short_name == USIM_DATASTORE_H5
-    assert forecast_h5.exists()
-    assert archive_h5.exists()
-    assert current_h5.exists()
-    with pd.HDFStore(forecast_h5, mode="r") as store:
+    # Merged store written to canonical input filename, root-level layout.
+    assert canonical_input.exists()
+    with pd.HDFStore(canonical_input, mode="r") as store:
         assert "/households" in store
         assert "/persons" in store
         assert "/jobs" in store
+    # Previous canonical input archived (renamed) under the forecast-year archive name.
+    assert archive_h5.exists()
+    # Forecast-year run output left untouched and still has /<year>/-prefixed tables.
+    assert forecast_h5.exists()
+    with pd.HDFStore(forecast_h5, mode="r") as store:
+        assert "/2021/households" in store
+        assert "/2021/persons" in store
+        assert "/2021/jobs" in store
+
+
+def test_create_usim_input_data_rejects_clobbered_year_file(tmp_path) -> None:
+    """Boundary assertion: if model_data_<year>.h5 has root-level
+    tables instead of /<year>/-prefixed ones, create_usim_input_data must raise
+    ValueError rather than silently propagating corrupt inputs to the next loop.
+    """
+    forecast_year = 2021
+    usim_dir = tmp_path / "urbansim" / "data"
+    usim_dir.mkdir(parents=True)
+    canonical_input = usim_dir / "custom_mpo_06197001_model_data.h5"
+    forecast_h5 = usim_dir / f"model_data_{forecast_year}.h5"
+
+    with pd.HDFStore(canonical_input, mode="w") as store:
+        store.put("/blocks", pd.DataFrame({"block_id": [1]}))
+    # Simulate the pre-patch bug: forecast_h5 has root-level layout instead of
+    # /<year>/-prefixed tables.
+    with pd.HDFStore(forecast_h5, mode="w") as store:
+        store.put("/households", pd.DataFrame({"household_id": [1]}))
+        store.put("/persons", pd.DataFrame({"person_id": [10]}))
+
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(output_file_template="model_data_{year}.h5")
+    )
+    state = SimpleNamespace(forecast_year=forecast_year)
+
+    with pytest.raises(ValueError, match="H5 layout mismatch"):
+        create_usim_input_data(
+            settings,
+            state,
+            asim_output_dict={
+                "households": pd.DataFrame({"household_id": [2]}),
+                "persons": pd.DataFrame({"person_id": [20]}),
+            },
+            tables_updated_by_asim=["households", "persons"],
+            asim_source_paths=[],
+            current_input_store_path=str(canonical_input),
+            population_source_store_path=str(forecast_h5),
+            target_store_path=str(canonical_input),
+        )
 
 
 def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
@@ -577,6 +636,8 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(
     assert len(input_calls) == 1
     assert input_calls[0]["path"] == str(h5_path)
     assert input_calls[0]["child_selection"] == "include_only"
+    assert input_calls[0]["container_recovery_unit"] == "parent_file"
+    assert input_calls[0]["child_recovery_policy"] == "descriptive_only"
     assert input_calls[0]["child_specs"]["/2025/households"].key == (
         "activitysim_preprocess_usim_households_table_input"
     )
@@ -654,7 +715,7 @@ def test_activitysim_preprocess_runtime_inputs_prefers_forecast_year(
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
 
 
-def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_current(
+def test_activitysim_postprocess_runtime_inputs_requires_current_input_when_land_use_enabled(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -666,21 +727,19 @@ def test_activitysim_postprocess_runtime_inputs_alias_population_source_to_curre
         lambda **_kwargs: BindingPlan(inputs={}, source_by_key={}),
     )
 
-    runtime_inputs = steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(
-            year=2023,
-            forecast_year=2025,
-            Stage=SimpleNamespace(land_use="land_use"),
-            is_enabled=lambda _stage: True,
-        ),
-        workspace=SimpleNamespace(full_path=str(tmp_path)),
-        coupler=_dummy_coupler(),
-        step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
-    )
-
-    assert runtime_inputs["population_source_h5_path"] == str(h5_path)
-    assert runtime_inputs["current_input_h5_path"] == str(h5_path)
+    with pytest.raises(ValueError, match="usim_datastore_h5"):
+        steps_activitysim._resolve_activitysim_postprocess_runtime_inputs(
+            settings=SimpleNamespace(),
+            state=SimpleNamespace(
+                year=2023,
+                forecast_year=2025,
+                Stage=SimpleNamespace(land_use="land_use"),
+                is_enabled=lambda _stage: True,
+            ),
+            workspace=SimpleNamespace(full_path=str(tmp_path)),
+            coupler=_dummy_coupler(),
+            step_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+        )
 
 
 @pytest.mark.parametrize(
@@ -701,26 +760,27 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
     population_h5.write_text("population")
     current_h5.write_text("current")
 
-    captured_years = []
-    captured_rule_keys = []
+    captured_calls = []
 
     def _fake_build_binding_plan(**kwargs):
-        year = kwargs["year"]
-        captured_years.append(year)
-        captured_rule_keys.append(
-            tuple(rule.semantic_key for rule in kwargs.get("artifact_rules", ()))
+        captured_calls.append(
+            {
+                "year": kwargs["year"],
+                "rules": tuple(
+                    rule.semantic_key for rule in kwargs.get("artifact_rules", ())
+                ),
+            }
         )
-        if year == forecast_year:
-            return BindingPlan(
-                inputs={USIM_POPULATION_SOURCE_H5: str(population_h5)},
-                source_by_key={USIM_POPULATION_SOURCE_H5: "fake"},
-            )
-        if year == current_year:
-            return BindingPlan(
-                inputs={USIM_DATASTORE_CURRENT_H5: str(current_h5)},
-                source_by_key={USIM_DATASTORE_CURRENT_H5: "fake"},
-            )
-        raise AssertionError(f"Unexpected binding year: {year}")
+        return BindingPlan(
+            inputs={
+                USIM_POPULATION_SOURCE_H5: str(population_h5),
+                USIM_DATASTORE_CURRENT_H5: str(current_h5),
+            },
+            source_by_key={
+                USIM_POPULATION_SOURCE_H5: "fake",
+                USIM_DATASTORE_CURRENT_H5: "fake",
+            },
+        )
 
     monkeypatch.setattr(
         steps_activitysim,
@@ -745,11 +805,14 @@ def test_activitysim_postprocess_runtime_inputs_split_population_and_current_yea
         coupler=_dummy_coupler(),
     )
 
-    assert captured_years == [forecast_year, current_year]
-    assert captured_rule_keys == [
-        (USIM_POPULATION_SOURCE_H5,),
-        (USIM_DATASTORE_CURRENT_H5,),
-    ]
+    # Single binding-plan call covers both rules; population year is intrinsic
+    # to the provider, so the planner threads `year=current_year`.
+    assert len(captured_calls) == 1
+    assert captured_calls[0]["year"] == current_year
+    assert set(captured_calls[0]["rules"]) == {
+        USIM_POPULATION_SOURCE_H5,
+        USIM_DATASTORE_CURRENT_H5,
+    }
     assert runtime_inputs["population_source_h5_path"] == str(population_h5)
     assert runtime_inputs["current_input_h5_path"] == str(current_h5)
 
@@ -790,6 +853,8 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(
     assert len(publish_calls) == 1
     assert publish_calls[0]["key"] == "usim_datastore_h5"
     assert publish_calls[0]["child_selection"] == "include_only"
+    assert publish_calls[0]["container_recovery_unit"] == "parent_file"
+    assert publish_calls[0]["child_recovery_policy"] == "descriptive_only"
     assert {
         path: spec.key for path, spec in publish_calls[0]["child_specs"].items()
     } == {

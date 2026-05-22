@@ -17,7 +17,7 @@ summary: Generic HPC execution posture for PILATES and how it differs from local
 - `job_runner.sh` creates a per-job settings file when `${BEAM_MEMORY}` templating is present.
 - `job.sh` bootstraps a Python virtual environment inside the job.
 - `job.sh` installs PILATES dependencies from `hpc/requirements-hpc.txt` when that file exists, or from `requirements.txt` otherwise.
-- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.4`.
+- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.5`.
 
 ## Most Important Difference From Local Runs
 
@@ -71,7 +71,7 @@ your cluster layout differs from the defaults.
 | `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env`                                                    | Job-side Python virtual environment. |
 | `PILATES_REQUIREMENTS_FILE` | No | `$PILATES_DIR/hpc/requirements-hpc.txt`, then `$PILATES_DIR/requirements.txt` | Requirements file installed inside the job. |
 | `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist`                                                     | Editable Consist checkout used when present. |
-| `CONSIST_PYPI_PACKAGE` | No | requirement pin when present, otherwise `consist==0.1.4`                      | Package spec used when editable Consist install is not available. |
+| `CONSIST_PYPI_PACKAGE` | No | requirement pin when present, otherwise `consist==0.1.5`                      | Package spec used when editable Consist install is not available. |
 | `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00`                                                                  | Slurm wall time. |
 | `MEMORY_LIMIT_GB` | No | partition preset                                                              | Slurm memory request. Explicit env value overrides partition and `--high-mem` defaults. |
 | `BEAM_MEMORY` | No | partition preset                                                              | Value substituted into settings templates containing `${BEAM_MEMORY}`. Explicit env value overrides partition and `--high-mem` defaults. |

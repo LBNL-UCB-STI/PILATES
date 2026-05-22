@@ -103,6 +103,8 @@ def test_log_h5_container_raises_outside_active_run(monkeypatch, tmp_path):
             key="usim_datastore_h5",
             direction="output",
             enabled=True,
+            container_recovery_unit="parent_file",
+            child_recovery_policy="descriptive_only",
         )
 
     assert calls == []
@@ -139,6 +141,8 @@ def test_log_h5_container_batches_artifact_writes_when_available(monkeypatch, tm
         key="usim_datastore_h5",
         direction="output",
         enabled=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
     )
 
     assert artifact["key"] == "usim_datastore_h5"

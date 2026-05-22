@@ -3,9 +3,12 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
+import hashlib
 import json
 import logging
 import os
+import time
+import uuid
 from pathlib import Path
 import shutil
 import tempfile
@@ -14,7 +17,9 @@ from typing import Any, Iterable, Optional, Sequence
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
+from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
+from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger(__name__)
 
@@ -221,8 +226,22 @@ def _json_safe(value: Any) -> Any:
     return value
 
 
+def _retry_merge_shard_path(source_run_dir: Path, root_run_id: str) -> Path:
+    safe_root_run_id = root_run_id.replace(os.sep, "_")
+    return (
+        source_run_dir
+        / ".consist"
+        / "retry-shards"
+        / f"promotion-shard-{safe_root_run_id}-{uuid.uuid4().hex}.duckdb"
+    )
+
+
 def _all_runs(tracker: Any) -> list[Any]:
     return list(tracker.find_runs(limit=100_000))
+
+
+def _run_id_text(run: Any) -> str:
+    return str(run.id).strip() if isinstance(run, RunLike) else ""
 
 
 def _run_tags(run: Any) -> list[str]:
@@ -236,7 +255,7 @@ def _run_sort_key(run: Any) -> tuple[str, str]:
     created_at = getattr(run, "created_at", None)
     return (
         str(created_at) if created_at is not None else "",
-        str(getattr(run, "id", "")),
+        _run_id_text(run),
     )
 
 
@@ -276,11 +295,11 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
 
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
     children_by_parent: dict[str, list[str]] = {}
-    available_ids = {str(getattr(run, "id")) for run in runs}
+    available_ids = {_run_id_text(run) for run in runs if _run_id_text(run)}
     if root_run_id not in available_ids:
         raise ValueError(f"root run ID not found in archive DB: {root_run_id}")
     for run in runs:
-        run_id = str(getattr(run, "id"))
+        run_id = _run_id_text(run)
         parent_id = getattr(run, "parent_run_id", None)
         if parent_id is None:
             continue
@@ -321,7 +340,7 @@ def _resolve_root_run_id(
         run
         for run in runs
         if getattr(run, "parent_run_id", None) is None
-        and str(getattr(run, "id")) not in inherited_run_ids
+        and _run_id_text(run) not in inherited_run_ids
     ]
     pilates_candidates = [
         run for run in root_candidates if "pilates_simulation" in set(_run_tags(run))
@@ -341,7 +360,7 @@ def _resolve_root_run_id(
     if len(root_candidates) != 1:
         rendered = [
             {
-                "id": str(getattr(run, "id", "")),
+                "id": _run_id_text(run),
                 "model": str(getattr(run, "model_name", "")),
                 "status": str(getattr(run, "status", "")),
                 "tags": _run_tags(run),
@@ -355,50 +374,97 @@ def _resolve_root_run_id(
             + json.dumps(rendered, sort_keys=True)
         )
 
-    resolved = str(getattr(root_candidates[0], "id"))
+    resolved = _run_id_text(root_candidates[0])
     return resolved, _expand_run_subtree(resolved, runs)
 
 
-def _all_output_artifacts(
+def _artifact_relative_path(tracker: Any, artifact: Any) -> Optional[Path]:
+    container_uri = getattr(artifact, "container_uri", None)
+    if not container_uri:
+        return None
+    fs = getattr(tracker, "fs", None)
+    get_relative = getattr(fs, "get_remappable_relative_path", None)
+    if not callable(get_relative):
+        return None
+    relative = get_relative(container_uri)
+    if relative is None:
+        return None
+    return Path(relative)
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _run_output_content_hashes(
     tracker: Any,
     *,
+    source_run_dir: Path,
+    run_id: str,
+) -> dict[str, str]:
+    content_hashes: dict[str, str] = {}
+    outputs = tracker.get_run_outputs(str(run_id))
+    for key, artifact in outputs.items():
+        relative_path = _artifact_relative_path(tracker, artifact)
+        if relative_path is None:
+            continue
+        source_path = source_run_dir / relative_path
+        if not source_path.is_file():
+            continue
+        content_hashes[str(key)] = _sha256_file(source_path)
+    return content_hashes
+
+
+def _register_verified_run_output_recovery_copies(
+    tracker: Any,
+    *,
+    source_run_dir: Path,
+    recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
-) -> list[Any]:
-    artifacts: list[Any] = []
-    seen_artifact_ids: set[str] = set()
+) -> int:
+    register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
+    if not callable(register_copies):
+        logger.warning(
+            "Consist tracker does not expose register_run_output_recovery_copies; "
+            "skipping verified recovery-copy metadata registration."
+        )
+        return 0
+
     selected_run_ids = (
         list(run_ids)
         if run_ids is not None
-        else [str(run.id) for run in _all_runs(tracker)]
+        else [_run_id_text(run) for run in _all_runs(tracker) if _run_id_text(run)]
     )
+    registered = 0
     for run_id in selected_run_ids:
-        run_artifacts = tracker.get_artifacts_for_run(str(run_id))
-        run_outputs = run_artifacts.outputs if run_artifacts.outputs is not None else {}
-        for artifact in list(run_outputs.values()):
-            artifact_id = str(getattr(artifact, "id", ""))
-            if artifact_id and artifact_id in seen_artifact_ids:
-                continue
-            if artifact_id:
-                seen_artifact_ids.add(artifact_id)
-            artifacts.append(artifact)
-    return artifacts
-
-
-def _update_artifact_recovery_roots(
-    tracker: Any,
-    recovery_run_dir: Path,
-    *,
-    run_ids: Optional[Iterable[str]] = None,
-) -> int:
-    updated = 0
-    for artifact in _all_output_artifacts(tracker, run_ids=run_ids):
-        tracker.set_artifact_recovery_roots(
-            artifact,
-            [str(recovery_run_dir)],
-            append=True,
+        content_hashes = _run_output_content_hashes(
+            tracker,
+            source_run_dir=source_run_dir,
+            run_id=str(run_id),
         )
-        updated += 1
-    return updated
+        result = register_copies(
+            str(run_id),
+            str(recovery_run_dir),
+            verify=True,
+            append=True,
+            content_hashes=content_hashes or None,
+        )
+        registered_for_run = getattr(result, "registered", {})
+        registered += len(registered_for_run)
+        blocked = getattr(result, "blocked", {})
+        if blocked:
+            logger.info(
+                "Verified recovery-copy registration blocked %d output(s) for "
+                "run %s: %s",
+                len(blocked),
+                run_id,
+                getattr(result, "summary", blocked),
+            )
+    return registered
 
 
 def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None:
@@ -561,6 +627,77 @@ def _merge_scoped_run_db(
     )
 
 
+def _merge_scoped_run_db_with_retry(
+    *,
+    settings: PilatesConfig,
+    source_tracker: Any,
+    source_run_dir: Path,
+    root_run_id: str,
+    main_db_path: str | os.PathLike[str],
+    conflict: str,
+    include_data: bool,
+    dry_run: bool,
+    shard_path: Optional[str | os.PathLike[str]] = None,
+) -> dict[str, Any]:
+    try:
+        return _merge_scoped_run_db(
+            source_tracker=source_tracker,
+            source_run_dir=source_run_dir,
+            root_run_id=root_run_id,
+            main_db_path=main_db_path,
+            conflict=conflict,
+            include_data=include_data,
+            dry_run=dry_run,
+            shard_path=shard_path,
+        )
+    except OperationalError as exc:
+        logger.warning(
+            "Consist DB merge failed once; retrying with a fresh archive tracker "
+            "after a short pause: %s",
+            exc,
+            exc_info=True,
+        )
+        time.sleep(0.25)
+        retry_tracker = _open_archive_tracker(settings, archive_run_dir=source_run_dir)
+        if retry_tracker is None:
+            raise
+        try:
+            retry_shard_path = _retry_merge_shard_path(
+                source_run_dir,
+                root_run_id,
+            )
+            if shard_path is not None:
+                original_shard_path = _resolve_db_file_path(shard_path)
+                if original_shard_path.exists():
+                    try:
+                        original_shard_path.unlink()
+                    except OSError:
+                        logger.debug(
+                            "Failed to remove partial Consist shard before retry",
+                            exc_info=True,
+                        )
+            return _merge_scoped_run_db(
+                source_tracker=retry_tracker,
+                source_run_dir=source_run_dir,
+                root_run_id=root_run_id,
+                main_db_path=main_db_path,
+                conflict=conflict,
+                include_data=include_data,
+                dry_run=dry_run,
+                shard_path=retry_shard_path,
+            )
+        finally:
+            retry_db = getattr(retry_tracker, "db", None)
+            retry_engine = getattr(retry_db, "engine", None)
+            if retry_engine is not None:
+                try:
+                    retry_engine.dispose()
+                except Exception:
+                    logger.debug(
+                        "Failed to dispose retry tracker engine", exc_info=True
+                    )
+
+
 def promote_run_to_recovery_roots(
     settings: PilatesConfig,
     archive_run_dir: Optional[str | os.PathLike[str]] = None,
@@ -665,12 +802,13 @@ def promote_run_to_recovery_roots(
                     entry.verified = True
 
                 if not verify_only and working_tracker is not None:
-                    _update_artifact_recovery_roots(
+                    metadata_updates = _register_verified_run_output_recovery_copies(
                         working_tracker,
-                        destination_run_dir,
+                        source_run_dir=source_run_dir,
+                        recovery_run_dir=destination_run_dir,
                         run_ids=scoped_run_ids or None,
                     )
-                    entry.artifact_metadata_updated = True
+                    entry.artifact_metadata_updated = metadata_updates > 0
 
                 if not verify_only:
                     successful_destinations.append(destination_run_dir)
@@ -696,16 +834,34 @@ def promote_run_to_recovery_roots(
             and resolved_root_run_id is not None
         ):
             if result.success:
-                result.merge_result = _merge_scoped_run_db(
-                    source_tracker=working_tracker,
-                    source_run_dir=source_run_dir,
-                    root_run_id=resolved_root_run_id,
-                    main_db_path=merge_main_db,
-                    conflict=merge_conflict,
-                    include_data=merge_include_data,
-                    dry_run=merge_dry_run,
-                    shard_path=merge_shard_path,
-                )
+                try:
+                    result.merge_result = _merge_scoped_run_db_with_retry(
+                        settings=settings,
+                        source_tracker=working_tracker,
+                        source_run_dir=source_run_dir,
+                        root_run_id=resolved_root_run_id,
+                        main_db_path=merge_main_db,
+                        conflict=merge_conflict,
+                        include_data=merge_include_data,
+                        dry_run=merge_dry_run,
+                        shard_path=merge_shard_path,
+                    )
+                except OperationalError as exc:
+                    logger.warning(
+                        "Skipping Consist DB merge for archive promotion because "
+                        "the export/merge transaction failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    result.merge_result = {
+                        "skipped": True,
+                        "reason": "consist_db_merge_failed_after_retry",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "root_run_id": resolved_root_run_id,
+                        "main_db_path": str(merge_main_db),
+                        "retry_attempted": True,
+                    }
             else:
                 result.merge_result = {
                     "skipped": True,

@@ -94,6 +94,14 @@ Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.m
 - The launcher emits a `restart_hydration` audit event with `fallback_reason="replay_mode"` in that replay-first case.
 - The older hydration helpers in `pilates/runtime/restart.py` remain available for manual tooling and focused tests, but the normal launcher path does not call them.
 
+Restart and exact-rewind recovery queries use Consist semantic run matching.
+PILATES passes a `run_scope` derived from the restart archive run directory when
+one is available, otherwise from the current workspace run directory name.
+Consist matches that scope against a run whose `Run.id` or `Run.description`
+equals the scope or starts with `f"{run_scope}__"`. Restartable PILATES run
+names must preserve that prefix convention so same-scenario recovery cannot
+accidentally select a completed step from another archive.
+
 ## Analysis Surface
 
 PILATES keeps the archive-side Consist database and run outputs available for post-run analysis. The analysis helpers read the archived run metadata, run outputs, and artifact facets rather than rebuilding workflow state from scratch.

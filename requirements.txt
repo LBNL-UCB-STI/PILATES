@@ -57,7 +57,7 @@ sqlmodel
 pyhocon==0.3.61
 
 # Workflow and provenance tracking
-consist[ingest]>=0.1.4
+consist[ingest]>=0.1.5
 openlineage-python
 attrs>=20.0
 httpx>=0.27.0

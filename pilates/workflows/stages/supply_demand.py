@@ -14,6 +14,10 @@ from pilates.utils.formatting import formatted_print
 from pilates.workflows.orchestration import ManifestConfig
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workspace import Workspace
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
+)
 from .handoffs import LandUseToSupplyDemandHandoff
 
 from .supply_demand_activity import (
@@ -135,6 +139,19 @@ def run_supply_demand_stage(
         total_iters = clamped_total_iters
     previous_beam_outputs: Optional[Dict[str, Any]] = None
     resumed_usim_inputs = handoff.to_input_mapping()
+    if bool(getattr(state, "is_restart_run", False)) and resumed_usim_inputs:
+        missing_restart_roles = [
+            key
+            for key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5)
+            if key not in resumed_usim_inputs
+        ]
+        if missing_restart_roles:
+            raise RuntimeError(
+                "Restart metadata is missing required post-land-use UrbanSim H5 "
+                f"roles for ActivitySim: {', '.join(missing_restart_roles)}. "
+                "This restart likely predates the explicit population-source H5 "
+                "role split."
+            )
     if bool(getattr(state, "is_restart_run", False)) and not resumed_usim_inputs:
         # On resumed runs, land use may be enabled globally but already complete
         # for the current year. In that case the skipped land-use stage will not
@@ -146,7 +163,6 @@ def run_supply_demand_stage(
             state=state,
             settings=settings,
         )
-
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
@@ -192,6 +208,7 @@ def run_supply_demand_stage(
                 outputs_holder=outputs_holder,
                 state=state,
                 settings=settings,
+                tracker=scenario.tracker,
                 manifest_path=Path(manifest_path),
             )
 

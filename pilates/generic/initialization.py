@@ -237,6 +237,8 @@ def _log_record_store(
                 direction=direction,
                 table_filter=_h5_table_filter_from_list(tables_used),
                 description=getattr(record, "description", None),
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 **meta,
             )
         else:

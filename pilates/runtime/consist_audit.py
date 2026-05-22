@@ -47,6 +47,23 @@ _LIFECYCLE_SCOPED_KEYS = {
     "zarr_skims",
     "asim_sharrow_cache_dir",
 }
+_LIFECYCLE_STABLE_CONTRACT_FAMILIES = {
+    "usim_datastore_base_h5",
+    "usim_datastore_h5",
+    "usim_input_archive",
+    "usim_population_source_h5",
+    "zarr_skims",
+}
+_LIFECYCLE_DEFERRED_CONTRACT_FAMILIES = {
+    "asim_sharrow_cache_dir",
+    "atlas_observe_only",
+    "usim_year_output_h5",
+}
+_LIFECYCLE_TRANSITIONAL_CONTRACT_FAMILIES = {
+    "asim_input_archived",
+    "beam_input_archived",
+    "usim_forecast_output",
+}
 _LIFECYCLE_ATLAS_PREFIXES = (
     "atlas_",
     "adopt_",
@@ -54,26 +71,32 @@ _LIFECYCLE_ATLAS_PREFIXES = (
     "modeaccessibility",
     "vehicle_type_mapping_",
 )
-_LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES = {
-    "beam_input_archived",
-}
-_LIFECYCLE_H5_POLICY_FAMILIES = {
-    "usim_datastore_h5",
-    "usim_datastore_base_h5",
-    "usim_datastore_current_h5",
-    "usim_forecast_output",
+_LIFECYCLE_PHASE2_CANDIDATE_FAMILIES = {
     "usim_input_archive",
-    "usim_input_merged",
     "usim_population_source_h5",
-    "usim_year_output_h5",
 }
-_LIFECYCLE_DIRECTORY_POLICY_FAMILIES = {
-    "asim_sharrow_cache_dir",
-    "zarr_skims",
+_LIFECYCLE_CONTRACT_STATUS_BY_FAMILY = {
+    **{family: "stable" for family in _LIFECYCLE_STABLE_CONTRACT_FAMILIES},
+    **{family: "deferred" for family in _LIFECYCLE_DEFERRED_CONTRACT_FAMILIES},
+    **{family: "transitional" for family in _LIFECYCLE_TRANSITIONAL_CONTRACT_FAMILIES},
 }
-_LIFECYCLE_OBSERVE_ONLY_FAMILIES = {
-    "atlas_observe_only",
+_LIFECYCLE_RESTART_SUPPORT_KEYS = {
+    "workflow_manifest",
 }
+
+
+def _lifecycle_contract_status(family: str) -> Optional[str]:
+    return _LIFECYCLE_CONTRACT_STATUS_BY_FAMILY.get(family)
+
+
+def _lifecycle_contract_status_by_family(
+    families: set[str],
+) -> Dict[str, str]:
+    return {
+        family: status
+        for family in sorted(families)
+        if (status := _lifecycle_contract_status(family)) is not None
+    }
 
 
 def _json_safe(value: Any) -> Any:
@@ -342,6 +365,7 @@ def _lifecycle_event_in_scope(event: Mapping[str, Any]) -> bool:
         "final_shutdown",
         "promotion_status",
         "beam_restart_binding",
+        "beam_restart_recovery_readiness",
     }:
         return True
     key = str(event.get("key") or "")
@@ -406,6 +430,15 @@ def _lifecycle_event_has_artifact_identity(event: Mapping[str, Any]) -> bool:
 
 
 def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
+    artifact_driver = str(
+        event.get("artifact_driver")
+        or event.get("driver")
+        or event.get("artifact_type")
+        or ""
+    ).lower()
+    family = _lifecycle_family(event)
+    if family == "zarr_skims" or artifact_driver == "zarr":
+        return "zarr"
     if bool(event.get("h5_container")) or str(path or "").lower().endswith(
         (".h5", ".hdf5")
     ):
@@ -415,6 +448,40 @@ def _lifecycle_path_kind(path: Optional[str], event: Mapping[str, Any]) -> str:
     if path and os.path.isdir(path):
         return "directory"
     return "file"
+
+
+def _joined_lifecycle_event(
+    copy_event: Mapping[str, Any],
+    logged_event: Optional[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    joined = dict(copy_event)
+    if logged_event is None:
+        return joined
+    for key, value in logged_event.items():
+        if joined.get(key) in (None, ""):
+            joined[key] = value
+    return joined
+
+
+def _is_h5_child_artifact(event: Mapping[str, Any]) -> bool:
+    artifact_driver = str(
+        event.get("artifact_driver")
+        or event.get("driver")
+        or event.get("artifact_type")
+        or ""
+    ).lower()
+    if artifact_driver == "h5_table":
+        return True
+    return bool(event.get("h5_parent_key")) and not bool(event.get("h5_container"))
+
+
+def _h5_parent_policy_allows_registration(event: Mapping[str, Any]) -> bool:
+    if _is_h5_child_artifact(event):
+        return False
+    return (
+        str(event.get("container_recovery_unit") or "") == "parent_file"
+        and str(event.get("child_recovery_policy") or "") == "descriptive_only"
+    )
 
 
 def _lifecycle_missing_required_facets(event: Mapping[str, Any]) -> list[str]:
@@ -459,19 +526,28 @@ def _lifecycle_core_summary_payload(
     logged: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
     copied: Dict[tuple[str, str], tuple[int, Mapping[str, Any]]] = {}
     families_seen: set[str] = set()
-    safe_families: set[str] = set()
-    blocked_families: set[str] = set()
+    phase2_candidate_families = set(_LIFECYCLE_PHASE2_CANDIDATE_FAMILIES)
+    phase2_safe_families: set[str] = set()
+    phase2_blocked_families: set[str] = set()
+    phase2_blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
     blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
     diagnostic_blocking_reasons_by_family: Dict[str, set[str]] = defaultdict(set)
     blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
     phase2_blocker_counts_by_reason: Dict[str, int] = defaultdict(int)
+    restart_support_keys: set[str] = set()
     unknown_event_keys: set[str] = set()
     snapshot_logged = 0
     missing_required = 0
     copy_only_promotions = 0
     local_to_scratch_recovery_root_writes = 0
+    copied_artifacts_eligible = 0
+    phase2_candidate_copied_artifacts_eligible = 0
 
     for index, event in enumerate(events):
+        key = str(event.get("key") or "")
+        if key in _LIFECYCLE_RESTART_SUPPORT_KEYS:
+            restart_support_keys.add(key)
+            continue
         family = _lifecycle_family(event)
         if _lifecycle_event_has_artifact_identity(event):
             families_seen.add(family)
@@ -480,13 +556,19 @@ def _lifecycle_core_summary_payload(
                     event.get("key") or event.get("event_type") or "unknown"
                 )
                 unknown_event_keys.add(unknown_key)
-                blocked_families.add("unknown")
                 blocking_reasons_by_family["unknown"].add("unclassified_family")
                 blocker_counts_by_reason["unclassified_family"] += 1
-                phase2_blocker_counts_by_reason["unclassified_family"] += 1
         event_type = str(event.get("event_type"))
         if event_type == "artifact_logged":
             logged.setdefault(_copy_match_key(event), (index, event))
+            if _is_h5_child_artifact(event):
+                blocking_reasons_by_family[family].add("h5_child_table_ineligible")
+                blocker_counts_by_reason["h5_child_table_ineligible"] += 1
+                if family in phase2_candidate_families:
+                    phase2_blocking_reasons_by_family[family].add(
+                        "h5_child_table_ineligible"
+                    )
+                    phase2_blocker_counts_by_reason["h5_child_table_ineligible"] += 1
             if family in {
                 "asim_input_archived",
                 "beam_input_archived",
@@ -496,14 +578,17 @@ def _lifecycle_core_summary_payload(
                 snapshot_logged += 1
                 if _lifecycle_missing_required_facets(event):
                     missing_required += 1
-                    blocked_families.add(family)
                     blocking_reasons_by_family[family].add(
                         "missing_required_snapshot_facets"
                     )
                     blocker_counts_by_reason["missing_required_snapshot_facets"] += 1
-                    phase2_blocker_counts_by_reason[
-                        "missing_required_snapshot_facets"
-                    ] += 1
+                    if family in phase2_candidate_families:
+                        phase2_blocking_reasons_by_family[family].add(
+                            "missing_required_snapshot_facets"
+                        )
+                        phase2_blocker_counts_by_reason[
+                            "missing_required_snapshot_facets"
+                        ] += 1
         elif event_type == "archive_copy_completed":
             copied[_copy_match_key(event)] = (index, event)
         elif event_type == "promotion_status":
@@ -515,37 +600,34 @@ def _lifecycle_core_summary_payload(
             )
             if copy_only_promotion:
                 copy_only_promotions += 1
-                blocked_families.add("post_run_promotion")
                 blocking_reasons_by_family["post_run_promotion"].add(
                     "copy_only_promotion_metadata_unavailable"
                 )
                 blocker_counts_by_reason[
                     "copy_only_promotion_metadata_unavailable"
                 ] += 1
-                phase2_blocker_counts_by_reason[
-                    "copy_only_promotion_metadata_unavailable"
-                ] += 1
-            elif metadata_updated:
-                safe_families.add("post_run_promotion")
         if bool(event.get("local_to_scratch_recovery_roots_written")):
             local_to_scratch_recovery_root_writes += 1
 
-    eligible = 0
     archive_bytes_missing = 0
     copy_before_log = 0
     source_outside_run_tree = 0
     shallow_directory = 0
     h5_policy = 0
+    child_h5_policy = sum(1 for event in events if _is_h5_child_artifact(event))
+    copied_joined_to_logged = 0
 
     for match_key, (copy_index, copy_event) in copied.items():
-        family = _lifecycle_family(copy_event)
-        families_seen.add(family)
         local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
         path = str(copy_event.get("src") or copy_event.get("path") or "")
         dest = str(copy_event.get("dest") or _archive_path_for_local(path) or "")
         reasons: list[str] = []
         logged_entry = logged.get(match_key)
-        path_kind = _lifecycle_path_kind(path, copy_event)
+        logged_event = logged_entry[1] if logged_entry is not None else None
+        joined_event = _joined_lifecycle_event(copy_event, logged_event)
+        family = _lifecycle_family(joined_event)
+        families_seen.add(family)
+        path_kind = _lifecycle_path_kind(path, joined_event)
 
         if not _path_under_root(path, local_root):
             source_outside_run_tree += 1
@@ -561,55 +643,53 @@ def _lifecycle_core_summary_payload(
         if path_kind == "directory":
             shallow_directory += 1
             reasons.append("shallow_directory_signature")
-        if path_kind == "h5" or family in _LIFECYCLE_H5_POLICY_FAMILIES:
+        if logged_event is not None:
+            copied_joined_to_logged += 1
+        if _is_h5_child_artifact(joined_event):
+            reasons.append("h5_child_table_ineligible")
+        elif path_kind == "h5" and not _h5_parent_policy_allows_registration(
+            joined_event
+        ):
             h5_policy += 1
             reasons.append("h5_parent_child_policy")
-        if family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
+        if path_kind == "directory":
             reasons.append("shallow_directory_signature")
-        if family not in _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES and not reasons:
-            reasons.append("phase2_policy_deferred")
 
         if reasons:
-            blocked_families.add(family)
             for reason in sorted(set(reasons)):
-                if family in _LIFECYCLE_OBSERVE_ONLY_FAMILIES:
+                if family == "atlas_observe_only":
                     diagnostic_blocking_reasons_by_family[family].add(reason)
                 else:
                     blocking_reasons_by_family[family].add(reason)
                 blocker_counts_by_reason[reason] += 1
-                if family not in _LIFECYCLE_OBSERVE_ONLY_FAMILIES:
+                if family in phase2_candidate_families:
+                    phase2_blocking_reasons_by_family[family].add(reason)
                     phase2_blocker_counts_by_reason[reason] += 1
+        elif family in phase2_candidate_families:
+            copied_artifacts_eligible += 1
+            phase2_safe_families.add(family)
+            phase2_candidate_copied_artifacts_eligible += 1
         else:
-            if family in _LIFECYCLE_PHASE2_ELIGIBLE_FAMILIES:
-                eligible += 1
-                safe_families.add(family)
-            else:
-                blocked_families.add(family)
-                blocking_reasons_by_family[family].add("phase2_policy_deferred")
-                blocker_counts_by_reason["phase2_policy_deferred"] += 1
-                phase2_blocker_counts_by_reason["phase2_policy_deferred"] += 1
+            copied_artifacts_eligible += 1
+    for family in sorted(phase2_candidate_families - families_seen):
+        phase2_blocking_reasons_by_family[family].add("phase2_candidate_missing")
+        blocking_reasons_by_family[family].add("phase2_candidate_missing")
+        blocker_counts_by_reason["phase2_candidate_missing"] += 1
+        phase2_blocker_counts_by_reason["phase2_candidate_missing"] += 1
 
-    if "atlas_observe_only" in families_seen:
-        blocked_families.add("atlas_observe_only")
-        blocking_reasons_by_family["atlas_observe_only"].add("deferred_policy")
-        blocker_counts_by_reason["deferred_policy"] += 1
-    for family in sorted(families_seen):
-        if family in _LIFECYCLE_H5_POLICY_FAMILIES:
-            blocked_families.add(family)
-            blocking_reasons_by_family[family].add("h5_parent_child_policy")
-        elif family in _LIFECYCLE_DIRECTORY_POLICY_FAMILIES:
-            blocked_families.add(family)
-            blocking_reasons_by_family[family].add("shallow_directory_signature")
+    phase2_blocked_families.update(phase2_blocking_reasons_by_family.keys())
 
-    if safe_families and blocked_families:
+    if phase2_safe_families and phase2_blocked_families:
         recommendation = "narrow"
-        reason = "Some artifact families look safe, but blocked families remain."
-    elif safe_families and not blocked_families:
+        reason = (
+            "Some intended Phase 2 candidates look safe, but blocked candidates remain."
+        )
+    elif phase2_safe_families and not phase2_blocked_families:
         recommendation = "go"
-        reason = "All intended-scope lifecycle gates passed."
+        reason = "All intended Phase 2 candidates passed."
     else:
         recommendation = "defer"
-        reason = "The audit cannot yet prove safe recovery-root registration."
+        reason = "The audit cannot yet prove intended Phase 2 candidates are safe."
 
     payload = {
         "generated_at": generated_at,
@@ -621,22 +701,30 @@ def _lifecycle_core_summary_payload(
             for event_type in sorted({str(event.get("event_type")) for event in events})
         },
         "families_seen": sorted(families_seen),
+        "restart_support_keys": sorted(restart_support_keys),
         "unknown_event_keys": sorted(unknown_event_keys),
         "snapshot_artifacts_logged": snapshot_logged,
         "snapshot_artifacts_missing_required_facets": missing_required,
-        "copied_artifacts_eligible_for_recovery_root_registration": eligible,
+        "copied_artifacts_eligible_for_recovery_root_registration": copied_artifacts_eligible,
+        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration": phase2_candidate_copied_artifacts_eligible,
         "copied_artifacts_blocked_archive_bytes_missing": archive_bytes_missing,
         "copied_artifacts_blocked_artifact_logging_after_copying": copy_before_log,
         "copied_artifacts_blocked_source_outside_run_tree": source_outside_run_tree,
+        "copied_artifacts_joined_to_logged_artifacts": copied_joined_to_logged,
         "directory_artifacts_blocked_shallow_directory_signatures": shallow_directory,
         "h5_parent_child_artifacts_requiring_policy": h5_policy,
+        "h5_child_table_artifacts_ineligible": child_h5_policy,
         "copy_only_promotions_db_tracker_metadata_unavailable": copy_only_promotions,
         "local_to_scratch_recovery_roots_written": local_to_scratch_recovery_root_writes,
         "atlas_observe_only_deferred": True,
         "phase2_recommendation": recommendation,
         "phase2_recommendation_reason": reason,
-        "safe_families_for_phase2": sorted(safe_families - blocked_families),
-        "blocked_families_for_phase2": sorted(blocked_families),
+        "contract_status_by_family": _lifecycle_contract_status_by_family(
+            families_seen
+        ),
+        "phase2_candidate_families": sorted(phase2_candidate_families),
+        "safe_families_for_phase2": sorted(phase2_safe_families),
+        "blocked_families_for_phase2": sorted(phase2_blocked_families),
         "blocking_reasons_by_family": {
             family: sorted(reasons)
             for family, reasons in sorted(blocking_reasons_by_family.items())

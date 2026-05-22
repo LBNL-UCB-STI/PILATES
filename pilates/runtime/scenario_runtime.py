@@ -14,7 +14,7 @@ from typing import (
 )
 
 from pilates.config import PilatesConfig
-from pilates.workflows.catalog import schema_step_names
+from pilates.workflows.catalog import schema_step_names, schema_step_specs
 from pilates.workflows.steps import (
     StepOutputsHolder,
     schema_step_builder_registry,
@@ -158,13 +158,14 @@ class ScenarioParentLinkProxy:
         model_norm = model_name.lower()
         if model_norm == "beam" or model_norm.startswith("beam_"):
             key = (year, iteration)
-            return self._activitysim_run_ids.get(key) or self._activitysim_step_ids.get(
-                key
-            )
+            exact = self._activitysim_run_ids.get(key)
+            step = self._activitysim_step_ids.get(key)
+            return exact or step
         if (
             model_norm == "activitysim" or model_norm.startswith("activitysim_")
         ) and iteration > 0:
-            return self._beam_run_ids.get((year, iteration - 1))
+            exact = self._beam_run_ids.get((year, iteration - 1))
+            return exact
         return None
 
     def _should_expect_parent(
@@ -404,10 +405,19 @@ def filter_schema_steps_for_enabled_models(
 def _required_output_keys_for_surface(
     *,
     surface: "EnabledWorkflowSurface",
+    state: Any = None,
 ) -> List[str]:
     required_output_keys: List[str] = []
     seen = set()
-    for step_name in schema_step_names():
+
+    min_order = _required_output_restart_frontier_order(
+        surface=surface,
+        state=state,
+    )
+    for spec in schema_step_specs(include_optional=False):
+        if min_order is not None and spec.order < min_order:
+            continue
+        step_name = spec.step_name
         if not surface.step_enabled(step_name, include_optional=False):
             continue
         step_surface = surface.step_surface(step_name)
@@ -419,6 +429,82 @@ def _required_output_keys_for_surface(
             required_output_keys.append(key)
             seen.add(key)
     return required_output_keys
+
+
+def _stage_name(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    name = getattr(value, "name", None)
+    if isinstance(name, str) and name:
+        return name
+    raw_value = getattr(value, "value", None)
+    if isinstance(raw_value, str) and raw_value:
+        return raw_value
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _state_stage_matches(state: Any, value: Any, stage_name: str) -> bool:
+    stage_enum = getattr(state, "Stage", None)
+    expected = getattr(stage_enum, stage_name, None) if stage_enum is not None else None
+    if expected is not None and value == expected:
+        return True
+    return _stage_name(value) == stage_name
+
+
+def _restart_frontier_stage_name(
+    *,
+    surface: "EnabledWorkflowSurface",
+    state: Any,
+) -> Optional[str]:
+    raw_run_mode = getattr(surface, "run_mode", None)
+    run_mode = str(getattr(raw_run_mode, "value", raw_run_mode))
+    if run_mode != "restart":
+        return None
+
+    current_major_stage = getattr(state, "current_major_stage", None)
+    if current_major_stage is None:
+        return None
+
+    if _state_stage_matches(state, current_major_stage, "supply_demand_loop"):
+        current_sub_stage = getattr(state, "current_sub_stage", None)
+        current_sub_stage_name = _stage_name(current_sub_stage)
+        if current_sub_stage_name in {"activity_demand", "traffic_assignment"}:
+            return current_sub_stage_name
+        for stage_name in ("activity_demand", "traffic_assignment"):
+            if any(
+                spec.stage_name == stage_name
+                and surface.step_enabled(spec.step_name, include_optional=False)
+                for spec in schema_step_specs(include_optional=False)
+            ):
+                return stage_name
+        return None
+
+    return _stage_name(current_major_stage)
+
+
+def _required_output_restart_frontier_order(
+    *,
+    surface: "EnabledWorkflowSurface",
+    state: Any = None,
+) -> Optional[int]:
+    if state is None:
+        return None
+
+    frontier_stage_name = _restart_frontier_stage_name(surface=surface, state=state)
+    if frontier_stage_name is None:
+        return None
+
+    orders = [
+        spec.order
+        for spec in schema_step_specs(include_optional=False)
+        if spec.stage_name == frontier_stage_name
+        and surface.step_enabled(spec.step_name, include_optional=False)
+    ]
+    if not orders:
+        return None
+    return min(orders)
 
 
 def build_scenario_runtime_contract(
@@ -478,7 +564,10 @@ def build_scenario_runtime_contract(
         require_all_tracked_declared=False,
     )
     coupler_schema = build_coupler_schema_fn(schema_steps_enabled, settings=settings)
-    required_output_keys = _required_output_keys_for_surface(surface=surface)
+    required_output_keys = _required_output_keys_for_surface(
+        surface=surface,
+        state=state,
+    )
     scenario_kwargs["require_outputs"] = required_output_keys
     return {
         "scenario_kwargs": scenario_kwargs,

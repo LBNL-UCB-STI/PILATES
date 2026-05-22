@@ -31,6 +31,8 @@ def test_consist_log_h5_container_integration(tmp_path):
             key="usim_datastore_h5",
             direction="input",
             hash_tables="never",
+            container_recovery_unit="parent_file",
+            child_recovery_policy="descriptive_only",
         )
 
     assert artifact is not None

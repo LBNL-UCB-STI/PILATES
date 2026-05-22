@@ -17,6 +17,7 @@ from typing import Any, Callable, Dict, Iterator, Mapping, Optional, cast
 
 from pilates.utils.consist_types import (
     ArtifactLike,
+    RunLike,
     ScenarioWithCoupler,
     TrackerLike,
 )
@@ -366,10 +367,9 @@ def current_run_id() -> Optional[str]:
     run = current_run()
     if run is None:
         return None
-    run_id = getattr(run, "id", None)
-    if run_id is None:
+    if not isinstance(run, RunLike):
         return None
-    run_id_text = str(run_id).strip()
+    run_id_text = str(run.id).strip()
     return run_id_text or None
 
 
@@ -441,12 +441,8 @@ def _resolve_artifact_path(value: Any) -> Optional[str]:
         return os.fspath(_normalize_path(value))
     if isinstance(value, str):
         return _normalize_path(value)
-    if hasattr(value, "path"):
+    if isinstance(value, ArtifactLike):
         return os.fspath(getattr(value, "path"))
-    if hasattr(value, "container_uri"):
-        return str(getattr(value, "container_uri"))
-    if hasattr(value, "uri"):
-        return str(getattr(value, "uri"))
     return None
 
 

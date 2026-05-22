@@ -76,6 +76,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workspace import Workspace
 from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
+from pilates.workflows.binding import build_binding_plan
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
@@ -93,6 +94,9 @@ from pilates.workflows.stages.supply_demand_beam import (
     _find_completed_beam_run_for_restart,
     _hydrate_completed_beam_run_outputs,
 )
+from pilates.workflows.stages.supply_demand_activity import (
+    _activitysim_postprocess_role_binding_rules,
+)
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
     _restore_supply_demand_usim_inputs_for_resume,
@@ -109,6 +113,7 @@ from tests.workflow_contract_harness import (
     DummyPreprocessor,
     DummyRunner,
     FakeScenario,
+    FakeTracker,
     build_runtime_context,
 )
 from workflow_state import WorkflowState
@@ -578,7 +583,12 @@ def test_land_use_stage_contract(stage_env):
     )
     assert USIM_DATASTORE_BASE_H5 in usim_inputs
     assert USIM_DATASTORE_CURRENT_H5 in usim_inputs
+    assert USIM_POPULATION_SOURCE_H5 in usim_inputs
     assert usim_inputs[USIM_DATASTORE_BASE_H5].endswith("usim_000.h5")
+    assert (
+        usim_inputs[USIM_POPULATION_SOURCE_H5] != usim_inputs[USIM_DATASTORE_CURRENT_H5]
+    )
+    assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith("_population_source.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
@@ -1742,6 +1752,139 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
 
 
+def test_supply_demand_stage_accepts_distinct_land_use_population_snapshot(
+    stage_env,
+    tmp_path,
+):
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    usim_dir = Path(stage_env["workspace"].get_usim_mutable_data_dir())
+    population_snapshot = _write_file(
+        usim_dir
+        / (
+            Path(stage_env["usim_input_path"]).stem
+            + "_population_source"
+            + Path(stage_env["usim_input_path"]).suffix
+        )
+    )
+    handoff = LandUseToSupplyDemandHandoff(
+        usim_datastore_base_h5=stage_env["usim_input_path"],
+        usim_datastore_current_h5=stage_env["usim_input_path"],
+        usim_population_source_h5=str(population_snapshot),
+    )
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=stage_env["state"],
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        handoff=handoff,
+        build_manifest_path=lambda _workspace, year, iteration: (
+            tmp_path / f"manifest_{year}_{iteration}.json"
+        ),
+    )
+
+    postprocess_calls = [
+        call
+        for call in stage_env["scenario"].calls
+        if call.get("model") == "activitysim_postprocess"
+    ]
+    assert postprocess_calls, "Expected an ActivitySim postprocess step call."
+    binding = postprocess_calls[0].get("binding")
+    assert isinstance(binding, BindingResult)
+    assert (binding.inputs or {}).get(USIM_POPULATION_SOURCE_H5) == str(
+        population_snapshot
+    )
+    assert (binding.inputs or {}).get(USIM_DATASTORE_CURRENT_H5) == stage_env[
+        "usim_input_path"
+    ]
+
+
+def test_activitysim_postprocess_role_binding_rejects_stale_coupler_h5_roles(
+    stage_env,
+):
+    from pilates.workflows.surface import build_enabled_workflow_surface
+
+    coupler = CouplerStub()
+    coupler.set(USIM_POPULATION_SOURCE_H5, "/tmp/stale_population.h5")
+    coupler.set(USIM_DATASTORE_CURRENT_H5, "/tmp/stale_current.h5")
+    surface = build_enabled_workflow_surface(
+        stage_env["settings"],
+        state=stage_env["state"],
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_postprocess",
+        coupler=coupler,
+        artifact_rules=_activitysim_postprocess_role_binding_rules(
+            postprocess_required_keys=(
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+            ),
+            postprocess_optional_keys=(),
+            land_use_enabled=True,
+        ),
+        restrict_to_inline_rules=True,
+        required_keys=(USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5),
+        settings=stage_env["settings"],
+        state=stage_env["state"],
+        workspace=stage_env["workspace"],
+        year=stage_env["state"].forecast_year,
+        surface=surface,
+    )
+
+    assert plan.inputs == {}
+    assert plan.input_keys == []
+    assert plan.missing_required == [
+        USIM_POPULATION_SOURCE_H5,
+        USIM_DATASTORE_CURRENT_H5,
+    ]
+
+
+def test_restart_activitysim_required_artifacts_warns_when_snapshot_missing(
+    stage_env,
+    caplog,
+):
+    from pilates.workflows import binding as workflow_binding
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    state.is_start_year = lambda: False
+
+    usim_dir = Path(workspace.get_usim_mutable_data_dir())
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
+    snapshot_h5 = current_h5.with_name(
+        f"{current_h5.stem}_population_source{current_h5.suffix}"
+    )
+    if snapshot_h5.exists():
+        snapshot_h5.unlink()
+
+    caplog.set_level(logging.WARNING)
+    candidates = workflow_binding._urbansim_datastore_candidates_for_year(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.forecast_year,
+    )
+
+    assert candidates is not None
+    assert candidates[USIM_POPULATION_SOURCE_H5] == str(current_h5)
+    assert "population-source snapshot missing" in caplog.text
+
+
 def test_supply_demand_activitysim_postprocess_skips_h5_bindings_without_land_use(
     stage_env, tmp_path
 ):
@@ -2064,7 +2207,7 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(
     assert BEAM_PERSONS_IN in run_input_keys
 
 
-def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
+def test_find_completed_beam_run_for_restart_uses_matching_target_with_run_scope(
     stage_env,
     tmp_path,
 ):
@@ -2075,53 +2218,18 @@ def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
     archive_run_dir.mkdir(parents=True)
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
     cache_epoch = getattr(settings.run, "cache_epoch", 2)
+    run_id = (
+        f"{Path(workspace.full_path).name}"
+        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
+    )
 
     class _Tracker:
         def __init__(self):
             self.calls = []
 
-        def find_runs(self, **kwargs):
+        def find_matching_run(self, **kwargs):
             self.calls.append(kwargs)
-            return [
-                SimpleNamespace(id="other-run__step_func__y2018__i0__phase_run_x"),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        "__step_func__y9999__i0__phase_run_wrong"
-                    ),
-                    model="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year + 2,
-                    iteration=0,
-                    meta={"cache_epoch": cache_epoch},
-                    updated_at="2099-01-01T00:00:00",
-                ),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        "__step_func__y9999__i0__phase_run_unproven"
-                    ),
-                    updated_at="2099-01-02T00:00:00",
-                ),
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
-                    ),
-                    meta={
-                        "model": "beam_run",
-                        "stage": "beam",
-                        "phase": "run",
-                        "cache_epoch": cache_epoch,
-                    },
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    updated_at="2026-01-01T00:00:00",
-                ),
-            ]
+            return SimpleNamespace(id=run_id)
 
     tracker = _Tracker()
     run = _find_completed_beam_run_for_restart(
@@ -2134,15 +2242,18 @@ def test_find_completed_beam_run_for_restart_rejects_other_archive_prefix(
     )
 
     assert run is not None
-    assert str(run.id).startswith(f"{Path(workspace.full_path).name}__")
+    assert run.id == run_id
     assert tracker.calls[0]["model"] == "beam_run"
     assert tracker.calls[0]["stage"] == "beam"
     assert tracker.calls[0]["phase"] == "run"
     assert tracker.calls[0]["status"] == "completed"
     assert tracker.calls[0]["iteration"] == 0
+    assert tracker.calls[0]["year"] == state.forecast_year
+    assert tracker.calls[0]["cache_epoch"] == cache_epoch
+    assert tracker.calls[0]["run_scope"] == Path(workspace.full_path).name
 
 
-def test_find_completed_beam_run_for_restart_rejects_unproven_same_prefix_candidate(
+def test_find_completed_beam_run_for_restart_returns_none_when_no_match(
     stage_env,
     tmp_path,
 ):
@@ -2154,15 +2265,8 @@ def test_find_completed_beam_run_for_restart_rejects_unproven_same_prefix_candid
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=(
-                        f"{Path(workspace.full_path).name}"
-                        f"__step_func__y{state.forecast_year}__i0__phase_run_unproven"
-                    )
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return None
 
     run = _find_completed_beam_run_for_restart(
         tracker=_Tracker(),
@@ -2366,19 +2470,8 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
             return "materialized_fs=2 missing_source=1"
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2496,19 +2589,8 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         def __init__(self):
             self.hydrate_calls = []
 
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=state.forecast_year,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2620,19 +2702,8 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     }
 
     class _Tracker:
-        def find_runs(self, **_kwargs):
-            return [
-                SimpleNamespace(
-                    id=run_id,
-                    model_name="beam_run",
-                    stage="beam",
-                    phase="run",
-                    status="completed",
-                    year=2017,
-                    iteration=0,
-                    meta={"cache_epoch": getattr(settings.run, "cache_epoch", 2)},
-                )
-            ]
+        def find_matching_run(self, **_kwargs):
+            return SimpleNamespace(id=run_id)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2831,6 +2902,7 @@ def test_restore_activity_demand_outputs_for_resume_reuses_coupler_artifacts(
         outputs_holder=holder,
         state=state,
         settings=stage_env["settings"],
+        tracker=FakeTracker(),
     )
 
     assert restored == {
@@ -2891,6 +2963,7 @@ def test_restore_activity_demand_outputs_for_resume_republishes_zarr_skims(
         outputs_holder=holder,
         state=state,
         settings=stage_env["settings"],
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -2935,6 +3008,7 @@ def test_restore_activity_demand_outputs_for_resume_promotes_archived_zarr_skims
         outputs_holder=holder,
         state=state,
         settings=stage_env["settings"],
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -3002,6 +3076,7 @@ def test_restore_activity_demand_outputs_for_resume_manifest_restore_rehydrates_
         state=state,
         settings=settings,
         manifest_path=manifest_path,
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -3079,6 +3154,7 @@ def test_restore_activity_demand_outputs_for_resume_manifest_workspace_uris_rehy
         state=state,
         settings=settings,
         manifest_path=manifest_path,
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -3091,231 +3167,250 @@ def test_restore_activity_demand_outputs_for_resume_manifest_workspace_uris_rehy
     assert coupler.get("persons_asim_out") == str(persons)
     assert artifact_to_path(coupler.get(ZARR_SKIMS), workspace) == str(archived_zarr)
 
+    def test_restore_activity_demand_outputs_for_resume_seeds_activitysim_run_parent_link(
+        stage_env,
+        tmp_path,
+    ):
+        workspace = stage_env["workspace"]
+        state = stage_env["state"]
+        state.current_year = state.forecast_year
+        coupler = stage_env["coupler"]
+        settings = stage_env["settings"]
+        holder = StepOutputsHolder()
+        remembered = []
 
-def test_restore_activity_demand_outputs_for_resume_seeds_activitysim_run_parent_link(
-    stage_env,
-    tmp_path,
-):
-    workspace = stage_env["workspace"]
-    state = stage_env["state"]
-    coupler = stage_env["coupler"]
-    settings = stage_env["settings"]
-    holder = StepOutputsHolder()
-    remembered = []
+        class _Scenario:
+            def remember_restored_run_id(self, **kwargs):
+                remembered.append(kwargs)
 
-    class _Scenario:
-        def remember_restored_run_id(self, **kwargs):
-            remembered.append(kwargs)
+        iter_dir = (
+            Path(workspace.get_asim_output_dir())
+            / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+        )
+        beam_plans = iter_dir / "beam_plans.parquet"
+        households = iter_dir / "households.parquet"
+        persons = iter_dir / "persons.parquet"
+        archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+        usim_datastore = (
+            Path(workspace.get_usim_mutable_data_dir())
+            / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+        )
+        _write_file(beam_plans)
+        _write_file(households)
+        _write_file(persons)
+        _write_file(archived_zarr)
+        _write_file(usim_datastore)
 
-    iter_dir = (
-        Path(workspace.get_asim_output_dir())
-        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
-    )
-    beam_plans = iter_dir / "beam_plans.parquet"
-    households = iter_dir / "households.parquet"
-    persons = iter_dir / "persons.parquet"
-    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
-    usim_datastore = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
-    )
-    _write_file(beam_plans)
-    _write_file(households)
-    _write_file(persons)
-    _write_file(archived_zarr)
-    _write_file(usim_datastore)
+        manifest_path = tmp_path / "activitysim_postprocess_manifest_with_run_id.yaml"
+        manifest_path.write_text(
+            yaml.safe_dump(
+                {
+                    "activitysim_run": {
+                        "run_id": "activitysim_run_y2018_i0_prun",
+                    },
+                    "activitysim_postprocess": {
+                        "completed_at": "2026-01-01T00:00:00",
+                        "cache_hit": True,
+                        "outputs": serialize_step_outputs(
+                            ActivitySimPostprocessOutputs(
+                                usim_datastore_h5=usim_datastore,
+                                asim_output_dir=Path(workspace.get_asim_output_dir()),
+                                processed_outputs={
+                                    "beam_plans_asim_out": beam_plans,
+                                    "households_asim_out": households,
+                                    "persons_asim_out": persons,
+                                    "asim_input_skims_zarr_archived": archived_zarr,
+                                },
+                            )
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    manifest_path = tmp_path / "activitysim_postprocess_manifest_with_run_id.yaml"
-    manifest_path.write_text(
-        yaml.safe_dump(
+        restored = _restore_activity_demand_outputs_for_resume(
+            scenario=_Scenario(),
+            coupler=coupler,
+            workspace=workspace,
+            outputs_holder=holder,
+            state=state,
+            settings=settings,
+            manifest_path=manifest_path,
+            tracker=FakeTracker(matching_run="activitysim_run_y2018_i0_prun"),
+        )
+
+        assert restored is not None
+        assert remembered == [
             {
-                "activitysim_run": {
-                    "run_id": "activitysim_run_y2018_i0_prun",
-                },
-                "activitysim_postprocess": {
-                    "completed_at": "2026-01-01T00:00:00",
-                    "cache_hit": True,
-                    "outputs": serialize_step_outputs(
-                        ActivitySimPostprocessOutputs(
-                            usim_datastore_h5=usim_datastore,
-                            asim_output_dir=Path(workspace.get_asim_output_dir()),
-                            processed_outputs={
-                                "beam_plans_asim_out": beam_plans,
-                                "households_asim_out": households,
-                                "persons_asim_out": persons,
-                                "asim_input_skims_zarr_archived": archived_zarr,
-                            },
-                        )
-                    ),
-                },
+                "model_name": "activitysim_run",
+                "year": state.forecast_year,
+                "iteration": state.current_inner_iter,
+                "run_id": "activitysim_run_y2018_i0_prun",
             }
-        ),
-        encoding="utf-8",
-    )
+        ]
 
-    restored = _restore_activity_demand_outputs_for_resume(
-        scenario=_Scenario(),
-        coupler=coupler,
-        workspace=workspace,
-        outputs_holder=holder,
-        state=state,
-        settings=settings,
-        manifest_path=manifest_path,
-    )
+    def test_restore_activity_demand_outputs_for_resume_seeds_parent_link_from_manifest_run_epoch(
+        stage_env,
+        tmp_path,
+    ):
+        workspace = stage_env["workspace"]
+        state = stage_env["state"]
+        coupler = stage_env["coupler"]
+        settings = stage_env["settings"]
+        holder = StepOutputsHolder()
+        remembered = []
 
-    assert restored is not None
-    assert remembered == [
-        {
-            "model_name": "activitysim_run",
-            "year": state.forecast_year,
-            "iteration": state.current_inner_iter,
-            "run_id": "activitysim_run_y2018_i0_prun",
-        }
-    ]
+        class _Scenario:
+            def remember_restored_run_id(self, **kwargs):
+                remembered.append(kwargs)
 
+        # Simulate a year-boundary resume where the current state has already moved on,
+        # but the manifest still restores the just-finished ActivitySim run.
+        state.current_year = 2018
+        state.forecast_year = 2019
+        state.current_inner_iter = 1
 
-def test_restore_activity_demand_outputs_for_resume_seeds_parent_link_from_manifest_run_epoch(
-    stage_env,
-    tmp_path,
-):
-    workspace = stage_env["workspace"]
-    state = stage_env["state"]
-    coupler = stage_env["coupler"]
-    settings = stage_env["settings"]
-    holder = StepOutputsHolder()
-    remembered = []
+        iter_dir = Path(workspace.get_asim_output_dir()) / "year-2017-iteration-1"
+        beam_plans = iter_dir / "beam_plans.parquet"
+        households = iter_dir / "households.parquet"
+        persons = iter_dir / "persons.parquet"
+        archived_zarr = (
+            Path(workspace.get_asim_output_dir())
+            / "inputs-year-2017-iteration-1"
+            / "skims.zarr"
+        )
+        usim_datastore = (
+            Path(workspace.get_usim_mutable_data_dir())
+            / f"{USIM_INPUT_MERGED_PREFIX}2018.h5"
+        )
+        _write_file(beam_plans)
+        _write_file(households)
+        _write_file(persons)
+        _write_file(archived_zarr)
+        _write_file(usim_datastore)
 
-    class _Scenario:
-        def remember_restored_run_id(self, **kwargs):
-            remembered.append(kwargs)
+        manifest_path = (
+            tmp_path / "activitysim_postprocess_manifest_with_epoch_run_id.yaml"
+        )
+        manifest_path.write_text(
+            yaml.safe_dump(
+                {
+                    "activitysim_run": {
+                        "run_id": (
+                            "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2"
+                        ),
+                    },
+                    "activitysim_postprocess": {
+                        "completed_at": "2026-01-01T00:00:00",
+                        "cache_hit": True,
+                        "outputs": serialize_step_outputs(
+                            ActivitySimPostprocessOutputs(
+                                usim_datastore_h5=usim_datastore,
+                                asim_output_dir=Path(workspace.get_asim_output_dir()),
+                                processed_outputs={
+                                    "beam_plans_asim_out": beam_plans,
+                                    "households_asim_out": households,
+                                    "persons_asim_out": persons,
+                                    "asim_input_skims_zarr_archived": archived_zarr,
+                                },
+                            )
+                        ),
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    # Simulate a year-boundary resume where the current state has already moved on,
-    # but the manifest still restores the just-finished ActivitySim run.
-    state.current_year = 2018
-    state.forecast_year = 2019
-    state.current_inner_iter = 1
+        restored = _restore_activity_demand_outputs_for_resume(
+            scenario=_Scenario(),
+            coupler=coupler,
+            workspace=workspace,
+            outputs_holder=holder,
+            state=state,
+            settings=settings,
+            manifest_path=manifest_path,
+            tracker=FakeTracker(
+                matching_run="archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2"
+            ),
+        )
 
-    iter_dir = Path(workspace.get_asim_output_dir()) / "year-2017-iteration-1"
-    beam_plans = iter_dir / "beam_plans.parquet"
-    households = iter_dir / "households.parquet"
-    persons = iter_dir / "persons.parquet"
-    archived_zarr = (
-        Path(workspace.get_asim_output_dir())
-        / "inputs-year-2017-iteration-1"
-        / "skims.zarr"
-    )
-    usim_datastore = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / f"{USIM_INPUT_MERGED_PREFIX}2018.h5"
-    )
-    _write_file(beam_plans)
-    _write_file(households)
-    _write_file(persons)
-    _write_file(archived_zarr)
-    _write_file(usim_datastore)
-
-    manifest_path = tmp_path / "activitysim_postprocess_manifest_with_epoch_run_id.yaml"
-    manifest_path.write_text(
-        yaml.safe_dump(
+        assert restored is not None
+        assert remembered == [
             {
-                "activitysim_run": {
-                    "run_id": (
-                        "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2"
-                    ),
-                },
-                "activitysim_postprocess": {
-                    "completed_at": "2026-01-01T00:00:00",
-                    "cache_hit": True,
-                    "outputs": serialize_step_outputs(
-                        ActivitySimPostprocessOutputs(
-                            usim_datastore_h5=usim_datastore,
-                            asim_output_dir=Path(workspace.get_asim_output_dir()),
-                            processed_outputs={
-                                "beam_plans_asim_out": beam_plans,
-                                "households_asim_out": households,
-                                "persons_asim_out": persons,
-                                "asim_input_skims_zarr_archived": archived_zarr,
-                            },
-                        )
-                    ),
-                },
+                "model_name": "activitysim_run",
+                "year": 2018,
+                "iteration": 1,
+                "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
             }
-        ),
-        encoding="utf-8",
-    )
+        ]
 
-    restored = _restore_activity_demand_outputs_for_resume(
-        scenario=_Scenario(),
-        coupler=coupler,
-        workspace=workspace,
-        outputs_holder=holder,
-        state=state,
-        settings=settings,
-        manifest_path=manifest_path,
-    )
+    def test_seed_supply_demand_parent_run_ids_for_resume_replays_manifest_run_ids(
+        stage_env,
+        tmp_path,
+    ):
+        workspace = stage_env["workspace"]
+        state = stage_env["state"]
+        remembered = []
 
-    assert restored is not None
-    assert remembered == [
-        {
-            "model_name": "activitysim_run",
-            "year": 2018,
-            "iteration": 1,
-            "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
-        }
-    ]
+        class _Scenario:
+            def remember_restored_run_id(self, **kwargs):
+                remembered.append(kwargs)
 
+        state.file_loc = str(tmp_path / "archive" / "state.yaml")
+        archive_workflow_dir = tmp_path / "archive" / "run" / ".workflow"
+        archive_workflow_dir.mkdir(parents=True, exist_ok=True)
+        Path(state.file_loc).parent.mkdir(parents=True, exist_ok=True)
+        Path(state.file_loc).write_text("year: 2018\n", encoding="utf-8")
+        (archive_workflow_dir / "year_2017_iteration_1.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "activitysim_run": {
+                        "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                    },
+                    "beam_run": {
+                        "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
 
-def test_seed_supply_demand_parent_run_ids_for_resume_replays_manifest_run_ids(
-    stage_env,
-    tmp_path,
-):
-    workspace = stage_env["workspace"]
-    state = stage_env["state"]
-    remembered = []
+        seed_supply_demand_parent_run_ids_for_resume(
+            scenario=_Scenario(),
+            workspace=workspace,
+            state=state,
+            tracker=FakeTracker(
+                matching_run={
+                    (
+                        "activitysim_run",
+                        2018,
+                        1,
+                    ): "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                    (
+                        "beam_run",
+                        2017,
+                        1,
+                    ): "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+                }
+            ),
+            settings=stage_env["settings"],
+        )
 
-    class _Scenario:
-        def remember_restored_run_id(self, **kwargs):
-            remembered.append(kwargs)
-
-    state.file_loc = str(tmp_path / "archive" / "state.yaml")
-    archive_workflow_dir = tmp_path / "archive" / "run" / ".workflow"
-    archive_workflow_dir.mkdir(parents=True, exist_ok=True)
-    Path(state.file_loc).parent.mkdir(parents=True, exist_ok=True)
-    Path(state.file_loc).write_text("year: 2018\n", encoding="utf-8")
-    (archive_workflow_dir / "year_2017_iteration_1.yaml").write_text(
-        yaml.safe_dump(
+        assert remembered == [
             {
-                "activitysim_run": {
-                    "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
-                },
-                "beam_run": {
-                    "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    seed_supply_demand_parent_run_ids_for_resume(
-        scenario=_Scenario(),
-        workspace=workspace,
-        state=state,
-    )
-
-    assert remembered == [
-        {
-            "model_name": "activitysim_run",
-            "year": 2018,
-            "iteration": 1,
-            "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
-        },
-        {
-            "model_name": "beam_run",
-            "year": 2017,
-            "iteration": 1,
-            "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
-        },
-    ]
+                "model_name": "activitysim_run",
+                "year": 2018,
+                "iteration": 1,
+                "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+            },
+            {
+                "model_name": "beam_run",
+                "year": 2017,
+                "iteration": 1,
+                "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+            },
+        ]
 
 
 def test_restore_activity_demand_outputs_for_resume_finds_archive_side_manifest(
@@ -3387,6 +3482,7 @@ def test_restore_activity_demand_outputs_for_resume_finds_archive_side_manifest(
         state=state,
         settings=settings,
         manifest_path=local_manifest_path,
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -3456,6 +3552,7 @@ def test_restore_activity_demand_outputs_for_resume_manifest_reuses_coupler_zarr
         state=state,
         settings=settings,
         manifest_path=manifest_path,
+        tracker=FakeTracker(),
     )
 
     assert restored is not None
@@ -3483,8 +3580,12 @@ def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_ro
         io="output",
         year=state.forecast_year,
     )
+    population_snapshot = usim_dir / (
+        f"{current_h5.stem}_population_source{current_h5.suffix}"
+    )
     _write_file(base_h5)
     _write_file(current_h5)
+    _write_file(population_snapshot)
 
     restored = _restore_supply_demand_usim_inputs_for_resume(
         coupler=coupler,
@@ -3496,6 +3597,8 @@ def test_restore_supply_demand_usim_inputs_for_resume_republishes_year_scoped_ro
     assert restored[USIM_DATASTORE_BASE_H5] == str(base_h5)
     assert restored[USIM_DATASTORE_CURRENT_H5] == str(current_h5)
     assert restored[USIM_FORECAST_OUTPUT] == str(current_h5)
+    # The coupler already carries the exact-year population source, so the
+    # helper should preserve that value even though a local snapshot exists.
     assert restored[USIM_POPULATION_SOURCE_H5] == str(current_h5)
     assert coupler.get(USIM_DATASTORE_CURRENT_H5) == str(current_h5)
     assert coupler.get(USIM_POPULATION_SOURCE_H5) == str(current_h5)
@@ -3548,7 +3651,14 @@ def test_restore_supply_demand_usim_inputs_for_resume_promotes_population_source
 
     usim_dir = Path(workspace.get_usim_mutable_data_dir())
     base_h5 = usim_dir / get_usim_datastore_fname(settings, io="input")
+    current_h5 = usim_dir / get_usim_datastore_fname(
+        settings,
+        io="output",
+        year=state.forecast_year,
+    )
     _write_file(base_h5)
+    if current_h5.exists():
+        current_h5.unlink()
     coupler.set(USIM_POPULATION_SOURCE_H5, str(base_h5))
 
     restored = _restore_supply_demand_usim_inputs_for_resume(
@@ -4123,3 +4233,249 @@ def test_build_beam_postprocess_input_keys_falls_back_for_legacy_names():
         include_zarr_skims=False,
     )
     assert selected == ["raw_od_skims_legacy", "events_parquet_legacy"]
+
+
+def test_restore_activity_demand_outputs_for_resume_seeds_activitysim_run_parent_link(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    state.current_year = state.forecast_year
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+    remembered = []
+
+    class _Scenario:
+        def remember_restored_run_id(self, **kwargs):
+            remembered.append(kwargs)
+
+    iter_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = iter_dir / "inputs-year-2017-iteration-0" / "skims.zarr"
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+
+    manifest_path = tmp_path / "activitysim_postprocess_manifest_with_run_id.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "run_id": "activitysim_run_y2018_i0_prun",
+                },
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                                "asim_input_skims_zarr_archived": archived_zarr,
+                            },
+                        )
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        scenario=_Scenario(),
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=manifest_path,
+        tracker=FakeTracker(matching_run="activitysim_run_y2018_i0_prun"),
+    )
+
+    assert restored is not None
+    assert remembered == [
+        {
+            "model_name": "activitysim_run",
+            "year": state.forecast_year,
+            "iteration": state.current_inner_iter,
+            "run_id": "activitysim_run_y2018_i0_prun",
+        }
+    ]
+
+
+def test_restore_activity_demand_outputs_for_resume_seeds_parent_link_from_manifest_run_epoch(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    coupler = stage_env["coupler"]
+    settings = stage_env["settings"]
+    holder = StepOutputsHolder()
+    remembered = []
+
+    class _Scenario:
+        def remember_restored_run_id(self, **kwargs):
+            remembered.append(kwargs)
+
+    # Simulate a year-boundary resume where the current state has already moved on,
+    # but the manifest still restores the just-finished ActivitySim run.
+    state.current_year = 2018
+    state.forecast_year = 2019
+    state.current_inner_iter = 1
+
+    iter_dir = Path(workspace.get_asim_output_dir()) / "year-2017-iteration-1"
+    beam_plans = iter_dir / "beam_plans.parquet"
+    households = iter_dir / "households.parquet"
+    persons = iter_dir / "persons.parquet"
+    archived_zarr = (
+        Path(workspace.get_asim_output_dir())
+        / "inputs-year-2017-iteration-1"
+        / "skims.zarr"
+    )
+    usim_datastore = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / f"{USIM_INPUT_MERGED_PREFIX}2018.h5"
+    )
+    _write_file(beam_plans)
+    _write_file(households)
+    _write_file(persons)
+    _write_file(archived_zarr)
+    _write_file(usim_datastore)
+
+    manifest_path = tmp_path / "activitysim_postprocess_manifest_with_epoch_run_id.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "run_id": (
+                        "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2"
+                    ),
+                },
+                "activitysim_postprocess": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "outputs": serialize_step_outputs(
+                        ActivitySimPostprocessOutputs(
+                            usim_datastore_h5=usim_datastore,
+                            asim_output_dir=Path(workspace.get_asim_output_dir()),
+                            processed_outputs={
+                                "beam_plans_asim_out": beam_plans,
+                                "households_asim_out": households,
+                                "persons_asim_out": persons,
+                                "asim_input_skims_zarr_archived": archived_zarr,
+                            },
+                        )
+                    ),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    restored = _restore_activity_demand_outputs_for_resume(
+        scenario=_Scenario(),
+        coupler=coupler,
+        workspace=workspace,
+        outputs_holder=holder,
+        state=state,
+        settings=settings,
+        manifest_path=manifest_path,
+        tracker=FakeTracker(
+            matching_run="archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2"
+        ),
+    )
+
+    assert restored is not None
+    assert remembered == [
+        {
+            "model_name": "activitysim_run",
+            "year": 2018,
+            "iteration": 1,
+            "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+        }
+    ]
+
+
+def test_seed_supply_demand_parent_run_ids_for_resume_replays_manifest_run_ids(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    remembered = []
+
+    class _Scenario:
+        def remember_restored_run_id(self, **kwargs):
+            remembered.append(kwargs)
+
+    state.file_loc = str(tmp_path / "archive" / "state.yaml")
+    archive_workflow_dir = tmp_path / "archive" / "run" / ".workflow"
+    archive_workflow_dir.mkdir(parents=True, exist_ok=True)
+    Path(state.file_loc).parent.mkdir(parents=True, exist_ok=True)
+    Path(state.file_loc).write_text("year: 2018\n", encoding="utf-8")
+    (archive_workflow_dir / "year_2017_iteration_1.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                },
+                "beam_run": {
+                    "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    seed_supply_demand_parent_run_ids_for_resume(
+        scenario=_Scenario(),
+        workspace=workspace,
+        state=state,
+        tracker=FakeTracker(
+            matching_run={
+                (
+                    "activitysim_run",
+                    2018,
+                    1,
+                ): "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                (
+                    "beam_run",
+                    2017,
+                    1,
+                ): "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+            }
+        ),
+        settings=stage_env["settings"],
+    )
+
+    assert remembered == [
+        {
+            "model_name": "activitysim_run",
+            "year": 2018,
+            "iteration": 1,
+            "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+        },
+        {
+            "model_name": "beam_run",
+            "year": 2017,
+            "iteration": 1,
+            "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
+        },
+    ]

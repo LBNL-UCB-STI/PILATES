@@ -143,6 +143,32 @@ class TraceCapableTrackerStub:
     def trace(self, **_kwargs):
         return nullcontext()
 
+    def find_matching_run(self, **_kwargs):
+        return None
+
+    def register_run_output_recovery_copies(self, *_args, **_kwargs):
+        return None
+
+    def log_h5_container(
+        self,
+        path,
+        key=None,
+        direction="output",
+        *,
+        container_recovery_unit=None,
+        child_recovery_policy=None,
+        representation_policy=None,
+        **_meta,
+    ):
+        return (
+            path,
+            key,
+            direction,
+            container_recovery_unit,
+            child_recovery_policy,
+            representation_policy,
+        )
+
 
 def _settings(cache_enabled=True, code_identity=None):
     return SimpleNamespace(
@@ -1520,6 +1546,32 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
         def trace(self, **kwargs):
             self.trace_calls.append(kwargs)
             return nullcontext()
+
+        def find_matching_run(self, **_kwargs):
+            return None
+
+        def register_run_output_recovery_copies(self, *_args, **_kwargs):
+            return None
+
+        def log_h5_container(
+            self,
+            path,
+            key=None,
+            direction="output",
+            *,
+            container_recovery_unit=None,
+            child_recovery_policy=None,
+            representation_policy=None,
+            **_meta,
+        ):
+            return (
+                path,
+                key,
+                direction,
+                container_recovery_unit,
+                child_recovery_policy,
+                representation_policy,
+            )
 
     settings = SimpleNamespace(
         run=SimpleNamespace(

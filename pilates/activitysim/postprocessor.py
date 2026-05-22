@@ -26,6 +26,7 @@ from pilates.activitysim.runner import (
     asim_staged_input_paths,
 )
 from pilates.workflows.artifact_keys import USIM_DATASTORE_H5, ZARR_SKIMS
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -80,33 +81,32 @@ def _activitysim_archived_input_paths(
     }
 
 
-def _default_usim_datastore_output_path(
+def _next_iter_usim_input_store_path(
     settings: PilatesConfig,
     workspace: Workspace,
+    state: WorkflowState,
 ) -> Optional[str]:
+    """Path of the canonical USIM input store that the asim postprocess writes
+    the merged next-iteration input to.
+
+    Must match the filename the urbansim postprocess writes to (see
+    ``pilates/urbansim/postprocessor.py:create_next_iter_usim_data``); the two
+    postprocessors are sequential and produce successive versions of the same
+    artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
+    urbansim run output and destroy its ``/<year>/``-prefixed table layout.
+    """
+    forecast_year = resolve_forecast_year(state)
     try:
-        datastore_name = get_usim_datastore_fname(settings, io="input")
+        if forecast_year is not None and getattr(
+            getattr(settings, "urbansim", None), "output_file_template", None
+        ):
+            datastore_name = get_usim_datastore_fname(
+                settings, io="output", year=forecast_year
+            )
+        else:
+            datastore_name = get_usim_datastore_fname(settings, io="input")
     except Exception:
         return None
-    return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
-
-
-def _forecast_usim_datastore_output_path(
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[str]:
-    forecast_year = getattr(state, "forecast_year", None)
-    if forecast_year is None:
-        return _default_usim_datastore_output_path(settings, workspace)
-    try:
-        datastore_name = get_usim_datastore_fname(
-            settings,
-            io="output",
-            year=forecast_year,
-        )
-    except Exception:
-        return _default_usim_datastore_output_path(settings, workspace)
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)
 
 
@@ -282,7 +282,7 @@ def _prepare_updated_tables(
             resolved_prefix,
             prefix,
         )
-    usim_output_store = pd.HDFStore(usim_output_store_path)
+    usim_output_store = pd.HDFStore(usim_output_store_path, mode="r")
     normalized_usim_keys = _normalized_h5_keys(usim_output_store)
 
     def _resolve_h5_key(table_name: str) -> str:
@@ -653,6 +653,25 @@ def create_usim_input_data(
         )
         return None, None
 
+    # If the source file is named
+    # model_data_<Y>.h5, it must contain /<Y>/-prefixed tables.  A root-level
+    # layout in a year-named file means the file was silently clobbered (e.g.
+    # by a postprocessor that wrote a merged canonical-input store to the wrong
+    # path).  Fail loud here rather than propagating corrupted inputs.
+    _fname_year_match = re.search(
+        r"model_data_(\d+)\.h5$", os.path.basename(source_store_path)
+    )
+    if _fname_year_match:
+        _fname_year = _fname_year_match.group(1)
+        if str(source_prefix) != _fname_year:
+            raise ValueError(
+                f"H5 layout mismatch: {source_store_path!r} is named for year "
+                f"{_fname_year} but its tables are prefixed with "
+                f"{source_prefix!r} instead of '/{_fname_year}/'. "
+                "The file may have been overwritten with a root-level merged "
+                "store by a postprocessor targeting the wrong output path."
+            )
+
     if fallback_to_current_input:
         logger.info(
             "Falling back to %s for ActivitySim postprocess because forecast output is missing: %s",
@@ -907,10 +926,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         """
         outputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
-            USIM_DATASTORE_H5: _forecast_usim_datastore_output_path(
+            USIM_DATASTORE_H5: _next_iter_usim_input_store_path(
                 settings,
-                state,
                 workspace,
+                state,
             ),
         }
         outputs.update(_activitysim_iteration_output_paths(state, workspace))
@@ -972,8 +991,12 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             ActivitySimPostprocessOutputs: Postprocessed output data.
         """
         settings = self.state.full_settings
-        year = self.state.year
-        forecast_year = self.state.forecast_year
+        year = getattr(self.state, "year", getattr(self.state, "current_year", None))
+        forecast_year = resolve_forecast_year(self.state)
+        if forecast_year is None:
+            raise RuntimeError(
+                "WorkflowState.forecast_year must be set before ActivitySim postprocess."
+            )
         replanning_iteration_number = self.state.current_inner_iter
         logger.info(
             "Running ActivitySim postprocessor for year %s, forecast year %s",
@@ -1126,10 +1149,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 source_file_paths,
                 current_input_store_path=current_input_h5_path,
                 population_source_store_path=population_source_h5_path,
-                target_store_path=_forecast_usim_datastore_output_path(
+                target_store_path=_next_iter_usim_input_store_path(
                     settings,
-                    self.state,
                     workspace,
+                    self.state,
                 ),
             )
             if usim_record:

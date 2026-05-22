@@ -19,11 +19,12 @@ from consist.protocols import (
 
 @runtime_checkable
 class ArtifactLike(ConsistArtifactLike, Protocol):
-    @property
-    def table_path(self) -> Optional[str]: ...
+    pass
 
-    @property
-    def array_path(self) -> Optional[str]: ...
+
+@runtime_checkable
+class RunLike(Protocol):
+    id: Any
 
 
 @runtime_checkable
@@ -72,6 +73,18 @@ class ScenarioWithCoupler(ScenarioLike, Protocol):
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 
     def coupler_schema(self, schema: Any) -> Any: ...
+
+
+@runtime_checkable
+class ScenarioRestorationLike(Protocol):
+    def remember_restored_run_id(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+        run_id: Optional[str],
+    ) -> None: ...
 
 
 @runtime_checkable

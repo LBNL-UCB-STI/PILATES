@@ -131,6 +131,21 @@ def test_resolve_usim_population_table_paths_prefers_target_year(tmp_path) -> No
     }
 
 
+def test_resolve_usim_population_table_paths_rejects_filename_year_mismatch(
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pytest.raises(ValueError, match="filename/year mismatch"):
+        resolve_usim_population_table_paths(
+            h5_path=str(h5_path),
+            year=2021,
+        )
+
+
 def test_resolve_usim_population_table_paths_falls_back_to_root_tables(
     tmp_path,
 ) -> None:
@@ -197,6 +212,27 @@ def test_reconcile_usim_population_table_paths_prefers_target_year_over_stale_ro
         USIM_POPULATION_BLOCKS_TABLE: "/2021/blocks",
     }
     assert "Ignoring stale pre-resolved UrbanSim population table path" in caplog.text
+
+
+def test_reconcile_usim_population_table_paths_rejects_filename_year_mismatch(
+    tmp_path,
+) -> None:
+    h5_path = tmp_path / "model_data_2019.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/2021/{table_name}", pd.DataFrame({"value": [1]}))
+
+    with pytest.raises(ValueError, match="requested_year=2021"):
+        reconcile_usim_population_table_paths(
+            h5_path=str(h5_path),
+            year=2021,
+            provided_paths={
+                USIM_POPULATION_HOUSEHOLDS_TABLE: "/2021/households",
+                USIM_POPULATION_PERSONS_TABLE: "/2021/persons",
+                USIM_POPULATION_JOBS_TABLE: "/2021/jobs",
+                USIM_POPULATION_BLOCKS_TABLE: "/2021/blocks",
+            },
+        )
 
 
 def test_reconcile_usim_population_table_paths_rejects_stale_root_when_exact_year_missing(

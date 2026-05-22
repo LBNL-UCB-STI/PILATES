@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from pathlib import Path
 from typing import Dict, Mapping, Optional
 
 import pandas as pd
@@ -21,6 +23,26 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_JOBS_TABLE: "jobs",
     USIM_POPULATION_BLOCKS_TABLE: "blocks",
 }
+
+
+def _year_from_usim_model_data_filename(h5_path: str) -> Optional[int]:
+    match = re.fullmatch(r"model_data_(\d{4})\.h5", Path(h5_path).name)
+    if match is None:
+        return None
+    return int(match.group(1))
+
+
+def _validate_usim_h5_filename_year(*, h5_path: str, year: Optional[int]) -> None:
+    filename_year = _year_from_usim_model_data_filename(h5_path)
+    if filename_year is None or year is None or filename_year == year:
+        return
+    raise ValueError(
+        "UrbanSim population source H5 filename/year mismatch. "
+        f"h5_path={h5_path} filename_year={filename_year} requested_year={year}. "
+        f"A year-named model_data_<year>.h5 file must be resolved with its "
+        f"matching population year; this usually means the binding layer selected "
+        f"the wrong UrbanSim datastore."
+    )
 
 
 def resolve_usim_h5_table_key(
@@ -88,6 +110,7 @@ def resolve_usim_population_table_paths(
         raise ValueError(
             "Exact-year UrbanSim population table resolution requires a year."
         )
+    _validate_usim_h5_filename_year(h5_path=h5_path, year=year)
     with pd.HDFStore(h5_path, mode="r") as store:
         resolved = {
             semantic_key: resolve_usim_h5_table_key(
@@ -129,6 +152,7 @@ def reconcile_usim_population_table_paths(
         raise ValueError(
             "Exact-year UrbanSim population table reconciliation requires a year."
         )
+    _validate_usim_h5_filename_year(h5_path=h5_path, year=year)
     normalized_provided = {
         semantic_key: (
             table_path

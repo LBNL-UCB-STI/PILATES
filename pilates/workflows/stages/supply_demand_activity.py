@@ -82,15 +82,16 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    resolved_usim_inputs: Mapping[str, Union[str, os.PathLike]],
     postprocess_required_keys: tuple[str, ...],
     postprocess_optional_keys: tuple[str, ...],
 ) -> Dict[str, Any]:
-    role_keys = set(postprocess_required_keys) | set(postprocess_optional_keys)
     if not state.is_enabled(WorkflowState.Stage.land_use):
         return {}
 
     explicit_inputs: Dict[str, Any] = {}
-    if USIM_POPULATION_SOURCE_H5 in role_keys:
+    population_value = resolved_usim_inputs.get(USIM_POPULATION_SOURCE_H5)
+    if population_value is None:
         population_binding = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=None,
@@ -104,6 +105,7 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
                     fallback_provider="activitysim_population_source",
                 ),
             ),
+            restrict_to_inline_rules=True,
             required_keys=(
                 (USIM_POPULATION_SOURCE_H5,)
                 if USIM_POPULATION_SOURCE_H5 in postprocess_required_keys
@@ -124,13 +126,14 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             population_binding.inputs if population_binding.inputs is not None else {}
         )
         population_value = population_inputs.get(USIM_POPULATION_SOURCE_H5)
-        if population_value is not None:
-            explicit_inputs[USIM_POPULATION_SOURCE_H5] = population_value
+    if population_value is not None:
+        explicit_inputs[USIM_POPULATION_SOURCE_H5] = population_value
 
-    if USIM_DATASTORE_CURRENT_H5 in role_keys:
-        # The postprocessor needs two explicit H5 roles: the forecast-year
-        # population source used to build ActivitySim inputs, and the current
-        # datastore being updated for legacy postprocess semantics.
+    # The postprocessor needs two explicit H5 roles when land use is enabled:
+    # the forecast-year population source used to build ActivitySim inputs and
+    # the current datastore being updated for legacy postprocess semantics.
+    current_value = resolved_usim_inputs.get(USIM_DATASTORE_CURRENT_H5)
+    if current_value is None:
         current_binding = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=None,
@@ -144,6 +147,7 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
                     fallback_provider="urbansim_inputs_for_year",
                 ),
             ),
+            restrict_to_inline_rules=True,
             required_keys=(
                 (USIM_DATASTORE_CURRENT_H5,)
                 if USIM_DATASTORE_CURRENT_H5 in postprocess_required_keys
@@ -164,10 +168,43 @@ def _resolve_activitysim_postprocess_h5_role_inputs(
             current_binding.inputs if current_binding.inputs is not None else {}
         )
         current_value = current_inputs.get(USIM_DATASTORE_CURRENT_H5)
-        if current_value is not None:
-            explicit_inputs[USIM_DATASTORE_CURRENT_H5] = current_value
+    if current_value is not None:
+        explicit_inputs[USIM_DATASTORE_CURRENT_H5] = current_value
 
     return explicit_inputs
+
+
+def _activitysim_postprocess_role_binding_rules(
+    *,
+    postprocess_required_keys: tuple[str, ...],
+    postprocess_optional_keys: tuple[str, ...],
+    land_use_enabled: bool = False,
+) -> tuple[ArtifactBindingRule, ...]:
+    role_keys = set(postprocess_required_keys) | set(postprocess_optional_keys)
+    rules: list[ArtifactBindingRule] = []
+    if land_use_enabled:
+        for semantic_key in (USIM_POPULATION_SOURCE_H5, USIM_DATASTORE_CURRENT_H5):
+            rules.append(
+                ArtifactBindingRule(
+                    semantic_key=semantic_key,
+                    required=semantic_key in postprocess_required_keys,
+                    allow_coupler=False,
+                    allow_fallback=False,
+                    preferred_keys=(semantic_key,),
+                )
+            )
+    if USIM_DATASTORE_BASE_H5 in role_keys:
+        rules.append(
+            ArtifactBindingRule(
+                semantic_key=USIM_DATASTORE_BASE_H5,
+                required=USIM_DATASTORE_BASE_H5 in postprocess_required_keys,
+                allow_coupler=False,
+                allow_fallback=True,
+                preferred_keys=(USIM_DATASTORE_BASE_H5,),
+                fallback_provider="activitysim_input_datastore",
+            )
+        )
+    return tuple(rules)
 
 
 @dataclass
@@ -381,28 +418,34 @@ def _run_activity_demand_phase(
         resolved_usim_inputs=resolved_usim_inputs,
         surface=runtime_surface,
     )
+    if (
+        bool(getattr(state, "is_restart_run", False))
+        and profile.land_use_enabled
+        and missing_restart_roles
+    ):
+        from .supply_demand_resume import (
+            _restore_supply_demand_usim_inputs_for_resume,
+        )
+
+        resolved_usim_inputs.update(
+            _restore_supply_demand_usim_inputs_for_resume(
+                coupler=coupler,
+                workspace=workspace,
+                state=state,
+                settings=settings,
+            )
+        )
+        missing_restart_roles = _surface_restart_missing_explicit_roles(
+            coupler=coupler,
+            resolved_usim_inputs=resolved_usim_inputs,
+            surface=runtime_surface,
+        )
     if missing_restart_roles:
         raise RuntimeError(
             "Restart metadata is missing required post-land-use UrbanSim H5 roles "
             f"for ActivitySim: {', '.join(missing_restart_roles)}. "
             "This restart likely predates the explicit population-source H5 role split."
         )
-    if (
-        bool(getattr(state, "is_restart_run", False))
-        and profile.land_use_enabled
-        and not resolved_usim_inputs
-    ):
-        from .supply_demand_resume import (
-            _restore_supply_demand_usim_inputs_for_resume,
-        )
-
-        for key, value in _restore_supply_demand_usim_inputs_for_resume(
-            coupler=coupler,
-            workspace=workspace,
-            state=state,
-            settings=settings,
-        ).items():
-            resolved_usim_inputs.setdefault(key, value)
 
     # ActivitySim runs in two manifest-checkpointed phases:
     # 1) Preprocess (per-iteration) to prepare compile inputs.
@@ -696,6 +739,7 @@ def _run_activity_demand_phase(
         settings=settings,
         state=state,
         workspace=workspace,
+        resolved_usim_inputs=resolved_usim_inputs,
         postprocess_required_keys=postprocess_required_keys,
         postprocess_optional_keys=postprocess_optional_keys,
     )
@@ -709,6 +753,12 @@ def _run_activity_demand_phase(
         coupler=coupler,
         explicit_inputs=postprocess_explicit_inputs or None,
         fallback_inputs=postprocess_fallback_inputs or None,
+        artifact_rules=_activitysim_postprocess_role_binding_rules(
+            postprocess_required_keys=postprocess_required_keys,
+            postprocess_optional_keys=postprocess_optional_keys,
+            land_use_enabled=profile.land_use_enabled,
+        ),
+        restrict_to_inline_rules=True,
         required_keys=postprocess_required_keys,
         optional_keys=postprocess_optional_keys,
         settings=settings,

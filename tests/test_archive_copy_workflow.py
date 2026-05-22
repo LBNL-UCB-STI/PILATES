@@ -320,9 +320,22 @@ def test_artifact_lifecycle_summary_updates_on_log_and_copy(monkeypatch, tmp_pat
         summary_after_copy["copied_artifacts_eligible_for_recovery_root_registration"]
         == 1
     )
+    assert (
+        summary_after_copy[
+            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
+        ]
+        == 0
+    )
     assert summary_after_copy["local_to_scratch_recovery_roots_written"] == 0
-    assert "beam_input_archived" in summary_after_copy["safe_families_for_phase2"]
-    assert summary_after_copy["phase2_recommendation"] == "go"
+    assert summary_after_copy["contract_status_by_family"]["beam_input_archived"] == (
+        "transitional"
+    )
+    assert summary_after_copy["phase2_candidate_families"] == [
+        "usim_input_archive",
+        "usim_population_source_h5",
+    ]
+    assert summary_after_copy["safe_families_for_phase2"] == []
+    assert "beam_input_archived" not in summary_after_copy["phase2_candidate_families"]
 
 
 def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
@@ -400,8 +413,41 @@ def test_artifact_lifecycle_summary_classifies_blockers(monkeypatch, tmp_path):
     assert summary["blocker_counts_by_reason"]["artifact_logging_after_copying"] == 1
     assert summary["blocker_counts_by_reason"]["shallow_directory_signature"] == 1
     assert summary["blocker_counts_by_reason"]["h5_parent_child_policy"] == 1
-    assert summary["phase2_blocker_counts_by_reason"]["h5_parent_child_policy"] == 1
+    assert "h5_parent_child_policy" not in summary["phase2_blocker_counts_by_reason"]
     assert summary["unknown_event_keys"] == []
+
+
+def test_artifact_lifecycle_summary_treats_zarr_skims_as_zarr_artifact(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    zarr_dir = local_root / "activitysim" / "cache" / "skims.zarr"
+    _write_file(zarr_dir / "0" / "values", "zarr")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="zarr_skims",
+        path=str(zarr_dir),
+        artifact_family="zarr_skims",
+        artifact_driver="zarr",
+        source_role="zarr_skims",
+        snapshot_role="zarr_skims",
+        snapshot_reason="exact_rewind",
+        storage_event="snapshot_copy",
+        year=2030,
+        iteration=0,
+    )
+    assert ch.archive_copy_now(key="zarr_skims", path=str(zarr_dir)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["contract_status_by_family"]["zarr_skims"] == "stable"
+    assert "zarr_skims" not in summary["phase2_candidate_families"]
+    assert "zarr_skims" not in summary["safe_families_for_phase2"]
+    assert "zarr_skims" not in summary["blocked_families_for_phase2"]
 
 
 def test_artifact_lifecycle_summary_preserves_attempts_on_run_context(
@@ -515,9 +561,10 @@ def test_artifact_lifecycle_summary_classifies_unknown_keys(monkeypatch, tmp_pat
     )
 
     summary = _lifecycle_summary(local_root)
-    assert "unknown" in summary["blocked_families_for_phase2"]
+    assert "unknown" not in summary["blocked_families_for_phase2"]
     assert summary["unknown_event_keys"] == ["beam_input_mystery"]
     assert summary["blocker_counts_by_reason"]["unclassified_family"] == 1
+    assert summary["blocking_reasons_by_family"]["unknown"] == ["unclassified_family"]
 
 
 def test_artifact_lifecycle_summary_keeps_atlas_observe_only_diagnostic(
@@ -534,10 +581,9 @@ def test_artifact_lifecycle_summary_keeps_atlas_observe_only_diagnostic(
     assert ch.archive_copy_now(key="atlas_vehicles2_output", path=str(source)) is True
 
     summary = _lifecycle_summary(local_root)
-    assert "atlas_observe_only" in summary["blocked_families_for_phase2"]
-    assert summary["blocking_reasons_by_family"]["atlas_observe_only"] == [
-        "deferred_policy"
-    ]
+    assert summary["contract_status_by_family"]["atlas_observe_only"] == "deferred"
+    assert "atlas_observe_only" not in summary["phase2_candidate_families"]
+    assert "atlas_observe_only" not in summary["blocked_families_for_phase2"]
     assert "artifact_not_logged" not in summary["phase2_blocker_counts_by_reason"]
     assert summary["diagnostic_blocking_reasons_by_family"]["atlas_observe_only"] == [
         "artifact_not_logged"
@@ -579,6 +625,123 @@ def test_artifact_lifecycle_summary_defers_usim_h5_snapshots_explicitly(
     )
 
 
+def test_artifact_lifecycle_summary_allows_policy_eligible_usim_h5_parent(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / "model_data_2030.h5"
+    _write_file(source, "h5")
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="usim_population_source_h5",
+        path=str(source),
+        artifact_family="usim_population_source_h5",
+        source_role="usim_population_source_h5",
+        snapshot_role="usim_population_source_h5",
+        snapshot_reason="post_merge_handoff",
+        storage_event="merged_h5_output",
+        year=2030,
+        h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
+    )
+    assert (
+        ch.archive_copy_now(key="usim_population_source_h5", path=str(source)) is True
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["copied_artifacts_joined_to_logged_artifacts"] == 1
+    assert summary["copied_artifacts_eligible_for_recovery_root_registration"] == 1
+    assert summary["contract_status_by_family"]["usim_population_source_h5"] == (
+        "stable"
+    )
+    assert summary["phase2_candidate_families"] == [
+        "usim_input_archive",
+        "usim_population_source_h5",
+    ]
+    assert "usim_population_source_h5" in summary["safe_families_for_phase2"]
+    assert "usim_population_source_h5" not in summary["blocked_families_for_phase2"]
+    assert "h5_parent_child_policy" not in summary["blocker_counts_by_reason"]
+
+
+@pytest.mark.parametrize(
+    "key, family",
+    [
+        ("usim_input_archive_2030", "usim_input_archive"),
+        ("usim_population_source_h5", "usim_population_source_h5"),
+    ],
+)
+def test_artifact_lifecycle_summary_starts_h5_phase2_eligibility(
+    monkeypatch, tmp_path, key, family
+):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    source = local_root / "urbansim" / "data" / f"{key}.h5"
+    _write_file(source, "h5")
+    fields = {
+        "event_type": "artifact_logged",
+        "key": key,
+        "path": str(source),
+        "artifact_family": family,
+        "year": 2030,
+        "h5_container": True,
+        "container_recovery_unit": "parent_file",
+        "child_recovery_policy": "descriptive_only",
+    }
+    if family in {"usim_input_archive", "usim_input_merged"}:
+        fields.update(
+            {
+                "source_role": "usim_datastore_h5",
+                "snapshot_role": family,
+                "snapshot_reason": "exact_rewind",
+                "storage_event": "snapshot_copy",
+            }
+        )
+    consist_audit.emit_artifact_lifecycle_audit_event(**fields)
+    assert ch.archive_copy_now(key=key, path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["contract_status_by_family"][family] == "stable"
+    assert family in summary["phase2_candidate_families"]
+    assert family in summary["safe_families_for_phase2"]
+    assert family not in summary["blocked_families_for_phase2"]
+
+
+def test_artifact_lifecycle_summary_keeps_h5_child_tables_ineligible(
+    monkeypatch, tmp_path
+):
+    local_root = tmp_path / "local" / "run"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        event_type="artifact_logged",
+        key="urbansim_postprocess_usim_households_table_updated",
+        path=str(local_root / "urbansim" / "data" / "model_data.h5"),
+        artifact_family="usim_datastore_h5",
+        artifact_driver="h5_table",
+        h5_parent_key="usim_datastore_h5",
+        h5_table_name="households",
+        child_recovery_policy="descriptive_only",
+    )
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["h5_child_table_artifacts_ineligible"] == 1
+    assert summary["contract_status_by_family"]["usim_datastore_h5"] == "stable"
+    assert summary["blocking_reasons_by_family"]["usim_datastore_h5"] == [
+        "h5_child_table_ineligible"
+    ]
+    assert "usim_datastore_h5" not in summary["phase2_candidate_families"]
+
+
 def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     monkeypatch, tmp_path
 ):
@@ -608,6 +771,7 @@ def test_artifact_lifecycle_summary_accepts_sanitized_artifact_year(
     summary = _lifecycle_summary(local_root)
     assert summary["snapshot_artifacts_logged"] == 1
     assert summary["snapshot_artifacts_missing_required_facets"] == 0
+    assert summary["contract_status_by_family"]["usim_input_archive"] == "stable"
     assert (
         "missing_required_snapshot_facets"
         not in summary["blocking_reasons_by_family"]["usim_input_archive"]
@@ -655,6 +819,9 @@ def test_artifact_lifecycle_summary_accepts_sanitized_artifact_iteration(
     summary = _lifecycle_summary(local_root)
     assert summary["snapshot_artifacts_logged"] == 1
     assert summary["snapshot_artifacts_missing_required_facets"] == 0
+    assert summary["contract_status_by_family"]["asim_input_archived"] == (
+        "transitional"
+    )
     assert "missing_required_snapshot_facets" not in summary[
         "blocking_reasons_by_family"
     ].get("asim_input_archived", [])
@@ -673,30 +840,37 @@ def test_artifact_lifecycle_summary_uses_first_log_for_copy_order(
     _write_file(source, "h5")
     consist_audit.emit_artifact_lifecycle_audit_event(
         event_type="artifact_logged",
-        key="usim_datastore_h5",
+        key="usim_population_source_h5",
         path=str(source),
-        artifact_family="usim_datastore_h5",
+        artifact_family="usim_population_source_h5",
         artifact_year=2030,
         h5_container=True,
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
     )
-    assert ch.archive_copy_now(key="usim_datastore_h5", path=str(source)) is True
+    assert (
+        ch.archive_copy_now(key="usim_population_source_h5", path=str(source)) is True
+    )
     consist_audit.emit_artifact_lifecycle_audit_event(
         event_type="artifact_logged",
-        key="usim_datastore_h5",
+        key="usim_population_source_h5",
         path=str(source),
-        artifact_family="usim_datastore_h5",
+        artifact_family="usim_population_source_h5",
         artifact_year=2030,
         h5_container=True,
-        snapshot_role="usim_input_merged",
+        snapshot_role="usim_population_source_h5",
         snapshot_reason="post_merge_handoff",
         storage_event="merged_h5_output",
+        container_recovery_unit="parent_file",
+        child_recovery_policy="descriptive_only",
     )
 
     summary = _lifecycle_summary(local_root)
     assert summary["copied_artifacts_blocked_artifact_logging_after_copying"] == 0
-    assert summary["blocking_reasons_by_family"]["usim_datastore_h5"] == [
-        "h5_parent_child_policy"
-    ]
+    assert summary["contract_status_by_family"]["usim_population_source_h5"] == (
+        "stable"
+    )
+    assert "usim_population_source_h5" in summary["safe_families_for_phase2"]
 
 
 def test_artifact_lifecycle_summary_blocks_copy_only_promotions(monkeypatch, tmp_path):
@@ -716,12 +890,12 @@ def test_artifact_lifecycle_summary_blocks_copy_only_promotions(monkeypatch, tmp
 
     summary = _lifecycle_summary(run_dir)
     assert summary["copy_only_promotions_db_tracker_metadata_unavailable"] == 1
-    assert "post_run_promotion" in summary["blocked_families_for_phase2"]
     assert (
         summary["blocker_counts_by_reason"]["copy_only_promotion_metadata_unavailable"]
         == 1
     )
     assert summary["phase2_recommendation"] == "defer"
+    assert "post_run_promotion" not in summary["phase2_candidate_families"]
 
 
 def test_resolve_existing_path_materializes_local_from_archive(
@@ -1035,6 +1209,32 @@ def test_archive_copy_now_copies_file_and_preserves_relative_path(
     archived = archive_root / ".workflow" / "year_2018_iteration_0.yaml"
     assert archived.exists()
     assert archived.read_text() == "manifest"
+
+
+def test_workflow_manifest_is_tracked_as_restart_support_only(monkeypatch, tmp_path):
+    local_root = tmp_path / "local" / "run"
+    archive_root = tmp_path / "archive" / "run"
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+
+    workspace = DummyWorkspace(local_root)
+    consist_audit.emit_artifact_lifecycle_audit_event(
+        workspace=workspace,
+        event_type="run_context",
+        run_name="restart",
+    )
+
+    source = local_root / ".workflow" / "year_2018_iteration_0.yaml"
+    _write_file(source, "manifest")
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+    assert ch.archive_copy_now(key="workflow_manifest", path=str(source)) is True
+
+    summary = _lifecycle_summary(local_root)
+    assert summary["restart_support_keys"] == ["workflow_manifest"]
+    assert summary["unknown_event_keys"] == []
+    assert "workflow_manifest" not in summary["blocked_families_for_phase2"]
+    assert "workflow_manifest" not in summary["safe_families_for_phase2"]
 
 
 def test_archive_copy_destination_returns_preserved_relative_path(

@@ -72,6 +72,8 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
     assert len(publish_meta) == 1
     assert publish_meta[0]["child_selection"] == "include_only"
+    assert publish_meta[0]["container_recovery_unit"] == "parent_file"
+    assert publish_meta[0]["child_recovery_policy"] == "descriptive_only"
     assert {
         path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
     } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
@@ -126,6 +128,8 @@ def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     assert calls[0][1] == str(usim_path)
     assert calls[0][2]["h5_container"] is True
     assert calls[0][2]["child_selection"] == "include_only"
+    assert calls[0][2]["container_recovery_unit"] == "parent_file"
+    assert calls[0][2]["child_recovery_policy"] == "descriptive_only"
     assert {path: spec.key for path, spec in calls[0][2]["child_specs"].items()} == {
         "/2023/households": "atlas_postprocess_usim_households_table_input"
     }
@@ -336,7 +340,7 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
     calls = []
     monkeypatch.setattr(
         atlas_postprocessor,
-        "enqueue_archive_copy",
+        "log_output_only",
         lambda **kwargs: calls.append(kwargs),
     )
 
@@ -399,25 +403,30 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
         workspace,
     )
 
+    assert len(calls) == 2
     assert any(
         call["key"] == "atlas_input_year_dir_2023"
         and str(call["path"]).endswith("year2023")
         for call in calls
     )
-    assert any(
-        call["key"] == "atlas_rdata_2023"
-        and str(call["path"]).endswith("vehicles_output.RData")
-        for call in calls
-    )
+    assert sum(1 for call in calls if call["key"] == "atlas_rdata_2023") == 1
+    assert all("description" in call for call in calls)
 
 
 def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
     atlas_output_dir = tmp_path / "atlas" / "atlas_output"
     atlas_input_dir = tmp_path / "atlas" / "atlas_input" / "year2023"
     usim_dir = tmp_path / "urbansim" / "data"
+    atlas_input_root = tmp_path / "atlas" / "atlas_input"
+    year_input_dir = atlas_input_root / "year2023"
     atlas_output_dir.mkdir(parents=True)
-    atlas_input_dir.mkdir(parents=True)
+    year_input_dir.mkdir(parents=True)
+    atlas_input_root.mkdir(parents=True, exist_ok=True)
     usim_dir.mkdir(parents=True)
+
+    for base_dir in (year_input_dir, atlas_input_root, atlas_output_dir):
+        for filename in ("vehicles_output.RData", "households_output.RData"):
+            (base_dir / filename).write_text("x")
 
     base_h5 = usim_dir / "model_data_000.h5"
     base_h5.write_text("h5")

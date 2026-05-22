@@ -22,7 +22,7 @@ from typing import (
 )
 
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import ArtifactLike, CouplerProtocol
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.coupler_namespace import (
     ResolvedCouplerValue,
@@ -93,6 +93,10 @@ _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS = {
     field: f"artifact_{field}" for field in _ARTIFACT_LIFECYCLE_RESERVED_FIELDS
 }
 _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS["event_type"] = "artifact_event_type"
+_H5_CONTAINER_RECOVERY_POLICY_FIELDS = (
+    "container_recovery_unit",
+    "child_recovery_policy",
+)
 
 
 def _is_noop_artifact(candidate: Any) -> bool:
@@ -399,9 +403,11 @@ def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
         or getattr(current_consist, "id", None)
         or getattr(current_consist, "run_id", None)
     )
+    artifact_driver = getattr(artifact, "driver", None)
     return {
         "artifact_id": getattr(artifact, "id", None),
         "producing_run_id": producing_run_id,
+        "artifact_driver": artifact_driver,
     }
 
 
@@ -430,6 +436,9 @@ def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, A
         "h5_tables_used",
         "h5_table_paths",
         "h5_table_count",
+        "container_recovery_unit",
+        "child_recovery_policy",
+        "representation_policy",
     ):
         if key in meta:
             add_field(key, meta[key])
@@ -1008,9 +1017,9 @@ def resolve_artifact_from_value(
     """
     if value is None:
         return None
-    if hasattr(value, "container_uri") and getattr(value, "key", None):
-        return value
-    if hasattr(value, "uri") and getattr(value, "key", None):
+    if isinstance(value, ArtifactLike):
+        if key and getattr(value, "key", None) != key:
+            value.key = key
         return value
 
     path = artifact_to_path(value, workspace)
@@ -1101,7 +1110,7 @@ def log_coupler_value(
         return
 
     value_type = type(value).__name__
-    has_container_uri = hasattr(value, "container_uri")
+    has_container_uri = isinstance(value, ArtifactLike)
     has_key = hasattr(value, "key")
     path = artifact_to_path(value, workspace)
 
@@ -1544,6 +1553,16 @@ def _log_with_optional_h5_container(
     requested_filter = _table_filter_to_callable(meta.pop("table_filter", None))
     h5_container = bool(meta.pop("h5_container", False)) or bool(tables_used)
     if h5_container:
+        missing_policy_fields = [
+            field
+            for field in _H5_CONTAINER_RECOVERY_POLICY_FIELDS
+            if meta.get(field) is None
+        ]
+        if missing_policy_fields:
+            raise ValueError(
+                "H5 container logging requires explicit recovery policy fields "
+                f"for key {key!r}: {', '.join(missing_policy_fields)}"
+            )
         if tables_used:
             normalized_paths = sorted(
                 {

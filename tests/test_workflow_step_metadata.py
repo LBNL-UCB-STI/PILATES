@@ -1353,6 +1353,113 @@ def test_build_scenario_runtime_contract_validates_only_enabled_steps():
     assert filter_surfaces == [surface]
 
 
+def _scenario_contract_test_settings():
+    return SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                land_use="urbansim",
+                vehicle_ownership="atlas",
+                activity_demand="activitysim",
+                traffic_assignment="beam",
+                travel="beam",
+            )
+        ),
+        activitysim=SimpleNamespace(main_configs_dir="configs"),
+        atlas=SimpleNamespace(scenario="baseline", adscen="baseline"),
+    )
+
+
+def _restart_state(*, major_stage: str, sub_stage: str | None = None):
+    stage = SimpleNamespace(
+        land_use="land_use",
+        vehicle_ownership_model="vehicle_ownership_model",
+        supply_demand_loop="supply_demand_loop",
+        activity_demand="activity_demand",
+        traffic_assignment="traffic_assignment",
+    )
+    return SimpleNamespace(
+        Stage=stage,
+        is_restart_run=True,
+        run_info_path="/tmp/run_state.yaml",
+        current_major_stage=getattr(stage, major_stage),
+        current_sub_stage=getattr(stage, sub_stage) if sub_stage else None,
+    )
+
+
+def _scenario_required_outputs(settings, state):
+    surface = run_module.build_enabled_workflow_surface(settings, state=state)
+    contract = run_module.scenario_runtime.build_scenario_runtime_contract(
+        settings=settings,
+        state=state,
+        workspace=SimpleNamespace(),
+        scenario_id="scenario-alpha",
+        seed=None,
+        cache_epoch=0,
+        build_scenario_consist_kwargs_fn=lambda _settings: {},
+        build_coupler_schema_fn=lambda *_args, **_kwargs: {},
+        validate_workflow_step_contracts_fn=lambda **_kwargs: None,
+        build_schema_steps_fn=lambda: [],
+        filter_schema_steps_for_enabled_models_fn=lambda steps, *_args, **_kwargs: (
+            steps
+        ),
+        merge_epoch_facet_fn=run_module.scenario_runtime.merge_epoch_facet,
+        scenario_name_template="scenario-{run_name}",
+        surface=surface,
+    )
+    return set(contract["required_output_keys"])
+
+
+def test_restart_scenario_required_outputs_start_at_activity_demand_frontier():
+    required_outputs = _scenario_required_outputs(
+        _scenario_contract_test_settings(),
+        _restart_state(
+            major_stage="supply_demand_loop",
+            sub_stage="activity_demand",
+        ),
+    )
+
+    assert "hh_size" not in required_outputs
+    assert "atlas_blocks_csv" not in required_outputs
+    assert "atlas_vehicles2_output" not in required_outputs
+    assert ASIM_LAND_USE_IN in required_outputs
+    assert BEAM_PLANS_OUT in required_outputs
+
+
+def test_restart_scenario_required_outputs_start_at_traffic_assignment_frontier():
+    required_outputs = _scenario_required_outputs(
+        _scenario_contract_test_settings(),
+        _restart_state(
+            major_stage="supply_demand_loop",
+            sub_stage="traffic_assignment",
+        ),
+    )
+
+    assert "hh_size" not in required_outputs
+    assert "atlas_blocks_csv" not in required_outputs
+    assert "atlas_vehicles2_output" not in required_outputs
+    assert ASIM_LAND_USE_IN not in required_outputs
+    assert BEAM_PLANS_OUT in required_outputs
+
+
+def test_fresh_scenario_required_outputs_keep_full_enabled_contract():
+    state = SimpleNamespace(
+        is_restart_run=False,
+        run_info_path=None,
+        current_major_stage=None,
+        current_sub_stage=None,
+    )
+    required_outputs = _scenario_required_outputs(
+        _scenario_contract_test_settings(),
+        state,
+    )
+
+    assert "hh_size" in required_outputs
+    assert "atlas_blocks_csv" in required_outputs
+    assert "atlas_vehicles2_output" in required_outputs
+    assert ASIM_LAND_USE_IN in required_outputs
+    assert BEAM_PLANS_OUT in required_outputs
+
+
 def test_epoch_tagging_proxy_sets_beam_parent_to_same_epoch_activitysim():
     scenario = _FakeEpochTaggingScenario(run_ids=["asim-2030-i1", "beam-2030-i1"])
     proxy = run_module._ScenarioParentLinkProxy(scenario)

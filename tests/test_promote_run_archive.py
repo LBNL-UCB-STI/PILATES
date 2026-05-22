@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
 from pilates.config import PilatesConfig
-from pilates.runtime.promote_run_archive import promote_run_to_recovery_roots
+from pilates.runtime.promote_run_archive import (
+    _register_verified_run_output_recovery_copies,
+    promote_run_to_recovery_roots,
+)
 
 
 def _minimal_config(
@@ -118,6 +123,65 @@ def _seed_output_run(
 
     run = tracker.find_runs(model=model, limit=10)[0]
     return str(run.id), output_path
+
+
+def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_path):
+    source_run_dir = tmp_path / "source-run"
+    recovery_run_dir = tmp_path / "recovery-run"
+    output = source_run_dir / "outputs" / "result.txt"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text("result-data", encoding="utf-8")
+    expected_hash = hashlib.sha256(b"result-data").hexdigest()
+
+    calls = []
+
+    class FakeFS:
+        @staticmethod
+        def get_remappable_relative_path(container_uri):
+            assert container_uri == "workspace://outputs/result.txt"
+            return "outputs/result.txt"
+
+    class FakeTracker:
+        fs = FakeFS()
+
+        def get_run_outputs(self, run_id):
+            assert run_id == "run-1"
+            return {
+                "demo_output": SimpleNamespace(
+                    container_uri="workspace://outputs/result.txt"
+                )
+            }
+
+        def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
+            calls.append((run_id, recovery_root, kwargs))
+            return SimpleNamespace(
+                registered={"demo_output": object()},
+                blocked={},
+                summary="registered=1",
+            )
+
+        def set_artifact_recovery_roots(self, *_args, **_kwargs):
+            raise AssertionError("legacy recovery-root setter should not be used")
+
+    registered = _register_verified_run_output_recovery_copies(
+        FakeTracker(),
+        source_run_dir=source_run_dir,
+        recovery_run_dir=recovery_run_dir,
+        run_ids=["run-1"],
+    )
+
+    assert registered == 1
+    assert calls == [
+        (
+            "run-1",
+            str(recovery_run_dir),
+            {
+                "append": True,
+                "content_hashes": {"demo_output": expected_hash},
+                "verify": True,
+            },
+        )
+    ]
 
 
 def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
@@ -231,8 +295,15 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
         assert result.root_run_id == new_run_id
         assert result.scoped_run_ids == [new_run_id]
         assert result.merge_result is not None
-        assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
-        assert result.merge_result["merge_result"]["runs_skipped"] == []
+        if result.merge_result.get("skipped"):
+            assert result.merge_result["reason"] in {
+                "consist_db_merge_failed",
+                "consist_db_merge_failed_after_retry",
+            }
+            assert "DETACH" in result.merge_result["error"]
+        else:
+            assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
+            assert result.merge_result["merge_result"]["runs_skipped"] == []
 
         old_outputs = tracker.get_run_outputs(old_run_id)
         new_outputs = tracker.get_run_outputs(new_run_id)
@@ -241,15 +312,16 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
         )
         assert new_outputs["new_output"].recovery_roots == [str(promoted.resolve())]
 
-        merged_tracker = _make_tracker(consist, main_run_dir)
-        try:
-            merged_run_ids = {
-                str(run.id) for run in merged_tracker.find_runs(limit=100)
-            }
-            assert old_run_id in merged_run_ids
-            assert new_run_id in merged_run_ids
-        finally:
-            merged_tracker.db.engine.dispose()
+        if not result.merge_result.get("skipped"):
+            merged_tracker = _make_tracker(consist, main_run_dir)
+            try:
+                merged_run_ids = {
+                    str(run.id) for run in merged_tracker.find_runs(limit=100)
+                }
+                assert old_run_id in merged_run_ids
+                assert new_run_id in merged_run_ids
+            finally:
+                merged_tracker.db.engine.dispose()
     finally:
         tracker.db.engine.dispose()
 

@@ -24,7 +24,7 @@ from pilates.utils.coupler_helpers import (
     resolve_existing_path,
     set_coupler_from_artifact,
 )
-from pilates.utils.consist_types import CouplerProtocol
+from pilates.utils.consist_types import CouplerProtocol, RunLike
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -548,49 +548,92 @@ def restart_exact_rewind_contract(
     return None
 
 
-def _select_latest_run_from_candidates(runs: Sequence[Any]) -> Any:
-    if not runs:
-        return None
+def restart_run_scope(
+    *,
+    state: Any = None,
+    workspace: Any = None,
+    archive_run_dir: Optional[str | os.PathLike[str]] = None,
+    local_run_dir: Optional[str | os.PathLike[str]] = None,
+) -> Optional[str]:
+    """Return the Consist run-scope prefix for restart lookups."""
 
-    def _latest_key(run: Any) -> Tuple[int, float, str]:
-        created_at_value = float("-inf")
-        created_at = getattr(run, "created_at", None)
-        if hasattr(created_at, "timestamp"):
+    candidate_paths: List[Any] = []
+    if archive_run_dir:
+        candidate_paths.append(archive_run_dir)
+    if state is not None:
+        run_info_path = getattr(state, "run_info_path", None)
+        if run_info_path:
             try:
-                created_at_value = float(created_at.timestamp())
+                candidate_paths.append(Path(run_info_path).expanduser().parent)
             except Exception:
-                created_at_value = float("-inf")
-        return (
-            _coerce_int(getattr(run, "iteration", None)) or -1,
-            created_at_value,
-            str(getattr(run, "id", "")),
-        )
+                pass
+    if workspace is not None:
+        full_path = getattr(workspace, "full_path", None)
+        if full_path:
+            candidate_paths.append(full_path)
+    if local_run_dir:
+        candidate_paths.append(local_run_dir)
 
-    return max(runs, key=_latest_key)
+    for value in candidate_paths:
+        try:
+            name = Path(value).expanduser().resolve().name
+        except Exception:
+            name = Path(str(value)).name
+        if name:
+            return name
+    return None
 
 
-def _find_latest_run_for_restart_target(
+def restart_target_for_step(
+    *,
+    settings: Any,
+    step_name: str,
+    year: int,
+    iteration: Optional[int] = None,
+    facet: Optional[Mapping[str, Any]] = None,
+    state: Any = None,
+    workspace: Any = None,
+    archive_run_dir: Optional[str | os.PathLike[str]] = None,
+    local_run_dir: Optional[str | os.PathLike[str]] = None,
+    include_iteration: bool = True,
+) -> Dict[str, Any]:
+    """Build the shared semantic Consist target for a completed restart run."""
+
+    scope = restart_query_scope_for_step(step_name)
+    target: Dict[str, Any] = {
+        "year": year,
+        "model": scope["model"],
+        "stage": scope["stage"],
+        "status": "completed",
+        "cache_epoch": resolve_cache_epoch(settings),
+    }
+    phase = scope.get("phase")
+    if phase is not None:
+        target["phase"] = phase
+    if include_iteration and iteration is not None:
+        target["iteration"] = iteration
+    if facet is not None:
+        target["facet"] = dict(facet)
+    run_scope = restart_run_scope(
+        state=state,
+        workspace=workspace,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+    )
+    if run_scope is not None:
+        target["run_scope"] = run_scope
+    return target
+
+
+def _find_matching_run_for_restart_target(
     *,
     tracker: Any,
     target: Mapping[str, Any],
 ) -> Any:
-    find_latest_run = getattr(tracker, "find_latest_run", None)
-    if callable(find_latest_run):
-        return find_latest_run(**dict(target))
-
-    find_runs = getattr(tracker, "find_runs", None)
-    if callable(find_runs):
-        runs = find_runs(limit=10_000, **dict(target))
-        if isinstance(runs, dict):
-            runs = list(runs.values())
-        run = _select_latest_run_from_candidates(list(runs or ()))
-        if run is None:
-            raise ValueError(
-                f"No runs found matching criteria for restart target: {dict(target)}"
-            )
-        return run
-
-    raise AttributeError("tracker does not support find_latest_run/find_runs")
+    find_matching_run = getattr(tracker, "find_matching_run", None)
+    if not callable(find_matching_run):
+        raise AttributeError("tracker does not support find_matching_run")
+    return find_matching_run(**dict(target))
 
 
 def _materialization_failures(result: Any) -> List[str]:
@@ -687,23 +730,23 @@ def _build_restart_query_target(
     producer: RestartProducerCandidate,
     query_facet: Optional[Mapping[str, Any]],
     include_iteration: bool,
+    state: Any = None,
+    workspace: Any = None,
+    archive_run_dir: Optional[str | os.PathLike[str]] = None,
+    local_run_dir: Optional[str | os.PathLike[str]] = None,
 ) -> Dict[str, Any]:
-    scope = restart_query_scope_for_step(producer.step_name)
-    target: Dict[str, Any] = {
-        "year": year,
-        "model": scope["model"],
-        "stage": scope["stage"],
-        "status": "completed",
-        "cache_epoch": resolve_cache_epoch(settings),
-    }
-    phase = scope.get("phase")
-    if phase is not None:
-        target["phase"] = phase
-    if include_iteration and iteration is not None:
-        target["iteration"] = iteration
-    if query_facet is not None:
-        target["facet"] = dict(query_facet)
-    return target
+    return restart_target_for_step(
+        settings=settings,
+        step_name=producer.step_name,
+        year=year,
+        iteration=iteration,
+        facet=query_facet,
+        include_iteration=include_iteration,
+        state=state,
+        workspace=workspace,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+    )
 
 
 def _raise_restart_hydration_error(
@@ -841,21 +884,23 @@ def _find_exact_rewind_source_run(
     year: int,
     iteration: int,
     query_facet: Optional[Mapping[str, Any]],
+    state: Any = None,
+    workspace: Any = None,
+    archive_run_dir: Optional[str | os.PathLike[str]] = None,
+    local_run_dir: Optional[str | os.PathLike[str]] = None,
 ) -> Any:
-    scope = restart_query_scope_for_step(contract.producer_step)
-    target: Dict[str, Any] = {
-        "year": year,
-        "iteration": iteration,
-        "model": scope["model"],
-        "stage": scope["stage"],
-        "status": "completed",
-        "cache_epoch": resolve_cache_epoch(settings),
-    }
-    if scope.get("phase") is not None:
-        target["phase"] = scope["phase"]
-    if query_facet is not None:
-        target["facet"] = dict(query_facet)
-    return _find_latest_run_for_restart_target(
+    target = restart_target_for_step(
+        settings=settings,
+        step_name=contract.producer_step,
+        year=year,
+        iteration=iteration,
+        facet=query_facet,
+        state=state,
+        workspace=workspace,
+        archive_run_dir=archive_run_dir,
+        local_run_dir=local_run_dir,
+    )
+    return _find_matching_run_for_restart_target(
         tracker=tracker,
         target=target,
     )
@@ -1117,6 +1162,10 @@ def hydrate_rewind_runner_inputs(
             year=year,
             iteration=iteration,
             query_facet=query_facet,
+            state=state,
+            workspace=workspace,
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
         )
     except Exception as exc:
         _raise_restart_hydration_error(
@@ -1125,8 +1174,15 @@ def hydrate_rewind_runner_inputs(
             producer_step=contract.producer_step,
             reason=f"no_completed_run_found:{exc}",
         )
+    if run is None:
+        _raise_restart_hydration_error(
+            summary=summary,
+            missing_key=contract.required_snapshot_keys[0],
+            producer_step=contract.producer_step,
+            reason="no_completed_run_found",
+        )
 
-    run_id = str(getattr(run, "id", "")).strip()
+    run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
     if not run_id:
         _raise_restart_hydration_error(
             summary=summary,
@@ -1325,13 +1381,42 @@ def hydrate_missing_restart_artifacts(
             producer=producer,
             query_facet=query_facet,
             include_iteration=True,
+            state=state,
+            workspace=workspace,
+            archive_run_dir=archive_run_dir,
+            local_run_dir=local_run_dir,
         )
         used_iteration_fallback = False
         try:
-            run = _find_latest_run_for_restart_target(
+            run = _find_matching_run_for_restart_target(
                 tracker=tracker,
                 target=query_target,
             )
+            if run is None:
+                query_target = _build_restart_query_target(
+                    settings=settings,
+                    year=year,
+                    iteration=iteration,
+                    producer=producer,
+                    query_facet=query_facet,
+                    include_iteration=False,
+                    state=state,
+                    workspace=workspace,
+                    archive_run_dir=archive_run_dir,
+                    local_run_dir=local_run_dir,
+                )
+                run = _find_matching_run_for_restart_target(
+                    tracker=tracker,
+                    target=query_target,
+                )
+                used_iteration_fallback = True
+            if run is None:
+                _raise_restart_hydration_error(
+                    summary=summary,
+                    missing_key=key,
+                    producer_step=producer.step_name,
+                    reason="no_completed_run_found",
+                )
         except ValueError:
             query_target = _build_restart_query_target(
                 settings=settings,
@@ -1340,13 +1425,24 @@ def hydrate_missing_restart_artifacts(
                 producer=producer,
                 query_facet=query_facet,
                 include_iteration=False,
+                state=state,
+                workspace=workspace,
+                archive_run_dir=archive_run_dir,
+                local_run_dir=local_run_dir,
             )
             try:
-                run = _find_latest_run_for_restart_target(
+                run = _find_matching_run_for_restart_target(
                     tracker=tracker,
                     target=query_target,
                 )
             except ValueError:
+                _raise_restart_hydration_error(
+                    summary=summary,
+                    missing_key=key,
+                    producer_step=producer.step_name,
+                    reason="no_completed_run_found",
+                )
+            if run is None:
                 _raise_restart_hydration_error(
                     summary=summary,
                     missing_key=key,
@@ -1362,7 +1458,7 @@ def hydrate_missing_restart_artifacts(
                 reason=f"tracker_query_failed:{exc}",
             )
 
-        run_id = str(getattr(run, "id", "")).strip()
+        run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
         if not run_id:
             _raise_restart_hydration_error(
                 summary=summary,

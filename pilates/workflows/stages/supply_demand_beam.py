@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
@@ -12,9 +11,14 @@ from pilates.runtime.context import (
     WorkflowRuntimeContext,
     ensure_workflow_runtime_context,
 )
-from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.runtime.restart import restart_target_for_step
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import (
+    CouplerProtocol,
+    RunLike,
+    ScenarioRestorationLike,
+    ScenarioWithCoupler,
+)
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
     artifact_to_existing_path,
@@ -61,9 +65,6 @@ if TYPE_CHECKING:
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
 _BEAM_VEHICLES_IN = "vehicles_beam_in"
-_STEP_RUN_ID_TARGET_RE = re.compile(
-    r"__step_func__y(?P<year>\d+)__i(?P<iteration>-?\d+)__phase_(?P<phase>[A-Za-z0-9_]+?)(?:_[0-9a-f]{6,})?$"
-)
 
 
 @dataclass
@@ -456,156 +457,6 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
         return None
 
 
-# TODO(consist): replace this matcher block with tracker.find_matching_run(...)
-# once docs-internal/consist_feature_request_run_matching_query.md lands upstream.
-def _current_run_prefix(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[str]:
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is not None:
-        return archive_run_dir.name
-    full_path = getattr(workspace, "full_path", None)
-    if not full_path:
-        return None
-    return Path(full_path).name
-
-
-def _run_id_matches_current_archive(
-    run: Any,
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> bool:
-    prefix = _current_run_prefix(state=state, workspace=workspace)
-    if not prefix:
-        return True
-    run_id = str(getattr(run, "id", "") or "")
-    if run_id == prefix or run_id.startswith(f"{prefix}__"):
-        return True
-    run_name = str(getattr(run, "name", "") or "")
-    return run_name == prefix or run_name.startswith(f"{prefix}__")
-
-
-def _candidate_direct_attr(run: Any, name: str) -> Any:
-    if isinstance(run, Mapping) and name in run:
-        return run.get(name)
-    return getattr(run, name, None)
-
-
-def _nested_mapping_values(run: Any) -> Iterable[Mapping[str, Any]]:
-    for container_name in (
-        "meta",
-        "metadata",
-        "facet",
-        "facets",
-        "step_facet",
-        "run_facet",
-    ):
-        value = _candidate_direct_attr(run, container_name)
-        if isinstance(value, Mapping):
-            yield value
-
-
-def _candidate_attr(run: Any, *names: str) -> Any:
-    for name in names:
-        value = _candidate_direct_attr(run, name)
-        if value not in (None, ""):
-            return value
-    for values in _nested_mapping_values(run):
-        for name in names:
-            value = values.get(name)
-            if value not in (None, ""):
-                return value
-    return None
-
-
-def _run_id_proven_target_value(run: Any, key: str) -> Any:
-    run_id = str(_candidate_direct_attr(run, "id") or "")
-    if not run_id:
-        return None
-    match = _STEP_RUN_ID_TARGET_RE.search(run_id)
-    if match is None:
-        return None
-    if key in {"year", "iteration", "phase"}:
-        return match.group(key)
-    return None
-
-
-def _candidate_value_matches(actual: Any, expected: Any) -> bool:
-    if expected in (None, ""):
-        return True
-    if actual in (None, ""):
-        return False
-    try:
-        return int(actual) == int(expected)
-    except (TypeError, ValueError):
-        return str(actual).strip().lower() == str(expected).strip().lower()
-
-
-def _run_matches_completed_beam_target(run: Any, target: Mapping[str, Any]) -> bool:
-    aliases = {
-        "model": ("model", "model_name"),
-        "stage": ("stage", "stage_name"),
-        "phase": ("phase",),
-        "status": ("status",),
-        "year": ("year",),
-        "iteration": ("iteration",),
-        "cache_epoch": ("cache_epoch",),
-    }
-    for key, names in aliases.items():
-        actual = _candidate_attr(run, *names)
-        if actual in (None, ""):
-            actual = _run_id_proven_target_value(run, key)
-        if not _candidate_value_matches(actual, target.get(key)):
-            return False
-    return True
-
-
-def _run_timestamp_value(run: Any) -> Optional[str]:
-    for name in (
-        "completed_at",
-        "ended_at",
-        "end_time",
-        "updated_at",
-        "created_at",
-        "started_at",
-        "start_time",
-        "recorded_at",
-    ):
-        value = _candidate_attr(run, name)
-        if value not in (None, ""):
-            return str(value)
-    return None
-
-
-def _select_completed_beam_candidate(
-    candidates: Iterable[Any],
-    *,
-    target: Mapping[str, Any],
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Optional[Any]:
-    valid = [
-        run
-        for run in candidates
-        if _run_id_matches_current_archive(run, state=state, workspace=workspace)
-        and _run_matches_completed_beam_target(run, target)
-    ]
-    if not valid:
-        return None
-    timestamped = [
-        (timestamp, index, run)
-        for index, run in enumerate(valid)
-        if (timestamp := _run_timestamp_value(run)) is not None
-    ]
-    if timestamped:
-        timestamped.sort(key=lambda item: (item[0], item[1]), reverse=True)
-        return timestamped[0][2]
-    return valid[0]
-
-
 def _find_completed_beam_run_for_restart(
     *,
     tracker: Any,
@@ -615,64 +466,19 @@ def _find_completed_beam_run_for_restart(
     year: int,
     iteration: int,
 ) -> Optional[Any]:
-    target: Dict[str, Any] = {
-        "model": "beam_run",
-        "stage": "beam",
-        "phase": "run",
-        "status": "completed",
-        "year": year,
-        "iteration": iteration,
-        "cache_epoch": resolve_cache_epoch(settings),
-    }
+    find_matching_run = getattr(tracker, "find_matching_run", None)
+    if not callable(find_matching_run):
+        raise AttributeError("tracker does not support find_matching_run")
 
-    find_runs = getattr(tracker, "find_runs", None)
-    if callable(find_runs):
-        try:
-            candidates = list(find_runs(limit=100, **target) or [])
-            selection_target = target
-        except TypeError:
-            legacy_target = dict(target)
-            legacy_target.pop("cache_epoch", None)
-            candidates = list(find_runs(limit=100, **legacy_target) or [])
-            selection_target = legacy_target
-        selected = _select_completed_beam_candidate(
-            candidates,
-            target=selection_target,
-            state=state,
-            workspace=workspace,
-        )
-        if selected is not None:
-            return selected
-        if candidates:
-            logger.info(
-                "[BEAM][restart] ignored %d completed beam_run candidate(s) outside current run scope or target attrs prefix=%s",
-                len(candidates),
-                _current_run_prefix(state=state, workspace=workspace),
-            )
-        return None
-
-    find_latest_run = getattr(tracker, "find_latest_run", None)
-    if not callable(find_latest_run):
-        return None
-    try:
-        run = find_latest_run(**target)
-        selection_target = target
-    except TypeError:
-        legacy_target = dict(target)
-        legacy_target.pop("cache_epoch", None)
-        try:
-            run = find_latest_run(**legacy_target)
-            selection_target = legacy_target
-        except Exception:
-            return None
-    except Exception:
-        return None
-    return _select_completed_beam_candidate(
-        [run] if run is not None else [],
-        target=selection_target,
+    target = restart_target_for_step(
+        settings=settings,
+        step_name="beam_run",
+        year=year,
+        iteration=iteration,
         state=state,
         workspace=workspace,
     )
+    return find_matching_run(**target)
 
 
 def _output_path_from_hydration_item(item: Any) -> Optional[Path]:
@@ -865,7 +671,7 @@ def _restored_beam_parent_years(
 
 def _try_restore_completed_beam_run_for_restart(
     *,
-    scenario: ScenarioWithCoupler,
+    scenario: ScenarioRestorationLike,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
@@ -882,7 +688,7 @@ def _try_restore_completed_beam_run_for_restart(
     tracker = cr.current_tracker()
     if tracker is None:
         return None
-    run = _find_completed_beam_run_for_restart(
+    run: Optional[RunLike] = _find_completed_beam_run_for_restart(
         tracker=tracker,
         settings=settings,
         state=state,
@@ -893,9 +699,19 @@ def _try_restore_completed_beam_run_for_restart(
     if run is None:
         return None
 
-    run_id = str(getattr(run, "id", "") or "")
+    run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
     if not run_id:
         return None
+    run_year, run_iteration = year, iteration
+    if isinstance(run, RunLike):
+        try:
+            run_year = int(getattr(run, "year", year))
+        except (TypeError, ValueError):
+            run_year = year
+        try:
+            run_iteration = int(getattr(run, "iteration", iteration))
+        except (TypeError, ValueError):
+            run_iteration = iteration
     outputs = _hydrate_completed_beam_run_outputs(
         tracker=tracker,
         run_id=run_id,
@@ -914,15 +730,16 @@ def _try_restore_completed_beam_run_for_restart(
 
     outputs_holder.beam_run = outputs
     _publish_recovered_beam_run_outputs(outputs=outputs, coupler=coupler)
-    remember_restored_run_id = getattr(scenario, "remember_restored_run_id", None)
-    if callable(remember_restored_run_id):
-        for parent_year in _restored_beam_parent_years(state=state, run_year=year):
-            remember_restored_run_id(
-                model_name="beam_run",
-                year=parent_year,
-                iteration=iteration,
-                run_id=run_id,
-            )
+    for parent_year in _restored_beam_parent_years(
+        state=state,
+        run_year=run_year if run_year is not None else year,
+    ):
+        scenario.remember_restored_run_id(
+            model_name="beam_run",
+            year=parent_year,
+            iteration=run_iteration,
+            run_id=run_id,
+        )
     restored_keys = sorted(outputs.raw_outputs.keys())
     logger.info(
         "[BEAM][restart] restored completed beam_run from Consist run_id=%s hydrated_keys=%s",
@@ -944,6 +761,185 @@ def _try_restore_completed_beam_run_for_restart(
         drift_classification="completed_beam_run_recovered",
     )
     return outputs
+
+
+def _beam_run_output_keys(outputs: BeamRunOutputs) -> list[str]:
+    raw_outputs = getattr(outputs, "raw_outputs", None)
+    if isinstance(raw_outputs, Mapping):
+        return sorted(str(key) for key in raw_outputs.keys())
+    iter_record_items = getattr(outputs, "_iter_record_items", None)
+    if callable(iter_record_items):
+        return sorted(
+            str(short_name) for short_name, _path, _desc in iter_record_items()
+        )
+    return []
+
+
+def _emit_beam_restart_recovery_readiness_diagnostic(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    outputs: BeamRunOutputs,
+    year: int,
+    iteration: int,
+    include_zarr_skims: bool,
+) -> None:
+    """Log whether a completed BEAM run is ready for restart-side recovery."""
+    output_keys = _beam_run_output_keys(outputs)
+    postprocess_keys = (
+        _build_beam_postprocess_input_keys(
+            upstream_keys=output_keys,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=include_zarr_skims,
+        )
+        or []
+    )
+    publication_keys = [
+        key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in output_keys
+    ]
+    required_keys = list(dict.fromkeys([*postprocess_keys, *publication_keys]))
+
+    matched_run_id: Optional[str] = None
+    matched_output_keys: list[str] = []
+    error: Optional[str] = None
+    target: Dict[str, Any] = {}
+    hydration_api_available = False
+    cache_identity_drift = False
+
+    try:
+        tracker = cr.current_tracker()
+        hydrate_run_outputs = getattr(tracker, "hydrate_run_outputs", None)
+        hydration_api_available = callable(hydrate_run_outputs)
+        find_matching_run = getattr(tracker, "find_matching_run", None)
+        if not callable(find_matching_run):
+            raise AttributeError("tracker does not support find_matching_run")
+        target = dict(
+            restart_target_for_step(
+                settings=settings,
+                step_name="beam_run",
+                year=year,
+                iteration=iteration,
+                state=state,
+                workspace=workspace,
+            )
+        )
+        run = find_matching_run(**target)
+        matched_run_id = str(run.id).strip() if isinstance(run, RunLike) else None
+        if matched_run_id:
+            try:
+                matched_outputs = load_tracker_run_outputs(
+                    matched_run_id,
+                    tracker=tracker,
+                    logger=logger,
+                    log_context="BEAM restart readiness diagnostic",
+                )
+                matched_output_keys = sorted(str(key) for key in matched_outputs.keys())
+            except Exception as exc:
+                error = f"get_run_outputs_failed:{type(exc).__name__}:{exc}"
+    except Exception as exc:
+        error = f"{type(exc).__name__}:{exc}"
+
+    identity_context = _beam_restart_identity_context(state=state)
+    cache_miss_explanation = identity_context.get("cache_miss_explanation")
+    identity_summary = identity_context.get("identity_summary")
+    drift_components: Dict[str, Any] = {}
+    if isinstance(cache_miss_explanation, Mapping):
+        cache_identity_drift = bool(
+            cache_miss_explanation.get("reason")
+            or cache_miss_explanation.get("mismatched_components")
+            or cache_miss_explanation.get("config_keys_changed")
+            or cache_miss_explanation.get("adapter_identity_changed")
+            or cache_miss_explanation.get("identity_inputs_changed")
+            or cache_miss_explanation.get("input_keys_changed")
+            or cache_miss_explanation.get("missing_input_keys")
+        )
+        for key in (
+            "mismatched_components",
+            "config_keys_changed",
+            "adapter_identity_changed",
+            "identity_inputs_changed",
+            "input_keys_changed",
+            "missing_input_keys",
+        ):
+            value = cache_miss_explanation.get(key)
+            if value:
+                drift_components[key] = value
+    if not cache_identity_drift and isinstance(identity_summary, Mapping):
+        cache_identity_drift = bool(
+            identity_summary.get("reason")
+            or identity_summary.get("mismatched_components")
+            or identity_summary.get("config_keys_changed")
+            or identity_summary.get("adapter_identity_changed")
+            or identity_summary.get("identity_inputs_changed")
+            or identity_summary.get("input_keys_changed")
+            or identity_summary.get("missing_input_keys")
+        )
+        if not drift_components:
+            for key in (
+                "mismatched_components",
+                "config_keys_changed",
+                "adapter_identity_changed",
+                "identity_inputs_changed",
+                "input_keys_changed",
+                "missing_input_keys",
+            ):
+                value = identity_summary.get(key)
+                if value:
+                    drift_components[key] = value
+
+    output_key_source = matched_output_keys or output_keys
+    missing_required = [
+        key for key in required_keys if key not in set(output_key_source)
+    ]
+    matchable = bool(matched_run_id)
+    if not matchable:
+        readiness_classification = "no_completed_run"
+    elif missing_required:
+        readiness_classification = "missing_inputs"
+    elif cache_identity_drift:
+        readiness_classification = "cache_identity_drift"
+    elif error is not None:
+        readiness_classification = "unknown"
+    else:
+        readiness_classification = "complete"
+    logger.info(
+        "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
+        "missing_required=%s required_keys=%s output_keys=%s",
+        matchable,
+        matched_run_id,
+        missing_required,
+        required_keys,
+        output_key_source,
+    )
+    _emit_artifact_lifecycle_event(
+        "beam_restart_recovery_readiness",
+        key="beam_restart_recovery_readiness",
+        artifact_family="beam_restart_diagnostic",
+        diagnostic="beam_restart_recovery_readiness",
+        restart_run=bool(getattr(state, "is_restart_run", False)),
+        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
+        forecast_year=getattr(state, "forecast_year", None),
+        iteration=iteration,
+        run_scope=str(target.get("run_scope")) if target else None,
+        query_status=target.get("status") if target else None,
+        matched_completed_run_id=matched_run_id,
+        matched_run_id=matched_run_id,
+        matchable=matchable,
+        output_keys=output_keys,
+        matched_output_keys=matched_output_keys,
+        required_restored_inputs=required_keys,
+        required_postprocess_keys=required_keys,
+        missing_restored_inputs=missing_required,
+        missing_required_keys=missing_required,
+        hydration_api_available=hydration_api_available,
+        identity_summary=dict(identity_summary or {}),
+        cache_miss_explanation=dict(cache_miss_explanation or {}),
+        identity_drift_components=drift_components,
+        drift_classification=readiness_classification,
+        diagnostic_error=error,
+    )
 
 
 def _derive_beam_run_input_keys(
@@ -1187,6 +1183,15 @@ def _run_beam_steps(
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
     if recovered_run is None:
+        _emit_beam_restart_recovery_readiness_diagnostic(
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            outputs=upstream_run,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=include_zarr_skims,
+        )
         _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
         upstream_keys=[

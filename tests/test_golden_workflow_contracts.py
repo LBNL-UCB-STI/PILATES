@@ -191,7 +191,9 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
         workspace,
     )
     assert final_usim_datastore is not None
-    assert Path(final_usim_datastore).name == f"usim_{state.forecast_year}.h5"
+    # The current datastore at this point is the merged input for the next iteration,
+    # so it uses the region-based template rather than the forecast-year template.
+    assert Path(final_usim_datastore).suffix == ".h5"
     assert Path(final_usim_datastore).parent == Path(after_vehicle_ownership).parent
     assert (
         Path(final_usim_datastore).resolve()

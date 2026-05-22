@@ -33,6 +33,7 @@ from pilates.utils.consist_config import (
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
 )
+from pilates.utils.consist_capabilities import require_consist_runtime_capabilities
 from pilates.utils.consist_db_snapshot import (
     ConsistDbSnapshotManager,
     mirror_consist_db_to_archive,
@@ -514,6 +515,7 @@ def _prepare_run_context(
             "Check earlier Consist logs for tracker creation errors, often caused by "
             "a PILATES/Consist API mismatch."
         )
+    require_consist_runtime_capabilities(tracker)
     run_event_context = RunNotificationContext.from_env(
         run_name=run_name,
         scenario_id=scenario_id,
@@ -834,6 +836,8 @@ def main(
                     scenario=tagged_scenario,
                     workspace=workspace,
                     state=state,
+                    tracker=tracker,
+                    settings=settings,
                 )
             if is_restart_run and state.data_initialized:
                 logger.info(

@@ -463,10 +463,15 @@ def _resolve_activitysim_postprocess_runtime_inputs(
     if not state.is_enabled(WorkflowState.Stage.land_use):
         return runtime_inputs
 
-    population_resolution = None
-    current_resolution = None
-    if not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs:
-        population_resolution = build_binding_plan(
+    # The population provider derives its year intrinsically from state.forecast_year,
+    # so the planner's `year` only governs the `urbansim_inputs_for_year` provider used
+    # for USIM_DATASTORE_CURRENT_H5. One binding call covers both rules.
+    resolution = None
+    needs_population = not step_inputs or USIM_POPULATION_SOURCE_H5 not in step_inputs
+    needs_current = not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs
+    if needs_population or needs_current:
+        current_year = getattr(state, "year", getattr(state, "current_year", None))
+        resolution = build_binding_plan(
             step_name="activitysim_postprocess",
             coupler=coupler,
             artifact_rules=(
@@ -478,19 +483,6 @@ def _resolve_activitysim_postprocess_runtime_inputs(
                     preferred_keys=(USIM_POPULATION_SOURCE_H5,),
                     fallback_provider="activitysim_population_source",
                 ),
-            ),
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            year=state.forecast_year,
-            surface=surface,
-        )
-    if not step_inputs or USIM_DATASTORE_CURRENT_H5 not in step_inputs:
-        current_year = getattr(state, "year", getattr(state, "current_year", None))
-        current_resolution = build_binding_plan(
-            step_name="activitysim_postprocess",
-            coupler=coupler,
-            artifact_rules=(
                 ArtifactBindingRule(
                     semantic_key=USIM_DATASTORE_CURRENT_H5,
                     required=False,
@@ -506,33 +498,76 @@ def _resolve_activitysim_postprocess_runtime_inputs(
             year=current_year,
             surface=surface,
         )
+    current_output_value: Optional[str] = None
+    population_snapshot_value: Optional[str] = None
+    get_usim_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    if state.is_enabled(WorkflowState.Stage.land_use) and callable(get_usim_dir):
+        from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+        usim_data_dir = Path(get_usim_dir())
+        current_candidate = usim_data_dir / get_usim_datastore_fname(
+            settings,
+            io="output",
+            year=state.forecast_year,
+        )
+        population_snapshot_candidate = current_candidate.with_name(
+            f"{current_candidate.stem}_population_source{current_candidate.suffix}"
+        )
+        base_candidate = usim_data_dir / get_usim_datastore_fname(
+            settings,
+            io="input",
+        )
+        if population_snapshot_candidate.exists():
+            population_snapshot_value = str(population_snapshot_candidate)
+        elif current_candidate.exists():
+            population_snapshot_value = str(current_candidate)
+        elif base_candidate.exists():
+            population_snapshot_value = str(base_candidate)
+
+        if current_candidate.exists():
+            current_output_value = str(current_candidate)
+        elif base_candidate.exists():
+            current_output_value = str(base_candidate)
+
     population_source_value = (
-        step_inputs.get(USIM_POPULATION_SOURCE_H5)
+        step_inputs.get("population_source_h5_path")
+        if step_inputs and "population_source_h5_path" in step_inputs
+        else step_inputs.get(USIM_POPULATION_SOURCE_H5)
         if step_inputs and USIM_POPULATION_SOURCE_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=population_resolution,
+            resolved=resolution,
             key=USIM_POPULATION_SOURCE_H5,
             coupler=coupler,
         )
     )
+    if population_source_value is None:
+        population_source_value = population_snapshot_value
     current_input_value = (
-        step_inputs.get(USIM_DATASTORE_CURRENT_H5)
+        step_inputs.get("current_input_h5_path")
+        if step_inputs and "current_input_h5_path" in step_inputs
+        else step_inputs.get(USIM_DATASTORE_CURRENT_H5)
         if step_inputs and USIM_DATASTORE_CURRENT_H5 in step_inputs
         else resolved_value_for_key(
-            resolved=current_resolution,
+            resolved=resolution,
             key=USIM_DATASTORE_CURRENT_H5,
             coupler=coupler,
         )
     )
-    if population_source_value is None:
-        population_source_value = current_input_value
     if current_input_value is None:
-        current_input_value = population_source_value
+        current_input_value = current_output_value
+    if population_source_value is None and current_input_value is not None:
+        current_input_path = Path(current_input_value)
+        current_snapshot_candidate = current_input_path.with_name(
+            f"{current_input_path.stem}_population_source{current_input_path.suffix}"
+        )
+        if current_snapshot_candidate.exists():
+            population_source_value = str(current_snapshot_candidate)
 
     runtime_inputs["population_source_h5_path"] = _resolve_activitysim_h5_runtime_path(
         value=population_source_value,
         key=USIM_POPULATION_SOURCE_H5,
         workspace=workspace,
+        required=False,
     )
     runtime_inputs["current_input_h5_path"] = _resolve_activitysim_h5_runtime_path(
         value=current_input_value,
@@ -1277,6 +1312,8 @@ def make_activitysim_preprocess_step(
                 coupler=coupler,
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 h5_tables_used=h5_tables_used,
                 child_specs=child_specs,
                 child_selection="include_only",
@@ -1759,6 +1796,8 @@ def make_activitysim_postprocess_step(
                 step_name="activitysim_postprocess",
                 profile_file_schema=True,
                 h5_container=True,
+                container_recovery_unit="parent_file",
+                child_recovery_policy="descriptive_only",
                 hash_tables="if_unchanged",
                 h5_tables_used=list(child_specs.keys()),
                 child_specs=child_specs,
