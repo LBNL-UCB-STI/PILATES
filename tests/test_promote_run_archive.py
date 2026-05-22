@@ -302,9 +302,7 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
             }
             assert "DETACH" in result.merge_result["error"]
         else:
-            assert result.merge_result["merge_result"]["runs_merged"] == [
-                new_run_id
-            ]
+            assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
             assert result.merge_result["merge_result"]["runs_skipped"] == []
 
         old_outputs = tracker.get_run_outputs(old_run_id)

@@ -693,7 +693,9 @@ def _merge_scoped_run_db_with_retry(
                 try:
                     retry_engine.dispose()
                 except Exception:
-                    logger.debug("Failed to dispose retry tracker engine", exc_info=True)
+                    logger.debug(
+                        "Failed to dispose retry tracker engine", exc_info=True
+                    )
 
 
 def promote_run_to_recovery_roots(
