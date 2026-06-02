@@ -95,6 +95,7 @@ def test_workflow_profile_respects_initialized_runtime_flags():
             vehicle_ownership_model_enabled=False,
             activity_demand_enabled=True,
             traffic_assignment_enabled=True,
+            impacts_enabled=True,
             replanning_enabled=False,
         ),
     )
@@ -104,6 +105,26 @@ def test_workflow_profile_respects_initialized_runtime_flags():
     assert profile.land_use_enabled is False
     assert profile.vehicle_ownership_model_enabled is False
     assert profile.activity_demand_enabled is True
+
+
+def test_ensure_runtime_flags_initialized_includes_impacts_when_already_initialized():
+    settings = _settings()
+    settings.runtime = SimpleNamespace(
+        flags_initialized=True,
+        flags=SimpleNamespace(
+            land_use_enabled=True,
+            vehicle_ownership_model_enabled=True,
+            activity_demand_enabled=True,
+            traffic_assignment_enabled=True,
+            impacts_enabled=False,
+            replanning_enabled=False,
+        ),
+    )
+
+    enabled_flags = ensure_runtime_flags_initialized(settings)
+
+    assert "impacts_enabled" in enabled_flags
+    assert enabled_flags["impacts_enabled"] is False
 
 
 def test_surface_enabled_schema_step_names_filters_disabled_model_steps():

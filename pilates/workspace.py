@@ -7,6 +7,14 @@ from pilates.utils.settings_helper import get as get_setting
 
 logger = logging.getLogger(__name__)
 
+# When ``activitysim`` is omitted from settings (e.g. activity demand disabled) BEAM
+# steps still resolve workspace-relative paths; match migrate_config defaults.
+_ACTIVITYSIM_WORKSPACE_SUBPATH_DEFAULTS: Dict[str, str] = {
+    "local_mutable_data_folder": "activitysim/data/",
+    "local_mutable_configs_folder": "activitysim/configs/",
+    "local_output_folder": "activitysim/output/",
+}
+
 
 class Workspace:
     """
@@ -50,6 +58,12 @@ class Workspace:
         os.makedirs(self.full_path, exist_ok=True)
         logger.info(f"Workspace initialized at: {self.full_path}")
 
+    def _activitysim_workspace_subpath(self, key: str) -> str:
+        val = get_setting(self.settings, f"activitysim.{key}")
+        if val is not None:
+            return val
+        return _ACTIVITYSIM_WORKSPACE_SUBPATH_DEFAULTS[key]
+
     def get_usim_mutable_data_dir(self) -> str:
         return os.path.join(
             self.full_path,
@@ -61,19 +75,19 @@ class Workspace:
             return self._asim_mutable_data_dir_override
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_mutable_data_folder"),
+            self._activitysim_workspace_subpath("local_mutable_data_folder"),
         )
 
     def get_asim_mutable_configs_dir(self) -> str:
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_mutable_configs_folder"),
+            self._activitysim_workspace_subpath("local_mutable_configs_folder"),
         )
 
     def get_asim_output_dir(self) -> str:
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "activitysim.local_output_folder"),
+            self._activitysim_workspace_subpath("local_output_folder"),
         )
 
     def get_asim_runtime_cache_dir(self) -> str:
@@ -110,7 +124,7 @@ class Workspace:
     def get_impacts_input_dir(self) -> str:
         return os.path.join(
             self.full_path,
-            get_setting(self.settings, "impacts.local_input_folder"),
+            get_setting(self.settings, "impacts.local_mutable_data_folder"),
         )
 
     def get_impacts_output_dir(self) -> str:

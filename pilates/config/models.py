@@ -682,16 +682,32 @@ class ImpactsConfig(BaseModel):
     """Downstream exposure/impacts model configuration."""
 
     local_input_folder: str = Field(
-        ..., description="Workspace-relative staged input folder"
+        "pilates/impacts/data",
+        description="Repo-relative seed folder copied into the workspace at initialization",
+    )
+    local_mutable_data_folder: str = Field(
+        "impacts/impacts_input", description="Workspace-relative staged input folder"
     )
     local_output_folder: str = Field(
-        ..., description="Workspace-relative impacts output folder"
+        "impacts/impacts_output", description="Workspace-relative impacts output folder"
     )
     container_input_folder: str = Field(
-        ..., description="Container-visible input folder"
+        "/input", description="Container-visible input folder"
     )
     container_output_folder: str = Field(
-        ..., description="Container-visible output folder"
+        "/output", description="Container-visible output folder"
+    )
+    container_beam_input_folder: str = Field(
+        "/beam/input",
+        description="Container-visible BEAM input root (covers e.g. /beam/input/sfbay)",
+    )
+    container_beam_output_folder: str = Field(
+        "/beam/beam_output",
+        description="Container-visible BEAM output root",
+    )
+    container_isrm_path: str = Field(
+        "/isrm.zarr",
+        description="Container-visible ISRM zarr store path",
     )
     command_template: str = Field(
         ...,
@@ -700,6 +716,10 @@ class ImpactsConfig(BaseModel):
             "{container_output_dir}, {container_input_manifest}, "
             "{container_output_manifest}, and {container_exposure_output}."
         ),
+    )
+    isrm_source_directory: str = Field(
+        "pilates/impacts/isrm.zarr",
+        description="InMAP Source-Receptor Matrix (ISRM) dataset",
     )
     exposure_output_filename: str = Field(
         "exposure_table.csv",

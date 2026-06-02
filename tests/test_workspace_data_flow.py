@@ -42,6 +42,33 @@ def test_workspace_path_resolution(tmp_path):
     )
 
 
+def test_workspace_activitysim_defaults_when_config_absent(tmp_path):
+    """Beam-only runs may omit ``activitysim``; workspace paths still resolve."""
+    settings = SimpleNamespace(
+        activitysim=None,
+        beam=SimpleNamespace(
+            local_mutable_data_folder="beam_mutable",
+            local_output_folder="beam_output",
+        ),
+        urbansim=SimpleNamespace(local_mutable_data_folder="usim_mutable"),
+        atlas=SimpleNamespace(
+            host_mutable_input_folder="atlas_input",
+            host_output_folder="atlas_output",
+        ),
+    )
+    workspace = Workspace(settings, str(tmp_path), folder_name="run")
+    root = workspace.full_path
+    assert workspace.get_asim_output_dir() == os.path.join(
+        root, "activitysim/output/"
+    )
+    assert workspace.get_asim_mutable_data_dir() == os.path.join(
+        root, "activitysim/data/"
+    )
+    assert workspace.get_asim_mutable_configs_dir() == os.path.join(
+        root, "activitysim/configs/"
+    )
+
+
 def test_artifact_path_resolution(tmp_path):
     workspace = SimpleNamespace(full_path=str(tmp_path))
 

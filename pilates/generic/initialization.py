@@ -308,6 +308,7 @@ class Initialization(Model):
         vehicle_ownership_enabled = bool(
             enabled_flags["vehicle_ownership_model_enabled"]
         )
+        impacts_enabled = bool(enabled_flags["impacts_enabled"])
         model_factory = ModelFactory()
 
         try:
@@ -421,6 +422,11 @@ class Initialization(Model):
                 "land_use": (
                     settings.run.models.land_use if urbansim_enabled else None
                 ),
+                "impacts": (
+                    getattr(settings.run.models, "impacts", None)
+                    if impacts_enabled
+                    else None
+                ),
             }
 
             for model_key, model_name in model_map.items():
@@ -484,6 +490,24 @@ class Initialization(Model):
                         initialization_records_in=initialization_records_in,
                         initialization_records_out=initialization_records_out,
                     )
+
+                # Impacts seed copy
+                if model_name == "impacts":
+                    input_dir = workspace.get_impacts_input_dir()
+                    os.makedirs(input_dir, exist_ok=True)
+                    impacts_preprocessor = model_factory.get_preprocessor(
+                        "impacts", self.state
+                    )
+                    result = impacts_preprocessor.copy_data_to_mutable_location(
+                        settings, input_dir, workspace
+                    )
+                    _accumulate_copy_result(
+                        result=result,
+                        model_name=model_name,
+                        initialization_records_in=initialization_records_in,
+                        initialization_records_out=initialization_records_out,
+                    )
+                    os.makedirs(workspace.get_impacts_output_dir(), exist_ok=True)
 
             # You can add further model-specific blocks (e.g., for urbansim, atlas) as needed
 

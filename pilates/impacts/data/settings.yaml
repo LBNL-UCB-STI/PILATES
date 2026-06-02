@@ -1,0 +1,205 @@
+run:
+  region: sfbay
+  scenario: base
+  start_year: 2018
+
+shared:
+  geography:
+    FIPS:
+      state: "06"
+      counties:
+        - "001"
+        - "013"
+        - "041"
+        - "055"
+        - "075"
+        - "081"
+        - "085"
+        - "095"
+        - "097"
+    local_crs: EPSG:26910
+
+beam:
+  local_input_folder: /beam/input
+  local_output_folder: /beam/beam_output
+  router_directory: r5/sfbay-cbg5500-weakConn-network
+
+impacts:
+  local_input_folder: /input/
+  local_output_folder: /output/
+  seed: 0
+  scenario: 2018-Baseline
+
+  pipeline:
+    presim:
+      activities: true
+      fleet: true
+    postsim:
+      emissions: true
+      inmap: true
+      aermod: true
+      exposure: true
+
+  population:
+    passenger_folder: urbansim/atlas-2019
+    freight_folder: freight/20250730/2018-Baseline
+    vehicle_folder: vehicle-tech
+    atlas_year: 2019
+    frism_year: 2018
+    population_sample: 0.005
+    transit_sample: 1.0
+
+  activities:
+    emissions_raw_archive: vehicle-tech/emissions/emissions_raw.tar.zst
+    region_label: SF
+    model_year_groups:
+      light_duty:
+        - "<=2003"
+        - "2004-2014"
+        - ">=2015"
+      medium_heavy_duty:
+        - "<=2002"
+        - "2003-2006"
+        - "2007-2009"
+        - "2010-2012"
+        - "2013-2015"
+        - ">=2016"
+    project_analysis:
+      main:
+        folder_in_archive: sfbay-emfac-project-analysis
+        pto_as_process:
+          enabled: true
+          vehicle_category:
+            - T7 Public Class 8
+            - T7 Utility Class 8
+            - T7 Single Concrete/Transit Mix Class 8
+            - T7 Single Dump Class 8
+            - T7 Single Other Class 8
+            - T7 SWCV Class 8
+      black_carbon:
+        folder_in_archive: sfbay-emfac-moves-bc
+        pollutant: BCh
+      paved_road_dust:
+        folder_in_archive: statewide-carb-road-dust
+        road_category_map:
+          motorway: Freeway
+          motorway_link: Freeway
+          trunk: Freeway
+          trunk_link: Major
+          primary: Major
+          primary_link: Major
+          secondary: Collector
+          secondary_link: Collector
+          tertiary: Collector
+          tertiary_link: Collector
+          unclassified: Collector
+          residential: Local Urban
+          residential_link: Local Urban
+    emissions_inventory:
+      folder_in_archive: sfbay-emfac-emissions-inventory
+      fallback_folder_in_archive: statewide-emfac-emissions-inventory
+      fuel_map:
+        Dsl: [Diesel]
+        Elec: [Electricity]
+        Gas: [Gasoline]
+        NG: [Natural Gas]
+        Phe: [Plug-in Hybrid]
+
+  fleet:
+    assignment_model: vehicle-tech/emissions/fleet_assignment.yaml
+    atlas:
+      fuel_map:
+        gasoline: [conv, hybrid, cng]
+        electricity: [ev]
+        hydrogen: [fuelcell]
+        electricity+gasoline: [phev]
+      income_bins: [0, 30, 60, 100, 200, 9999]
+
+  emissions:
+    pollutants: [NH3, NOx, PM25, SOx, ROG, BC]
+    include_non_osm_car_links: true
+    include_passenger: true
+    include_freight: true
+    enable_passenger_activity_correction: false
+    enable_freight_activity_correction: false
+    default_annualization_days:
+      light_duty: 327.0
+      medium_heavy_duty: 312.0
+
+  dispersions:
+    inmap:
+      isrm_zarr: /isrm.zarr
+      isrm_nox_to_no2_ratios_file: vehicle-tech/dispersions/inmap/nox_to_no2_full_isrm_matrix.npz
+      grid_path: vehicle-tech/dispersions/inmap/isrm_polygon_wgs84.gpkg
+      grid_id: isrm
+      grid_epsg: 4326
+    aermod:
+      grid_size_meters: 100.0
+      asrv_patterns_file: vehicle-tech/dispersions/aermod/aermod_patterns_wgs84.parquet
+      asrv_patterns_epsg: 4326
+
+  analysis:
+
+    targets: # 2018 year: https://www.baaqmd.gov/en/about-air-quality/emission-inventory/emissions-lookup-tool
+      pm25_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 714.26
+          light_duty_trucks: 313.92
+          medium_duty_trucks: 151.68
+          heavy_duty_trucks: 486.16
+          other: 43.62
+        road_dust:
+          all: 1499.25
+      nox_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 3964.37
+          light_duty_trucks: 3083.81
+          medium_duty_trucks: 1880.14
+          heavy_duty_trucks: 16524.57
+          other: 1429.61
+      rog_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 4877.02
+          light_duty_trucks: 3384.74
+          medium_duty_trucks: 1809.77
+          heavy_duty_trucks: 1663.68
+          other: 1665.45
+        road_dust:
+          all:
+      sox_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 105.34
+          light_duty_trucks: 58.88
+          medium_duty_trucks: 35.14
+          heavy_duty_trucks: 49.98
+          other: 5.31
+        road_dust:
+          all:
+      pm10_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 1705.24
+          light_duty_trucks: 746.55
+          medium_duty_trucks: 360.45
+          heavy_duty_trucks: 769.24
+          other: 88.17
+        road_dust:
+          all: 10465.56
+      tog_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 5356.65
+          light_duty_trucks: 3685.32
+          medium_duty_trucks: 1983.48
+          heavy_duty_trucks: 1913.94
+          other: 2009.93
+        road_dust:
+          all:
+      co_annual_short_tons:
+        mobile_onroad:
+          passenger_cars: 46346.58
+          light_duty_trucks: 27664.06
+          medium_duty_trucks: 15307.58
+          heavy_duty_trucks: 7027.98
+          other: 10767.99
+        road_dust:
+          all:
+

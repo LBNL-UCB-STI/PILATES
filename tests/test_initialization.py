@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 from types import SimpleNamespace
 
@@ -59,6 +60,8 @@ class DummyWorkspace:
         self.atlas_mutable_input_dir = "/tmp/atlas_in"
         self.atlas_output_dir = "/tmp/atlas_out"
         self.activitysim_mutable_dir = "/tmp/asim"
+        self.impacts_input_dir = "/tmp/impacts/input"
+        self.impacts_output_dir = "/tmp/impacts/output"
         self.full_path = "/tmp"
 
     def get_beam_mutable_data_dir(self):
@@ -75,6 +78,12 @@ class DummyWorkspace:
 
     def get_asim_mutable_data_dir(self):
         return self.activitysim_mutable_dir
+
+    def get_impacts_input_dir(self):
+        return self.impacts_input_dir
+
+    def get_impacts_output_dir(self):
+        return self.impacts_output_dir
 
 
 # ----------------------------------------------------------------------
@@ -683,5 +692,81 @@ def test_initialization_activitysim_beam_stages_only_required_model_families(
         assert "beam" in summary["models"]
         assert "activitysim" in summary["models"]
         assert "atlas" not in summary["models"]
+    finally:
+        cr.set_enabled(None)
+
+
+def test_initialization_copies_impacts_seed_when_impacts_enabled(
+    monkeypatch, tmp_path
+):
+    from pilates.generic.records import FileRecord, RecordStore
+    from pilates.utils import consist_runtime as cr
+
+    cr.set_enabled(False)
+
+    class _CountingPreprocessor:
+        def __init__(self, model_name, calls):
+            self.model_name = model_name
+            self.calls = calls
+
+        def copy_data_to_mutable_location(self, settings, output_dir, workspace=None):
+            self.calls.append((self.model_name, output_dir, workspace))
+            record = FileRecord(
+                unique_id=f"{self.model_name}-out",
+                short_name=f"{self.model_name}_output",
+                file_path=str(tmp_path / f"{self.model_name}.txt"),
+            )
+            return RecordStore(), RecordStore(recordList=[record])
+
+    class _CountingFactory:
+        def __init__(self):
+            self.calls = []
+
+        def get_preprocessor(self, model_name, state, **_kwargs):
+            return _CountingPreprocessor(model_name, self.calls)
+
+    factory = _CountingFactory()
+    monkeypatch.setattr("pilates.generic.initialization.ModelFactory", lambda: factory)
+    monkeypatch.setattr(
+        "pilates.generic.initialization.ensure_runtime_flags_initialized",
+        lambda _settings: {
+            "land_use_enabled": False,
+            "vehicle_ownership_model_enabled": False,
+            "activity_demand_enabled": False,
+            "traffic_assignment_enabled": False,
+            "impacts_enabled": True,
+            "replanning_enabled": False,
+        },
+    )
+
+    workspace = DummyWorkspace()
+    workspace.impacts_input_dir = str(tmp_path / "impacts" / "impacts_input")
+    workspace.impacts_output_dir = str(tmp_path / "impacts" / "impacts_output")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(
+                travel=None,
+                activity_demand=None,
+                vehicle_ownership=None,
+                land_use=None,
+                impacts="impacts",
+            ),
+            start_year=2020,
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(zones=None),
+        ),
+    )
+
+    try:
+        init = Initialization("init", None)
+        init.run(settings, workspace)
+
+        impacts_calls = [call for call in factory.calls if call[0] == "impacts"]
+        assert len(impacts_calls) == 1
+        assert impacts_calls[0][1] == workspace.get_impacts_input_dir()
+        assert impacts_calls[0][2] is workspace
+        assert Path(workspace.get_impacts_output_dir()).exists()
     finally:
         cr.set_enabled(None)

@@ -7,6 +7,7 @@ import yaml
 
 from pilates.generic.runner import GenericRunner
 from pilates.impacts.outputs import ImpactsPreprocessOutputs, ImpactsRunOutputs
+from pilates.impacts.volumes import build_impacts_docker_volumes, volumes_manifest
 from pilates.workspace import Workspace
 
 
@@ -87,16 +88,8 @@ class ImpactsRunner(GenericRunner[ImpactsPreprocessOutputs, ImpactsRunOutputs]):
                 )
             manifest_payload["status"] = "stubbed"
         else:
-            volumes = {
-                str(store.input_dir.resolve()): {
-                    "bind": container_input_dir,
-                    "mode": "rw",
-                },
-                str(output_dir.resolve()): {
-                    "bind": container_output_dir,
-                    "mode": "rw",
-                },
-            }
+            volumes = build_impacts_docker_volumes(workspace=workspace, cfg=cfg)
+            manifest_payload["volumes"] = volumes_manifest(volumes)
             success = self.run_container(
                 client=None,
                 settings=settings,

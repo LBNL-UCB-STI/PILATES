@@ -43,7 +43,8 @@ def _make_settings(tmp_path: Path) -> AttrDict:
                 },
             },
             "impacts": {
-                "local_input_folder": "impacts/input",
+                "local_input_folder": "impacts/seed",
+                "local_mutable_data_folder": "impacts/input",
                 "local_output_folder": "impacts/output",
                 "container_input_folder": "/app/input",
                 "container_output_folder": "/app/output",

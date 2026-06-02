@@ -59,6 +59,7 @@ def ensure_runtime_flags_initialized(settings: Any) -> Dict[str, bool]:
             "traffic_assignment_enabled": bool(
                 runtime_flags.traffic_assignment_enabled
             ),
+            "impacts_enabled": bool(runtime_flags.impacts_enabled),
             "replanning_enabled": bool(runtime_flags.replanning_enabled),
         }
 

@@ -15,12 +15,14 @@ run:
   travel_model_freq: 1
   vehicle_ownership_freq: 6
   supply_demand_iters: 6
-  output_directory: /global/scratch/users/$USER/pilates-output
+#  output_directory: /global/scratch/users/$USER/pilates-output
+  output_directory: ./output
   output_run_name: BREATHE--2018-Baseline
   consist_db_local_run: true
   consist_db_filename: provenance.duckdb
   models:
     land_use: null
+    impacts: impacts
     travel: beam
     activity_demand: null
     vehicle_ownership: null
@@ -236,15 +238,17 @@ shared:
 # Container management (Docker/Singularity) and execution environment
 # =============================================================================
 infrastructure:
-  container_manager: singularity
+  container_manager: docker
   singularity_images:
     urbansim: docker://jdcaicedo/urbansim_demos:v0.1.1
     atlas: docker://ghcr.io/lbnl-science-it/atlas:sfb-v2.0.12
+    impacts: docker://beammodel/impacts:0.0.2
     beam: docker://haitamlaarabi/beam:1.1-beta-v260424
     activitysim: docker://zaneedell/activitysim:0.2.5
   docker_images:
     urbansim: jdcaicedo/urbansim_demos:v0.1.1
     atlas: ghcr.io/lbnl-science-it/atlas:v1.0.7
+    impacts: beammodel/impacts:0.0.2
     beam: haitamlaarabi/beam:1.1-beta-v260424
     activitysim: zaneedell/activitysim:0.2.5
     polaris: tbd
@@ -273,6 +277,16 @@ urbansim:
       seattle: "53199100"
 
 # =============================================================================
+# IMPACTS CONFIGURATION
+# =============================================================================
+impacts:
+  local_input_folder: pilates/impacts/data
+  local_mutable_data_folder: impacts/impacts_input
+  local_output_folder: impacts/impacts_output
+  command_template: "pipeline --config /input/settings.yaml"
+  isrm_source_directory: pilates/impacts/isrm_v1.2.1.zarr
+
+# =============================================================================
 # BEAM CONFIGURATION
 # Transportation network simulation settings
 # =============================================================================
@@ -280,8 +294,8 @@ beam:
   config: "scenarios/breathe/pilates--sfbay--2018-Baseline.conf"
   sample: 1.0
   replanning_portion: 0.4
-  memory: "${BEAM_MEMORY}"
-  extra_jvm_args: "${BEAM_EXTRA_JVM_ARGS}"
+  memory: "400g"
+  extra_jvm_args: ""
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
