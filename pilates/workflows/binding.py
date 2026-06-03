@@ -969,12 +969,18 @@ def _beam_preprocess_atlas_inputs(
 
     atlas_output_dir = workspace.get_atlas_output_dir()
     candidates = [
-        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
-        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
+        Path(atlas_output_dir) / f"vehicles2_{forecast_year}.csv",
+        Path(atlas_output_dir) / f"vehicles2_{forecast_year - 1}.csv",
     ]
     for atlas_vehicle_path in candidates:
-        if os.path.exists(atlas_vehicle_path):
-            return {ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_path}
+        archive_path = archive_fallback_path(
+            state=state,
+            workspace=workspace,
+            local_path=atlas_vehicle_path,
+        )
+        selected = first_existing_path(atlas_vehicle_path, archive_path)
+        if selected is not None:
+            return {ATLAS_VEHICLES2_OUTPUT: str(selected)}
     return None
 
 

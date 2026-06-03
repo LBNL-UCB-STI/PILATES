@@ -390,6 +390,50 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     )
 
 
+def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(
+    tmp_path,
+):
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    atlas_rel = Path("atlas") / "atlas_output"
+    archive_vehicles = archive_root / atlas_rel / "vehicles2_2030.csv"
+    archive_vehicles.parent.mkdir(parents=True)
+    archive_vehicles.write_text("archive forecast vehicles", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="sfbay",
+            models=SimpleNamespace(traffic_assignment="beam"),
+        ),
+        runtime=SimpleNamespace(
+            flags=SimpleNamespace(
+                activity_demand_enabled=True,
+                vehicle_ownership_model_enabled=True,
+            )
+        ),
+        beam=SimpleNamespace(
+            scenario_folder="urbansim",
+            config="sfbay-pilates-base-omx.conf",
+        ),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    state = SimpleNamespace(
+        current_inner_iter=0,
+        forecast_year=2030,
+        year=2024,
+        run_info_path=str(archive_root / "run_state.yaml"),
+    )
+    workspace = MagicMock()
+    workspace.full_path = str(local_root)
+    workspace.get_beam_mutable_data_dir.return_value = str(local_root / "beam" / "input")
+    workspace.get_asim_output_dir.return_value = str(local_root / "activitysim" / "output")
+    workspace.get_atlas_output_dir.return_value = str(local_root / atlas_rel)
+
+    expected = BeamPreprocessor.expected_inputs(settings, state, workspace)
+
+    assert expected[ATLAS_VEHICLES2_OUTPUT] == str(archive_vehicles)
+
+
 def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_local_ids():
     normalized = _normalize_beam_vehicle_columns(
         pd.DataFrame(

@@ -21,6 +21,7 @@ from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
+from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
@@ -246,13 +247,17 @@ class BeamPreprocessor(GenericPreprocessor):
             forecast_year = getattr(state, "forecast_year", None)
             if forecast_year is not None:
                 for candidate in (
-                    os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
-                    os.path.join(
-                        atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"
-                    ),
+                    Path(atlas_output_dir) / f"vehicles2_{forecast_year}.csv",
+                    Path(atlas_output_dir) / f"vehicles2_{forecast_year - 1}.csv",
                 ):
-                    if os.path.exists(candidate):
-                        atlas_vehicle_input = candidate
+                    archive_candidate = archive_fallback_path(
+                        state=state,
+                        workspace=workspace,
+                        local_path=candidate,
+                    )
+                    selected = first_existing_path(candidate, archive_candidate)
+                    if selected is not None:
+                        atlas_vehicle_input = str(selected)
                         break
         return {
             BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),

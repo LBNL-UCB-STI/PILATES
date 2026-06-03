@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import consist
@@ -732,6 +733,53 @@ def test_beam_preprocess_atlas_inputs_falls_back_to_forecast_year_minus_one(
     )
 
     assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(prior_year_h5)
+
+
+def test_beam_preprocess_atlas_inputs_use_forecast_year_archive_candidate(
+    tmp_path,
+):
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    atlas_rel = Path("atlas") / "atlas_output"
+    archive_vehicles = archive_root / atlas_rel / "vehicles2_2030.csv"
+    archive_vehicles.parent.mkdir(parents=True)
+    archive_vehicles.write_text("archive forecast vehicles", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam"))
+    )
+    state = SimpleNamespace(
+        current_inner_iter=0,
+        forecast_year=2030,
+        year=2024,
+        run_info_path=str(archive_root / "run_state.yaml"),
+    )
+    workspace = SimpleNamespace(
+        full_path=str(local_root),
+        get_atlas_output_dir=lambda: str(local_root / atlas_rel),
+    )
+
+    plan = build_binding_plan(
+        step_name="unit_test_beam_preprocess",
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=ATLAS_VEHICLES2_OUTPUT,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_atlas_inputs",
+            ),
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.year,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(archive_vehicles)
 
 
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(
