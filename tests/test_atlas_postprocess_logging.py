@@ -5,7 +5,10 @@ import pytest
 
 from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
-from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 
@@ -30,11 +33,13 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 
     output_logger = captured["output_logger"]
     output_only_keys = []
+    output_only_meta = []
     set_output_keys = []
     publish_meta = []
 
     def _log_output_only(*, key, path, description, **meta):
         output_only_keys.append(key)
+        output_only_meta.append(meta)
 
     def _log_and_set_output(*, key, path, description, coupler, **meta):
         set_output_keys.append(key)
@@ -56,7 +61,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         usim_datastore_h5=h5_path,
         processed_outputs={
             "usim_h5_updated": h5_path,
-            "atlas_vehicles2_output": vehicles2_path,
+            ATLAS_VEHICLES2_OUTPUT: vehicles2_path,
         },
     )
 
@@ -68,7 +73,15 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         holder=SimpleNamespace(),
     )
 
-    assert output_only_keys == ["atlas_vehicles2_output"]
+    assert output_only_keys == [ATLAS_VEHICLES2_OUTPUT]
+    assert output_only_meta[0]["facet"] == {
+        "artifact_family": ATLAS_VEHICLES2_OUTPUT,
+        "source_role": ATLAS_VEHICLES2_OUTPUT,
+        "year": 2023,
+        "iteration": None,
+    }
+    assert output_only_meta[0]["facet_schema_version"] == "v1"
+    assert output_only_meta[0]["facet_index"] is True
     assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
     assert len(publish_meta) == 1
     assert publish_meta[0]["child_selection"] == "include_only"

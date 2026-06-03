@@ -19,9 +19,9 @@ from pilates.beam.config_hocon import (
 )
 from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
+from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
-from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
@@ -244,21 +244,16 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         atlas_vehicle_input = None
         if atlas_output_dir is not None:
-            forecast_year = getattr(state, "forecast_year", None)
-            if forecast_year is not None:
-                for candidate in (
-                    Path(atlas_output_dir) / f"vehicles2_{forecast_year}.csv",
-                    Path(atlas_output_dir) / f"vehicles2_{forecast_year - 1}.csv",
-                ):
-                    archive_candidate = archive_fallback_path(
-                        state=state,
-                        workspace=workspace,
-                        local_path=candidate,
-                    )
-                    selected = first_existing_path(candidate, archive_candidate)
-                    if selected is not None:
-                        atlas_vehicle_input = str(selected)
-                        break
+            resolved_vehicle_source = resolve_atlas_vehicles2_source(
+                state=state,
+                workspace=workspace,
+                require_exact_year=(
+                    settings.runtime.flags.activity_demand_enabled
+                    and getattr(state, "current_inner_iter", 0) == 0
+                ),
+            )
+            if resolved_vehicle_source is not None:
+                atlas_vehicle_input = str(resolved_vehicle_source.selected_path)
         return {
             BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
             BEAM_CONFIG_FILE: beam_config_path,
@@ -403,18 +398,24 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
+            require_exact_vehicle_source = self._activity_demand_enabled()
+            source_short_names = (
+                (ATLAS_VEHICLES2_OUTPUT,)
+                if require_exact_vehicle_source
+                else (ATLAS_VEHICLES2_OUTPUT, "vehicles_beam_in")
+            )
             restored_vehicle_source = next(
                 (
                     record.file_path
                     for record in previous_records.all_records()
-                    if getattr(record, "short_name", None)
-                    in (ATLAS_VEHICLES2_OUTPUT, "vehicles_beam_in")
+                    if getattr(record, "short_name", None) in source_short_names
                 ),
                 None,
             )
             beam_output_record = self._copy_vehicles_from_atlas(
                 workspace,
                 source_path=restored_vehicle_source,
+                require_exact_year=require_exact_vehicle_source,
             )
             if beam_output_record is not None:
                 store.add_record(beam_output_record)
@@ -497,14 +498,23 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         record_store = self._preprocess(workspace, input_store)
         prepared_inputs: Dict[str, Path] = {}
-        for key, value in record_store.to_mapping().items():
+        prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
+        record_mapping = record_store.to_mapping()
+        for key, value in record_mapping.items():
             path = artifact_to_path(value, workspace)
             if path is None:
                 continue
             prepared_inputs[key] = Path(path)
+        for record in record_store.all_records():
+            short_name = getattr(record, "short_name", None)
+            if short_name in prepared_inputs:
+                metadata = getattr(record, "metadata", None)
+                if metadata:
+                    prepared_input_metadata[short_name] = dict(metadata)
         return BeamPreprocessOutputs(
             beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
             prepared_inputs=prepared_inputs,
+            prepared_input_metadata=prepared_input_metadata,
         )
 
     def copy_data_to_mutable_location(
@@ -595,12 +605,14 @@ class BeamPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         *,
         source_path: Optional[str] = None,
+        require_exact_year: bool = False,
     ) -> Optional[FileRecord]:
         return beam_input_staging.copy_vehicles_from_atlas(
             workspace=workspace,
             state=self.state,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,
             source_path=source_path,
+            require_exact_year=require_exact_year,
             preferred_format=(
                 getattr(
                     getattr(self.settings, "activitysim", None), "file_format", None

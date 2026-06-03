@@ -30,6 +30,7 @@ from pilates.beam.config_hocon import (
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_INPUT_CONFIG_ARCHIVED,
@@ -201,6 +202,34 @@ _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
         "beam_experienced_plans_warmstart"
     ),
 }
+
+
+def _beam_preprocess_input_publication_meta(
+    *,
+    key: str,
+    state: WorkflowState,
+    input_metadata: Mapping[str, Any],
+) -> Dict[str, Any]:
+    if key != "vehicles_beam_in":
+        return {}
+    if input_metadata.get("source_semantic_key") != ATLAS_VEHICLES2_OUTPUT:
+        return {}
+
+    return {
+        "facet": {
+            "artifact_family": "beam_preprocess_input",
+            "source_role": key,
+            "derived_from": ATLAS_VEHICLES2_OUTPUT,
+            "year": getattr(state, "forecast_year", None),
+            "iteration": getattr(state, "iteration", None),
+            "source_year": input_metadata.get("source_year"),
+            "source_resolution_mode": input_metadata.get("source_resolution_mode"),
+            "source_storage_location": input_metadata.get("source_storage_location"),
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+        "source_path": input_metadata.get("source_path"),
+    }
 
 
 def _beam_run_snapshot_dir(
@@ -847,8 +876,9 @@ def _recover_beam_preprocess_outputs(
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
 ) -> Optional[BeamPreprocessOutputs]:
-    del settings, state, coupler, outputs_holder, cached_outputs, run_id
+    del settings, state, coupler, outputs_holder, run_id
     prepared_inputs: Dict[str, Path] = {}
+    prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
     if step_inputs:
         allowed_keys = {
             BEAM_CONFIG_FILE,
@@ -870,9 +900,16 @@ def _recover_beam_preprocess_outputs(
                 prepared_inputs[key] = Path(path)
     if not prepared_inputs:
         return None
+    if cached_outputs:
+        raw_metadata = cached_outputs.get("prepared_input_metadata")
+        if isinstance(raw_metadata, Mapping):
+            for key, value in raw_metadata.items():
+                if key in prepared_inputs and isinstance(value, Mapping):
+                    prepared_input_metadata[str(key)] = dict(value)
     return BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared_inputs,
+        prepared_input_metadata=prepared_input_metadata,
     )
 
 
@@ -1081,6 +1118,13 @@ def make_beam_preprocess_step(
                 "plans_beam_in",
                 "vehicles_beam_in",
             },
+            extra_meta_fn=lambda key, _path, _description: (
+                _beam_preprocess_input_publication_meta(
+                    key=key,
+                    state=state,
+                    input_metadata=outputs.prepared_input_metadata.get(key, {}),
+                )
+            ),
         )
 
     step = build_standard_step(

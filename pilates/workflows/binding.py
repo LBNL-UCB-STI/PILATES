@@ -30,6 +30,7 @@ from typing import (
 
 from consist.types import BindingResult
 
+from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
@@ -467,11 +468,18 @@ def beam_preprocess_binding_plan(
             for key, value in warmstart_inputs.items():
                 explicit_inputs.setdefault(key, value)
 
+    require_exact_atlas_vehicles = bool(
+        resolved_profile.activity_demand_enabled
+        and activity_demand_outputs is not None
+        and resolved_profile.vehicle_ownership_model_enabled
+        and iteration_index(state, default=0) == 0
+    )
     atlas_inputs = _beam_preprocess_atlas_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
         surface=surface,
+        require_exact_year=require_exact_atlas_vehicles,
     )
     # When BEAM is consuming the ActivitySim outputs from the current phase,
     # keep the ATLAS vehicles2 selection anchored to that same local year before
@@ -946,6 +954,7 @@ def _beam_preprocess_atlas_inputs(
     state: Any,
     workspace: Any,
     surface: "EnabledWorkflowSurface",
+    require_exact_year: bool = False,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     """Forecast-year ATLAS vehicles2 fallback.
@@ -963,24 +972,13 @@ def _beam_preprocess_atlas_inputs(
     if current_iter != 0:
         return None
 
-    forecast_year = getattr(state, "forecast_year", None)
-    if forecast_year is None:
-        return None
-
-    atlas_output_dir = workspace.get_atlas_output_dir()
-    candidates = [
-        Path(atlas_output_dir) / f"vehicles2_{forecast_year}.csv",
-        Path(atlas_output_dir) / f"vehicles2_{forecast_year - 1}.csv",
-    ]
-    for atlas_vehicle_path in candidates:
-        archive_path = archive_fallback_path(
-            state=state,
-            workspace=workspace,
-            local_path=atlas_vehicle_path,
-        )
-        selected = first_existing_path(atlas_vehicle_path, archive_path)
-        if selected is not None:
-            return {ATLAS_VEHICLES2_OUTPUT: str(selected)}
+    resolved = resolve_atlas_vehicles2_source(
+        state=state,
+        workspace=workspace,
+        require_exact_year=require_exact_year,
+    )
+    if resolved is not None:
+        return {ATLAS_VEHICLES2_OUTPUT: str(resolved.selected_path)}
     return None
 
 

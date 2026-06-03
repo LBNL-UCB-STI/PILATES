@@ -144,6 +144,25 @@ def _resolve_atlas_postprocess_households_table_path(
     return resolved if str(resolved).startswith("/") else f"/{resolved}"
 
 
+def _atlas_postprocess_output_meta(
+    *,
+    key: str,
+    state: WorkflowState,
+) -> Dict[str, Any]:
+    if key != ATLAS_VEHICLES2_OUTPUT:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": ATLAS_VEHICLES2_OUTPUT,
+            "source_role": ATLAS_VEHICLES2_OUTPUT,
+            "year": getattr(state, "forecast_year", None),
+            "iteration": getattr(state, "iteration", None),
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
+
+
 def _urbansim_run_recovered_datastore(
     recovered_paths: Mapping[str, Path], _state: WorkflowState
 ) -> Optional[Path]:
@@ -1153,6 +1172,9 @@ def make_atlas_postprocess_step(
                 **meta,
             ),
             profile_schema_suffixes=(".csv", ".parquet"),
+            extra_meta_fn=lambda key, _path, _description: (
+                _atlas_postprocess_output_meta(key=key, state=state)
+            ),
         )
         if outputs.usim_datastore_h5 is not None:
             if not state.is_start_year():

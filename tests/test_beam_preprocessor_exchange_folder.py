@@ -286,8 +286,9 @@ def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_h
             ]
         )
 
-    def _fake_copy_vehicles(_workspace, source_path=None):
+    def _fake_copy_vehicles(_workspace, source_path=None, require_exact_year=False):
         _ = source_path
+        _ = require_exact_year
         pd.DataFrame(
             {
                 "vehicleId": [100],
@@ -319,11 +320,11 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
 
     scenario_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
     scenario_dir.mkdir(parents=True, exist_ok=True)
-    explicit_vehicles = tmp_path / "restored" / "vehicles.csv.gz"
+    explicit_vehicles = tmp_path / "restored" / "vehicles2_2018.csv"
     explicit_vehicles.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
         {"vehicle_id": [100], "household_id": [1], "vehicleTypeId": ["sedan_gas_2015"]}
-    ).to_csv(explicit_vehicles, index=False, compression="gzip")
+    ).to_csv(explicit_vehicles, index=False)
 
     monkeypatch.setattr(
         preprocessor, "_update_beam_config", lambda *args, **kwargs: None
@@ -362,8 +363,9 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
 
     captured = {}
 
-    def _fake_copy_vehicles(_workspace, source_path=None):
+    def _fake_copy_vehicles(_workspace, source_path=None, require_exact_year=False):
         captured["source_path"] = source_path
+        captured["require_exact_year"] = require_exact_year
         pd.DataFrame(
             {
                 "vehicleId": [100],
@@ -385,9 +387,149 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     )
 
     assert captured["source_path"] == str(explicit_vehicles)
+    assert captured["require_exact_year"] is True
     assert (
         outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
     )
+
+
+def test_beam_preprocess_rejects_stale_restored_vehicle_input_for_activitysim(
+    monkeypatch, tmp_path
+):
+    preprocessor = _make_preprocessor(
+        scenario_folder="urbansim",
+        activity_demand_enabled=True,
+    )
+    preprocessor.settings.vehicle_ownership_model_enabled = True
+    workspace = _make_workspace(tmp_path)
+    workspace.get_atlas_output_dir.return_value = str(
+        tmp_path / "atlas" / "atlas_output"
+    )
+
+    scenario_dir = tmp_path / "beam" / "input" / "sfbay" / "urbansim"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+    stale_vehicles = tmp_path / "restored" / "vehicles.parquet"
+    stale_vehicles.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {"vehicleId": [100], "householdId": [1], "vehicleTypeId": ["sedan_gas_2015"]}
+    ).to_parquet(stale_vehicles, index=False)
+
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
+
+    def _fake_copy_plans(_input_records, _workspace):
+        pd.DataFrame({"household_id": [1], "cars": [1]}).to_parquet(
+            scenario_dir / "households.parquet",
+            index=False,
+        )
+        pd.DataFrame({"person_id": [11], "household_id": [1]}).to_parquet(
+            scenario_dir / "persons.parquet",
+            index=False,
+        )
+        pd.DataFrame({"trip_id": [1], "person_id": [11]}).to_parquet(
+            scenario_dir / "plans.parquet",
+            index=False,
+        )
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(scenario_dir / "households.parquet"),
+                    short_name=BEAM_HOUSEHOLDS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "persons.parquet"),
+                    short_name=BEAM_PERSONS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "plans.parquet"),
+                    short_name=BEAM_PLANS_IN,
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
+
+    with pytest.raises(FileNotFoundError, match="exact forecast-year ATLAS vehicles2"):
+        preprocessor.preprocess(
+            workspace,
+            beam_preprocess_inputs={"vehicles_beam_in": str(stale_vehicles)},
+        )
+
+
+def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
+    monkeypatch, tmp_path
+):
+    preprocessor = _make_preprocessor(
+        scenario_folder="urbansim",
+        activity_demand_enabled=True,
+    )
+    preprocessor.settings.vehicle_ownership_model_enabled = True
+    preprocessor.state.run_info_path = str(tmp_path / "archive-run" / "run_state.yaml")
+    workspace = _make_workspace(tmp_path / "local-run")
+    local_root = Path(workspace.full_path)
+    archive_root = Path(preprocessor.state.run_info_path).parent
+    atlas_rel = Path("atlas") / "atlas_output"
+    archive_vehicles = archive_root / atlas_rel / "vehicles2_2018.csv"
+    archive_vehicles.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {"vehicle_id": [100], "household_id": [1], "vehicleTypeId": ["sedan_gas_2015"]}
+    ).to_csv(archive_vehicles, index=False)
+    workspace.get_atlas_output_dir.return_value = str(local_root / atlas_rel)
+
+    scenario_dir = local_root / "beam" / "input" / "sfbay" / "urbansim"
+    scenario_dir.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        preprocessor, "_update_beam_config", lambda *args, **kwargs: None
+    )
+    monkeypatch.setattr(preprocessor, "_handle_linkstats", lambda *args, **kwargs: None)
+
+    def _fake_copy_plans(_input_records, _workspace):
+        pd.DataFrame({"household_id": [1], "cars": [1]}).to_parquet(
+            scenario_dir / "households.parquet",
+            index=False,
+        )
+        pd.DataFrame({"person_id": [11], "household_id": [1]}).to_parquet(
+            scenario_dir / "persons.parquet",
+            index=False,
+        )
+        pd.DataFrame({"trip_id": [1], "person_id": [11]}).to_parquet(
+            scenario_dir / "plans.parquet",
+            index=False,
+        )
+        return RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(scenario_dir / "households.parquet"),
+                    short_name=BEAM_HOUSEHOLDS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "persons.parquet"),
+                    short_name=BEAM_PERSONS_IN,
+                ),
+                FileRecord(
+                    file_path=str(scenario_dir / "plans.parquet"),
+                    short_name=BEAM_PLANS_IN,
+                ),
+            ]
+        )
+
+    monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
+
+    outputs = preprocessor.preprocess(workspace)
+
+    assert (
+        outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
+    )
+    metadata = outputs.prepared_input_metadata["vehicles_beam_in"]
+    assert metadata["source_semantic_key"] == ATLAS_VEHICLES2_OUTPUT
+    assert metadata["source_path"] == str(archive_vehicles)
+    assert metadata["source_year"] == 2018
+    assert metadata["forecast_year"] == 2018
+    assert metadata["source_resolution_mode"] == "exact_forecast_year"
+    assert metadata["source_storage_location"] == "archive"
 
 
 def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(
@@ -425,8 +567,12 @@ def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(
     )
     workspace = MagicMock()
     workspace.full_path = str(local_root)
-    workspace.get_beam_mutable_data_dir.return_value = str(local_root / "beam" / "input")
-    workspace.get_asim_output_dir.return_value = str(local_root / "activitysim" / "output")
+    workspace.get_beam_mutable_data_dir.return_value = str(
+        local_root / "beam" / "input"
+    )
+    workspace.get_asim_output_dir.return_value = str(
+        local_root / "activitysim" / "output"
+    )
     workspace.get_atlas_output_dir.return_value = str(local_root / atlas_rel)
 
     expected = BeamPreprocessor.expected_inputs(settings, state, workspace)

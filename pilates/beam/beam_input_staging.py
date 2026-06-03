@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -14,17 +15,20 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     resolve_beam_config_value,
 )
+from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.coupler_helpers import resolve_existing_path
 from pilates.utils.io import locate_beam_file
 from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
 )
 
 logger = logging.getLogger(__name__)
+_VEHICLES2_NAME_RE = re.compile(r"^vehicles2_(?P<year>\d{4})\.csv(?:\.gz)?$")
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -124,6 +128,7 @@ def copy_vehicles_from_atlas(
     state: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     source_path: Optional[str] = None,
+    require_exact_year: bool = False,
     preferred_format: Optional[str] = None,
 ) -> Optional[FileRecord]:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
@@ -134,19 +139,17 @@ def copy_vehicles_from_atlas(
         file_format=beam_vehicles_format,
     )
 
+    source_metadata: Dict[str, Any] = {}
     atlas_candidates = [source_path] if source_path else []
     if not atlas_candidates:
-        atlas_output_data_dir = workspace.get_atlas_output_dir()
-        atlas_candidates.extend(
-            [
-                os.path.join(
-                    atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
-                ),
-                os.path.join(
-                    atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
-                ),
-            ]
+        resolved_source = resolve_atlas_vehicles2_source(
+            state=state,
+            workspace=workspace,
+            require_exact_year=require_exact_year,
         )
+        if resolved_source is not None:
+            atlas_candidates.append(str(resolved_source.selected_path))
+            source_metadata = resolved_source.as_input_metadata()
 
     atlas_vehicle_file_loc = None
     for candidate in atlas_candidates:
@@ -167,6 +170,31 @@ def copy_vehicles_from_atlas(
             atlas_candidates[0] if atlas_candidates else None,
         )
         return None
+
+    forecast_year = getattr(state, "forecast_year", None)
+    source_year = _source_year_from_vehicles2_path(atlas_vehicle_file_loc)
+    if require_exact_year and (
+        forecast_year is None or source_year != int(forecast_year)
+    ):
+        raise ValueError(
+            "BEAM preprocess requires exact forecast-year ATLAS vehicles2 input, "
+            f"but received source_path={atlas_vehicle_file_loc!r} "
+            f"forecast_year={forecast_year!r} parsed_source_year={source_year!r}."
+        )
+    if not source_metadata:
+        source_metadata = {
+            "source_semantic_key": ATLAS_VEHICLES2_OUTPUT,
+            "source_path": str(atlas_vehicle_file_loc),
+            "source_year": source_year,
+            "forecast_year": int(forecast_year) if forecast_year is not None else None,
+            "source_storage_location": "explicit",
+            "source_resolution_mode": (
+                "exact_forecast_year"
+                if forecast_year is not None and source_year == int(forecast_year)
+                else "explicit"
+            ),
+            "candidate_paths": [str(path) for path in atlas_candidates if path],
+        }
 
     logger.info(
         "Copying atlas vehicles2 file from %s to %s "
@@ -191,7 +219,15 @@ def copy_vehicles_from_atlas(
         short_name="vehicles_beam_in",
         year=getattr(state, "forecast_year", None),
         iteration=getattr(state, "current_inner_iter", None),
+        metadata=source_metadata,
     )
+
+
+def _source_year_from_vehicles2_path(path: str) -> Optional[int]:
+    match = _VEHICLES2_NAME_RE.match(Path(path).name)
+    if match is None:
+        return None
+    return int(match.group("year"))
 
 
 def validate_population_consistency(
