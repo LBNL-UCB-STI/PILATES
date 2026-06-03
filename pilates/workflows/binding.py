@@ -40,7 +40,10 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    ensure_usim_population_year_table_aliases,
+    resolve_usim_population_table_paths,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
@@ -765,18 +768,42 @@ def _activitysim_population_source(
         if isinstance(selected, (str, os.PathLike)):
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
+                require_exact_year = _requires_exact_activitysim_population_year(state)
+                if (
+                    require_exact_year
+                    and target_year is not None
+                    and Path(selected_path).stem.endswith("_population_source")
+                ):
+                    try:
+                        alias_result = ensure_usim_population_year_table_aliases(
+                            h5_path=selected_path,
+                            year=target_year,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to repair ActivitySim population-source year "
+                            "aliases for %s",
+                            selected_path,
+                            exc_info=True,
+                        )
+                    else:
+                        created = alias_result.get("created") or []
+                        if created:
+                            logger.info(
+                                "Added exact-year population table aliases for %s: %s",
+                                selected_path,
+                                created,
+                            )
                 try:
                     mapping.update(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
                             year=target_year,
-                            require_exact_year=(
-                                _requires_exact_activitysim_population_year(state)
-                            ),
+                            require_exact_year=require_exact_year,
                         )
                     )
                 except Exception as exc:
-                    if _requires_exact_activitysim_population_year(state):
+                    if require_exact_year:
                         raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "

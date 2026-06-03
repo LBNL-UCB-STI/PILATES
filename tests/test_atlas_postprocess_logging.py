@@ -79,6 +79,60 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
 
 
+def test_atlas_postprocess_aliases_root_population_tables_before_publish(
+    monkeypatch,
+    tmp_path,
+):
+    captured = {}
+
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "build_standard_step",
+        _fake_build_standard_step,
+    )
+
+    steps.make_atlas_postprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    output_calls = []
+    monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", lambda **kwargs: None)
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda **kwargs: output_calls.append(kwargs),
+    )
+
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    captured["output_logger"](
+        AtlasPostprocessOutputs(
+            atlas_output_dir=tmp_path,
+            usim_datastore_h5=h5_path,
+            processed_outputs={"usim_h5_updated": h5_path},
+        ),
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(forecast_year=2021, is_start_year=lambda: False),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(),
+    )
+
+    assert output_calls[0]["h5_tables_used"] == ["/2021/households"]
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert "/2021/households" in store
+        assert "/2021/persons" in store
+        assert "/2021/jobs" in store
+        assert "/2021/blocks" in store
+
+
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):
     captured = {}
 

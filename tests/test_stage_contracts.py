@@ -190,6 +190,13 @@ def _write_population_h5(path: Path, year: int) -> None:
             store.put(f"/{year}/{table_name}", pd.DataFrame({"value": [1]}))
 
 
+def _write_root_population_h5(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.HDFStore(path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+
 def _build_settings(tmp_path: Path):
     """Build a compact workflow config that exercises all stage contracts."""
 
@@ -570,6 +577,7 @@ def test_land_use_stage_contract(stage_env):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
 
+    _write_root_population_h5(Path(stage_env["usim_output_path"]))
     outputs_holder = StepOutputsHolder()
 
     usim_inputs = run_land_use_stage(
@@ -591,6 +599,32 @@ def test_land_use_stage_contract(stage_env):
     assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith("_population_source.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
+
+
+def test_land_use_stage_aliases_root_population_snapshot_tables_for_non_start_year(
+    stage_env,
+):
+    """Non-start-year ActivitySim handoffs require exact-year population tables."""
+    from pilates.workflows.steps import StepOutputsHolder
+
+    state = stage_env["state"]
+    state.current_year = state.forecast_year
+    _write_root_population_h5(Path(stage_env["usim_output_path"]))
+
+    outputs_holder = StepOutputsHolder()
+    usim_inputs = run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    with pd.HDFStore(usim_inputs[USIM_POPULATION_SOURCE_H5], mode="r") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/{state.forecast_year}/{table_name}" in store
 
 
 def test_land_use_stage_returns_typed_supply_demand_handoff(stage_env):

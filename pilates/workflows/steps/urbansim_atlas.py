@@ -19,6 +19,7 @@ from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
@@ -1154,6 +1155,18 @@ def make_atlas_postprocess_step(
             profile_schema_suffixes=(".csv", ".parquet"),
         )
         if outputs.usim_datastore_h5 is not None:
+            if not state.is_start_year():
+                try:
+                    ensure_usim_population_year_table_aliases(
+                        h5_path=str(outputs.usim_datastore_h5),
+                        year=forecast_year,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to normalize ATLAS population-source H5 aliases for %s",
+                        outputs.usim_datastore_h5,
+                        exc_info=True,
+                    )
             households_table_path = _resolve_atlas_postprocess_households_table_path(
                 path=str(outputs.usim_datastore_h5),
                 forecast_year=forecast_year,

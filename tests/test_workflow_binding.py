@@ -560,6 +560,41 @@ def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_st
         )
 
 
+def test_activitysim_preprocess_binding_repairs_population_snapshot_root_tables(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021_population_source.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    state = SimpleNamespace(
+        year=2021,
+        forecast_year=2021,
+        Stage=SimpleNamespace(land_use="land_use"),
+        is_enabled=lambda stage: stage == "land_use",
+        is_start_year=lambda: False,
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_preprocess",
+        fallback_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+        settings=SimpleNamespace(),
+        state=state,
+        workspace=SimpleNamespace(),
+        year=2021,
+    )
+
+    assert (
+        plan.metadata["resolved_values_by_semantic_key"][
+            USIM_POPULATION_HOUSEHOLDS_TABLE
+        ]
+        == "/2021/households"
+    )
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert "/2021/households" in store
+
+
 def test_activitysim_population_source_uses_forecast_year_when_planner_threads_current_year(
     tmp_path,
 ):

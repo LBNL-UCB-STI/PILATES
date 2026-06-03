@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 from typing import Dict, Mapping, Optional
 
+import h5py
 import pandas as pd
 
 from pilates.workflows.artifact_keys import (
@@ -23,6 +24,41 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_JOBS_TABLE: "jobs",
     USIM_POPULATION_BLOCKS_TABLE: "blocks",
 }
+
+
+def ensure_usim_population_year_table_aliases(
+    *,
+    h5_path: str,
+    year: int,
+) -> Dict[str, list[str]]:
+    """
+    Link root-level UrbanSim population tables into a year-scoped namespace.
+
+    UrbanSim forecast outputs can expose the current population slice at root
+    keys such as ``/households``. Downstream exact-year consumers expect
+    ``/<year>/households``. HDF5 hard links let the population-source snapshot
+    satisfy that contract without duplicating table data.
+    """
+    created: list[str] = []
+    existing: list[str] = []
+    missing_root: list[str] = []
+    with h5py.File(h5_path, "r+") as handle:
+        year_group = handle.require_group(str(year))
+        for table_name in POPULATION_TABLE_BY_KEY.values():
+            year_key = f"/{year}/{table_name}"
+            if table_name in year_group:
+                existing.append(year_key)
+                continue
+            if table_name not in handle:
+                missing_root.append(f"/{table_name}")
+                continue
+            year_group[table_name] = handle[table_name]
+            created.append(year_key)
+    return {
+        "created": created,
+        "existing": existing,
+        "missing_root": missing_root,
+    }
 
 
 def _year_from_usim_model_data_filename(h5_path: str) -> Optional[int]:
