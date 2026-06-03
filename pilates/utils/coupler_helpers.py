@@ -41,6 +41,7 @@ from pilates.runtime.archive_paths import (
     resolve_local_path as _resolve_local_path,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,
 )
+from pilates.runtime import recovery_root_adoption
 
 logger = logging.getLogger(__name__)
 _STEP_OUTPUT_WARNING_SIGNATURES: set[tuple[Any, ...]] = set()
@@ -70,6 +71,9 @@ _archive_pending_tasks: Dict[
 _archive_queued_destinations: set[str] = set()
 _archive_inflight_signature: Dict[str, tuple[int, int, bool]] = {}
 _archive_last_copied_signature: Dict[str, tuple[int, int, bool]] = {}
+_archive_last_recovery_root_registration_signature = (
+    recovery_root_adoption._last_registration_signature
+)
 _published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
     "published_coupler_keys",
     default=None,
@@ -388,6 +392,16 @@ def _emit_artifact_lifecycle_event(
         logger.debug("Artifact lifecycle audit event failed", exc_info=True)
 
 
+def _register_phase2_recovery_root_copies() -> int:
+    return recovery_root_adoption.adopt_pending_recovery_root_copies(
+        find_artifact=lambda key, path: _find_current_run_output_artifact(
+            key=key,
+            path=path,
+        ),
+        emit_lifecycle_event=_emit_artifact_lifecycle_event,
+    )
+
+
 def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
     try:
         run = cr.current_run()
@@ -470,6 +484,13 @@ def _copy_archive_payload(
             if _archive_inflight_signature.get(dest) == signature:
                 _archive_inflight_signature.pop(dest, None)
             _archive_last_copied_signature[dest] = signature
+    recovery_root_adoption.record_archive_copy(
+        key=key,
+        src=src,
+        dest=dest,
+        is_dir=is_dir,
+        signature=signature,
+    )
     _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
     _emit_artifact_lifecycle_event(
         "archive_copy_completed",
@@ -721,6 +742,7 @@ def archive_copy_now(
             storage_event="local_to_scratch_copy_already_present",
             local_to_scratch_recovery_roots_written=0,
         )
+        _register_phase2_recovery_root_copies()
         return True
 
     _copy_archive_payload(
@@ -730,6 +752,7 @@ def archive_copy_now(
         is_dir=is_dir,
         signature=signature,
     )
+    _register_phase2_recovery_root_copies()
     return True
 
 
@@ -755,6 +778,7 @@ def flush_archive_queue(
     fail_on_timeout: bool = False,
 ) -> bool:
     if _archive_queue is None:
+        _register_phase2_recovery_root_copies()
         _emit_artifact_lifecycle_event(
             "archive_copy_checkpoint",
             require_existing_summary=True,
@@ -768,6 +792,7 @@ def flush_archive_queue(
     if timeout is None:
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
+        _register_phase2_recovery_root_copies()
         _emit_artifact_lifecycle_event(
             "archive_copy_checkpoint",
             require_existing_summary=True,
@@ -780,6 +805,7 @@ def flush_archive_queue(
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
+            _register_phase2_recovery_root_copies()
             _emit_artifact_lifecycle_event(
                 "archive_copy_checkpoint",
                 require_existing_summary=True,
