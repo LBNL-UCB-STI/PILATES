@@ -130,7 +130,7 @@ def _build_test_settings(root: Path, run_name: str) -> Any:
     settings.run.start_year = 2017
     settings.run.end_year = 2019
     settings.run.supply_demand_iters = 2
-    settings.run.travel_model_freq = 1
+    settings.run.travel_model_freq = 2
     settings.run.output_directory = str(root / "outputs")
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = True
@@ -418,8 +418,11 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 }
                 if int(state.year) > int(state.start_year):
                     outputs["atlas_grave_csv"] = year_dir / "grave.csv"
-                for path in outputs.values():
-                    _write_csv(path, pd.DataFrame({"id": [1, 2]}))
+                for key, path in outputs.items():
+                    if key == "atlas_households_csv":
+                        _write_csv(path, pd.DataFrame({"household_id": [1, 2]}))
+                    else:
+                        _write_csv(path, pd.DataFrame({"id": [1, 2]}))
                 return AtlasPreprocessOutputs(
                     atlas_mutable_input_dir=atlas_input_dir,
                     prepared_inputs=outputs,

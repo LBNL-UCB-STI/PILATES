@@ -935,7 +935,7 @@ def make_atlas_preprocess_step(
     ) -> None:
         setattr(
             outputs,
-            "_compatibility_fallback_used",
+            "_restart_rehydration_used",
             _rehydrate_restart_atlas_preprocess_state(
                 state=state,
                 workspace=workspace,
