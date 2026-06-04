@@ -238,7 +238,7 @@ def test_beam_preprocess_does_not_fallback_to_defaults_when_activitysim_enabled(
         preprocessor.preprocess(workspace)
 
 
-def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_households(
+def test_beam_preprocess_fails_when_staged_households_have_vehicle_shortfall(
     monkeypatch, tmp_path
 ):
     preprocessor = _make_preprocessor(
@@ -304,7 +304,7 @@ def test_beam_preprocess_fails_when_vehicle_households_are_missing_from_staged_h
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
     monkeypatch.setattr(preprocessor, "_copy_vehicles_from_atlas", _fake_copy_vehicles)
 
-    with pytest.raises(ValueError, match="reference households that are absent"):
+    with pytest.raises(ValueError, match="require more cars"):
         preprocessor.preprocess(workspace)
 
 
@@ -474,7 +474,11 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
     archive_vehicles = archive_root / atlas_rel / "vehicles2_2018.csv"
     archive_vehicles.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(
-        {"vehicle_id": [100], "household_id": [1], "vehicleTypeId": ["sedan_gas_2015"]}
+        {
+            "vehicle_id": [100, 200],
+            "household_id": [1, 999],
+            "vehicleTypeId": ["sedan_gas_2015", "sedan_gas_2015"],
+        }
     ).to_csv(archive_vehicles, index=False)
     workspace.get_atlas_output_dir.return_value = str(local_root / atlas_rel)
 
@@ -523,6 +527,8 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
     assert (
         outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
     )
+    staged_vehicles = pd.read_parquet(scenario_dir / "vehicles.parquet")
+    assert staged_vehicles["householdId"].tolist() == [1]
     metadata = outputs.prepared_input_metadata["vehicles_beam_in"]
     assert metadata["source_semantic_key"] == ATLAS_VEHICLES2_OUTPUT
     assert metadata["source_path"] == str(archive_vehicles)

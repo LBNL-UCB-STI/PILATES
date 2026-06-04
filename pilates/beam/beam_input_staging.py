@@ -346,6 +346,76 @@ def validate_population_consistency(
     )
 
 
+def filter_vehicles_to_staged_households(
+    *,
+    workspace: Any,
+    settings: Any,
+    resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    state: Any = None,
+) -> None:
+    beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
+    file_format = settings.activitysim.file_format if settings.activitysim else "csv"
+    households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
+    vehicles_path = _find_existing_vehicle_path(
+        beam_scenario_folder,
+        preferred_format=file_format,
+    )
+    if (
+        households_path is None
+        or not os.path.exists(households_path)
+        or vehicles_path is None
+        or not os.path.exists(vehicles_path)
+    ):
+        return
+
+    households = BeamDataHelper.read_and_clean(
+        households_path, "households", file_format
+    )
+    vehicles = _read_vehicle_table(vehicles_path)
+    vehicle_household_col = None
+    for candidate in ("householdId", "household_id"):
+        if candidate in vehicles.columns:
+            vehicle_household_col = candidate
+            break
+    if vehicle_household_col is None:
+        raise ValueError(
+            "BEAM staged vehicles input is missing a household reference column. "
+            f"Expected one of ['householdId', 'household_id'], found {vehicles.columns.tolist()}"
+        )
+
+    household_ids = _coerce_index_to_int64(
+        households.index,
+        context="staged households index",
+    )
+    vehicle_household_ids = _coerce_beam_vehicle_integer_column(
+        vehicles[vehicle_household_col],
+        column_name=vehicle_household_col,
+    )
+    keep_mask = vehicle_household_ids.isin(set(household_ids.values))
+    removed = int((~keep_mask).sum())
+    if removed == 0:
+        return
+
+    filtered = vehicles.loc[keep_mask].copy()
+    _write_vehicle_table(
+        filtered,
+        vehicles_path,
+        file_format=_vehicle_file_format_from_path(vehicles_path),
+    )
+    logger.warning(
+        "Filtered BEAM staged vehicles to ActivitySim-staged households. "
+        "workflow_year=%s forecast_year=%s iteration=%s removed_vehicle_rows=%s "
+        "remaining_vehicle_rows=%s households_path=%s vehicles_path=%s",
+        getattr(state, "year", None),
+        getattr(state, "forecast_year", None),
+        getattr(state, "current_inner_iter", None),
+        removed,
+        len(filtered),
+        households_path,
+        vehicles_path,
+    )
+
+
 def _beam_vehicle_file_format(preferred_format: Optional[str]) -> str:
     return "parquet" if preferred_format == "parquet" else "csv.gz"
 
@@ -388,6 +458,10 @@ def _write_vehicle_table(df: pd.DataFrame, path: str, *, file_format: str) -> No
         df.to_parquet(path, index=False)
         return
     df.to_csv(path, compression="gzip", index=False)
+
+
+def _vehicle_file_format_from_path(path: str) -> str:
+    return "parquet" if path.endswith(".parquet") else "csv.gz"
 
 
 def _normalize_beam_vehicle_columns(df: pd.DataFrame) -> pd.DataFrame:
