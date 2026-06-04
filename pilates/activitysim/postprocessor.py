@@ -95,16 +95,8 @@ def _next_iter_usim_input_store_path(
     artifact. Writing to ``model_data_<year>.h5`` instead would clobber the
     urbansim run output and destroy its ``/<year>/``-prefixed table layout.
     """
-    forecast_year = resolve_forecast_year(state)
     try:
-        if forecast_year is not None and getattr(
-            getattr(settings, "urbansim", None), "output_file_template", None
-        ):
-            datastore_name = get_usim_datastore_fname(
-                settings, io="output", year=forecast_year
-            )
-        else:
-            datastore_name = get_usim_datastore_fname(settings, io="input")
+        datastore_name = get_usim_datastore_fname(settings, io="input")
     except Exception:
         return None
     return os.path.join(workspace.get_usim_mutable_data_dir(), datastore_name)

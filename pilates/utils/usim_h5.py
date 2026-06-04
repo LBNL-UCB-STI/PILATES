@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import re
 from pathlib import Path
-from typing import Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 import h5py
 import pandas as pd
@@ -131,6 +133,62 @@ def resolve_usim_h5_table_key(
             return min(year_scoped_candidates, key=lambda entry: entry[0])[1]
 
     return year_key
+
+
+def fingerprint_usim_h5_table(
+    *,
+    h5_path: str,
+    year: Optional[int],
+    table: str,
+    allow_root_fallback: bool = True,
+    nearest_year_fallback: bool = True,
+) -> Dict[str, Any]:
+    """
+    Return a stable semantic fingerprint for one UrbanSim H5 table.
+
+    The fingerprint is deliberately table-scoped instead of whole-file scoped:
+    ATLAS cache identity depends on the selected population table, not on
+    unrelated H5 metadata or tables that ATLAS does not consume for that
+    decision point.
+    """
+    with pd.HDFStore(h5_path, mode="r") as store:
+        table_path = resolve_usim_h5_table_key(
+            store,
+            year=year,
+            table=table,
+            allow_root_fallback=allow_root_fallback,
+            nearest_year_fallback=nearest_year_fallback,
+        )
+        if table_path not in store:
+            available = sorted(store.keys())
+            raise KeyError(
+                "UrbanSim H5 table fingerprint target is missing. "
+                f"h5_path={h5_path} year={year} table={table} "
+                f"resolved_table_path={table_path} available={available}"
+            )
+        frame = store[table_path]
+
+    metadata = {
+        "fingerprint_version": "usim_h5_table_v1",
+        "requested_year": year,
+        "table": table,
+        "resolved_table_path": table_path,
+        "row_count": int(len(frame)),
+        "column_count": int(len(frame.columns)),
+        "index_name": None if frame.index.name is None else str(frame.index.name),
+        "columns": [str(column) for column in frame.columns],
+        "dtypes": {str(column): str(dtype) for column, dtype in frame.dtypes.items()},
+    }
+    digest = hashlib.sha256()
+    digest.update(json.dumps(metadata, sort_keys=True).encode("utf-8"))
+    digest.update(b"\0")
+    row_hashes = pd.util.hash_pandas_object(frame, index=True).to_numpy(
+        dtype="uint64",
+        copy=False,
+    )
+    digest.update(row_hashes.tobytes())
+    metadata["sha256"] = digest.hexdigest()
+    return metadata
 
 
 def resolve_usim_population_table_paths(

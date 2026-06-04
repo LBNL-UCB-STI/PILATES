@@ -15,6 +15,7 @@ import geopandas as gpd
 from shapely import wkt
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import yaml
 
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
@@ -48,6 +49,15 @@ if TYPE_CHECKING:
     from pilates.workspace import Workspace
 
 logger = logging.getLogger(__name__)
+_ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES = frozenset(
+    {
+        "vehicle_ownership",
+        "auto_ownership_simulate",
+        "vehicle_type_choice",
+        "vehicle_type_choice_simulate",
+        "vehicle_allocation",
+    }
+)
 
 # Define expected data types for BEAM raw skims CSV files.
 # This helps in efficient memory usage and correct data interpretation when reading large CSVs.
@@ -371,6 +381,90 @@ def required_asim_config_dirs(main_configs_dir: str) -> list[str]:
         seen.add(dirname)
         result.append(dirname)
     return result
+
+
+def _is_atlas_vehicle_ownership_enabled(settings: PilatesConfig) -> bool:
+    model = get_setting(
+        settings,
+        "run.models.vehicle_ownership",
+        default=get_setting(settings, "vehicle_ownership_model"),
+    )
+    return str(model).lower() == "atlas"
+
+
+def _model_name_for_activitysim_disable(model_entry: Any) -> Optional[str]:
+    if isinstance(model_entry, str):
+        return model_entry
+    if isinstance(model_entry, dict) and len(model_entry) == 1:
+        return str(next(iter(model_entry)))
+    return None
+
+
+def _disable_activitysim_vehicle_ownership_models_in_file(
+    settings_path: Path,
+) -> list[str]:
+    loaded = yaml.safe_load(settings_path.read_text(encoding="utf-8")) or {}
+    if not isinstance(loaded, dict):
+        return []
+    models = loaded.get("models")
+    if not isinstance(models, list):
+        return []
+
+    kept_models = []
+    removed: list[str] = []
+    for model in models:
+        model_name = _model_name_for_activitysim_disable(model)
+        if (
+            model_name is not None
+            and model_name.lower() in _ASIM_ATLAS_DISABLED_VEHICLE_MODEL_NAMES
+        ):
+            removed.append(model_name)
+            continue
+        kept_models.append(model)
+
+    if not removed:
+        return []
+
+    loaded["models"] = kept_models
+    settings_path.write_text(
+        yaml.safe_dump(loaded, sort_keys=False),
+        encoding="utf-8",
+    )
+    return removed
+
+
+def _disable_activitysim_vehicle_ownership_models_for_atlas(
+    *,
+    settings: PilatesConfig,
+    configs_dest_dir: str,
+    main_configs_dir: str,
+) -> Dict[str, list[str]]:
+    """
+    Remove ActivitySim ownership model steps when ATLAS is the ownership source.
+
+    ATLAS owns household vehicle ownership in integrated runs. ActivitySim may
+    still consume vehicle ownership fields, but it must not recompute them and
+    overwrite the post-ATLAS population before BEAM staging.
+    """
+    if not _is_atlas_vehicle_ownership_enabled(settings):
+        return {}
+
+    removed_by_file: Dict[str, list[str]] = {}
+    for dirname in required_asim_config_dirs(main_configs_dir):
+        settings_path = Path(configs_dest_dir) / dirname / "settings.yaml"
+        if not settings_path.exists():
+            continue
+        removed = _disable_activitysim_vehicle_ownership_models_in_file(settings_path)
+        if not removed:
+            continue
+        removed_by_file[str(settings_path)] = removed
+        logger.warning(
+            "Disabled ActivitySim vehicle ownership model steps because ATLAS is "
+            "the configured ownership source. settings=%s removed_models=%s",
+            settings_path,
+            removed,
+        )
+    return removed_by_file
 
 
 ####################################
@@ -2918,6 +3012,13 @@ def _copy_data_to_mutable_location(
     )
     _copytree_if_needed(configs_source_dir, configs_dest_dir)
     _ensure_required_asim_config_dirs(
+        configs_dest_dir=configs_dest_dir,
+        main_configs_dir=get_setting(
+            settings, "activitysim.main_configs_dir", "configs"
+        ),
+    )
+    _disable_activitysim_vehicle_ownership_models_for_atlas(
+        settings=settings,
         configs_dest_dir=configs_dest_dir,
         main_configs_dir=get_setting(
             settings, "activitysim.main_configs_dir", "configs"

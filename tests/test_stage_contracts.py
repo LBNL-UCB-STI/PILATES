@@ -888,6 +888,10 @@ def test_vehicle_ownership_stage_contract(stage_env):
         build_atlas_static_inputs_fallback=lambda workspace: {},
     )
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+    assert stage_env["coupler"].get(USIM_POPULATION_SOURCE_H5) is not None
+    assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) == stage_env[
+        "coupler"
+    ].get(USIM_POPULATION_SOURCE_H5)
 
 
 def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env):
@@ -1746,6 +1750,9 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     )
     _write_file(current_h5)
     _write_population_h5(forecast_h5, forecast_year)
+    atlas_output_dir = Path(stage_env["workspace"].get_atlas_output_dir())
+    atlas_output_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(atlas_output_dir / f"vehicles2_{forecast_year}.csv")
 
     state = stage_env["state"]
     state.current_year = current_year

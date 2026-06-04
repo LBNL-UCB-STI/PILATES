@@ -4,6 +4,7 @@ import pandas as pd
 import pandas.testing as pdt
 
 from pilates.activitysim.postprocessor import (
+    _next_iter_usim_input_store_path,
     _prepare_updated_tables,
     create_usim_input_data,
 )
@@ -21,6 +22,21 @@ def _settings(vehicle_ownership=None):
             region_mappings={"region_to_region_id": {"test": "001"}},
         ),
     )
+
+
+def test_next_iter_usim_input_store_path_uses_mutable_input_not_forecast_output(
+    tmp_path,
+):
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data")
+    )
+    settings = _settings()
+    state = SimpleNamespace(forecast_year=2021)
+
+    path = _next_iter_usim_input_store_path(settings, workspace, state)
+
+    assert path == str(tmp_path / "urbansim" / "data" / "custom_mpo_001_model_data.h5")
+    assert not path.endswith("model_data_2021.h5")
 
 
 def test_prepare_updated_tables_preserves_usim_person_household_ids_when_asim_ids_are_invalid(
