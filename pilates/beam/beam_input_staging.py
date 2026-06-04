@@ -352,7 +352,7 @@ def filter_vehicles_to_staged_households(
     settings: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     state: Any = None,
-) -> None:
+) -> Dict[str, Any]:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     file_format = settings.activitysim.file_format if settings.activitysim else "csv"
     households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
@@ -366,7 +366,12 @@ def filter_vehicles_to_staged_households(
         or vehicles_path is None
         or not os.path.exists(vehicles_path)
     ):
-        return
+        return {
+            "filtered_to_staged_households": False,
+            "staged_household_filter_reason": "missing_staged_inputs",
+            "staged_household_filter_households_path": households_path,
+            "staged_household_filter_vehicles_path": vehicles_path,
+        }
 
     households = BeamDataHelper.read_and_clean(
         households_path, "households", file_format
@@ -393,8 +398,17 @@ def filter_vehicles_to_staged_households(
     )
     keep_mask = vehicle_household_ids.isin(set(household_ids.values))
     removed = int((~keep_mask).sum())
+    filter_metadata = {
+        "filtered_to_staged_households": True,
+        "staged_household_filter_input_vehicle_rows": len(vehicles),
+        "staged_household_filter_removed_vehicle_rows": removed,
+        "staged_household_filter_remaining_vehicle_rows": int(keep_mask.sum()),
+        "staged_household_filter_household_rows": len(households),
+        "staged_household_filter_households_path": households_path,
+        "staged_household_filter_vehicles_path": vehicles_path,
+    }
     if removed == 0:
-        return
+        return filter_metadata
 
     filtered = vehicles.loc[keep_mask].copy()
     _write_vehicle_table(
@@ -414,6 +428,7 @@ def filter_vehicles_to_staged_households(
         households_path,
         vehicles_path,
     )
+    return filter_metadata
 
 
 def _beam_vehicle_file_format(preferred_format: Optional[str]) -> str:

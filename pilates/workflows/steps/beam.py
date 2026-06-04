@@ -215,17 +215,25 @@ def _beam_preprocess_input_publication_meta(
     if input_metadata.get("source_semantic_key") != ATLAS_VEHICLES2_OUTPUT:
         return {}
 
+    facet = {
+        "artifact_family": "beam_preprocess_input",
+        "source_role": key,
+        "derived_from": ATLAS_VEHICLES2_OUTPUT,
+        "year": getattr(state, "forecast_year", None),
+        "iteration": getattr(state, "iteration", None),
+        "source_year": input_metadata.get("source_year"),
+        "source_resolution_mode": input_metadata.get("source_resolution_mode"),
+        "source_storage_location": input_metadata.get("source_storage_location"),
+    }
+    for optional_key in (
+        "filtered_to_staged_households",
+        "staged_household_filter_removed_vehicle_rows",
+    ):
+        if optional_key in input_metadata:
+            facet[optional_key] = input_metadata.get(optional_key)
+
     return {
-        "facet": {
-            "artifact_family": "beam_preprocess_input",
-            "source_role": key,
-            "derived_from": ATLAS_VEHICLES2_OUTPUT,
-            "year": getattr(state, "forecast_year", None),
-            "iteration": getattr(state, "iteration", None),
-            "source_year": input_metadata.get("source_year"),
-            "source_resolution_mode": input_metadata.get("source_resolution_mode"),
-            "source_storage_location": input_metadata.get("source_storage_location"),
-        },
+        "facet": facet,
         "facet_schema_version": "v1",
         "facet_index": True,
         "source_path": input_metadata.get("source_path"),

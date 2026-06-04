@@ -90,6 +90,8 @@ def test_beam_preprocess_logs_vehicle_source_provenance(monkeypatch, tmp_path):
                 "forecast_year": 2030,
                 "source_resolution_mode": "exact_forecast_year",
                 "source_storage_location": "archive",
+                "filtered_to_staged_households": True,
+                "staged_household_filter_removed_vehicle_rows": 12,
             }
         },
     )
@@ -113,6 +115,8 @@ def test_beam_preprocess_logs_vehicle_source_provenance(monkeypatch, tmp_path):
         "source_year": 2030,
         "source_resolution_mode": "exact_forecast_year",
         "source_storage_location": "archive",
+        "filtered_to_staged_households": True,
+        "staged_household_filter_removed_vehicle_rows": 12,
     }
     assert meta["facet_schema_version"] == "v1"
     assert meta["facet_index"] is True

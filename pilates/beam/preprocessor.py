@@ -392,6 +392,7 @@ class BeamPreprocessor(GenericPreprocessor):
             logger.info("No zones configured; skipping zone shapefile preparation.")
 
         store = RecordStore()
+        beam_output_record: Optional[FileRecord] = None
 
         # Copy vehicle data from Atlas (only on first iteration)
         if (
@@ -444,7 +445,9 @@ class BeamPreprocessor(GenericPreprocessor):
                     f"BEAM input trio, but missing outputs were {sorted(missing_keys)}"
                 )
             if self.state.current_inner_iter == 0:
-                self._filter_vehicles_to_staged_households(workspace)
+                filter_metadata = self._filter_vehicles_to_staged_households(workspace)
+                if beam_output_record is not None and filter_metadata:
+                    beam_output_record.metadata.update(filter_metadata)
                 self._validate_population_consistency(workspace)
         else:
             store += self._register_existing_beam_exchange_inputs(workspace)
@@ -716,8 +719,10 @@ class BeamPreprocessor(GenericPreprocessor):
             state=self.state,
         )
 
-    def _filter_vehicles_to_staged_households(self, workspace: "Workspace") -> None:
-        beam_input_staging.filter_vehicles_to_staged_households(
+    def _filter_vehicles_to_staged_households(
+        self, workspace: "Workspace"
+    ) -> Dict[str, Any]:
+        return beam_input_staging.filter_vehicles_to_staged_households(
             workspace=workspace,
             settings=self.settings,
             resolve_beam_exchange_scenario_folder_fn=self._resolve_beam_exchange_scenario_folder,

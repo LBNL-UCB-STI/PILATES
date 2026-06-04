@@ -536,6 +536,14 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
     assert metadata["forecast_year"] == 2018
     assert metadata["source_resolution_mode"] == "exact_forecast_year"
     assert metadata["source_storage_location"] == "archive"
+    assert metadata["filtered_to_staged_households"] is True
+    assert metadata["staged_household_filter_input_vehicle_rows"] == 2
+    assert metadata["staged_household_filter_removed_vehicle_rows"] == 1
+    assert metadata["staged_household_filter_remaining_vehicle_rows"] == 1
+    assert metadata["staged_household_filter_household_rows"] == 1
+    assert metadata["staged_household_filter_vehicles_path"] == str(
+        scenario_dir / "vehicles.parquet"
+    )
 
 
 def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(

@@ -330,6 +330,8 @@ def test_recover_beam_preprocess_outputs(tmp_path):
                     "source_year": 2018,
                     "forecast_year": 2018,
                     "source_resolution_mode": "exact_forecast_year",
+                    "filtered_to_staged_households": True,
+                    "staged_household_filter_removed_vehicle_rows": 148861,
                 }
             }
         },
@@ -343,6 +345,12 @@ def test_recover_beam_preprocess_outputs(tmp_path):
             "source_resolution_mode"
         ]
         == "exact_forecast_year"
+    )
+    assert (
+        holder.beam_preprocess.prepared_input_metadata["vehicles_beam_in"][
+            "staged_household_filter_removed_vehicle_rows"
+        ]
+        == 148861
     )
     assert coupler.get(BEAM_PLANS_IN) is not None
     assert coupler.get(BEAM_HOUSEHOLDS_IN) is not None
