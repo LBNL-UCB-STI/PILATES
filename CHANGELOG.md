@@ -1,6 +1,27 @@
 # Changelog
 
-## v2.0.0 - Consist Integration (2026-MM-DD)
+## v1.0.1 - 2026-06-05
+
+This release tightens PILATES’ Consist-backed runtime behavior and aligns archive/recovery handling across the workflow.
+
+### Highlights
+
+- Updated Consist dependency and environment pins to match the current Consist release line (`#68`).
+- Fixed restart behavior across runtime, workflow, and analysis paths, improving replay and restart consistency (`#69`).
+- Integrated Consist 0.1.5 capabilities, including capability probing, workflow binding updates, stage-contract adjustments, and broader restart/promotion support (`#70`).
+- Aligned run promotion with recovery-root adoption across ActivitySim, BEAM, Atlas, and UrbanSim paths, and added supporting recovery-root tooling and docs (`#71`).
+
+### Validation and coverage
+
+- Expanded test coverage around restart equivalence, archive promotion, stage contracts, workflow metadata, and recovery behavior.
+- Updated HPC and workflow documentation where the Consist integration changes affected operator-facing behavior.
+
+### Notes
+
+- This is primarily a reliability and infrastructure release rather than a new model-feature release.
+- The main behavioral shifts are in restart, recovery, and archive promotion semantics.
+
+## v1.0.0 - Consist Integration (2026-05-05)
 
 PILATES now uses Consist for cache-aware workflow tracking, run identity, and
 artifact provenance. This release establishes Consist as the source of truth
@@ -42,15 +63,3 @@ Restart and provenance:
 
 - Added lifecycle audit diagnostics for local-to-scratch archive copies and
   Phase 2 recovery-root readiness.
-- Captured the May 4 SFBay canary decision surface with
-  `phase2_recommendation: "defer"` and zero local-to-scratch recovery-root
-  writes.
-- Kept H5 container families blocked from Phase 2 recovery-root registration
-  until Consist has an explicit container recovery policy.
-- Documented upstream Consist feature requests for semantic run matching and
-  container artifact recovery policy.
-
-Release notes:
-
-- Update the date and version before tagging.
-- Tag only after the merge target becomes the release/main branch.
