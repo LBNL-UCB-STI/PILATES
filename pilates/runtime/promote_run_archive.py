@@ -18,7 +18,10 @@ from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import RunLike
-from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
+from pilates.utils.consist_db_snapshot import (
+    resolve_consist_db_paths,
+    snapshot_latest_dir,
+)
 from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger(__name__)
@@ -188,6 +191,9 @@ def _archive_db_path(
     resolved = Path(archive_db_path)
     if resolved.exists():
         return resolved
+    latest_snapshot = snapshot_latest_dir(str(archive_run_dir)) / resolved.name
+    if latest_snapshot.exists():
+        return latest_snapshot
     return None
 
 

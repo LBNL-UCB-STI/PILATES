@@ -10,6 +10,7 @@ import pytest
 
 from pilates.config import PilatesConfig
 from pilates.runtime.promote_run_archive import (
+    _archive_db_path,
     _register_verified_run_output_recovery_copies,
     promote_run_to_recovery_roots,
 )
@@ -322,6 +323,79 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
                 assert new_run_id in merged_run_ids
             finally:
                 merged_tracker.db.engine.dispose()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_direct_copy_missing(
+    tmp_path,
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+
+    main_run_dir = tmp_path / "main-catalog"
+    main_tracker = _make_tracker(consist, main_run_dir)
+    main_db_path = main_run_dir / ".consist" / "provenance.duckdb"
+
+    try:
+        _seed_output_run(
+            main_tracker,
+            main_run_dir,
+            run_name="historical_root",
+            model="history",
+            key="old_output",
+            relative_path="outputs/old-result.txt",
+            content="old-result-data",
+        )
+    finally:
+        main_tracker.db.engine.dispose()
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tracker = _make_tracker(consist, run_dir)
+    new_run_id, _new_output_path = _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+
+    source_db = run_dir / ".consist" / "provenance.duckdb"
+    source_wal = Path(f"{source_db}.wal")
+    snapshot_db = run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+    snapshot_db.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_db, snapshot_db)
+    if source_wal.exists():
+        shutil.copy2(source_wal, Path(f"{snapshot_db}.wal"))
+
+    tracker.db.engine.dispose()
+    source_db.unlink()
+    source_wal.unlink(missing_ok=True)
+
+    promoted = recovery_root / run_dir.name
+    assert _archive_db_path(settings, archive_run_dir=run_dir) == snapshot_db
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            roots=[str(recovery_root)],
+            merge_main_db=str(main_db_path),
+            merge_dry_run=True,
+        )
+
+        assert result.success is True
+        assert result.db_path == str(snapshot_db)
+        assert result.root_run_id == new_run_id
+        assert promoted.exists()
+        assert (promoted / ".consist" / "recovery_promotion.json").exists()
+        assert (
+            promoted / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+        ).exists()
     finally:
         tracker.db.engine.dispose()
 

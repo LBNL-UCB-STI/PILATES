@@ -231,7 +231,10 @@ def test_notifier_always_reports_internal_failures() -> None:
 
     assert backend.messages[0].fallback_text == "⚠️ PILATES step failed: workspace_setup"
     assert "error: boom" in backend.messages[0].markdown_text
-    assert "Next: inspect the run archive and summary HTML" in backend.messages[0].markdown_text
+    assert (
+        "Next: inspect the run archive and summary HTML"
+        in backend.messages[0].markdown_text
+    )
 
 
 def test_notifier_failure_includes_next_place_to_look() -> None:
@@ -260,7 +263,9 @@ def test_notifier_verbose_mode_includes_internal_runs() -> None:
 
     notifier.on_run_start(_run("workspace_setup"))
 
-    assert backend.messages[0].fallback_text == "🚀 PILATES step started: workspace_setup"
+    assert (
+        backend.messages[0].fallback_text == "🚀 PILATES step started: workspace_setup"
+    )
 
 
 def test_notifier_scenario_message_includes_run_user_job_and_archive() -> None:
@@ -500,10 +505,12 @@ def test_register_consist_run_notification_hooks_with_real_consist_scenario(
     messages = [message.fallback_text for message in backend.messages]
     assert messages[0] == "🚀 PILATES run started: smoke_scenario"
     assert any(
-        message.startswith("🚀 PILATES step started: smoke_step") for message in messages
+        message.startswith("🚀 PILATES step started: smoke_step")
+        for message in messages
     )
     assert any(
-        message.startswith("✅ PILATES step completed: smoke_step") for message in messages
+        message.startswith("✅ PILATES step completed: smoke_step")
+        for message in messages
     )
     assert messages[-1] == "✅ PILATES run completed: smoke_scenario"
 
