@@ -18,6 +18,96 @@ error_exit() {
 
 trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
 
+_pilates_watch() {
+    local job_id="$1"
+    local log_file="$2"
+    local partition="$3"
+
+    printf "\n  Job %s queued on %s.\n" "$job_id" "$partition"
+    printf "  Ctrl+C to detach at any time — job will keep running.\n\n"
+    printf "  Waiting for log"
+
+    while [ ! -f "$log_file" ]; do
+        sleep 2
+        printf "."
+    done
+    printf "\n\n"
+
+    _pilates_detach() {
+        printf "\n"
+        printf "── Detached ──────────────────────────────────────────\n"
+        printf "Re-attach : tail -f %s\n" "$log_file"
+        printf "Status    : squeue -j %s\n" "$job_id"
+        printf "Cancel    : scancel %s\n" "$job_id"
+        printf "──────────────────────────────────────────────────────\n"
+    }
+
+    trap '_pilates_detach; exit 0' INT
+
+    tail -f "$log_file" &
+    local tail_pid=$!
+    wait "$tail_pid" || true
+
+    trap - INT
+}
+
+_print_submission_summary() {
+    local config_file="$1"
+    local partition="$2"
+    local memory_gb="$3"
+    local beam_memory="$4"
+    local duration="$5"
+    local archive="$6"
+    local stage="$7"
+
+    python3 - "$config_file" "$partition" "$memory_gb" "$beam_memory" "$duration" "$archive" "$stage" <<'PY'
+import sys, yaml, re
+
+config_file, partition, memory_gb, beam_memory, duration, archive, stage = sys.argv[1:]
+
+def fmt_duration(d):
+    m = re.match(r'(\d+)-(\d+):(\d+):(\d+)', d)
+    if m:
+        days, hours = int(m.group(1)), int(m.group(2))
+        total_hours = days * 24 + hours
+        if total_hours % 24 == 0:
+            return f"{total_hours // 24}d"
+        return f"{total_hours}h"
+    return d
+
+duration = fmt_duration(duration)
+
+with open(config_file) as f:
+    cfg = yaml.safe_load(f)
+
+run = cfg.get("run", {})
+models_cfg = run.get("models", {})
+
+run_name    = run.get("output_run_name", "?")
+region      = run.get("region", "?")
+scenario    = run.get("scenario", "?")
+start_year  = run.get("start_year", "?")
+end_year    = run.get("end_year", "?")
+sd_iters    = run.get("supply_demand_iters", "?")
+output_dir  = run.get("output_directory", "?")
+
+active = [v for v in models_cfg.values() if v]
+off    = [k for k, v in models_cfg.items() if not v]
+model_parts = active[:]
+if off:
+    model_parts.append("(" + ", ".join(off) + ": off)")
+models_str = "  ".join(model_parts) if model_parts else "(none)"
+
+print()
+print(f"  Run      : {run_name}")
+print(f"  Region   : {region} / {scenario}  ({start_year} → {end_year}, {sd_iters} SD iters)")
+print(f"  Models   : {models_str}")
+print(f"  Output   : {output_dir}")
+print(f"  Resources: {partition}  {memory_gb}G  {duration}  {archive}")
+print(f"  BEAM mem : {beam_memory}")
+PY
+}
+
 # Generate random ID (avoid SIGPIPE from urandom pipe)
 RANDOM_PART="$(head -c 32 /dev/urandom | base64 | tr -dc A-Z0-9 | head -c 8)"
 DATETIME="$(date "+%Y.%m.%d-%H.%M.%S")"
@@ -34,6 +124,7 @@ high_mem=false
 beam_profile=false
 archive_mode="scratch"
 hours_arg=""
+watch_flag=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -69,17 +160,22 @@ while [ $# -gt 0 ]; do
         hours_arg="${2:-}"
         shift 2
         ;;
+    -w|--watch)
+        watch_flag=true
+        shift
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --beam-profile: enable BEAM Java Flight Recorder output in /app/output."
         echo "  --archive: set live archive target to shared or scratch."
         echo "  -t, --hours: job time limit in hours (e.g. -t 12); default is 72 (3 days)."
+        echo "  -w, --watch: stream the job log after submission; Ctrl+C detaches (job keeps running)."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-profile] [--archive shared|scratch] [-t hours] [-w|--watch]\n" "$0"
         exit 2
         ;;
     esac
@@ -282,6 +378,21 @@ if [ -n "$stage_path" ]; then
     sbatch_args+=("$stage_path")
 fi
 
-sbatch "${sbatch_args[@]}"
+SBATCH_OUTPUT="$(sbatch "${sbatch_args[@]}")"
+echo "$SBATCH_OUTPUT"
+JOB_ID="$(printf '%s\n' "$SBATCH_OUTPUT" | awk '/Submitted batch job/{print $NF}')"
 
-echo "$JOB_LOG_FILE_PATH"
+echo "Job submitted. Log: $JOB_LOG_FILE_PATH"
+
+_print_submission_summary \
+    "$generated_settings_path" \
+    "$partition_arg" \
+    "$MEMORY_LIMIT_GB" \
+    "$BEAM_MEMORY" \
+    "$EXPECTED_EXECUTION_DURATION" \
+    "$archive_mode" \
+    "$stage_path"
+
+if [ "$watch_flag" = true ]; then
+    _pilates_watch "$JOB_ID" "$JOB_LOG_FILE_PATH" "$partition_arg"
+fi
