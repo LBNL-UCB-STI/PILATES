@@ -293,8 +293,15 @@ def test_recover_beam_preprocess_outputs(tmp_path):
     plans_path = beam_dir / "seattle" / "urbansim" / "plans.parquet"
     households_path = beam_dir / "seattle" / "urbansim" / "households.parquet"
     persons_path = beam_dir / "seattle" / "urbansim" / "persons.parquet"
+    vehicles_path = beam_dir / "seattle" / "urbansim" / "vehicles.parquet"
     linkstats_path = beam_dir / "seattle" / "r5" / "init.linkstats.csv.gz"
-    for path in (plans_path, households_path, persons_path, linkstats_path):
+    for path in (
+        plans_path,
+        households_path,
+        persons_path,
+        vehicles_path,
+        linkstats_path,
+    ):
         _write_file(path)
 
     coupler = DummyCoupler()
@@ -312,13 +319,39 @@ def test_recover_beam_preprocess_outputs(tmp_path):
             BEAM_PLANS_IN: str(plans_path),
             BEAM_HOUSEHOLDS_IN: str(households_path),
             BEAM_PERSONS_IN: str(persons_path),
+            "vehicles_beam_in": str(vehicles_path),
             LINKSTATS_WARMSTART: str(linkstats_path),
+        },
+        cached_outputs={
+            "prepared_input_metadata": {
+                "vehicles_beam_in": {
+                    "source_semantic_key": "atlas_vehicles2_output",
+                    "source_path": "/archive/atlas/vehicles2_2018.csv",
+                    "source_year": 2018,
+                    "forecast_year": 2018,
+                    "source_resolution_mode": "exact_forecast_year",
+                    "filtered_to_staged_households": True,
+                    "staged_household_filter_removed_vehicle_rows": 148861,
+                }
+            }
         },
     )
 
     assert outputs is not None
     assert holder.beam_preprocess is not None
     assert holder.beam_preprocess.prepared_inputs[BEAM_PLANS_IN] == plans_path
+    assert (
+        holder.beam_preprocess.prepared_input_metadata["vehicles_beam_in"][
+            "source_resolution_mode"
+        ]
+        == "exact_forecast_year"
+    )
+    assert (
+        holder.beam_preprocess.prepared_input_metadata["vehicles_beam_in"][
+            "staged_household_filter_removed_vehicle_rows"
+        ]
+        == 148861
+    )
     assert coupler.get(BEAM_PLANS_IN) is not None
     assert coupler.get(BEAM_HOUSEHOLDS_IN) is not None
     assert coupler.get(BEAM_PERSONS_IN) is not None

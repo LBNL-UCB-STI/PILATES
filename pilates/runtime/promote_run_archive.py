@@ -18,7 +18,10 @@ from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import RunLike
-from pilates.utils.consist_db_snapshot import resolve_consist_db_paths
+from pilates.utils.consist_db_snapshot import (
+    resolve_consist_db_paths,
+    snapshot_latest_dir,
+)
 from sqlalchemy.exc import OperationalError
 
 logger = logging.getLogger(__name__)
@@ -132,9 +135,74 @@ def _recovery_roots(
     return resolved
 
 
+def _promotion_copy_ignore(
+    dirpath: str, names: list[str], *, source_run_dir: Path
+) -> set[str]:
+    try:
+        rel = Path(dirpath).relative_to(source_run_dir)
+    except ValueError:
+        return set()
+    if rel == Path("activitysim") / "output":
+        return {"final_pipeline"} if "final_pipeline" in names else set()
+    if rel == Path("shared_cache"):
+        return {"numba"} if "numba" in names else set()
+    if rel == Path(".consist") / "snapshots":
+        return {"history"} if "history" in names else set()
+    return set()
+
+
 def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
+    source_run_dir = source_run_dir.resolve()
     destination_run_dir.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(source_run_dir, destination_run_dir, dirs_exist_ok=True)
+    if (source_run_dir / "activitysim" / "output" / "final_pipeline").exists():
+        logger.info("Skipping ActivitySim final_pipeline tree during promotion copy")
+    if (source_run_dir / "shared_cache" / "numba").exists():
+        logger.info("Skipping shared numba cache during promotion copy")
+    if (source_run_dir / ".consist" / "snapshots" / "history").exists():
+        logger.info("Skipping Consist snapshot history tree during promotion copy")
+    shutil.copytree(
+        source_run_dir,
+        destination_run_dir,
+        dirs_exist_ok=True,
+        ignore=lambda dirpath, names: _promotion_copy_ignore(
+            dirpath, names, source_run_dir=source_run_dir
+        ),
+    )
+    excluded_paths = [
+        destination_run_dir / "activitysim" / "output" / "final_pipeline",
+        destination_run_dir / "shared_cache" / "numba",
+        destination_run_dir / ".consist" / "snapshots" / "history",
+    ]
+    for excluded_path in excluded_paths:
+        if excluded_path.exists():
+            logger.info("Pruning excluded promotion tree: %s", excluded_path)
+            shutil.rmtree(excluded_path, ignore_errors=True)
+
+
+def _tree_inventory(root: Path) -> tuple[int, int, int]:
+    root = root.resolve()
+    file_count = 0
+    dir_count = 0
+    byte_count = 0
+    for current_root, dirs, files in os.walk(root):
+        try:
+            rel = Path(current_root).relative_to(root)
+        except ValueError:
+            rel = None
+        if rel == Path("activitysim") / "output" and "final_pipeline" in dirs:
+            dirs.remove("final_pipeline")
+        if rel == Path("shared_cache") and "numba" in dirs:
+            dirs.remove("numba")
+        if rel == Path(".consist") / "snapshots" and "history" in dirs:
+            dirs.remove("history")
+        dir_count += len(dirs)
+        file_count += len(files)
+        for name in files:
+            try:
+                byte_count += (Path(current_root) / name).stat().st_size
+            except OSError:
+                continue
+    return file_count, dir_count, byte_count
 
 
 def _verify_promoted_run_dir(
@@ -188,6 +256,9 @@ def _archive_db_path(
     resolved = Path(archive_db_path)
     if resolved.exists():
         return resolved
+    latest_snapshot = snapshot_latest_dir(str(archive_run_dir)) / resolved.name
+    if latest_snapshot.exists():
+        return latest_snapshot
     return None
 
 
@@ -425,12 +496,13 @@ def _register_verified_run_output_recovery_copies(
     source_run_dir: Path,
     recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
+    verify: bool = True,
 ) -> int:
     register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
     if not callable(register_copies):
         logger.warning(
             "Consist tracker does not expose register_run_output_recovery_copies; "
-            "skipping verified recovery-copy metadata registration."
+            "skipping recovery-copy metadata registration."
         )
         return 0
 
@@ -441,15 +513,19 @@ def _register_verified_run_output_recovery_copies(
     )
     registered = 0
     for run_id in selected_run_ids:
-        content_hashes = _run_output_content_hashes(
-            tracker,
-            source_run_dir=source_run_dir,
-            run_id=str(run_id),
+        content_hashes = (
+            _run_output_content_hashes(
+                tracker,
+                source_run_dir=source_run_dir,
+                run_id=str(run_id),
+            )
+            if verify
+            else {}
         )
         result = register_copies(
             str(run_id),
             str(recovery_run_dir),
-            verify=True,
+            verify=verify,
             append=True,
             content_hashes=content_hashes or None,
         )
@@ -458,8 +534,7 @@ def _register_verified_run_output_recovery_copies(
         blocked = getattr(result, "blocked", {})
         if blocked:
             logger.info(
-                "Verified recovery-copy registration blocked %d output(s) for "
-                "run %s: %s",
+                "Recovery-copy registration blocked %d output(s) for run %s: %s",
                 len(blocked),
                 run_id,
                 getattr(result, "summary", blocked),
@@ -474,6 +549,12 @@ def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None
     destination_consist_dir = destination_run_dir / ".consist"
     destination_consist_dir.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(source_consist_dir, destination_consist_dir, dirs_exist_ok=True)
+    history_dir = destination_consist_dir / "snapshots" / "history"
+    if history_dir.exists():
+        logger.info(
+            "Pruning excluded Consist snapshot history during sync: %s", history_dir
+        )
+        shutil.rmtree(history_dir, ignore_errors=True)
 
 
 def _marker_path(source_run_dir: Path) -> Path:
@@ -710,16 +791,35 @@ def promote_run_to_recovery_roots(
     merge_include_data: bool = True,
     merge_dry_run: bool = False,
     merge_shard_path: Optional[str | os.PathLike[str]] = None,
+    merge_only: bool = False,
+    recovery_copy_verify: bool = True,
     *,
     dry_run: bool = False,
     verify_only: bool = False,
 ) -> PromotionResult:
+    overall_started = time.perf_counter()
     source_run_dir = _source_archive_run_dir(settings, archive_run_dir)
     recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
     if merge_main_db is not None:
         merge_conflict = _validate_merge_conflict(merge_conflict)
+    if merge_only and merge_main_db is None:
+        raise ValueError("--merge-only requires --merge-main-db")
+
+    logger.info(
+        "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
+        "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s "
+        "recovery_copy_verify=%s",
+        source_run_dir,
+        len(recovery_roots),
+        db_path if db_path is not None else "none",
+        dry_run,
+        verify_only,
+        merge_main_db if merge_main_db is not None else "none",
+        merge_only,
+        recovery_copy_verify,
+    )
 
     result = PromotionResult(
         source_run_dir=str(source_run_dir),
@@ -731,6 +831,39 @@ def promote_run_to_recovery_roots(
 
     opened_tracker = None
     working_tracker = tracker or cr.current_tracker()
+    if (
+        working_tracker is not None
+        and db_path is not None
+        and not dry_run
+        and not verify_only
+    ):
+        tracker_db_path = getattr(working_tracker, "db_path", None)
+        if tracker_db_path:
+            try:
+                resolved_tracker_db_path = (
+                    Path(os.path.expandvars(os.fspath(tracker_db_path)))
+                    .expanduser()
+                    .resolve()
+                )
+            except OSError:
+                resolved_tracker_db_path = None
+            if (
+                resolved_tracker_db_path is not None
+                and resolved_tracker_db_path != db_path
+            ):
+                refreshed_tracker = _open_archive_tracker(
+                    settings,
+                    archive_run_dir=source_run_dir,
+                )
+                if refreshed_tracker is not None:
+                    logger.info(
+                        "Refreshing archive tracker from resolved DB path %s "
+                        "instead of stale tracker path %s",
+                        db_path,
+                        tracker_db_path,
+                    )
+                    working_tracker = refreshed_tracker
+                    opened_tracker = refreshed_tracker
     needs_tracker = (
         not dry_run
         and not verify_only
@@ -785,15 +918,48 @@ def promote_run_to_recovery_roots(
                 continue
 
             try:
+                root_started = time.perf_counter()
+                source_file_count, source_dir_count, source_byte_count = (
+                    _tree_inventory(source_run_dir)
+                )
+                logger.info(
+                    "Promoting archive to recovery root %s -> %s "
+                    "(files=%d dirs=%d size=%.2f GiB)",
+                    recovery_root,
+                    destination_run_dir,
+                    source_file_count,
+                    source_dir_count,
+                    source_byte_count / (1024**3),
+                )
                 if dry_run:
                     entry.status = "dry_run"
                     continue
 
-                if not verify_only:
+                if merge_only:
+                    if not destination_run_dir.exists():
+                        raise FileNotFoundError(
+                            "Cannot merge-only promote because the promoted archive "
+                            f"copy does not exist: {destination_run_dir}"
+                        )
+                    logger.info(
+                        "Reusing existing promoted archive copy at %s",
+                        destination_run_dir,
+                    )
+                elif not verify_only:
+                    logger.info(
+                        "Copying archive tree to %s with shutil.copytree(...)",
+                        destination_run_dir,
+                    )
                     _copy_run_tree(source_run_dir, destination_run_dir)
                     entry.copy_performed = True
+                    logger.info(
+                        "Finished copying archive tree to %s in %.2fs",
+                        destination_run_dir,
+                        time.perf_counter() - root_started,
+                    )
 
                 if verify:
+                    logger.info("Verifying promoted archive at %s", destination_run_dir)
                     _verify_promoted_run_dir(
                         source_run_dir=source_run_dir,
                         destination_run_dir=destination_run_dir,
@@ -802,21 +968,36 @@ def promote_run_to_recovery_roots(
                     entry.verified = True
 
                 if not verify_only and working_tracker is not None:
+                    logger.info(
+                        "Registering recovery copies for %s (%sbyte verification)",
+                        destination_run_dir,
+                        "with " if recovery_copy_verify else "without ",
+                    )
                     metadata_updates = _register_verified_run_output_recovery_copies(
                         working_tracker,
                         source_run_dir=source_run_dir,
                         recovery_run_dir=destination_run_dir,
                         run_ids=scoped_run_ids or None,
+                        verify=recovery_copy_verify,
                     )
                     entry.artifact_metadata_updated = metadata_updates > 0
 
                 if not verify_only:
                     successful_destinations.append(destination_run_dir)
                     if working_tracker is not None:
+                        logger.info(
+                            "Syncing Consist state into %s",
+                            destination_run_dir,
+                        )
                         for successful_destination in successful_destinations:
                             _sync_consist_state(source_run_dir, successful_destination)
 
                 entry.status = "promoted"
+                logger.info(
+                    "Finished promotion for %s in %.2fs",
+                    destination_run_dir,
+                    time.perf_counter() - root_started,
+                )
             except Exception as exc:
                 entry.status = "failed"
                 entry.error = str(exc)
@@ -835,6 +1016,12 @@ def promote_run_to_recovery_roots(
         ):
             if result.success:
                 try:
+                    merge_started = time.perf_counter()
+                    logger.info(
+                        "Exporting and merging root run subtree %s into %s",
+                        resolved_root_run_id,
+                        merge_main_db,
+                    )
                     result.merge_result = _merge_scoped_run_db_with_retry(
                         settings=settings,
                         source_tracker=working_tracker,
@@ -845,6 +1032,10 @@ def promote_run_to_recovery_roots(
                         include_data=merge_include_data,
                         dry_run=merge_dry_run,
                         shard_path=merge_shard_path,
+                    )
+                    logger.info(
+                        "Finished Consist DB merge path in %.2fs",
+                        time.perf_counter() - merge_started,
                     )
                 except OperationalError as exc:
                     logger.warning(
@@ -891,6 +1082,11 @@ def promote_run_to_recovery_roots(
                 artifact_metadata_updated=entry.artifact_metadata_updated,
                 db_path=str(db_path) if db_path is not None else None,
             )
+        logger.info(
+            "Archive promotion complete in %.2fs (success=%s)",
+            time.perf_counter() - overall_started,
+            result.success,
+        )
     finally:
         if opened_tracker is not None:
             _dispose_tracker(opened_tracker)
@@ -963,6 +1159,24 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-recovery-copy-verify",
+        action="store_false",
+        dest="recovery_copy_verify",
+        default=True,
+        help=(
+            "Skip byte-level verification when registering promoted recovery copies "
+            "for this archive promotion."
+        ),
+    )
+    parser.add_argument(
+        "--merge-only",
+        action="store_true",
+        help=(
+            "Reuse an already-copied promoted archive and run only the Consist DB "
+            "export/merge path."
+        ),
+    )
+    parser.add_argument(
         "--merge-shard-path",
         help=(
             "Optional path for the filtered export shard used for a real merge. "
@@ -1001,6 +1215,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         merge_conflict=args.merge_conflict,
         merge_include_data=bool(args.merge_include_data),
         merge_dry_run=bool(args.merge_dry_run),
+        merge_only=bool(args.merge_only),
+        recovery_copy_verify=bool(args.recovery_copy_verify),
         merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
         verify_only=bool(args.verify_only),

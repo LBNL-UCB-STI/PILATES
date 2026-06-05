@@ -19,6 +19,7 @@ from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
@@ -141,6 +142,25 @@ def _resolve_atlas_postprocess_households_table_path(
         return default_path
 
     return resolved if str(resolved).startswith("/") else f"/{resolved}"
+
+
+def _atlas_postprocess_output_meta(
+    *,
+    key: str,
+    state: WorkflowState,
+) -> Dict[str, Any]:
+    if key != ATLAS_VEHICLES2_OUTPUT:
+        return {}
+    return {
+        "facet": {
+            "artifact_family": ATLAS_VEHICLES2_OUTPUT,
+            "source_role": ATLAS_VEHICLES2_OUTPUT,
+            "year": getattr(state, "forecast_year", None),
+            "iteration": getattr(state, "iteration", None),
+        },
+        "facet_schema_version": "v1",
+        "facet_index": True,
+    }
 
 
 def _urbansim_run_recovered_datastore(
@@ -915,7 +935,7 @@ def make_atlas_preprocess_step(
     ) -> None:
         setattr(
             outputs,
-            "_compatibility_fallback_used",
+            "_restart_rehydration_used",
             _rehydrate_restart_atlas_preprocess_state(
                 state=state,
                 workspace=workspace,
@@ -1152,8 +1172,23 @@ def make_atlas_postprocess_step(
                 **meta,
             ),
             profile_schema_suffixes=(".csv", ".parquet"),
+            extra_meta_fn=lambda key, _path, _description: (
+                _atlas_postprocess_output_meta(key=key, state=state)
+            ),
         )
         if outputs.usim_datastore_h5 is not None:
+            if not state.is_start_year():
+                try:
+                    ensure_usim_population_year_table_aliases(
+                        h5_path=str(outputs.usim_datastore_h5),
+                        year=forecast_year,
+                    )
+                except Exception:
+                    logger.debug(
+                        "Failed to normalize ATLAS population-source H5 aliases for %s",
+                        outputs.usim_datastore_h5,
+                        exc_info=True,
+                    )
             households_table_path = _resolve_atlas_postprocess_households_table_path(
                 path=str(outputs.usim_datastore_h5),
                 forecast_year=forecast_year,

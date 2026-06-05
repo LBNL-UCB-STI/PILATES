@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -14,17 +15,21 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     resolve_beam_config_value,
 )
+from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.coupler_helpers import resolve_existing_path
 from pilates.utils.io import locate_beam_file
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
 )
 
 logger = logging.getLogger(__name__)
+_VEHICLES2_NAME_RE = re.compile(r"^vehicles2_(?P<year>\d{4})\.csv(?:\.gz)?$")
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -124,6 +129,7 @@ def copy_vehicles_from_atlas(
     state: Any,
     resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
     source_path: Optional[str] = None,
+    require_exact_year: bool = False,
     preferred_format: Optional[str] = None,
 ) -> Optional[FileRecord]:
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
@@ -134,19 +140,17 @@ def copy_vehicles_from_atlas(
         file_format=beam_vehicles_format,
     )
 
+    source_metadata: Dict[str, Any] = {}
     atlas_candidates = [source_path] if source_path else []
     if not atlas_candidates:
-        atlas_output_data_dir = workspace.get_atlas_output_dir()
-        atlas_candidates.extend(
-            [
-                os.path.join(
-                    atlas_output_data_dir, f"vehicles2_{state.forecast_year}.csv"
-                ),
-                os.path.join(
-                    atlas_output_data_dir, f"vehicles2_{state.forecast_year - 1}.csv"
-                ),
-            ]
+        resolved_source = resolve_atlas_vehicles2_source(
+            state=state,
+            workspace=workspace,
+            require_exact_year=require_exact_year,
         )
+        if resolved_source is not None:
+            atlas_candidates.append(str(resolved_source.selected_path))
+            source_metadata = resolved_source.as_input_metadata()
 
     atlas_vehicle_file_loc = None
     for candidate in atlas_candidates:
@@ -167,6 +171,31 @@ def copy_vehicles_from_atlas(
             atlas_candidates[0] if atlas_candidates else None,
         )
         return None
+
+    forecast_year = resolve_forecast_year(state)
+    source_year = _source_year_from_vehicles2_path(atlas_vehicle_file_loc)
+    if require_exact_year and (
+        forecast_year is None or source_year != int(forecast_year)
+    ):
+        raise ValueError(
+            "BEAM preprocess requires exact forecast-year ATLAS vehicles2 input, "
+            f"but received source_path={atlas_vehicle_file_loc!r} "
+            f"forecast_year={forecast_year!r} parsed_source_year={source_year!r}."
+        )
+    if not source_metadata:
+        source_metadata = {
+            "source_semantic_key": ATLAS_VEHICLES2_OUTPUT,
+            "source_path": str(atlas_vehicle_file_loc),
+            "source_year": source_year,
+            "forecast_year": int(forecast_year) if forecast_year is not None else None,
+            "source_storage_location": "explicit",
+            "source_resolution_mode": (
+                "exact_forecast_year"
+                if forecast_year is not None and source_year == int(forecast_year)
+                else "explicit"
+            ),
+            "candidate_paths": [str(path) for path in atlas_candidates if path],
+        }
 
     logger.info(
         "Copying atlas vehicles2 file from %s to %s "
@@ -191,7 +220,15 @@ def copy_vehicles_from_atlas(
         short_name="vehicles_beam_in",
         year=getattr(state, "forecast_year", None),
         iteration=getattr(state, "current_inner_iter", None),
+        metadata=source_metadata,
     )
+
+
+def _source_year_from_vehicles2_path(path: str) -> Optional[int]:
+    match = _VEHICLES2_NAME_RE.match(Path(path).name)
+    if match is None:
+        return None
+    return int(match.group("year"))
 
 
 def validate_population_consistency(
@@ -310,6 +347,91 @@ def validate_population_consistency(
     )
 
 
+def filter_vehicles_to_staged_households(
+    *,
+    workspace: Any,
+    settings: Any,
+    resolve_beam_exchange_scenario_folder_fn: Callable[[Any], str],
+    state: Any = None,
+) -> Dict[str, Any]:
+    beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
+    file_format = settings.activitysim.file_format if settings.activitysim else "csv"
+    households_path = locate_beam_file(beam_scenario_folder, "households", file_format)
+    vehicles_path = _find_existing_vehicle_path(
+        beam_scenario_folder,
+        preferred_format=file_format,
+    )
+    if (
+        households_path is None
+        or not os.path.exists(households_path)
+        or vehicles_path is None
+        or not os.path.exists(vehicles_path)
+    ):
+        return {
+            "filtered_to_staged_households": False,
+            "staged_household_filter_reason": "missing_staged_inputs",
+            "staged_household_filter_households_path": households_path,
+            "staged_household_filter_vehicles_path": vehicles_path,
+        }
+
+    households = BeamDataHelper.read_and_clean(
+        households_path, "households", file_format
+    )
+    vehicles = _read_vehicle_table(vehicles_path)
+    vehicle_household_col = None
+    for candidate in ("householdId", "household_id"):
+        if candidate in vehicles.columns:
+            vehicle_household_col = candidate
+            break
+    if vehicle_household_col is None:
+        raise ValueError(
+            "BEAM staged vehicles input is missing a household reference column. "
+            f"Expected one of ['householdId', 'household_id'], found {vehicles.columns.tolist()}"
+        )
+
+    household_ids = _coerce_index_to_int64(
+        households.index,
+        context="staged households index",
+    )
+    vehicle_household_ids = _coerce_beam_vehicle_integer_column(
+        vehicles[vehicle_household_col],
+        column_name=vehicle_household_col,
+    )
+    keep_mask = vehicle_household_ids.isin(set(household_ids.values))
+    removed = int((~keep_mask).sum())
+    filter_metadata = {
+        "filtered_to_staged_households": True,
+        "staged_household_filter_input_vehicle_rows": len(vehicles),
+        "staged_household_filter_removed_vehicle_rows": removed,
+        "staged_household_filter_remaining_vehicle_rows": int(keep_mask.sum()),
+        "staged_household_filter_household_rows": len(households),
+        "staged_household_filter_households_path": households_path,
+        "staged_household_filter_vehicles_path": vehicles_path,
+    }
+    if removed == 0:
+        return filter_metadata
+
+    filtered = vehicles.loc[keep_mask].copy()
+    _write_vehicle_table(
+        filtered,
+        vehicles_path,
+        file_format=_vehicle_file_format_from_path(vehicles_path),
+    )
+    logger.warning(
+        "Filtered BEAM staged vehicles to ActivitySim-staged households. "
+        "workflow_year=%s forecast_year=%s iteration=%s removed_vehicle_rows=%s "
+        "remaining_vehicle_rows=%s households_path=%s vehicles_path=%s",
+        getattr(state, "year", None),
+        getattr(state, "forecast_year", None),
+        getattr(state, "current_inner_iter", None),
+        removed,
+        len(filtered),
+        households_path,
+        vehicles_path,
+    )
+    return filter_metadata
+
+
 def _beam_vehicle_file_format(preferred_format: Optional[str]) -> str:
     return "parquet" if preferred_format == "parquet" else "csv.gz"
 
@@ -352,6 +474,10 @@ def _write_vehicle_table(df: pd.DataFrame, path: str, *, file_format: str) -> No
         df.to_parquet(path, index=False)
         return
     df.to_csv(path, compression="gzip", index=False)
+
+
+def _vehicle_file_format_from_path(path: str) -> str:
+    return "parquet" if path.endswith(".parquet") else "csv.gz"
 
 
 def _normalize_beam_vehicle_columns(df: pd.DataFrame) -> pd.DataFrame:

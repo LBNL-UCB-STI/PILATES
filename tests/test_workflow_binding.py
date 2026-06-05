@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import consist
@@ -339,6 +340,107 @@ def test_beam_preprocess_binding_plan_prefers_current_atlas_vehicle_with_activit
     assert plan.source_by_key[ATLAS_VEHICLES2_OUTPUT] == "explicit"
 
 
+def test_beam_preprocess_binding_plan_uses_archive_exact_year_vehicle_over_coupler(
+    monkeypatch, tmp_path
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    atlas_rel = Path("atlas") / "atlas_output"
+    archive_vehicles = archive_root / atlas_rel / "vehicles2_2030.csv"
+    archive_vehicles.parent.mkdir(parents=True)
+    archive_vehicles.write_text("archive forecast vehicles", encoding="utf-8")
+
+    plan = beam_preprocess_binding_plan(
+        coupler=_CouplerStub({ATLAS_VEHICLES2_OUTPUT: "/tmp/stale-vehicles.csv.gz"}),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                models=SimpleNamespace(
+                    activity_demand="activitysim",
+                    traffic_assignment="beam",
+                )
+            ),
+            vehicle_ownership_model_enabled=True,
+        ),
+        state=SimpleNamespace(
+            current_inner_iter=0,
+            forecast_year=2030,
+            year=2030,
+            run_info_path=str(archive_root / "run_state.yaml"),
+        ),
+        workspace=SimpleNamespace(
+            full_path=str(local_root),
+            get_atlas_output_dir=lambda: str(local_root / atlas_rel),
+        ),
+        year=2030,
+        activity_demand_outputs={},
+        previous_beam_outputs=None,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(archive_vehicles)
+
+
+def test_beam_preprocess_binding_plan_rejects_prior_year_vehicle_for_activity_outputs(
+    monkeypatch, tmp_path
+):
+    from pilates.workflows import binding as binding_module
+
+    monkeypatch.setattr(
+        binding_module,
+        "_beam_preprocess_warmstart_inputs",
+        lambda **_: None,
+    )
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    atlas_rel = Path("atlas") / "atlas_output"
+    prior_vehicles = archive_root / atlas_rel / "vehicles2_2029.csv"
+    prior_vehicles.parent.mkdir(parents=True)
+    prior_vehicles.write_text("archive prior vehicles", encoding="utf-8")
+
+    with pytest.raises(FileNotFoundError, match="exact forecast-year ATLAS vehicles2"):
+        beam_preprocess_binding_plan(
+            coupler=_CouplerStub(
+                {ATLAS_VEHICLES2_OUTPUT: "/tmp/stale-vehicles.csv.gz"}
+            ),
+            settings=SimpleNamespace(
+                run=SimpleNamespace(
+                    models=SimpleNamespace(
+                        activity_demand="activitysim",
+                        traffic_assignment="beam",
+                    )
+                ),
+                vehicle_ownership_model_enabled=True,
+            ),
+            state=SimpleNamespace(
+                current_inner_iter=0,
+                forecast_year=2030,
+                year=2030,
+                run_info_path=str(archive_root / "run_state.yaml"),
+            ),
+            workspace=SimpleNamespace(
+                full_path=str(local_root),
+                get_atlas_output_dir=lambda: str(local_root / atlas_rel),
+            ),
+            year=2030,
+            activity_demand_outputs={},
+            previous_beam_outputs=None,
+            surface=_surface_stub(
+                activity_demand_enabled=True,
+                vehicle_ownership_model_enabled=True,
+            ),
+        )
+
+
 def test_beam_preprocess_binding_plan_prefers_restored_atlas_vehicle_without_activity_outputs(
     monkeypatch,
 ):
@@ -560,6 +662,41 @@ def test_activitysim_preprocess_binding_rejects_root_only_forecast_h5_for_non_st
         )
 
 
+def test_activitysim_preprocess_binding_repairs_population_snapshot_root_tables(
+    tmp_path,
+):
+    h5_path = tmp_path / "model_data_2021_population_source.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    state = SimpleNamespace(
+        year=2021,
+        forecast_year=2021,
+        Stage=SimpleNamespace(land_use="land_use"),
+        is_enabled=lambda stage: stage == "land_use",
+        is_start_year=lambda: False,
+    )
+
+    plan = build_binding_plan(
+        step_name="activitysim_preprocess",
+        fallback_inputs={USIM_POPULATION_SOURCE_H5: str(h5_path)},
+        settings=SimpleNamespace(),
+        state=state,
+        workspace=SimpleNamespace(),
+        year=2021,
+    )
+
+    assert (
+        plan.metadata["resolved_values_by_semantic_key"][
+            USIM_POPULATION_HOUSEHOLDS_TABLE
+        ]
+        == "/2021/households"
+    )
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert "/2021/households" in store
+
+
 def test_activitysim_population_source_uses_forecast_year_when_planner_threads_current_year(
     tmp_path,
 ):
@@ -697,6 +834,53 @@ def test_beam_preprocess_atlas_inputs_falls_back_to_forecast_year_minus_one(
     )
 
     assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(prior_year_h5)
+
+
+def test_beam_preprocess_atlas_inputs_use_forecast_year_archive_candidate(
+    tmp_path,
+):
+    local_root = tmp_path / "local-run"
+    archive_root = tmp_path / "archive-run"
+    atlas_rel = Path("atlas") / "atlas_output"
+    archive_vehicles = archive_root / atlas_rel / "vehicles2_2030.csv"
+    archive_vehicles.parent.mkdir(parents=True)
+    archive_vehicles.write_text("archive forecast vehicles", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(models=SimpleNamespace(traffic_assignment="beam"))
+    )
+    state = SimpleNamespace(
+        current_inner_iter=0,
+        forecast_year=2030,
+        year=2024,
+        run_info_path=str(archive_root / "run_state.yaml"),
+    )
+    workspace = SimpleNamespace(
+        full_path=str(local_root),
+        get_atlas_output_dir=lambda: str(local_root / atlas_rel),
+    )
+
+    plan = build_binding_plan(
+        step_name="unit_test_beam_preprocess",
+        artifact_rules=(
+            ArtifactBindingRule(
+                semantic_key=ATLAS_VEHICLES2_OUTPUT,
+                required=False,
+                allow_fallback=True,
+                fallback_provider="beam_preprocess_atlas_inputs",
+            ),
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=state.year,
+        surface=_surface_stub(
+            activity_demand_enabled=True,
+            vehicle_ownership_model_enabled=True,
+        ),
+    )
+
+    assert plan.inputs[ATLAS_VEHICLES2_OUTPUT] == str(archive_vehicles)
 
 
 def test_build_binding_plan_uses_activitysim_postprocess_base_datastore_provider(

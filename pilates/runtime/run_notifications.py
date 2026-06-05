@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Mapping, Optional, Protocol, Sequence, Union
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -26,6 +27,15 @@ SlackBlock = dict[str, Union[str, SlackTextObject]]
 SlackPayload = dict[str, Union[str, list[SlackBlock]]]
 GoogleChatThread = dict[str, str]
 GoogleChatPayload = dict[str, Union[str, GoogleChatThread]]
+
+
+@dataclass
+class _RunThreadStats:
+    """Lightweight per-thread counters for a scenario recap."""
+
+    completed_steps: int = 0
+    cache_hits: int = 0
+    failures: int = 0
 
 
 class ConsistHookTracker(Protocol):
@@ -275,6 +285,7 @@ class ConsistRunNotifier:
         self.settings = settings
         self.backends = tuple(backends)
         self.context = context or RunNotificationContext()
+        self._thread_stats: dict[str, _RunThreadStats] = {}
 
     def on_run_start(self, run: Run) -> None:
         if not self._should_notify(run):
@@ -282,7 +293,7 @@ class ConsistRunNotifier:
         label = self._run_label(run)
         self._send(
             self._build_message(
-                title=f"{label} started",
+                title=_event_title("start", label, "started"),
                 run=run,
                 lines=self._run_lines(run, event="start"),
             )
@@ -292,27 +303,48 @@ class ConsistRunNotifier:
         if not self._should_notify(run):
             return
         label = self._run_label(run)
+        thread_key = _thread_key(context=self.context, run=run)
+        stats = self._thread_stats.setdefault(thread_key, _RunThreadStats())
+        cache_status = _cache_status(run, event="complete")
+        if not _is_scenario_header(run):
+            stats.completed_steps += 1
+            if cache_status == "cache hit":
+                stats.cache_hits += 1
+        lines = list(self._run_lines(run, event="complete", output_count=len(outputs)))
+        if _is_scenario_header(run):
+            recap_line = _scenario_recap_line(stats)
+            if recap_line is not None:
+                lines.append(recap_line)
         self._send(
             self._build_message(
-                title=f"{label} completed",
+                title=_event_title("complete", label, "completed"),
                 run=run,
-                lines=self._run_lines(run, event="complete", output_count=len(outputs)),
+                lines=tuple(lines),
             )
         )
+        if _is_scenario_header(run):
+            self._thread_stats.pop(thread_key, None)
 
     def on_run_failed(self, run: Run, error: Exception) -> None:
         label = self._run_label(run)
         error_text = self._truncate(str(error) or type(error).__name__)
+        thread_key = _thread_key(context=self.context, run=run)
+        stats = self._thread_stats.setdefault(thread_key, _RunThreadStats())
+        if not _is_scenario_header(run):
+            stats.failures += 1
         self._send(
             self._build_message(
-                title=f"{label} failed",
+                title=_event_title("failed", label, "failed"),
                 run=run,
                 lines=(
                     *self._run_lines(run, event="failed"),
                     f"error: {error_text}",
+                    _failure_next_step(self.context),
                 ),
             )
         )
+        if _is_scenario_header(run):
+            self._thread_stats.pop(thread_key, None)
 
     def _send(self, message: RunNotificationMessage) -> None:
         for backend in self.backends:
@@ -708,3 +740,32 @@ def _safe_request_error(exc: Exception) -> str:
     if isinstance(exc, requests.RequestException):
         return type(exc).__name__
     return str(exc)
+
+
+def _event_title(event: str, label: str, action: str) -> str:
+    prefix = {
+        "start": "🚀",
+        "complete": "✅",
+        "failed": "⚠️",
+    }.get(event)
+    title = f"{label} {action}"
+    return f"{prefix} {title}" if prefix else title
+
+
+def _scenario_recap_line(stats: _RunThreadStats) -> Optional[str]:
+    if not (stats.completed_steps or stats.cache_hits or stats.failures):
+        return None
+    return (
+        "Recap: "
+        f"{stats.completed_steps} step{'' if stats.completed_steps == 1 else 's'} completed, "
+        f"{stats.cache_hits} cache hit{'' if stats.cache_hits == 1 else 's'}, "
+        f"{stats.failures} failure{'' if stats.failures == 1 else 's'}"
+    )
+
+
+def _failure_next_step(context: RunNotificationContext) -> str:
+    base_dir = context.archive_run_dir or context.local_run_dir
+    if base_dir:
+        summary_path = Path(base_dir) / ".pilates" / "run_summary.html"
+        return f"Next: inspect `{summary_path}`"
+    return "Next: inspect the run archive and summary HTML"

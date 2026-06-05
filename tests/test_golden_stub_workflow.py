@@ -427,6 +427,12 @@ def golden_stub_env(tmp_path, monkeypatch):
     beam_config_path = beam_dir / settings.run.region / settings.beam.config
     _write_file(beam_config_path)
 
+    forecast_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
+    forecast_vehicles2_path.write_text(
+        "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
+        encoding="utf-8",
+    )
+
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
     ]

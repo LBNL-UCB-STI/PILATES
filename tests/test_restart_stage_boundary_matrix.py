@@ -612,6 +612,10 @@ def restart_stage_env(tmp_path, monkeypatch):
         beam_dir / settings.run.region / settings.shared.skims.fname
     )
     _write_file(beam_dir / settings.run.region / settings.beam.config, "beam-config")
+    _write_file(
+        atlas_output_dir / f"vehicles2_{state.forecast_year}.csv",
+        "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
+    )
 
     def record_builder(model_name, phase):
         if phase == "preprocess":

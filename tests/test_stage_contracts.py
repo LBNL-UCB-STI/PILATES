@@ -190,6 +190,13 @@ def _write_population_h5(path: Path, year: int) -> None:
             store.put(f"/{year}/{table_name}", pd.DataFrame({"value": [1]}))
 
 
+def _write_root_population_h5(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with pd.HDFStore(path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+
 def _build_settings(tmp_path: Path):
     """Build a compact workflow config that exercises all stage contracts."""
 
@@ -570,6 +577,7 @@ def test_land_use_stage_contract(stage_env):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
 
+    _write_root_population_h5(Path(stage_env["usim_output_path"]))
     outputs_holder = StepOutputsHolder()
 
     usim_inputs = run_land_use_stage(
@@ -591,6 +599,32 @@ def test_land_use_stage_contract(stage_env):
     assert usim_inputs[USIM_POPULATION_SOURCE_H5].endswith("_population_source.h5")
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
+
+
+def test_land_use_stage_aliases_root_population_snapshot_tables_for_non_start_year(
+    stage_env,
+):
+    """Non-start-year ActivitySim handoffs require exact-year population tables."""
+    from pilates.workflows.steps import StepOutputsHolder
+
+    state = stage_env["state"]
+    state.current_year = state.forecast_year
+    _write_root_population_h5(Path(stage_env["usim_output_path"]))
+
+    outputs_holder = StepOutputsHolder()
+    usim_inputs = run_land_use_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        outputs_holder_year=outputs_holder,
+    )
+
+    with pd.HDFStore(usim_inputs[USIM_POPULATION_SOURCE_H5], mode="r") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/{state.forecast_year}/{table_name}" in store
 
 
 def test_land_use_stage_returns_typed_supply_demand_handoff(stage_env):
@@ -854,6 +888,10 @@ def test_vehicle_ownership_stage_contract(stage_env):
         build_atlas_static_inputs_fallback=lambda workspace: {},
     )
     assert stage_env["coupler"].get(USIM_DATASTORE_H5) is not None
+    assert stage_env["coupler"].get(USIM_POPULATION_SOURCE_H5) is not None
+    assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) == stage_env[
+        "coupler"
+    ].get(USIM_POPULATION_SOURCE_H5)
 
 
 def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env):
@@ -1712,6 +1750,9 @@ def test_supply_demand_activitysim_postprocess_binds_population_source_to_foreca
     )
     _write_file(current_h5)
     _write_population_h5(forecast_h5, forecast_year)
+    atlas_output_dir = Path(stage_env["workspace"].get_atlas_output_dir())
+    atlas_output_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(atlas_output_dir / f"vehicles2_{forecast_year}.csv")
 
     state = stage_env["state"]
     state.current_year = current_year
@@ -2684,6 +2725,13 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
         / settings.beam.config
     )
     beam_config_path.unlink()
+
+    atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    forecast_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
+    forecast_vehicles2_path.write_text(
+        "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
+        encoding="utf-8",
+    )
 
     beam_out = Path(workspace.get_beam_output_dir())
     linkstats = beam_out / "0.linkstats.csv.gz"

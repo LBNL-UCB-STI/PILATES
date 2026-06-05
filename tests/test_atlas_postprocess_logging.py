@@ -5,7 +5,10 @@ import pytest
 
 from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
-from pilates.workflows.artifact_keys import USIM_POPULATION_SOURCE_H5
+from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows import steps
 from pilates.workflows.steps import urbansim_atlas as steps_urbansim_atlas
 
@@ -30,11 +33,13 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
 
     output_logger = captured["output_logger"]
     output_only_keys = []
+    output_only_meta = []
     set_output_keys = []
     publish_meta = []
 
     def _log_output_only(*, key, path, description, **meta):
         output_only_keys.append(key)
+        output_only_meta.append(meta)
 
     def _log_and_set_output(*, key, path, description, coupler, **meta):
         set_output_keys.append(key)
@@ -56,7 +61,7 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         usim_datastore_h5=h5_path,
         processed_outputs={
             "usim_h5_updated": h5_path,
-            "atlas_vehicles2_output": vehicles2_path,
+            ATLAS_VEHICLES2_OUTPUT: vehicles2_path,
         },
     )
 
@@ -68,7 +73,15 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
         holder=SimpleNamespace(),
     )
 
-    assert output_only_keys == ["atlas_vehicles2_output"]
+    assert output_only_keys == [ATLAS_VEHICLES2_OUTPUT]
+    assert output_only_meta[0]["facet"] == {
+        "artifact_family": ATLAS_VEHICLES2_OUTPUT,
+        "source_role": ATLAS_VEHICLES2_OUTPUT,
+        "year": 2023,
+        "iteration": None,
+    }
+    assert output_only_meta[0]["facet_schema_version"] == "v1"
+    assert output_only_meta[0]["facet_index"] is True
     assert set_output_keys == [USIM_POPULATION_SOURCE_H5]
     assert len(publish_meta) == 1
     assert publish_meta[0]["child_selection"] == "include_only"
@@ -77,6 +90,60 @@ def test_atlas_postprocess_logs_only_canonical_usim_h5_output(monkeypatch, tmp_p
     assert {
         path: spec.key for path, spec in publish_meta[0]["child_specs"].items()
     } == {"/2023/households": "atlas_postprocess_usim_households_table_updated"}
+
+
+def test_atlas_postprocess_aliases_root_population_tables_before_publish(
+    monkeypatch,
+    tmp_path,
+):
+    captured = {}
+
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "build_standard_step",
+        _fake_build_standard_step,
+    )
+
+    steps.make_atlas_postprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    output_calls = []
+    monkeypatch.setattr(steps_urbansim_atlas, "log_output_only", lambda **kwargs: None)
+    monkeypatch.setattr(
+        steps_urbansim_atlas,
+        "log_and_set_output",
+        lambda **kwargs: output_calls.append(kwargs),
+    )
+
+    h5_path = tmp_path / "model_data_2021.h5"
+    with pd.HDFStore(h5_path, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    captured["output_logger"](
+        AtlasPostprocessOutputs(
+            atlas_output_dir=tmp_path,
+            usim_datastore_h5=h5_path,
+            processed_outputs={"usim_h5_updated": h5_path},
+        ),
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(forecast_year=2021, is_start_year=lambda: False),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(),
+    )
+
+    assert output_calls[0]["h5_tables_used"] == ["/2021/households"]
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert "/2021/households" in store
+        assert "/2021/persons" in store
+        assert "/2021/jobs" in store
+        assert "/2021/blocks" in store
 
 
 def test_atlas_postprocess_logs_usim_h5_as_input(monkeypatch, tmp_path):

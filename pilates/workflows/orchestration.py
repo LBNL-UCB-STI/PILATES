@@ -1078,6 +1078,8 @@ def _publish_recovered_outputs(
 def _merge_output_recovery_meta(outputs: Any, audit_meta: Dict[str, Any]) -> None:
     if bool(getattr(outputs, "_compatibility_fallback_used", False)):
         audit_meta["used_compatibility_fallback"] = True
+    if bool(getattr(outputs, "_restart_rehydration_used", False)):
+        audit_meta["used_restart_rehydration"] = True
 
 
 def _finalize_recovered_step_outputs(

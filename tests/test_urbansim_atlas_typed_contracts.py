@@ -369,6 +369,54 @@ def test_atlas_preprocess_outputs_require_grave_csv_for_non_start_year(
         )
 
 
+def test_atlas_preprocess_outputs_reject_stale_households_csv_for_selected_h5(
+    tmp_path: Path,
+) -> None:
+    h5_path = tmp_path / "model_data_2021.h5"
+    pd.DataFrame(
+        {"cars": [1, 2]},
+        index=pd.Index([10, 20], name="household_id"),
+    ).to_hdf(h5_path, key="/households", mode="w")
+
+    prepared_inputs = {}
+    for key, filename, contents in (
+        (
+            "atlas_households_csv",
+            "households.csv",
+            "household_id,cars\n1,1\n2,2\n",
+        ),
+        ("atlas_blocks_csv", "blocks.csv", "x\n"),
+        ("atlas_persons_csv", "persons.csv", "x\n"),
+        ("atlas_residential_csv", "residential.csv", "x\n"),
+        ("atlas_jobs_csv", "jobs.csv", "x\n"),
+        ("atlas_grave_csv", "grave.csv", "x\n"),
+    ):
+        path = tmp_path / "atlas-input" / "year2021" / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(contents, encoding="utf-8")
+        prepared_inputs[key] = path
+
+    outputs = AtlasPreprocessOutputs(
+        atlas_mutable_input_dir=tmp_path / "atlas-input",
+        prepared_inputs=prepared_inputs,
+    )
+
+    with pytest.raises(AssertionError, match="different population universe"):
+        outputs.validate(
+            context=ValidationContext(
+                step_name="atlas_preprocess",
+                state=SimpleNamespace(
+                    start_year=2017,
+                    year=2021,
+                    current_year=2021,
+                    atlas_usim_datastore_h5=str(h5_path),
+                    is_start_year=lambda: False,
+                ),
+                workspace=SimpleNamespace(full_path=str(tmp_path)),
+            )
+        )
+
+
 def test_atlas_runner_retries_container_exceptions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

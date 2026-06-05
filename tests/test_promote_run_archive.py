@@ -10,6 +10,7 @@ import pytest
 
 from pilates.config import PilatesConfig
 from pilates.runtime.promote_run_archive import (
+    _archive_db_path,
     _register_verified_run_output_recovery_copies,
     promote_run_to_recovery_roots,
 )
@@ -184,6 +185,60 @@ def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_pat
     ]
 
 
+def test_register_verified_recovery_copies_can_skip_hash_verification(
+    tmp_path, monkeypatch
+):
+    source_run_dir = tmp_path / "source-run"
+    recovery_run_dir = tmp_path / "recovery-run"
+    calls = []
+
+    class FakeTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "run-1"
+            return {
+                "demo_output": SimpleNamespace(
+                    container_uri="workspace://outputs/result.txt"
+                )
+            }
+
+        def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
+            calls.append((run_id, recovery_root, kwargs))
+            return SimpleNamespace(
+                registered={"demo_output": object()},
+                blocked={},
+                summary="registered=1",
+            )
+
+    def fail_hash(*_args, **_kwargs):
+        raise AssertionError("source hashing should be skipped when verify=False")
+
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._run_output_content_hashes",
+        fail_hash,
+    )
+
+    registered = _register_verified_run_output_recovery_copies(
+        FakeTracker(),
+        source_run_dir=source_run_dir,
+        recovery_run_dir=recovery_run_dir,
+        run_ids=["run-1"],
+        verify=False,
+    )
+
+    assert registered == 1
+    assert calls == [
+        (
+            "run-1",
+            str(recovery_run_dir),
+            {
+                "append": True,
+                "content_hashes": None,
+                "verify": False,
+            },
+        )
+    ]
+
+
 def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
     tmp_path,
 ):
@@ -240,6 +295,42 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         assert marker["source_run_dir"] == str(run_dir)
         assert marker["roots"][0]["status"] == "promoted"
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
+    tmp_path, monkeypatch
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tracker, _run_id, _output_path = _seed_run_archive(consist, run_dir)
+    calls = []
+
+    def fake_register_verified_run_output_recovery_copies(*_args, **kwargs):
+        calls.append(kwargs.get("verify"))
+        return 1
+
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._register_verified_run_output_recovery_copies",
+        fake_register_verified_run_output_recovery_copies,
+    )
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            recovery_copy_verify=False,
+        )
+
+        assert result.success is True
+        assert calls == [False]
+        assert result.roots[0].artifact_metadata_updated is True
     finally:
         tracker.db.engine.dispose()
 
@@ -322,6 +413,238 @@ def test_promote_run_to_recovery_root_scopes_seeded_db_merge(tmp_path):
                 assert new_run_id in merged_run_ids
             finally:
                 merged_tracker.db.engine.dispose()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
+    tmp_path,
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tracker, _run_id, _output_path = _seed_run_archive(consist, run_dir)
+    final_pipeline_file = (
+        run_dir
+        / "activitysim"
+        / "output"
+        / "final_pipeline"
+        / "persons"
+        / "final.parquet"
+    )
+    final_pipeline_file.parent.mkdir(parents=True, exist_ok=True)
+    final_pipeline_file.write_text("final-pipeline", encoding="utf-8")
+
+    archived_output_file = (
+        run_dir / "activitysim" / "output" / "year-2021-iteration-0" / "persons.parquet"
+    )
+    archived_output_file.parent.mkdir(parents=True, exist_ok=True)
+    archived_output_file.write_text("archived-output", encoding="utf-8")
+
+    numba_cache_file = run_dir / "shared_cache" / "numba" / "flow_example" / "cache.bin"
+    numba_cache_file.parent.mkdir(parents=True, exist_ok=True)
+    numba_cache_file.write_text("numba-cache", encoding="utf-8")
+
+    snapshot_history_file = (
+        run_dir
+        / ".consist"
+        / "snapshots"
+        / "history"
+        / "20260605-000000_foo"
+        / "provenance.duckdb"
+    )
+    snapshot_history_file.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_history_file.write_text("snapshot-history", encoding="utf-8")
+
+    snapshot_latest_file = (
+        run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+    )
+    snapshot_latest_file.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_latest_file.write_text("snapshot-latest", encoding="utf-8")
+
+    promoted = recovery_root / run_dir.name
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+        )
+
+        assert result.success is True
+        assert archived_output_file.exists()
+        assert (
+            promoted
+            / "activitysim"
+            / "output"
+            / "year-2021-iteration-0"
+            / "persons.parquet"
+        ).exists()
+        assert not (promoted / "activitysim" / "output" / "final_pipeline").exists()
+        assert not (promoted / "shared_cache" / "numba").exists()
+        assert not (
+            promoted
+            / ".consist"
+            / "snapshots"
+            / "history"
+            / "20260605-000000_foo"
+            / "provenance.duckdb"
+        ).exists()
+        assert (promoted / ".consist" / "snapshots" / "latest").exists()
+        assert final_pipeline_file.exists()
+        assert numba_cache_file.exists()
+        assert snapshot_history_file.exists()
+        assert snapshot_latest_file.exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_direct_copy_missing(
+    tmp_path,
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+
+    main_run_dir = tmp_path / "main-catalog"
+    main_tracker = _make_tracker(consist, main_run_dir)
+    main_db_path = main_run_dir / ".consist" / "provenance.duckdb"
+
+    try:
+        _seed_output_run(
+            main_tracker,
+            main_run_dir,
+            run_name="historical_root",
+            model="history",
+            key="old_output",
+            relative_path="outputs/old-result.txt",
+            content="old-result-data",
+        )
+    finally:
+        main_tracker.db.engine.dispose()
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tracker = _make_tracker(consist, run_dir)
+    new_run_id, _new_output_path = _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+
+    source_db = run_dir / ".consist" / "provenance.duckdb"
+    source_wal = Path(f"{source_db}.wal")
+    snapshot_db = run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+    snapshot_db.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_db, snapshot_db)
+    if source_wal.exists():
+        shutil.copy2(source_wal, Path(f"{snapshot_db}.wal"))
+
+    tracker.db.engine.dispose()
+    source_db.unlink()
+    source_wal.unlink(missing_ok=True)
+
+    promoted = recovery_root / run_dir.name
+    assert _archive_db_path(settings, archive_run_dir=run_dir) == snapshot_db
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            roots=[str(recovery_root)],
+            merge_main_db=str(main_db_path),
+            merge_dry_run=True,
+        )
+
+        assert result.success is True
+        assert result.db_path == str(snapshot_db)
+        assert result.root_run_id == new_run_id
+        assert promoted.exists()
+        assert (promoted / ".consist" / "recovery_promotion.json").exists()
+        assert (
+            promoted / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
+        ).exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
+    tmp_path, monkeypatch
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+
+    main_run_dir = tmp_path / "main-catalog"
+    main_tracker = _make_tracker(consist, main_run_dir)
+    main_db_path = main_run_dir / ".consist" / "provenance.duckdb"
+
+    try:
+        _seed_output_run(
+            main_tracker,
+            main_run_dir,
+            run_name="historical_root",
+            model="history",
+            key="old_output",
+            relative_path="outputs/old-result.txt",
+            content="old-result-data",
+        )
+    finally:
+        main_tracker.db.engine.dispose()
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tracker = _make_tracker(consist, run_dir)
+    _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+
+    promoted = recovery_root / run_dir.name
+
+    try:
+        first = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            merge_main_db=str(main_db_path),
+            merge_dry_run=True,
+        )
+        assert first.success is True
+        assert promoted.exists()
+
+        def fail_copy(*_args, **_kwargs):
+            raise AssertionError("copy_run_tree should not run during merge-only")
+
+        monkeypatch.setattr(
+            "pilates.runtime.promote_run_archive._copy_run_tree",
+            fail_copy,
+        )
+
+        second = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            merge_main_db=str(main_db_path),
+            merge_only=True,
+        )
+
+        assert second.success is True
+        assert second.roots[0].copy_performed is False
+        assert second.roots[0].verified is True
+        assert promoted.exists()
+        assert (promoted / ".consist" / "recovery_promotion.json").exists()
     finally:
         tracker.db.engine.dispose()
 

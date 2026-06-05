@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("openmatrix")
 
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
+from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.steps import beam as steps_beam
 
 
@@ -45,6 +46,81 @@ def test_beam_preprocess_fails_early_when_config_file_missing(monkeypatch, tmp_p
         assert "seattle-pilates.conf" in str(exc)
     else:
         raise AssertionError("Expected FileNotFoundError for missing BEAM config")
+
+
+def test_beam_preprocess_logs_vehicle_source_provenance(monkeypatch, tmp_path):
+    captured = {}
+
+    def _fake_build_standard_step(*, spec, **_kwargs):
+        captured["output_logger"] = spec.output_logger
+        return lambda *args, **inner_kwargs: None
+
+    monkeypatch.setattr(
+        steps_beam,
+        "build_standard_step",
+        _fake_build_standard_step,
+    )
+
+    steps_beam.make_beam_preprocess_step(
+        coupler=SimpleNamespace(),
+        outputs_holder=SimpleNamespace(),
+    )
+
+    output_logger = captured["output_logger"]
+    calls = []
+    monkeypatch.setattr(
+        steps_beam,
+        "log_and_set_output",
+        lambda *, key, path, description, coupler, **meta: calls.append(
+            (key, path, description, meta)
+        ),
+    )
+
+    vehicles_path = tmp_path / "vehicles.parquet"
+    vehicles_path.write_text("vehicles", encoding="utf-8")
+    source_path = tmp_path / "atlas" / "vehicles2_2030.csv"
+    outputs = BeamPreprocessOutputs(
+        beam_mutable_data_dir=tmp_path / "beam" / "input",
+        prepared_inputs={"vehicles_beam_in": vehicles_path},
+        prepared_input_metadata={
+            "vehicles_beam_in": {
+                "source_semantic_key": ATLAS_VEHICLES2_OUTPUT,
+                "source_path": str(source_path),
+                "source_year": 2030,
+                "forecast_year": 2030,
+                "source_resolution_mode": "exact_forecast_year",
+                "source_storage_location": "archive",
+                "filtered_to_staged_households": True,
+                "staged_household_filter_removed_vehicle_rows": 12,
+            }
+        },
+    )
+
+    output_logger(
+        outputs,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030, forecast_year=2030, iteration=2),
+        workspace=SimpleNamespace(),
+        holder=SimpleNamespace(),
+    )
+
+    assert calls[0][0] == "vehicles_beam_in"
+    meta = calls[0][3]
+    assert meta["facet"] == {
+        "artifact_family": "beam_preprocess_input",
+        "source_role": "vehicles_beam_in",
+        "derived_from": ATLAS_VEHICLES2_OUTPUT,
+        "year": 2030,
+        "iteration": 2,
+        "source_year": 2030,
+        "source_resolution_mode": "exact_forecast_year",
+        "source_storage_location": "archive",
+        "filtered_to_staged_households": True,
+        "staged_household_filter_removed_vehicle_rows": 12,
+    }
+    assert meta["facet_schema_version"] == "v1"
+    assert meta["facet_index"] is True
+    assert meta["source_path"] == str(source_path)
 
 
 def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):

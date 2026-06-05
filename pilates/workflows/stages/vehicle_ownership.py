@@ -561,6 +561,10 @@ def run_vehicle_ownership_stage(
                         USIM_POPULATION_SOURCE_H5,
                         str(atlas_postprocess_outputs.usim_datastore_h5),
                     )
+                    set_value(
+                        USIM_DATASTORE_CURRENT_H5,
+                        str(atlas_postprocess_outputs.usim_datastore_h5),
+                    )
                 if not atlas_state.is_start_year():
                     _validate_population_h5_for_activitysim_year(
                         path=atlas_postprocess_outputs.usim_datastore_h5,

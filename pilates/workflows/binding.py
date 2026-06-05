@@ -30,6 +30,7 @@ from typing import (
 
 from consist.types import BindingResult
 
+from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
@@ -40,7 +41,10 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import iteration_index
-from pilates.utils.usim_h5 import resolve_usim_population_table_paths
+from pilates.utils.usim_h5 import (
+    ensure_usim_population_year_table_aliases,
+    resolve_usim_population_table_paths,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
@@ -464,11 +468,18 @@ def beam_preprocess_binding_plan(
             for key, value in warmstart_inputs.items():
                 explicit_inputs.setdefault(key, value)
 
+    require_exact_atlas_vehicles = bool(
+        resolved_profile.activity_demand_enabled
+        and activity_demand_outputs is not None
+        and resolved_profile.vehicle_ownership_model_enabled
+        and iteration_index(state, default=0) == 0
+    )
     atlas_inputs = _beam_preprocess_atlas_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
         surface=surface,
+        require_exact_year=require_exact_atlas_vehicles,
     )
     # When BEAM is consuming the ActivitySim outputs from the current phase,
     # keep the ATLAS vehicles2 selection anchored to that same local year before
@@ -765,18 +776,42 @@ def _activitysim_population_source(
         if isinstance(selected, (str, os.PathLike)):
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
+                require_exact_year = _requires_exact_activitysim_population_year(state)
+                if (
+                    require_exact_year
+                    and target_year is not None
+                    and Path(selected_path).stem.endswith("_population_source")
+                ):
+                    try:
+                        alias_result = ensure_usim_population_year_table_aliases(
+                            h5_path=selected_path,
+                            year=target_year,
+                        )
+                    except Exception:
+                        logger.debug(
+                            "Failed to repair ActivitySim population-source year "
+                            "aliases for %s",
+                            selected_path,
+                            exc_info=True,
+                        )
+                    else:
+                        created = alias_result.get("created") or []
+                        if created:
+                            logger.info(
+                                "Added exact-year population table aliases for %s: %s",
+                                selected_path,
+                                created,
+                            )
                 try:
                     mapping.update(
                         resolve_usim_population_table_paths(
                             h5_path=selected_path,
                             year=target_year,
-                            require_exact_year=(
-                                _requires_exact_activitysim_population_year(state)
-                            ),
+                            require_exact_year=require_exact_year,
                         )
                     )
                 except Exception as exc:
-                    if _requires_exact_activitysim_population_year(state):
+                    if require_exact_year:
                         raise
                     logger.warning(
                         "Failed to resolve ActivitySim population-source table paths "
@@ -919,6 +954,7 @@ def _beam_preprocess_atlas_inputs(
     state: Any,
     workspace: Any,
     surface: "EnabledWorkflowSurface",
+    require_exact_year: bool = False,
     **_: Any,
 ) -> Optional[Mapping[str, Any]]:
     """Forecast-year ATLAS vehicles2 fallback.
@@ -936,18 +972,13 @@ def _beam_preprocess_atlas_inputs(
     if current_iter != 0:
         return None
 
-    forecast_year = getattr(state, "forecast_year", None)
-    if forecast_year is None:
-        return None
-
-    atlas_output_dir = workspace.get_atlas_output_dir()
-    candidates = [
-        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year}.csv"),
-        os.path.join(atlas_output_dir, f"vehicles2_{forecast_year - 1}.csv"),
-    ]
-    for atlas_vehicle_path in candidates:
-        if os.path.exists(atlas_vehicle_path):
-            return {ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_path}
+    resolved = resolve_atlas_vehicles2_source(
+        state=state,
+        workspace=workspace,
+        require_exact_year=require_exact_year,
+    )
+    if resolved is not None:
+        return {ATLAS_VEHICLES2_OUTPUT: str(resolved.selected_path)}
     return None
 
 

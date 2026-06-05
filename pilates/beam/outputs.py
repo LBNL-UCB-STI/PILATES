@@ -125,6 +125,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("prepared_inputs",)
     beam_mutable_data_dir: Path
     prepared_inputs: Dict[str, Path] = field(default_factory=dict)
+    prepared_input_metadata: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         """
@@ -141,6 +142,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
                     file_path=str(path),
                     short_name=short_name,
                     description=description,
+                    metadata=dict(self.prepared_input_metadata.get(short_name, {})),
                 )
                 for short_name, path, description in self._iter_record_items()
             ]
@@ -167,14 +169,22 @@ class BeamPreprocessOutputs(StepOutputsBase):
         """
         mapping = record_store.to_mapping()
         prepared_inputs: Dict[str, Path] = {}
+        prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
         for key, value in mapping.items():
             path = artifact_to_path(value, workspace)
             if path is None:
                 continue
             prepared_inputs[key] = Path(path)
+        for record in record_store.all_records():
+            short_name = getattr(record, "short_name", None)
+            if short_name in prepared_inputs:
+                metadata = getattr(record, "metadata", None)
+                if metadata:
+                    prepared_input_metadata[short_name] = dict(metadata)
         return cls(
             beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
             prepared_inputs=prepared_inputs,
+            prepared_input_metadata=prepared_input_metadata,
         )
 
 

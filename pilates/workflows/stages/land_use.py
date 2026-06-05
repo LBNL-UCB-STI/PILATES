@@ -40,6 +40,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.urbansim.inputs import build_urbansim_inputs
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
+from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +241,20 @@ def run_land_use_stage(
             forecast_output_path
         )
         shutil.copy2(forecast_output_path, population_source_snapshot)
+        if state.forecast_year is not None and not state.is_start_year():
+            alias_result = ensure_usim_population_year_table_aliases(
+                h5_path=str(population_source_snapshot),
+                year=state.forecast_year,
+            )
+            missing_root = alias_result.get("missing_root") or []
+            if missing_root:
+                logger.warning(
+                    "Population-source snapshot %s is missing root tables needed "
+                    "for year %s aliases: %s",
+                    population_source_snapshot,
+                    state.forecast_year,
+                    missing_root,
+                )
         usim_inputs[USIM_FORECAST_OUTPUT] = str(population_source_snapshot)
         usim_inputs[USIM_POPULATION_SOURCE_H5] = str(population_source_snapshot)
     if postprocess_outputs is not None and postprocess_outputs.usim_datastore_h5:

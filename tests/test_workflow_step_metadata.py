@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 from consist import define_step
 from consist.types import BindingResult
@@ -479,6 +480,68 @@ def test_atlas_step_metadata_config_includes_parent_forecast_year():
     assert config["main_forecast_year"] == 2029
     assert facet["atlas_subyear"] == 2023
     assert facet["main_forecast_year"] == 2029
+
+
+def test_atlas_step_metadata_config_fingerprints_selected_usim_households(
+    tmp_path: Path,
+):
+    def _write_h5(path: Path, household_ids: list[int]) -> None:
+        households = pd.DataFrame(
+            {"cars": [1 for _ in household_ids]},
+            index=pd.Index(household_ids, name="household_id"),
+        )
+        with pd.HDFStore(path, mode="w") as store:
+            store.put("/households", households)
+
+    first_h5 = tmp_path / "first.h5"
+    second_h5 = tmp_path / "second.h5"
+    _write_h5(first_h5, [1, 2, 3])
+    _write_h5(second_h5, [10, 20, 30])
+
+    coupler = _DummyCoupler()
+    holder = StepOutputsHolder()
+    step = make_atlas_preprocess_step(coupler=coupler, outputs_holder=holder)
+    meta = step.__consist_step__
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(),
+        activitysim=None,
+        beam=None,
+        urbansim=None,
+        postprocessing=None,
+        atlas=SimpleNamespace(model_dump=lambda: {"max_retries": 1}),
+    )
+    workspace = SimpleNamespace(full_path=str(tmp_path))
+
+    class _Ctx:
+        def __init__(self, h5_path: Path):
+            self._runtime = {
+                "settings": settings,
+                "workspace": workspace,
+                "state": SimpleNamespace(
+                    year=2021,
+                    start_year=2020,
+                    current_year=2021,
+                    forecast_year=2021,
+                    main_forecast_year=2021,
+                    atlas_usim_datastore_h5=str(h5_path),
+                ),
+            }
+
+        def get_runtime(self, name, default=None):
+            return self._runtime.get(name, default)
+
+    first_config = meta.config(_Ctx(first_h5))
+    second_config = meta.config(_Ctx(second_h5))
+
+    assert first_config["atlas_usim_households_identity_status"] == "resolved"
+    assert first_config["atlas_usim_households_table_path"] == "/households"
+    assert first_config["atlas_usim_households_requested_year"] == 2021
+    assert first_config["atlas_usim_households_row_count"] == 3
+    assert (
+        first_config["atlas_usim_households_sha256"]
+        != second_config["atlas_usim_households_sha256"]
+    )
 
 
 def test_urbansim_run_declares_strict_output_contract():
@@ -1071,7 +1134,7 @@ def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(
 
     call = scenario.calls[0]
     assert call["output_paths"][USIM_DATASTORE_H5] == str(
-        tmp_path / "urbansim" / "data" / "forecast_2020.h5"
+        tmp_path / "urbansim" / "data" / "custom_53199100.h5"
     )
     assert "asim_input_skims_omx_archived" in call["output_paths"]
     assert "asim_input_skims_zarr_archived" in call["output_paths"]
