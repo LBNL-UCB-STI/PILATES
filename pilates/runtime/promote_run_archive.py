@@ -840,12 +840,17 @@ def promote_run_to_recovery_roots(
         tracker_db_path = getattr(working_tracker, "db_path", None)
         if tracker_db_path:
             try:
-                resolved_tracker_db_path = Path(
-                    os.path.expandvars(os.fspath(tracker_db_path))
-                ).expanduser().resolve()
+                resolved_tracker_db_path = (
+                    Path(os.path.expandvars(os.fspath(tracker_db_path)))
+                    .expanduser()
+                    .resolve()
+                )
             except OSError:
                 resolved_tracker_db_path = None
-            if resolved_tracker_db_path is not None and resolved_tracker_db_path != db_path:
+            if (
+                resolved_tracker_db_path is not None
+                and resolved_tracker_db_path != db_path
+            ):
                 refreshed_tracker = _open_archive_tracker(
                     settings,
                     archive_run_dir=source_run_dir,
