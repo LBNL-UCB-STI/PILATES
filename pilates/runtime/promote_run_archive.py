@@ -551,7 +551,9 @@ def _sync_consist_state(source_run_dir: Path, destination_run_dir: Path) -> None
     shutil.copytree(source_consist_dir, destination_consist_dir, dirs_exist_ok=True)
     history_dir = destination_consist_dir / "snapshots" / "history"
     if history_dir.exists():
-        logger.info("Pruning excluded Consist snapshot history during sync: %s", history_dir)
+        logger.info(
+            "Pruning excluded Consist snapshot history during sync: %s", history_dir
+        )
         shutil.rmtree(history_dir, ignore_errors=True)
 
 
@@ -884,8 +886,8 @@ def promote_run_to_recovery_roots(
 
             try:
                 root_started = time.perf_counter()
-                source_file_count, source_dir_count, source_byte_count = _tree_inventory(
-                    source_run_dir
+                source_file_count, source_dir_count, source_byte_count = (
+                    _tree_inventory(source_run_dir)
                 )
                 logger.info(
                     "Promoting archive to recovery root %s -> %s "

@@ -444,13 +444,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
     archived_output_file.parent.mkdir(parents=True, exist_ok=True)
     archived_output_file.write_text("archived-output", encoding="utf-8")
 
-    numba_cache_file = (
-        run_dir
-        / "shared_cache"
-        / "numba"
-        / "flow_example"
-        / "cache.bin"
-    )
+    numba_cache_file = run_dir / "shared_cache" / "numba" / "flow_example" / "cache.bin"
     numba_cache_file.parent.mkdir(parents=True, exist_ok=True)
     numba_cache_file.write_text("numba-cache", encoding="utf-8")
 
@@ -466,11 +460,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
     snapshot_history_file.write_text("snapshot-history", encoding="utf-8")
 
     snapshot_latest_file = (
-        run_dir
-        / ".consist"
-        / "snapshots"
-        / "latest"
-        / "provenance.duckdb"
+        run_dir / ".consist" / "snapshots" / "latest" / "provenance.duckdb"
     )
     snapshot_latest_file.parent.mkdir(parents=True, exist_ok=True)
     snapshot_latest_file.write_text("snapshot-latest", encoding="utf-8")
@@ -485,7 +475,13 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
 
         assert result.success is True
         assert archived_output_file.exists()
-        assert (promoted / "activitysim" / "output" / "year-2021-iteration-0" / "persons.parquet").exists()
+        assert (
+            promoted
+            / "activitysim"
+            / "output"
+            / "year-2021-iteration-0"
+            / "persons.parquet"
+        ).exists()
         assert not (promoted / "activitysim" / "output" / "final_pipeline").exists()
         assert not (promoted / "shared_cache" / "numba").exists()
         assert not (
