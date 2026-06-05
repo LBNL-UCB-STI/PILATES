@@ -215,8 +215,8 @@ def test_notifier_filters_to_scenario_headers_and_child_runs() -> None:
     notifier.on_run_start(_run("workspace_setup"))
 
     assert [message.fallback_text for message in backend.messages] == [
-        "PILATES run started: scenario",
-        "PILATES step started: step",
+        "🚀 PILATES run started: scenario",
+        "🚀 PILATES step started: step",
     ]
 
 
@@ -229,8 +229,26 @@ def test_notifier_always_reports_internal_failures() -> None:
 
     notifier.on_run_failed(_run("workspace_setup"), RuntimeError("boom"))
 
-    assert backend.messages[0].fallback_text == "PILATES step failed: workspace_setup"
+    assert backend.messages[0].fallback_text == "⚠️ PILATES step failed: workspace_setup"
     assert "error: boom" in backend.messages[0].markdown_text
+    assert "Next: inspect the run archive and summary HTML" in backend.messages[0].markdown_text
+
+
+def test_notifier_failure_includes_next_place_to_look() -> None:
+    backend = FakeBackend()
+    notifier = run_notifications.ConsistRunNotifier(
+        settings=_enabled_settings(),
+        backends=[backend],
+        context=RunNotificationContext(archive_run_dir="/global/scratch/run"),
+    )
+
+    notifier.on_run_failed(
+        _run("failed_step", parent_run_id="scenario"),
+        RuntimeError("boom"),
+    )
+
+    text = backend.messages[0].markdown_text
+    assert "Next: inspect `/global/scratch/run/.pilates/run_summary.html`" in text
 
 
 def test_notifier_verbose_mode_includes_internal_runs() -> None:
@@ -242,7 +260,7 @@ def test_notifier_verbose_mode_includes_internal_runs() -> None:
 
     notifier.on_run_start(_run("workspace_setup"))
 
-    assert backend.messages[0].fallback_text == "PILATES step started: workspace_setup"
+    assert backend.messages[0].fallback_text == "🚀 PILATES step started: workspace_setup"
 
 
 def test_notifier_scenario_message_includes_run_user_job_and_archive() -> None:
@@ -318,7 +336,7 @@ def test_notifier_step_message_is_compact_and_scannable() -> None:
     message = backend.messages[0]
     assert (
         message.fallback_text
-        == "PILATES step completed: y2020 | i0 | traffic_assignment_abcdef0"
+        == "✅ PILATES step completed: y2020 | i0 | traffic_assignment_abcdef0"
     )
     assert message.thread_key == "pilates-run--sfbay--baseline"
     assert "Step: `beam_run`" in message.markdown_text
@@ -348,6 +366,52 @@ def test_notifier_complete_message_marks_executed_result() -> None:
     )
 
     assert "Result: executed" in backend.messages[0].markdown_text
+
+
+def test_notifier_appends_scenario_recap_on_completion() -> None:
+    backend = FakeBackend()
+    notifier = run_notifications.ConsistRunNotifier(
+        settings=_enabled_settings(),
+        backends=[backend],
+        context=RunNotificationContext(
+            run_name="pilates-run--sfbay--baseline",
+            archive_run_dir="/global/scratch/run",
+        ),
+    )
+
+    notifier.on_run_complete(
+        _run(
+            "pilates-run--sfbay--baseline__step_func__y2020__i0__phase_a_aaaaaaa",
+            parent_run_id="pilates-run--sfbay--baseline",
+            meta={"cache_hit": True},
+        ),
+        outputs=[],
+    )
+    notifier.on_run_complete(
+        _run(
+            "pilates-run--sfbay--baseline__step_func__y2021__i0__phase_b_bbbbbbb",
+            parent_run_id="pilates-run--sfbay--baseline",
+        ),
+        outputs=[],
+    )
+    notifier.on_run_failed(
+        _run(
+            "pilates-run--sfbay--baseline__step_func__y2022__i0__phase_c_ccccccc",
+            parent_run_id="pilates-run--sfbay--baseline",
+        ),
+        RuntimeError("bad"),
+    )
+    notifier.on_run_complete(
+        _run(
+            "pilates-run--sfbay--baseline",
+            tags=["scenario_header"],
+            model_name="pilates_orchestrator",
+        ),
+        outputs=[],
+    )
+
+    text = backend.messages[-1].markdown_text
+    assert "Recap: 2 steps completed, 1 cache hit, 1 failure" in text
 
 
 def test_notifier_truncates_long_failure_errors() -> None:
@@ -385,9 +449,9 @@ def test_register_consist_run_notification_hooks_uses_fake_backend() -> None:
     tracker.emit_failed(_run("bad_step", parent_run_id="scenario"), ValueError("bad"))
 
     assert [message.fallback_text for message in backend.messages] == [
-        "PILATES run started: scenario",
-        "PILATES step completed: step",
-        "PILATES step failed: bad_step",
+        "🚀 PILATES run started: scenario",
+        "✅ PILATES step completed: step",
+        "⚠️ PILATES step failed: bad_step",
     ]
 
 
@@ -434,14 +498,14 @@ def test_register_consist_run_notification_hooks_with_real_consist_scenario(
         )
 
     messages = [message.fallback_text for message in backend.messages]
-    assert messages[0] == "PILATES run started: smoke_scenario"
+    assert messages[0] == "🚀 PILATES run started: smoke_scenario"
     assert any(
-        message.startswith("PILATES step started: smoke_step") for message in messages
+        message.startswith("🚀 PILATES step started: smoke_step") for message in messages
     )
     assert any(
-        message.startswith("PILATES step completed: smoke_step") for message in messages
+        message.startswith("✅ PILATES step completed: smoke_step") for message in messages
     )
-    assert messages[-1] == "PILATES run completed: smoke_scenario"
+    assert messages[-1] == "✅ PILATES run completed: smoke_scenario"
 
 
 def test_slack_backend_posts_block_payload(monkeypatch) -> None:
@@ -454,7 +518,7 @@ def test_slack_backend_posts_block_payload(monkeypatch) -> None:
 
     backend.send(
         RunNotificationMessage(
-            title="PILATES run started",
+            title="🚀 PILATES run started",
             run_id="run-a",
             lines=("run_id: `run-a`",),
             thread_key="run-a",
@@ -464,7 +528,7 @@ def test_slack_backend_posts_block_payload(monkeypatch) -> None:
     url, payload, timeout = recorded.calls[0]
     assert url == "https://hooks.slack.com/services/T/B/C"
     assert timeout == 3.0
-    assert payload["text"] == "PILATES run started: run-a"
+    assert payload["text"] == "🚀 PILATES run started: run-a"
     assert "blocks" in payload
 
 
@@ -478,7 +542,7 @@ def test_google_chat_backend_posts_threaded_payload(monkeypatch) -> None:
 
     backend.send(
         RunNotificationMessage(
-            title="PILATES run started",
+            title="🚀 PILATES run started",
             run_id="run-a",
             lines=("run_id: `run-a`",),
             thread_key="run-a",
@@ -492,6 +556,6 @@ def test_google_chat_backend_posts_threaded_payload(monkeypatch) -> None:
     )
     assert timeout == 4.0
     assert payload == {
-        "text": "*PILATES run started*\n- run_id: run-a",
+        "text": "*🚀 PILATES run started*\n- run_id: run-a",
         "thread": {"threadKey": "run-a"},
     }
