@@ -1076,7 +1076,7 @@ def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
     assert (current_atlas_input_dir / "year2021" / "grave.csv").exists()
     assert (current_atlas_input_dir / "year2021" / "vehicles_output.RData").exists()
     assert (current_atlas_input_dir / "year2021" / "households_output.RData").exists()
-    assert getattr(outputs, "_compatibility_fallback_used", False) is True
+    assert getattr(outputs, "_restart_rehydration_used", False) is True
 
 
 def test_manifest_restore_reruns_atlas_stage_when_restart_subyear_grave_csv_missing(

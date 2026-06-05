@@ -2726,6 +2726,13 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     )
     beam_config_path.unlink()
 
+    atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    forecast_vehicles2_path = atlas_output_dir / f"vehicles2_{state.forecast_year}.csv"
+    forecast_vehicles2_path.write_text(
+        "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
+        encoding="utf-8",
+    )
+
     beam_out = Path(workspace.get_beam_output_dir())
     linkstats = beam_out / "0.linkstats.csv.gz"
     events = beam_out / "0.events.parquet"

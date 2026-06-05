@@ -6,6 +6,7 @@ from typing import Any, Optional, Tuple
 
 from pilates.runtime.archive_paths import archive_fallback_path
 from pilates.utils.coupler_helpers import resolve_existing_path
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 
 
@@ -59,7 +60,7 @@ def resolve_atlas_vehicles2_source(
     the forecast year first and then permits the prior forecast year fallback.
     Both modes search the local run workspace before the archive fallback path.
     """
-    forecast_year = getattr(state, "forecast_year", None)
+    forecast_year = resolve_forecast_year(state)
     if forecast_year is None:
         if require_exact_year:
             raise FileNotFoundError(

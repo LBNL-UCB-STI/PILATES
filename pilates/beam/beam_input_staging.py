@@ -20,6 +20,7 @@ from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.coupler_helpers import resolve_existing_path
 from pilates.utils.io import locate_beam_file
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
@@ -171,7 +172,7 @@ def copy_vehicles_from_atlas(
         )
         return None
 
-    forecast_year = getattr(state, "forecast_year", None)
+    forecast_year = resolve_forecast_year(state)
     source_year = _source_year_from_vehicles2_path(atlas_vehicle_file_loc)
     if require_exact_year and (
         forecast_year is None or source_year != int(forecast_year)

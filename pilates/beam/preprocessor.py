@@ -26,6 +26,7 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -243,15 +244,19 @@ class BeamPreprocessor(GenericPreprocessor):
             else None
         )
         atlas_vehicle_input = None
-        if atlas_output_dir is not None:
-            resolved_vehicle_source = resolve_atlas_vehicles2_source(
-                state=state,
-                workspace=workspace,
-                require_exact_year=(
-                    settings.runtime.flags.activity_demand_enabled
-                    and getattr(state, "current_inner_iter", 0) == 0
-                ),
-            )
+        forecast_year = resolve_forecast_year(state)
+        if atlas_output_dir is not None and forecast_year is not None:
+            try:
+                resolved_vehicle_source = resolve_atlas_vehicles2_source(
+                    state=state,
+                    workspace=workspace,
+                    require_exact_year=(
+                        settings.runtime.flags.activity_demand_enabled
+                        and getattr(state, "current_inner_iter", 0) == 0
+                    ),
+                )
+            except FileNotFoundError:
+                resolved_vehicle_source = None
             if resolved_vehicle_source is not None:
                 atlas_vehicle_input = str(resolved_vehicle_source.selected_path)
         return {
