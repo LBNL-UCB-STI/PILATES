@@ -185,6 +185,60 @@ def test_register_verified_recovery_copies_uses_consist_registration_api(tmp_pat
     ]
 
 
+def test_register_verified_recovery_copies_can_skip_hash_verification(
+    tmp_path, monkeypatch
+):
+    source_run_dir = tmp_path / "source-run"
+    recovery_run_dir = tmp_path / "recovery-run"
+    calls = []
+
+    class FakeTracker:
+        def get_run_outputs(self, run_id):
+            assert run_id == "run-1"
+            return {
+                "demo_output": SimpleNamespace(
+                    container_uri="workspace://outputs/result.txt"
+                )
+            }
+
+        def register_run_output_recovery_copies(self, run_id, recovery_root, **kwargs):
+            calls.append((run_id, recovery_root, kwargs))
+            return SimpleNamespace(
+                registered={"demo_output": object()},
+                blocked={},
+                summary="registered=1",
+            )
+
+    def fail_hash(*_args, **_kwargs):
+        raise AssertionError("source hashing should be skipped when verify=False")
+
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._run_output_content_hashes",
+        fail_hash,
+    )
+
+    registered = _register_verified_run_output_recovery_copies(
+        FakeTracker(),
+        source_run_dir=source_run_dir,
+        recovery_run_dir=recovery_run_dir,
+        run_ids=["run-1"],
+        verify=False,
+    )
+
+    assert registered == 1
+    assert calls == [
+        (
+            "run-1",
+            str(recovery_run_dir),
+            {
+                "append": True,
+                "content_hashes": None,
+                "verify": False,
+            },
+        )
+    ]
+
+
 def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
     tmp_path,
 ):
@@ -241,6 +295,42 @@ def test_promote_run_to_recovery_root_copies_run_dir_and_updates_recovery_roots(
         assert marker["source_run_dir"] == str(run_dir)
         assert marker["roots"][0]["status"] == "promoted"
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_can_skip_recovery_copy_verification(
+    tmp_path, monkeypatch
+):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tracker, _run_id, _output_path = _seed_run_archive(consist, run_dir)
+    calls = []
+
+    def fake_register_verified_run_output_recovery_copies(*_args, **kwargs):
+        calls.append(kwargs.get("verify"))
+        return 1
+
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._register_verified_run_output_recovery_copies",
+        fake_register_verified_run_output_recovery_copies,
+    )
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            recovery_copy_verify=False,
+        )
+
+        assert result.success is True
+        assert calls == [False]
+        assert result.roots[0].artifact_metadata_updated is True
     finally:
         tracker.db.engine.dispose()
 

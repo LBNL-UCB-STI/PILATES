@@ -122,6 +122,21 @@ python -m pilates.runtime.promote_run_archive \
   --merge-only
 ```
 
+If you trust the promoted copy and want to skip the byte-level Consist
+verification of recovery-copy files as well, add `--no-recovery-copy-verify`.
+Keep this opt-in path narrow; it avoids re-reading each promoted output file but
+removes the independent checksum check on the NFS copy:
+
+```bash
+python -m pilates.runtime.promote_run_archive \
+  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
+  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
+  --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
+  --merge-main-db "$MAIN_DB" \
+  --merge-only \
+  --no-recovery-copy-verify
+```
+
 By default the helper uses `--merge-conflict error`. That is intentional: the
 filtered shard should contain only the new root run subtree, so any run-ID
 conflict usually means the wrong root was selected or the run was already

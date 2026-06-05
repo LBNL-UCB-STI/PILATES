@@ -496,12 +496,13 @@ def _register_verified_run_output_recovery_copies(
     source_run_dir: Path,
     recovery_run_dir: Path,
     run_ids: Optional[Iterable[str]] = None,
+    verify: bool = True,
 ) -> int:
     register_copies = getattr(tracker, "register_run_output_recovery_copies", None)
     if not callable(register_copies):
         logger.warning(
             "Consist tracker does not expose register_run_output_recovery_copies; "
-            "skipping verified recovery-copy metadata registration."
+            "skipping recovery-copy metadata registration."
         )
         return 0
 
@@ -512,15 +513,19 @@ def _register_verified_run_output_recovery_copies(
     )
     registered = 0
     for run_id in selected_run_ids:
-        content_hashes = _run_output_content_hashes(
-            tracker,
-            source_run_dir=source_run_dir,
-            run_id=str(run_id),
+        content_hashes = (
+            _run_output_content_hashes(
+                tracker,
+                source_run_dir=source_run_dir,
+                run_id=str(run_id),
+            )
+            if verify
+            else {}
         )
         result = register_copies(
             str(run_id),
             str(recovery_run_dir),
-            verify=True,
+            verify=verify,
             append=True,
             content_hashes=content_hashes or None,
         )
@@ -529,8 +534,7 @@ def _register_verified_run_output_recovery_copies(
         blocked = getattr(result, "blocked", {})
         if blocked:
             logger.info(
-                "Verified recovery-copy registration blocked %d output(s) for "
-                "run %s: %s",
+                "Recovery-copy registration blocked %d output(s) for run %s: %s",
                 len(blocked),
                 run_id,
                 getattr(result, "summary", blocked),
@@ -786,6 +790,7 @@ def promote_run_to_recovery_roots(
     merge_dry_run: bool = False,
     merge_shard_path: Optional[str | os.PathLike[str]] = None,
     merge_only: bool = False,
+    recovery_copy_verify: bool = True,
     *,
     dry_run: bool = False,
     verify_only: bool = False,
@@ -802,7 +807,8 @@ def promote_run_to_recovery_roots(
 
     logger.info(
         "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
-        "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s",
+        "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s "
+        "recovery_copy_verify=%s",
         source_run_dir,
         len(recovery_roots),
         db_path if db_path is not None else "none",
@@ -810,6 +816,7 @@ def promote_run_to_recovery_roots(
         verify_only,
         merge_main_db if merge_main_db is not None else "none",
         merge_only,
+        recovery_copy_verify,
     )
 
     result = PromotionResult(
@@ -927,14 +934,16 @@ def promote_run_to_recovery_roots(
 
                 if not verify_only and working_tracker is not None:
                     logger.info(
-                        "Registering verified recovery copies for %s",
+                        "Registering recovery copies for %s (%sbyte verification)",
                         destination_run_dir,
+                        "with " if recovery_copy_verify else "without ",
                     )
                     metadata_updates = _register_verified_run_output_recovery_copies(
                         working_tracker,
                         source_run_dir=source_run_dir,
                         recovery_run_dir=destination_run_dir,
                         run_ids=scoped_run_ids or None,
+                        verify=recovery_copy_verify,
                     )
                     entry.artifact_metadata_updated = metadata_updates > 0
 
@@ -1115,6 +1124,16 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-recovery-copy-verify",
+        action="store_false",
+        dest="recovery_copy_verify",
+        default=True,
+        help=(
+            "Skip byte-level verification when registering promoted recovery copies "
+            "for this archive promotion."
+        ),
+    )
+    parser.add_argument(
         "--merge-only",
         action="store_true",
         help=(
@@ -1162,6 +1181,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         merge_include_data=bool(args.merge_include_data),
         merge_dry_run=bool(args.merge_dry_run),
         merge_only=bool(args.merge_only),
+        recovery_copy_verify=bool(args.recovery_copy_verify),
         merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
         verify_only=bool(args.verify_only),
