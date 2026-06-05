@@ -109,6 +109,19 @@ python -m pilates.runtime.promote_run_archive \
   --merge-main-db "$MAIN_DB"
 ```
 
+If the archive copy already exists from the dry-run and you only want to reuse
+it for the real main-DB merge, add `--merge-only` instead of repeating the full
+copy:
+
+```bash
+python -m pilates.runtime.promote_run_archive \
+  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
+  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
+  --root /clusterfs/<project-or-nfs-root>/$USER/pilates-outputs \
+  --merge-main-db "$MAIN_DB" \
+  --merge-only
+```
+
 By default the helper uses `--merge-conflict error`. That is intentional: the
 filtered shard should contain only the new root run subtree, so any run-ID
 conflict usually means the wrong root was selected or the run was already
