@@ -831,6 +831,34 @@ def promote_run_to_recovery_roots(
 
     opened_tracker = None
     working_tracker = tracker or cr.current_tracker()
+    if (
+        working_tracker is not None
+        and db_path is not None
+        and not dry_run
+        and not verify_only
+    ):
+        tracker_db_path = getattr(working_tracker, "db_path", None)
+        if tracker_db_path:
+            try:
+                resolved_tracker_db_path = Path(
+                    os.path.expandvars(os.fspath(tracker_db_path))
+                ).expanduser().resolve()
+            except OSError:
+                resolved_tracker_db_path = None
+            if resolved_tracker_db_path is not None and resolved_tracker_db_path != db_path:
+                refreshed_tracker = _open_archive_tracker(
+                    settings,
+                    archive_run_dir=source_run_dir,
+                )
+                if refreshed_tracker is not None:
+                    logger.info(
+                        "Refreshing archive tracker from resolved DB path %s "
+                        "instead of stale tracker path %s",
+                        db_path,
+                        tracker_db_path,
+                    )
+                    working_tracker = refreshed_tracker
+                    opened_tracker = refreshed_tracker
     needs_tracker = (
         not dry_run
         and not verify_only
