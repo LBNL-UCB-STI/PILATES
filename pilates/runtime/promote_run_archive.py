@@ -720,12 +720,24 @@ def promote_run_to_recovery_roots(
     dry_run: bool = False,
     verify_only: bool = False,
 ) -> PromotionResult:
+    overall_started = time.perf_counter()
     source_run_dir = _source_archive_run_dir(settings, archive_run_dir)
     recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
     if merge_main_db is not None:
         merge_conflict = _validate_merge_conflict(merge_conflict)
+
+    logger.info(
+        "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
+        "dry_run=%s verify_only=%s merge_main_db=%s",
+        source_run_dir,
+        len(recovery_roots),
+        db_path if db_path is not None else "none",
+        dry_run,
+        verify_only,
+        merge_main_db if merge_main_db is not None else "none",
+    )
 
     result = PromotionResult(
         source_run_dir=str(source_run_dir),
@@ -791,15 +803,23 @@ def promote_run_to_recovery_roots(
                 continue
 
             try:
+                root_started = time.perf_counter()
+                logger.info(
+                    "Promoting archive to recovery root %s -> %s",
+                    recovery_root,
+                    destination_run_dir,
+                )
                 if dry_run:
                     entry.status = "dry_run"
                     continue
 
                 if not verify_only:
+                    logger.info("Copying archive tree to %s", destination_run_dir)
                     _copy_run_tree(source_run_dir, destination_run_dir)
                     entry.copy_performed = True
 
                 if verify:
+                    logger.info("Verifying promoted archive at %s", destination_run_dir)
                     _verify_promoted_run_dir(
                         source_run_dir=source_run_dir,
                         destination_run_dir=destination_run_dir,
@@ -808,6 +828,10 @@ def promote_run_to_recovery_roots(
                     entry.verified = True
 
                 if not verify_only and working_tracker is not None:
+                    logger.info(
+                        "Registering verified recovery copies for %s",
+                        destination_run_dir,
+                    )
                     metadata_updates = _register_verified_run_output_recovery_copies(
                         working_tracker,
                         source_run_dir=source_run_dir,
@@ -819,10 +843,19 @@ def promote_run_to_recovery_roots(
                 if not verify_only:
                     successful_destinations.append(destination_run_dir)
                     if working_tracker is not None:
+                        logger.info(
+                            "Syncing Consist state into %s",
+                            destination_run_dir,
+                        )
                         for successful_destination in successful_destinations:
                             _sync_consist_state(source_run_dir, successful_destination)
 
                 entry.status = "promoted"
+                logger.info(
+                    "Finished promotion for %s in %.2fs",
+                    destination_run_dir,
+                    time.perf_counter() - root_started,
+                )
             except Exception as exc:
                 entry.status = "failed"
                 entry.error = str(exc)
@@ -841,6 +874,12 @@ def promote_run_to_recovery_roots(
         ):
             if result.success:
                 try:
+                    merge_started = time.perf_counter()
+                    logger.info(
+                        "Exporting and merging root run subtree %s into %s",
+                        resolved_root_run_id,
+                        merge_main_db,
+                    )
                     result.merge_result = _merge_scoped_run_db_with_retry(
                         settings=settings,
                         source_tracker=working_tracker,
@@ -851,6 +890,10 @@ def promote_run_to_recovery_roots(
                         include_data=merge_include_data,
                         dry_run=merge_dry_run,
                         shard_path=merge_shard_path,
+                    )
+                    logger.info(
+                        "Finished Consist DB merge path in %.2fs",
+                        time.perf_counter() - merge_started,
                     )
                 except OperationalError as exc:
                     logger.warning(
@@ -897,6 +940,11 @@ def promote_run_to_recovery_roots(
                 artifact_metadata_updated=entry.artifact_metadata_updated,
                 db_path=str(db_path) if db_path is not None else None,
             )
+        logger.info(
+            "Archive promotion complete in %.2fs (success=%s)",
+            time.perf_counter() - overall_started,
+            result.success,
+        )
     finally:
         if opened_tracker is not None:
             _dispose_tracker(opened_tracker)
