@@ -574,6 +574,66 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
         tracker.db.engine.dispose()
 
 
+def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tracker = _make_tracker(consist, run_dir)
+    new_run_id, _new_output_path = _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+
+    main_db_path = tmp_path / "missing-seed" / "provenance_seattle.duckdb"
+    promoted = recovery_root / run_dir.name
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            roots=[str(recovery_root)],
+            merge_main_db=str(main_db_path),
+            merge_conflict="error",
+        )
+
+        assert result.success is True
+        assert result.root_run_id == new_run_id
+        assert result.merge_result is not None
+        assert result.merge_result["main_db_seeded"] is True
+        assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
+        assert main_db_path.exists()
+        assert promoted.exists()
+        assert (promoted / ".consist" / "recovery_promotion.json").exists()
+
+        merged_tracker = consist.Tracker(
+            run_dir=tmp_path / "merged-reader",
+            db_path=str(main_db_path),
+            mounts={
+                "workspace": str(tmp_path / "merged-reader"),
+                "inputs": str(tmp_path),
+                "scratch": str(tmp_path),
+            },
+            allow_external_paths=True,
+        )
+        try:
+            merged_run_ids = {
+                str(run.id) for run in merged_tracker.find_runs(limit=100)
+            }
+            assert new_run_id in merged_run_ids
+        finally:
+            merged_tracker.db.engine.dispose()
+    finally:
+        tracker.db.engine.dispose()
+
+
 def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
     tmp_path, monkeypatch
 ):

@@ -59,6 +59,58 @@ def format_hpc_restart_command(
     return " ".join(shlex.quote(part) for part in command)
 
 
+def _settings_recovery_roots(settings: Optional[Any]) -> list[str]:
+    if settings is None:
+        return []
+    try:
+        roots = settings.run.recovery_archive_roots
+    except AttributeError:
+        return []
+    if not roots:
+        return []
+    return [str(root) for root in roots if root]
+
+
+def _settings_shared_db_path(settings: Optional[Any]) -> Optional[str]:
+    if settings is None:
+        return None
+    try:
+        db_path = settings.shared.database.path
+    except AttributeError:
+        return None
+    if not db_path:
+        return None
+    return str(db_path)
+
+
+def format_promotion_command(
+    *,
+    settings: Optional[Any],
+    archive_run_dir: Optional[str],
+) -> Optional[str]:
+    config_path = None
+    if settings is not None:
+        config_path = settings.settings_file
+    if not config_path or not archive_run_dir:
+        return None
+
+    command = [
+        "python",
+        "-m",
+        "pilates.runtime.promote_run_archive",
+        "-c",
+        str(config_path),
+        "--run-dir",
+        str(archive_run_dir),
+    ]
+    for root in _settings_recovery_roots(settings):
+        command.extend(["--root", root])
+    shared_db_path = _settings_shared_db_path(settings)
+    if shared_db_path:
+        command.extend(["--merge-main-db", shared_db_path])
+    return " ".join(shlex.quote(part) for part in command)
+
+
 def log_restart_instructions_on_failure(
     *,
     logger: logging.Logger,
@@ -94,3 +146,11 @@ def log_restart_instructions_on_failure(
         logger.error("  archive run dir: %s", archive_run_dir)
     if local_run_dir:
         logger.error("  local run dir: %s", local_run_dir)
+
+    promotion_command = format_promotion_command(
+        settings=settings,
+        archive_run_dir=archive_run_dir,
+    )
+    if promotion_command is not None:
+        logger.error("Run promotion command for NFS archive:")
+        logger.error("  %s", promotion_command)

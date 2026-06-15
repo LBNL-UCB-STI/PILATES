@@ -351,9 +351,7 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
 
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
     if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+        return set()
 
     db = DatabaseManager(str(resolved_main_db_path))
     try:
@@ -362,6 +360,14 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
         return {str(row[0]) for row in rows}
     finally:
         db.engine.dispose()
+
+
+def _copy_db_file_with_wal(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    source_wal = Path(f"{source}.wal")
+    if source_wal.exists():
+        shutil.copy2(source_wal, Path(f"{destination}.wal"))
 
 
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
@@ -611,10 +617,7 @@ def _merge_scoped_run_db(
 ) -> dict[str, Any]:
     conflict = _validate_merge_conflict(conflict)
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
-    if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+    main_db_preexisting = resolved_main_db_path.exists()
 
     try:
         from consist.core.maintenance import DatabaseMaintenance
@@ -655,11 +658,16 @@ def _merge_scoped_run_db(
                 include_children=True,
                 dry_run=False,
             )
-            target_db = DatabaseManager(str(resolved_main_db_path))
+            preview_target_db_path = (
+                resolved_main_db_path
+                if main_db_preexisting
+                else Path(tmpdir) / resolved_main_db_path.name
+            )
+            target_db = DatabaseManager(str(preview_target_db_path))
             try:
                 target_maintenance = DatabaseMaintenance(
                     db=target_db,
-                    run_dir=resolved_main_db_path.parent,
+                    run_dir=preview_target_db_path.parent,
                 )
                 merge_result = target_maintenance.merge(
                     preview_shard,
@@ -669,35 +677,35 @@ def _merge_scoped_run_db(
                 )
             finally:
                 target_db.engine.dispose()
-            payload = {
-                "dry_run": True,
-                "main_db_path": str(resolved_main_db_path),
-                "root_run_id": root_run_id,
-                "shard_path": None,
-                "temporary_shard_path": str(preview_shard),
-                "temporary_shard_removed": True,
-                "export_result": asdict(export_result),
+                payload = {
+                    "dry_run": True,
+                    "main_db_path": str(resolved_main_db_path),
+                    "main_db_seeded": not main_db_preexisting,
+                    "root_run_id": root_run_id,
+                    "shard_path": None,
+                    "temporary_shard_path": str(preview_shard),
+                    "temporary_shard_removed": True,
+                    "export_result": asdict(export_result),
                 "merge_result": asdict(merge_result),
             }
             return _json_safe(payload)
 
-    target_db = DatabaseManager(str(resolved_main_db_path))
-    try:
-        target_maintenance = DatabaseMaintenance(
-            db=target_db,
-            run_dir=resolved_main_db_path.parent,
-        )
-        merge_result = target_maintenance.merge(
-            shard_output,
-            conflict=conflict,
-            include_snapshots=False,
-            dry_run=False,
-        )
-    finally:
-        target_db.engine.dispose()
-
-    return _json_safe(
-        {
+    if main_db_preexisting:
+        target_db = DatabaseManager(str(resolved_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=resolved_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+        payload = {
             "dry_run": False,
             "main_db_path": str(resolved_main_db_path),
             "root_run_id": root_run_id,
@@ -705,7 +713,36 @@ def _merge_scoped_run_db(
             "export_result": asdict(export_result),
             "merge_result": asdict(merge_result),
         }
-    )
+        return _json_safe(payload)
+
+    with tempfile.TemporaryDirectory(prefix="pilates-promotion-main-db-") as tmpdir:
+        temp_main_db_path = Path(tmpdir) / resolved_main_db_path.name
+        target_db = DatabaseManager(str(temp_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=temp_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+
+        _copy_db_file_with_wal(temp_main_db_path, resolved_main_db_path)
+        payload = {
+            "dry_run": False,
+            "main_db_path": str(resolved_main_db_path),
+            "main_db_seeded": True,
+            "root_run_id": root_run_id,
+            "shard_path": str(shard_output),
+            "export_result": asdict(export_result),
+            "merge_result": asdict(merge_result),
+        }
+        return _json_safe(payload)
 
 
 def _merge_scoped_run_db_with_retry(

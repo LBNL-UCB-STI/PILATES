@@ -137,6 +137,10 @@ python -m pilates.runtime.promote_run_archive \
   --no-recovery-copy-verify
 ```
 
+If the target main DB does not exist yet, the helper seeds it from the filtered
+shard instead of failing. That is the right behavior for a new region or a fresh
+deployment where you are creating the shared provenance DB for the first time.
+
 By default the helper uses `--merge-conflict error`. That is intentional: the
 filtered shard should contain only the new root run subtree, so any run-ID
 conflict usually means the wrong root was selected or the run was already
