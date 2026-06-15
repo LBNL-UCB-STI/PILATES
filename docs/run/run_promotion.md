@@ -122,6 +122,21 @@ python -m pilates.runtime.promote_run_archive \
   --merge-only
 ```
 
+If you only want to update the seed/main Consist DB and do not want to promote
+the scratch archive tree to recovery roots at all, use `--merge-db-only`:
+
+```bash
+python -m pilates.runtime.promote_run_archive \
+  -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
+  --run-dir /global/scratch/users/$USER/pilates-outputs/pilates-run--seattle--my-run--20260505T120000 \
+  --merge-main-db "$MAIN_DB" \
+  --merge-db-only
+```
+
+That path exports the resolved root run lineage from the run-local DB and
+merges only that Consist shard into the seed DB. It skips recovery-root
+registration, archive copying, and promotion marker writes.
+
 If you trust the promoted copy and want to skip the byte-level Consist
 verification of recovery-copy files as well, add `--no-recovery-copy-verify`.
 Keep this opt-in path narrow; it avoids re-reading each promoted output file but

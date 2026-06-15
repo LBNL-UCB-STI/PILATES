@@ -103,11 +103,14 @@ def format_promotion_command(
         "--run-dir",
         str(archive_run_dir),
     ]
-    for root in _settings_recovery_roots(settings):
+    recovery_roots = _settings_recovery_roots(settings)
+    for root in recovery_roots:
         command.extend(["--root", root])
     shared_db_path = _settings_shared_db_path(settings)
     if shared_db_path:
         command.extend(["--merge-main-db", shared_db_path])
+        if not recovery_roots:
+            command.append("--merge-db-only")
     return " ".join(shlex.quote(part) for part in command)
 
 

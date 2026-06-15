@@ -58,6 +58,28 @@ def test_format_promotion_command_uses_recovery_root_and_shared_db():
     )
 
 
+def test_format_promotion_command_uses_merge_db_only_when_no_roots():
+    settings = SimpleNamespace(
+        settings_file="scenarios/settings-seattle.yaml",
+        run=SimpleNamespace(recovery_archive_roots=[]),
+        shared=SimpleNamespace(
+            database=SimpleNamespace(
+                path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+            )
+        ),
+    )
+
+    command = failure_hints.format_promotion_command(
+        settings=settings,
+        archive_run_dir="/global/scratch/run",
+    )
+
+    assert (
+        command
+        == "python -m pilates.runtime.promote_run_archive -c scenarios/settings-seattle.yaml --run-dir /global/scratch/run --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb --merge-db-only"
+    )
+
+
 def test_log_restart_instructions_uses_context_state_path(caplog):
     context = {
         "settings": SimpleNamespace(settings_file="settings.yaml"),

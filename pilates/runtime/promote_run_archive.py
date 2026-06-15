@@ -43,6 +43,7 @@ class PromotionResult:
     source_run_dir: str
     dry_run: bool
     verify_only: bool
+    merge_db_only: bool
     db_path: Optional[str]
     marker_path: Optional[str]
     root_run_id: Optional[str] = None
@@ -60,7 +61,14 @@ class PromotionResult:
 
     @property
     def success(self) -> bool:
-        return bool(self.roots) and not self.failed_roots
+        if self.failed_roots:
+            return False
+        if self.merge_db_only:
+            return bool(
+                self.merge_result is not None
+                and not self.merge_result.get("skipped", False)
+            )
+        return bool(self.roots)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -829,6 +837,7 @@ def promote_run_to_recovery_roots(
     merge_dry_run: bool = False,
     merge_shard_path: Optional[str | os.PathLike[str]] = None,
     merge_only: bool = False,
+    merge_db_only: bool = False,
     recovery_copy_verify: bool = True,
     *,
     dry_run: bool = False,
@@ -836,25 +845,32 @@ def promote_run_to_recovery_roots(
 ) -> PromotionResult:
     overall_started = time.perf_counter()
     source_run_dir = _source_archive_run_dir(settings, archive_run_dir)
-    recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
     if merge_main_db is not None:
         merge_conflict = _validate_merge_conflict(merge_conflict)
     if merge_only and merge_main_db is None:
         raise ValueError("--merge-only requires --merge-main-db")
+    if merge_db_only and merge_main_db is None:
+        raise ValueError("--merge-db-only requires --merge-main-db")
+    if merge_db_only and merge_only:
+        raise ValueError("--merge-db-only cannot be combined with --merge-only")
+
+    recovery_roots = [] if merge_db_only else _recovery_roots(settings, roots=roots)
 
     logger.info(
         "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
         "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s "
+        "merge_db_only=%s "
         "recovery_copy_verify=%s",
         source_run_dir,
-        len(recovery_roots),
+        0 if merge_db_only else len(recovery_roots),
         db_path if db_path is not None else "none",
         dry_run,
         verify_only,
         merge_main_db if merge_main_db is not None else "none",
         merge_only,
+        merge_db_only,
         recovery_copy_verify,
     )
 
@@ -862,6 +878,7 @@ def promote_run_to_recovery_roots(
         source_run_dir=str(source_run_dir),
         dry_run=dry_run,
         verify_only=verify_only,
+        merge_db_only=merge_db_only,
         db_path=str(db_path) if db_path is not None else None,
         marker_path=None,
     )
@@ -1051,7 +1068,7 @@ def promote_run_to_recovery_roots(
             and working_tracker is not None
             and resolved_root_run_id is not None
         ):
-            if result.success:
+            if merge_db_only or result.success:
                 try:
                     merge_started = time.perf_counter()
                     logger.info(
@@ -1096,7 +1113,7 @@ def promote_run_to_recovery_roots(
                     "reason": "archive promotion did not complete for all roots",
                 }
 
-        if not dry_run and not verify_only:
+        if not dry_run and not verify_only and not merge_db_only:
             marker_path = _write_promotion_marker(
                 source_run_dir=source_run_dir,
                 result=result,
@@ -1214,6 +1231,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--merge-db-only",
+        action="store_true",
+        help=(
+            "Run only the Consist DB export/merge path and skip archive promotion "
+            "to recovery roots."
+        ),
+    )
+    parser.add_argument(
         "--merge-shard-path",
         help=(
             "Optional path for the filtered export shard used for a real merge. "
@@ -1253,6 +1278,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         merge_include_data=bool(args.merge_include_data),
         merge_dry_run=bool(args.merge_dry_run),
         merge_only=bool(args.merge_only),
+        merge_db_only=bool(args.merge_db_only),
         recovery_copy_verify=bool(args.recovery_copy_verify),
         merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
@@ -1260,7 +1286,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     print(json.dumps(_json_safe(result.to_dict()), indent=2, sort_keys=True))
-    return 0 if not result.failed_roots else 1
+    return 0 if result.success else 1
 
 
 if __name__ == "__main__":

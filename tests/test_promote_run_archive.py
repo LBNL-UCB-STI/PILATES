@@ -709,6 +709,53 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
         tracker.db.engine.dispose()
 
 
+def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
+    tmp_path, monkeypatch
+):
+    consist = pytest.importorskip("consist")
+    settings = _minimal_config(tmp_path)
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tracker, run_id, _output_path = _seed_run_archive(consist, run_dir)
+    main_db_path = tmp_path / "seeded" / "provenance_seattle.duckdb"
+
+    def fail_copy(*_args, **_kwargs):
+        raise AssertionError("copy_run_tree should not run during merge-db-only")
+
+    def fail_register(*_args, **_kwargs):
+        raise AssertionError(
+            "recovery-copy registration should not run during merge-db-only"
+        )
+
+    monkeypatch.setattr("pilates.runtime.promote_run_archive._copy_run_tree", fail_copy)
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._register_verified_run_output_recovery_copies",
+        fail_register,
+    )
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            merge_main_db=str(main_db_path),
+            merge_db_only=True,
+        )
+
+        assert result.success is True
+        assert result.merge_db_only is True
+        assert result.roots == []
+        assert result.marker_path is None
+        assert result.root_run_id == run_id
+        assert result.merge_result is not None
+        assert result.merge_result["main_db_seeded"] is True
+        assert result.merge_result["merge_result"]["runs_merged"] == [run_id]
+        assert main_db_path.exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
 def test_promote_run_to_recovery_roots_is_idempotent(tmp_path):
     consist = pytest.importorskip("consist")
     recovery_root = tmp_path / "nfs"
