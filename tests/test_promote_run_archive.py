@@ -743,6 +743,7 @@ def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
             merge_db_only=True,
         )
 
+        shard_path = run_dir / ".consist" / f"promotion-shard-{run_id}.duckdb"
         assert result.success is True
         assert result.merge_db_only is True
         assert result.roots == []
@@ -752,6 +753,8 @@ def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
         assert result.merge_result["main_db_seeded"] is True
         assert result.merge_result["merge_result"]["runs_merged"] == [run_id]
         assert main_db_path.exists()
+        assert not shard_path.exists()
+        assert not Path(f"{shard_path}.wal").exists()
     finally:
         tracker.db.engine.dispose()
 

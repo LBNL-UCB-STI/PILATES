@@ -83,6 +83,31 @@ def _settings_shared_db_path(settings: Optional[Any]) -> Optional[str]:
     return str(db_path)
 
 
+def format_consist_shell_command(
+    *,
+    archive_run_dir: Optional[str],
+    run_db_path: Optional[str],
+    main_db_path: Optional[str],
+) -> Optional[str]:
+    if not run_db_path and not main_db_path:
+        return None
+
+    db_path = main_db_path or run_db_path
+    if db_path is None:
+        return None
+
+    command = [
+        "consist",
+        "shell",
+        "--db-path",
+        str(db_path),
+    ]
+    if archive_run_dir:
+        command.extend(["--run-dir", str(archive_run_dir)])
+    command.append("--trust-db")
+    return " ".join(shlex.quote(part) for part in command)
+
+
 def format_promotion_command(
     *,
     settings: Optional[Any],
@@ -157,3 +182,24 @@ def log_restart_instructions_on_failure(
     if promotion_command is not None:
         logger.error("Run promotion command for NFS archive:")
         logger.error("  %s", promotion_command)
+
+
+def log_consist_cli_instructions(
+    *,
+    logger: logging.Logger,
+    archive_run_dir: Optional[str],
+    run_db_path: Optional[str],
+    main_db_path: Optional[str],
+    success: bool,
+) -> None:
+    command = format_consist_shell_command(
+        archive_run_dir=archive_run_dir,
+        run_db_path=run_db_path,
+        main_db_path=main_db_path,
+    )
+    if command is None:
+        return
+
+    log_fn = logger.info if success else logger.error
+    log_fn("Consist shell command:")
+    log_fn("  %s", command)

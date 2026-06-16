@@ -80,6 +80,19 @@ def test_format_promotion_command_uses_merge_db_only_when_no_roots():
     )
 
 
+def test_format_consist_shell_command_prefers_main_db():
+    command = failure_hints.format_consist_shell_command(
+        archive_run_dir="/global/scratch/run",
+        run_db_path="/global/scratch/run/.consist/snapshots/latest/provenance.duckdb",
+        main_db_path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb",
+    )
+
+    assert (
+        command
+        == "consist shell --db-path /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb --run-dir /global/scratch/run --trust-db"
+    )
+
+
 def test_log_restart_instructions_uses_context_state_path(caplog):
     context = {
         "settings": SimpleNamespace(settings_file="settings.yaml"),
@@ -129,5 +142,21 @@ def test_log_restart_instructions_includes_promotion_command_when_available(capl
     assert "Run promotion command for NFS archive:" in caplog.text
     assert (
         "python -m pilates.runtime.promote_run_archive -c settings.yaml --run-dir /tmp/run --root /clusterfs/beem-core-data-nfs/pilates-outputs --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+        in caplog.text
+    )
+
+
+def test_log_consist_cli_instructions(caplog):
+    failure_hints.log_consist_cli_instructions(
+        logger=failure_hints.logger,
+        archive_run_dir="/global/scratch/run",
+        run_db_path="/global/scratch/run/.consist/provenance.duckdb",
+        main_db_path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb",
+        success=True,
+    )
+
+    assert "Consist shell command:" in caplog.text
+    assert (
+        "consist shell --db-path /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb --run-dir /global/scratch/run --trust-db"
         in caplog.text
     )

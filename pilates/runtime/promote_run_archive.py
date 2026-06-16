@@ -16,6 +16,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
+from pilates.runtime.failure_hints import log_consist_cli_instructions
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import (
@@ -378,6 +379,12 @@ def _copy_db_file_with_wal(source: Path, destination: Path) -> None:
         shutil.copy2(source_wal, Path(f"{destination}.wal"))
 
 
+def _remove_db_file_with_wal(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    wal_path = Path(f"{path}.wal")
+    wal_path.unlink(missing_ok=True)
+
+
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
     children_by_parent: dict[str, list[str]] = {}
     available_ids = {_run_id_text(run) for run in runs if _run_id_text(run)}
@@ -694,8 +701,8 @@ def _merge_scoped_run_db(
                     "temporary_shard_path": str(preview_shard),
                     "temporary_shard_removed": True,
                     "export_result": asdict(export_result),
-                "merge_result": asdict(merge_result),
-            }
+                    "merge_result": asdict(merge_result),
+                }
             return _json_safe(payload)
 
     if main_db_preexisting:
@@ -713,6 +720,7 @@ def _merge_scoped_run_db(
             )
         finally:
             target_db.engine.dispose()
+        _remove_db_file_with_wal(shard_output)
         payload = {
             "dry_run": False,
             "main_db_path": str(resolved_main_db_path),
@@ -741,6 +749,7 @@ def _merge_scoped_run_db(
             target_db.engine.dispose()
 
         _copy_db_file_with_wal(temp_main_db_path, resolved_main_db_path)
+        _remove_db_file_with_wal(shard_output)
         payload = {
             "dry_run": False,
             "main_db_path": str(resolved_main_db_path),
@@ -1140,6 +1149,13 @@ def promote_run_to_recovery_roots(
             "Archive promotion complete in %.2fs (success=%s)",
             time.perf_counter() - overall_started,
             result.success,
+        )
+        log_consist_cli_instructions(
+            logger=logger,
+            archive_run_dir=str(source_run_dir),
+            run_db_path=str(db_path) if db_path is not None else None,
+            main_db_path=str(merge_main_db) if merge_main_db is not None else None,
+            success=result.success,
         )
     finally:
         if opened_tracker is not None:
