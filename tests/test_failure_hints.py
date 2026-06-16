@@ -147,13 +147,14 @@ def test_log_restart_instructions_includes_promotion_command_when_available(capl
 
 
 def test_log_consist_cli_instructions(caplog):
-    failure_hints.log_consist_cli_instructions(
-        logger=failure_hints.logger,
-        archive_run_dir="/global/scratch/run",
-        run_db_path="/global/scratch/run/.consist/provenance.duckdb",
-        main_db_path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb",
-        success=True,
-    )
+    with caplog.at_level("INFO"):
+        failure_hints.log_consist_cli_instructions(
+            logger=failure_hints.logger,
+            archive_run_dir="/global/scratch/run",
+            run_db_path="/global/scratch/run/.consist/provenance.duckdb",
+            main_db_path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb",
+            success=True,
+        )
 
     assert "Consist shell command:" in caplog.text
     assert (

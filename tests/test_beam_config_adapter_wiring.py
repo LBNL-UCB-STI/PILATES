@@ -563,6 +563,69 @@ def test_beam_adapter_policies_suppress_dormant_runtime_and_scalar_noise(
     )
 
 
+def test_beam_config_reference_artifacts_use_beam_input_mount(tmp_path):
+    consist = pytest.importorskip("consist")
+    from consist.integrations.beam import BeamConfigAdapter
+
+    archive_run_dir = tmp_path / "archive-run"
+    beam_input_root = archive_run_dir / "beam" / "input"
+    config_root = beam_input_root / "seattle"
+    config_root.mkdir(parents=True)
+    lccm_path = config_root / "lccm-long.csv"
+    lccm_path.write_text("segment\nlow\n", encoding="utf-8")
+    primary_config = config_root / "beam.conf"
+    primary_config.write_text(
+        f'beam.agentsim.lccm.filePath = "{lccm_path}"\n',
+        encoding="utf-8",
+    )
+
+    tracker = consist.Tracker(
+        run_dir=tmp_path / "tracker-run",
+        db_path=str(tmp_path / "tracker.duckdb"),
+        mounts={
+            "workspace": str(archive_run_dir),
+            "beam_input": str(beam_input_root),
+        },
+        archive_mounts={
+            "workspace": ".",
+            "beam_input": "beam/input",
+        },
+        allow_external_paths=True,
+    )
+    adapter = BeamConfigAdapter(
+        root_dirs=[config_root],
+        primary_config=primary_config,
+        path_aliases={
+            "workspace": archive_run_dir,
+            "beam_input": beam_input_root,
+            "beam_region_input": config_root,
+        },
+    )
+
+    try:
+        result = tracker.run(
+            lambda: None,
+            name="beam-config-reference-uri",
+            model="beam_run",
+            adapter=adapter,
+        )
+        artifacts = tracker.get_artifacts_for_run(result.run.id)
+    finally:
+        tracker.db.engine.dispose()
+
+    lccm_artifact = artifacts.inputs["config:seattle/lccm-long.csv"]
+    assert lccm_artifact.container_uri == "beam_input://seattle/lccm-long.csv"
+    assert lccm_artifact.meta["mount_scheme"] == "beam_input"
+    assert result.run.meta["archive_mounts"] == {
+        "workspace": ".",
+        "beam_input": "beam/input",
+    }
+    assert (
+        lccm_artifact.meta["config_reference_key"]
+        == "beam.agentsim.lccm.filePath"
+    )
+
+
 def test_beam_run_identity_inputs_exclude_mutable_data_dir(tmp_path):
     workspace, settings = _setup_config(tmp_path)
     zarr_skims = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"

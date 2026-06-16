@@ -117,6 +117,7 @@ def build_archive_mounts(
     mounts: Dict[str, str] = {
         "inputs": str(project_root_path),
         "workspace": str(archive_run_dir_path),
+        "beam_input": str((archive_run_dir_path / "beam" / "input").resolve()),
     }
     if output_root is not None:
         mounts["scratch"] = str(Path(output_root).expanduser().resolve())
@@ -160,6 +161,10 @@ def create_analysis_tracker(
         run_dir=str(archive_run_dir_path),
         db_path=str(db_path_obj),
         mounts=mounts,
+        archive_mounts={
+            "workspace": ".",
+            "beam_input": "beam/input",
+        },
         access_mode=access_mode,
         hashing_strategy=hashing_strategy,
     )

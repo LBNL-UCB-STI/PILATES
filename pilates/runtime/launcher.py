@@ -504,7 +504,12 @@ def _prepare_run_context(
         mounts={
             "inputs": project_root_abs,
             "workspace": local_run_dir,
+            "beam_input": os.path.join(local_run_dir, "beam", "input"),
             "scratch": str(Path(output_path).resolve()),
+        },
+        archive_mounts={
+            "workspace": ".",
+            "beam_input": "beam/input",
         },
         project_root=project_root_abs,
         schemas=_get_consist_schemas(),
