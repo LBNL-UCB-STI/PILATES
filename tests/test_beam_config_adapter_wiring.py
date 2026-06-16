@@ -620,10 +620,7 @@ def test_beam_config_reference_artifacts_use_beam_input_mount(tmp_path):
         "workspace": ".",
         "beam_input": "beam/input",
     }
-    assert (
-        lccm_artifact.meta["config_reference_key"]
-        == "beam.agentsim.lccm.filePath"
-    )
+    assert lccm_artifact.meta["config_reference_key"] == "beam.agentsim.lccm.filePath"
 
 
 def test_beam_run_identity_inputs_exclude_mutable_data_dir(tmp_path):
