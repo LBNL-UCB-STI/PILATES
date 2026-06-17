@@ -7,6 +7,7 @@ import pytest
 from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
 from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
 )
@@ -14,6 +15,9 @@ from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
+)
+from pilates.workflows.steps.activitysim import (
+    _materialize_activitysim_config_references_for_archive,
 )
 
 
@@ -48,10 +52,12 @@ class DummyPreprocessor:
 
 
 class DummyWorkspace:
-    def __init__(self, configs_dir: Path, data_dir: Path) -> None:
+    def __init__(
+        self, configs_dir: Path, data_dir: Path, full_path: Path | None = None
+    ) -> None:
         self._configs_dir = Path(configs_dir)
         self._data_dir = Path(data_dir)
-        self.full_path = str(configs_dir.parent)
+        self.full_path = str(full_path if full_path is not None else configs_dir.parent)
 
     def get_asim_mutable_configs_dir(self) -> str:
         return str(self._configs_dir)
@@ -218,6 +224,63 @@ def test_activitysim_run_metadata_adapter_includes_overlay_config_roots_when_pre
         configs_root / "configs_mp",
         configs_root / "configs_sh_compile",
     ]
+
+
+def test_activitysim_config_reference_materialization_populates_archive_workspace(
+    monkeypatch, tmp_path
+):
+    local_run = tmp_path / "local" / "run"
+    archive_run = tmp_path / "archive" / "run"
+    configs_root = local_run / "activitysim" / "configs"
+    base_root = configs_root / "base"
+    extended_root = configs_root / "configs_extended"
+    base_root.mkdir(parents=True)
+    extended_root.mkdir(parents=True)
+
+    (base_root / "settings.yaml").write_text("models: []\n", encoding="utf-8")
+    (base_root / "tour_mode_choice.yaml").write_text("spec: x\n", encoding="utf-8")
+    (extended_root / "tour_mode_choice_coefficients.csv").write_text(
+        "coef,value\nx,1\n",
+        encoding="utf-8",
+    )
+
+    workspace = DummyWorkspace(
+        configs_root,
+        local_run / "activitysim" / "data",
+        full_path=local_run,
+    )
+    settings = _make_settings()
+
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_run))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run))
+
+    materialized = _materialize_activitysim_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+    flush_archive_queue(timeout=5)
+    stop_archive_worker(timeout=5)
+
+    assert materialized == {
+        "activitysim/configs/base/settings.yaml": str(base_root / "settings.yaml"),
+        "activitysim/configs/base/tour_mode_choice.yaml": str(
+            base_root / "tour_mode_choice.yaml"
+        ),
+        "activitysim/configs/configs_extended/tour_mode_choice_coefficients.csv": str(
+            extended_root / "tour_mode_choice_coefficients.csv"
+        ),
+    }
+    assert (
+        archive_run / "activitysim" / "configs" / "base" / "settings.yaml"
+    ).read_text(encoding="utf-8") == "models: []\n"
+    assert (
+        archive_run
+        / "activitysim"
+        / "configs"
+        / "configs_extended"
+        / "tour_mode_choice_coefficients.csv"
+    ).read_text(encoding="utf-8") == "coef,value\nx,1\n"
 
 
 def test_activitysim_run_metadata_filters_adapter_covered_identity_inputs(

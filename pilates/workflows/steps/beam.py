@@ -28,7 +28,10 @@ from pilates.beam.config_hocon import (
     load_resolved_beam_config_tree,
 )
 from pilates.config.models import PilatesConfig
-from pilates.utils.coupler_helpers import artifact_to_existing_path
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    enqueue_archive_copy,
+)
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
@@ -370,38 +373,30 @@ def _beam_config_reference_relative_path(path: Path, config_root: Path) -> Path:
     return Path("__external__", *parts)
 
 
-def _copy_tree_contents(source_root: Path, target_root: Path) -> None:
-    if not source_root.exists() or not source_root.is_dir():
-        return
-    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
-        target = target_root / child.name
-        if child.is_dir():
-            if target.exists():
-                shutil.rmtree(target)
-            shutil.copytree(child, target)
-        else:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(child, target)
+def _beam_input_reference_relative_path(path: Path, beam_input_root: Path) -> Path:
+    resolved = path.resolve()
+    root_resolved = beam_input_root.resolve()
+    if resolved.is_relative_to(root_resolved):
+        return resolved.relative_to(root_resolved)
+    parts = list(resolved.parts)
+    if parts and parts[0] == resolved.anchor:
+        parts = parts[1:]
+    return Path("__external__", *parts)
 
 
-def _archive_beam_config_references(
+def _collect_beam_config_reference_sources(
     *,
     settings: PilatesConfig,
     workspace: Workspace,
-    snapshot_dir: Path,
-) -> Optional[Path]:
+) -> set[Path]:
     config_path = _require_primary_beam_config(settings, workspace).resolve()
     config_root = beam_config_root(settings, workspace=workspace).resolve()
-    archive_root = snapshot_dir / BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
-    sources_by_target: Dict[Path, Path] = {}
+    sources: set[Path] = set()
     config_files = _scan_beam_config_includes(config_path)
 
     for include_path in config_files:
-        if include_path == config_path:
-            continue
-        sources_by_target[
-            _beam_config_reference_relative_path(include_path, config_root)
-        ] = include_path
+        if include_path != config_path:
+            sources.add(include_path)
 
     try:
         config_tree = load_resolved_beam_config_tree(
@@ -417,25 +412,113 @@ def _archive_beam_config_references(
             config_path,
             exc,
         )
-        config_tree = None
-    if config_tree is None:
-        if not sources_by_target:
-            return None
-        logger.debug(
-            "pyhocon unavailable while archiving BEAM config references; "
-            "archiving include files only."
-        )
-    else:
-        raw_refs = _collect_beam_config_path_references(config_tree)
-
-        for raw_ref in sorted(raw_refs):
-            resolved = _resolve_beam_config_reference(raw_ref, config_root)
-            if resolved is None or not resolved.exists() or resolved == config_path:
-                continue
-            sources_by_target.setdefault(
-                _beam_config_reference_relative_path(resolved, config_root),
-                resolved,
+        if sources:
+            logger.debug(
+                "pyhocon unavailable while archiving BEAM config references; "
+                "archiving include files only."
             )
+        return sources
+
+    raw_refs = _collect_beam_config_path_references(config_tree)
+    for raw_ref in sorted(raw_refs):
+        resolved = _resolve_beam_config_reference(raw_ref, config_root)
+        if resolved is None or not resolved.exists() or resolved == config_path:
+            continue
+        sources.add(resolved)
+    return sources
+
+
+def _copy_tree_contents(source_root: Path, target_root: Path) -> None:
+    if not source_root.exists() or not source_root.is_dir():
+        return
+    for child in sorted(source_root.iterdir(), key=lambda path: path.name):
+        target = target_root / child.name
+        if child.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(child, target)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(child, target)
+
+
+def _copy_path_for_beam_input_archive(source_path: Path, target_path: Path) -> None:
+    source_resolved = source_path.resolve()
+    target_resolved = target_path.resolve()
+    if source_resolved == target_resolved:
+        return
+    if source_path.is_dir():
+        if target_path.exists() and not target_path.is_dir():
+            target_path.unlink()
+        _copy_tree_contents(source_path, target_path)
+        return
+    if target_path.exists() and target_path.is_dir():
+        shutil.rmtree(target_path)
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+
+
+def _materialize_beam_config_references_for_archive(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    """
+    Ensure ConfigAdapter-discovered BEAM inputs are present under beam/input.
+
+    Consist logs these paths as ``beam_input://...``. In local-to-archive runs,
+    the archive worker only mirrors explicitly enqueued paths, so static BEAM
+    production inputs must be enqueued even when they already exist in the
+    node-local mutable input tree.
+    """
+    config_path = _require_primary_beam_config(settings, workspace).resolve()
+    beam_input_root = Path(workspace.get_beam_mutable_data_dir()).resolve()
+    sources = _collect_beam_config_reference_sources(
+        settings=settings,
+        workspace=workspace,
+    )
+    sources.add(config_path)
+
+    materialized: Dict[str, str] = {}
+    for source_path in sorted(
+        sources,
+        key=lambda path: (
+            0 if path.is_dir() else 1,
+            len(_beam_input_reference_relative_path(path, beam_input_root).parts),
+            _beam_input_reference_relative_path(path, beam_input_root).as_posix(),
+        ),
+    ):
+        if not source_path.exists():
+            continue
+        rel_target = _beam_input_reference_relative_path(source_path, beam_input_root)
+        target_path = beam_input_root / rel_target
+        _copy_path_for_beam_input_archive(source_path, target_path)
+        enqueue_archive_copy(
+            key=BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED,
+            path=target_path,
+            workspace=workspace,
+        )
+        materialized[rel_target.as_posix()] = str(source_path)
+    return materialized
+
+
+def _archive_beam_config_references(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    snapshot_dir: Path,
+) -> Optional[Path]:
+    config_root = beam_config_root(settings, workspace=workspace).resolve()
+    archive_root = snapshot_dir / BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED
+    sources_by_target: Dict[Path, Path] = {}
+
+    for include_path in _collect_beam_config_reference_sources(
+        settings=settings,
+        workspace=workspace,
+    ):
+        sources_by_target[
+            _beam_config_reference_relative_path(include_path, config_root)
+        ] = include_path
 
     if not sources_by_target:
         return None
@@ -606,6 +689,15 @@ def _archive_beam_run_inputs(
                 year=snapshot_year,
                 iteration=state.iteration,
             ),
+        )
+    materialized_references = _materialize_beam_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+    if materialized_references:
+        logger.info(
+            "Enqueued %d BEAM config reference(s) for archive beam_input materialization",
+            len(materialized_references),
         )
 
     for archive_key, source_path in _collect_beam_run_snapshot_sources(

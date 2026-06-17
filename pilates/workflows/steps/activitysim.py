@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
 from consist.types import H5ChildSpec
 
-from pilates.activitysim.preprocessor import ActivitysimPreprocessor
+from pilates.activitysim.preprocessor import (
+    ActivitysimPreprocessor,
+    required_asim_config_dirs,
+)
 from pilates.activitysim.runner import (
     ActivitysimCompileRunner,
     ActivitysimRunner,
@@ -23,6 +26,7 @@ from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
+    enqueue_archive_copy,
     resolve_existing_path,
 )
 from pilates.utils.settings_helper import get as get_setting
@@ -91,6 +95,78 @@ _ACTIVITYSIM_POPULATION_TABLE_KEYS = (
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_BLOCKS_TABLE,
 )
+_ACTIVITYSIM_CONFIG_REFERENCES_ARCHIVED_KEY = "activitysim_config_references_archived"
+
+
+def _activitysim_config_root_dirs(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> list[Path]:
+    if settings.activitysim is None:
+        return []
+
+    mutable_configs_root = Path(workspace.get_asim_mutable_configs_dir())
+    roots: list[Path] = []
+    main_configs_dir = get_setting(settings, "activitysim.main_configs_dir", "configs")
+    for dirname in required_asim_config_dirs(str(main_configs_dir)):
+        candidate = mutable_configs_root / dirname
+        if candidate.exists():
+            roots.append(candidate)
+    return roots
+
+
+def _materialize_activitysim_config_references_for_archive(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Dict[str, str]:
+    """
+    Enqueue ActivitySim config files so workspace:// config artifacts resolve.
+
+    ActivitySim config canonicalization logs concrete files under the mutable
+    config roots. In local-to-archive runs, those static files must be copied to
+    the archive run workspace just like generated inputs and outputs.
+    """
+    materialized: Dict[str, str] = {}
+    workspace_root = Path(workspace.full_path).resolve()
+    for config_root in _activitysim_config_root_dirs(
+        settings=settings,
+        workspace=workspace,
+    ):
+        for source_path in sorted(
+            (path for path in config_root.rglob("*") if path.is_file()),
+            key=lambda path: path.as_posix(),
+        ):
+            if any(part.startswith(".git") for part in source_path.parts):
+                continue
+            try:
+                rel_path = source_path.resolve().relative_to(workspace_root)
+            except ValueError:
+                rel_path = source_path.name
+            enqueue_archive_copy(
+                key=_ACTIVITYSIM_CONFIG_REFERENCES_ARCHIVED_KEY,
+                path=source_path,
+                workspace=workspace,
+            )
+            materialized[str(rel_path)] = str(source_path)
+    return materialized
+
+
+def _enqueue_activitysim_config_references_for_archive(
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> None:
+    materialized = _materialize_activitysim_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+    if materialized:
+        logger.info(
+            "Enqueued %d ActivitySim config reference(s) for archive workspace materialization",
+            len(materialized),
+        )
 
 
 def _canonical_activitysim_run_output_key(short_name: str) -> str:
@@ -1100,6 +1176,10 @@ def make_activitysim_compile_step(
             raise TypeError(
                 "activitysim_compile requires ActivitySimPreprocessOutputs from activitysim_preprocess"
             )
+        _enqueue_activitysim_config_references_for_archive(
+            settings=settings,
+            workspace=workspace,
+        )
         if expected_outputs is None:
             expected_outputs = activitysim_compile_output_paths(
                 settings=settings,
@@ -1250,6 +1330,10 @@ def make_activitysim_preprocess_step(
         dict
             Extra runtime kwargs for the step executor (empty for this helper).
         """
+        _enqueue_activitysim_config_references_for_archive(
+            settings=settings,
+            workspace=workspace,
+        )
         runtime_inputs = _resolve_activitysim_preprocess_runtime_inputs(
             settings=settings,
             state=state,
@@ -1426,6 +1510,10 @@ def make_activitysim_run_step(
         upstream = holder.activitysim_preprocess
         if upstream is None:
             raise RuntimeError("ActivitySim preprocess must complete first")
+        _enqueue_activitysim_config_references_for_archive(
+            settings=settings,
+            workspace=workspace,
+        )
 
         profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in upstream._iter_record_items():
