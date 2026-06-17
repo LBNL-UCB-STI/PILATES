@@ -848,15 +848,13 @@ def test_beam_config_reference_materialization_populates_archive_beam_input(
         "seattle/lccm-long.csv": str(config_root / "lccm-long.csv"),
         "seattle/r5/router/seattle_gtfs.zip": str(r5_root / "seattle_gtfs.zip"),
     }
-    assert (
-        archive_run / "beam" / "input" / "common" / "akka.conf"
-    ).read_text(encoding="utf-8") == "akka.test = 1\n"
-    assert (
-        archive_run / "beam" / "input" / "seattle" / "beam.conf"
-    ).exists()
-    assert (
-        archive_run / "beam" / "input" / "seattle" / "lccm-long.csv"
-    ).read_text(encoding="utf-8") == "value\n1\n"
+    assert (archive_run / "beam" / "input" / "common" / "akka.conf").read_text(
+        encoding="utf-8"
+    ) == "akka.test = 1\n"
+    assert (archive_run / "beam" / "input" / "seattle" / "beam.conf").exists()
+    assert (archive_run / "beam" / "input" / "seattle" / "lccm-long.csv").read_text(
+        encoding="utf-8"
+    ) == "value\n1\n"
     assert (
         archive_run
         / "beam"
