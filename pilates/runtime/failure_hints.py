@@ -83,6 +83,15 @@ def _settings_shared_db_path(settings: Optional[Any]) -> Optional[str]:
     return str(db_path)
 
 
+def _promotion_log_path(archive_run_dir: str) -> str:
+    return str(
+        (
+            f"{archive_run_dir}/.workflow/diagnostics/"
+            "promotion_to_nfs.log"
+        )
+    )
+
+
 def format_consist_shell_command(
     *,
     archive_run_dir: Optional[str],
@@ -139,6 +148,25 @@ def format_promotion_command(
     return " ".join(shlex.quote(part) for part in command)
 
 
+def format_promotion_nohup_command(
+    *,
+    settings: Optional[Any],
+    archive_run_dir: Optional[str],
+) -> Optional[str]:
+    promotion_command = format_promotion_command(
+        settings=settings,
+        archive_run_dir=archive_run_dir,
+    )
+    if promotion_command is None or not archive_run_dir:
+        return None
+
+    log_path = _promotion_log_path(str(archive_run_dir))
+    return (
+        f"nohup {promotion_command} > {shlex.quote(log_path)} "
+        "2>&1 < /dev/null &"
+    )
+
+
 def log_restart_instructions_on_failure(
     *,
     logger: logging.Logger,
@@ -182,6 +210,34 @@ def log_restart_instructions_on_failure(
     if promotion_command is not None:
         logger.error("Run promotion command for NFS archive:")
         logger.error("  %s", promotion_command)
+
+
+def log_promotion_instructions_on_success(
+    *,
+    logger: logging.Logger,
+    context: Optional[Dict[str, Any]] = None,
+) -> None:
+    context = RUN_FAILURE_CONTEXT if context is None else context
+    settings = context.get("settings")
+    archive_run_dir = context.get("archive_run_dir")
+
+    promotion_command = format_promotion_command(
+        settings=settings,
+        archive_run_dir=archive_run_dir,
+    )
+    if promotion_command is None:
+        return
+
+    logger.info("Run promotion command for NFS archive:")
+    logger.info("  %s", promotion_command)
+
+    nohup_command = format_promotion_nohup_command(
+        settings=settings,
+        archive_run_dir=archive_run_dir,
+    )
+    if nohup_command is not None:
+        logger.info("Detached nohup command:")
+        logger.info("  %s", nohup_command)
 
 
 def log_consist_cli_instructions(

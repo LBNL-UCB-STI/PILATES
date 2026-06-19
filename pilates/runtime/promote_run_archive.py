@@ -152,7 +152,12 @@ def _promotion_copy_ignore(
     except ValueError:
         return set()
     if rel == Path("activitysim") / "output":
-        return {"final_pipeline"} if "final_pipeline" in names else set()
+        ignored: set[str] = set()
+        if "final_pipeline" in names:
+            ignored.add("final_pipeline")
+        if "cache" in names:
+            ignored.add("cache")
+        return ignored
     if rel == Path("shared_cache"):
         return {"numba"} if "numba" in names else set()
     if rel == Path(".consist") / "snapshots":
@@ -165,6 +170,8 @@ def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
     destination_run_dir.parent.mkdir(parents=True, exist_ok=True)
     if (source_run_dir / "activitysim" / "output" / "final_pipeline").exists():
         logger.info("Skipping ActivitySim final_pipeline tree during promotion copy")
+    if (source_run_dir / "activitysim" / "output" / "cache").exists():
+        logger.info("Skipping ActivitySim runtime cache tree during promotion copy")
     if (source_run_dir / "shared_cache" / "numba").exists():
         logger.info("Skipping shared numba cache during promotion copy")
     if (source_run_dir / ".consist" / "snapshots" / "history").exists():
@@ -179,6 +186,7 @@ def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
     )
     excluded_paths = [
         destination_run_dir / "activitysim" / "output" / "final_pipeline",
+        destination_run_dir / "activitysim" / "output" / "cache",
         destination_run_dir / "shared_cache" / "numba",
         destination_run_dir / ".consist" / "snapshots" / "history",
     ]
@@ -200,6 +208,8 @@ def _tree_inventory(root: Path) -> tuple[int, int, int]:
             rel = None
         if rel == Path("activitysim") / "output" and "final_pipeline" in dirs:
             dirs.remove("final_pipeline")
+        if rel == Path("activitysim") / "output" and "cache" in dirs:
+            dirs.remove("cache")
         if rel == Path("shared_cache") and "numba" in dirs:
             dirs.remove("numba")
         if rel == Path(".consist") / "snapshots" and "history" in dirs:

@@ -80,6 +80,30 @@ def test_format_promotion_command_uses_merge_db_only_when_no_roots():
     )
 
 
+def test_format_promotion_nohup_command_wraps_output_log():
+    settings = SimpleNamespace(
+        settings_file="scenarios/settings-seattle.yaml",
+        run=SimpleNamespace(
+            recovery_archive_roots=["/clusterfs/beem-core-data-nfs/pilates-outputs"]
+        ),
+        shared=SimpleNamespace(
+            database=SimpleNamespace(
+                path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+            )
+        ),
+    )
+
+    command = failure_hints.format_promotion_nohup_command(
+        settings=settings,
+        archive_run_dir="/global/scratch/run",
+    )
+
+    assert (
+        command
+        == "nohup python -m pilates.runtime.promote_run_archive -c scenarios/settings-seattle.yaml --run-dir /global/scratch/run --root /clusterfs/beem-core-data-nfs/pilates-outputs --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb > /global/scratch/run/.workflow/diagnostics/promotion_to_nfs.log 2>&1 < /dev/null &"
+    )
+
+
 def test_format_consist_shell_command_prefers_main_db():
     command = failure_hints.format_consist_shell_command(
         archive_run_dir="/global/scratch/run",
@@ -142,6 +166,41 @@ def test_log_restart_instructions_includes_promotion_command_when_available(capl
     assert "Run promotion command for NFS archive:" in caplog.text
     assert (
         "python -m pilates.runtime.promote_run_archive -c settings.yaml --run-dir /tmp/run --root /clusterfs/beem-core-data-nfs/pilates-outputs --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+        in caplog.text
+    )
+    assert "Detached nohup command:" not in caplog.text
+
+
+def test_log_promotion_instructions_on_success(caplog):
+    context = {
+        "settings": SimpleNamespace(
+            settings_file="settings.yaml",
+            run=SimpleNamespace(
+                recovery_archive_roots=["/clusterfs/beem-core-data-nfs/pilates-outputs"]
+            ),
+            shared=SimpleNamespace(
+                database=SimpleNamespace(
+                    path="/clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+                )
+            ),
+        ),
+        "archive_run_dir": "/tmp/run",
+    }
+
+    with caplog.at_level("INFO"):
+        failure_hints.log_promotion_instructions_on_success(
+            logger=failure_hints.logger,
+            context=context,
+        )
+
+    assert "Run promotion command for NFS archive:" in caplog.text
+    assert (
+        "python -m pilates.runtime.promote_run_archive -c settings.yaml --run-dir /tmp/run --root /clusterfs/beem-core-data-nfs/pilates-outputs --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb"
+        in caplog.text
+    )
+    assert "Detached nohup command:" in caplog.text
+    assert (
+        "nohup python -m pilates.runtime.promote_run_archive -c settings.yaml --run-dir /tmp/run --root /clusterfs/beem-core-data-nfs/pilates-outputs --merge-main-db /clusterfs/beem-core-data-nfs/pilates-main/provenance.duckdb > /tmp/run/.workflow/diagnostics/promotion_to_nfs.log 2>&1 < /dev/null &"
         in caplog.text
     )
 

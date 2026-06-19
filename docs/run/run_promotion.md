@@ -73,6 +73,11 @@ For each recovery root, the helper:
 - syncs the updated `.consist` directory into the promoted copy
 - writes `.consist/recovery_promotion.json` in both the source and promoted run
 
+The promoted copy intentionally drops transient trees such as
+`activitysim/output/final_pipeline`, `activitysim/output/cache`,
+`shared_cache/numba`, and `.consist/snapshots/history`. The source scratch
+archive remains complete.
+
 That marker is the operator-visible record of what was promoted, where it was
 copied, and whether each destination succeeded.
 

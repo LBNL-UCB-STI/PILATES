@@ -448,6 +448,12 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
     numba_cache_file.parent.mkdir(parents=True, exist_ok=True)
     numba_cache_file.write_text("numba-cache", encoding="utf-8")
 
+    runtime_cache_file = (
+        run_dir / "activitysim" / "output" / "cache" / "skims.zarr" / ".zarray"
+    )
+    runtime_cache_file.parent.mkdir(parents=True, exist_ok=True)
+    runtime_cache_file.write_text("runtime-cache", encoding="utf-8")
+
     snapshot_history_file = (
         run_dir
         / ".consist"
@@ -483,6 +489,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
             / "persons.parquet"
         ).exists()
         assert not (promoted / "activitysim" / "output" / "final_pipeline").exists()
+        assert not (promoted / "activitysim" / "output" / "cache").exists()
         assert not (promoted / "shared_cache" / "numba").exists()
         assert not (
             promoted
@@ -495,6 +502,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
         assert (promoted / ".consist" / "snapshots" / "latest").exists()
         assert final_pipeline_file.exists()
         assert numba_cache_file.exists()
+        assert runtime_cache_file.exists()
         assert snapshot_history_file.exists()
         assert snapshot_latest_file.exists()
     finally:

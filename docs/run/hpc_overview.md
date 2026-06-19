@@ -53,6 +53,8 @@ python -m pilates.runtime.promote_run_archive -c path/to/settings.yaml
 
 Use `--run-dir` when you want to promote a specific completed archive directory, and `--root` to add or override recovery roots for a one-off promotion. The helper copies the full archive run directory, updates artifact `recovery_roots` in the run-local Consist DB, syncs the updated `.consist` state into the promoted copy, and writes a promotion marker at `.consist/recovery_promotion.json`. If you only want to update the seed/main Consist DB and skip the NFS archive promotion step entirely, add `--merge-db-only`.
 
+The NFS promotion copy skips transient trees such as `activitysim/output/final_pipeline`, `activitysim/output/cache`, `shared_cache/numba`, and `.consist/snapshots/history`. The scratch archive stays intact.
+
 Read [Run Promotion](run_promotion.md) for the full post-run workflow,
 including NFS promotion, verification, and merging the completed run-local DB
 into a central main DB.
