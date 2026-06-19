@@ -111,6 +111,61 @@ class DummyScenario:
         return SimpleNamespace(cache_hit=False)
 
 
+class DummyScenarioWithRunIds(DummyScenario):
+    def __init__(
+        self,
+        *,
+        cache_hit: bool = False,
+        cached_outputs: Optional[dict[str, object]] = None,
+        run_id: str = "dummy-run",
+    ) -> None:
+        super().__init__(cache_hit=cache_hit, cached_outputs=cached_outputs)
+        self.run_id = run_id
+        self.restored_run_ids = []
+
+    def run(self, **kwargs):
+        self.calls.append(kwargs)
+        run = SimpleNamespace(id=self.run_id)
+        if self.cache_hit:
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs=self.cached_outputs,
+                run=run,
+            )
+
+        fn = kwargs["fn"]
+        runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+        fn(**runtime_kwargs)
+        return SimpleNamespace(cache_hit=False, run=run)
+
+    def remember_restored_run_id(
+        self,
+        *,
+        model_name: Optional[str],
+        year: Optional[int],
+        iteration: Optional[int],
+        run_id: Optional[str],
+    ) -> None:
+        self.restored_run_ids.append(
+            {
+                "model_name": model_name,
+                "year": year,
+                "iteration": iteration,
+                "run_id": run_id,
+            }
+        )
+
+
+class DummyTracker:
+    def __init__(self, outputs_by_run_id: dict[str, dict[str, object]]) -> None:
+        self.outputs_by_run_id = outputs_by_run_id
+        self.queries = []
+
+    def get_run_outputs(self, run_id: str):
+        self.queries.append(run_id)
+        return self.outputs_by_run_id.get(run_id)
+
+
 class _BindingEnvelope:
     def __init__(self, inputs):
         self.inputs = inputs
@@ -647,6 +702,96 @@ def test_activitysim_run_cache_hit_recovers_from_cached_output_paths(tmp_path):
     assert recovered.raw_outputs["persons_asim_out"] == persons
     assert recovered.raw_outputs["beam_plans_asim_out"] == beam_plans
     assert recovered.source_input_paths[ZARR_SKIMS] == zarr_skims
+
+
+def test_activitysim_run_cache_hit_restores_typed_outputs_from_tracker_run_outputs(
+    monkeypatch,
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path / "current")
+    cached_root = tmp_path / "persisted_run"
+    cached_iter_dir = cached_root / "activitysim" / "output" / "year-2035-iteration-2"
+    households = cached_iter_dir / "households.parquet"
+    persons = cached_iter_dir / "persons.parquet"
+    beam_plans = cached_iter_dir / "beam_plans.parquet"
+    zarr_skims = cached_root / "activitysim" / "output" / "cache" / "skims.zarr"
+    for path in (households, persons, beam_plans, zarr_skims):
+        _write_file(path)
+
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    asim_output_dir.mkdir(parents=True)
+    assert not (asim_output_dir / "year-2035-iteration-2").exists()
+
+    state = SimpleNamespace(year=2035, forecast_year=2035, iteration=2)
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    upstream_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=Path(workspace.get_asim_mutable_data_dir()) / "land_use.csv",
+        households_table=Path(workspace.get_asim_mutable_data_dir()) / "households.csv",
+        persons_table=Path(workspace.get_asim_mutable_data_dir()) / "persons.csv",
+    )
+    for path in (
+        upstream_preprocess.land_use_table,
+        upstream_preprocess.households_table,
+        upstream_preprocess.persons_table,
+    ):
+        _write_file(path)
+
+    run_id = "activitysim-run-2035-2"
+    tracker = DummyTracker(
+        {
+            run_id: {
+                "households_asim_out": str(households),
+                "persons_asim_out": str(persons),
+                "beam_plans_asim_out": str(beam_plans),
+                ZARR_SKIMS: str(zarr_skims),
+            }
+        }
+    )
+    monkeypatch.setattr(
+        "pilates.utils.consist_runtime.current_tracker",
+        lambda: tracker,
+    )
+
+    holder = StepOutputsHolder()
+    holder.set_attribute("activitysim_preprocess", upstream_preprocess)
+    coupler = DummyCoupler()
+    step = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+    )
+
+    run_manifested_steps(
+        stage_name="activitysim_run_tracker_output_recovery",
+        steps=[StepRef(name="activitysim_run", step_func=step)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=tmp_path / "manifest.yaml"),
+        scenario=DummyScenarioWithRunIds(cache_hit=True, run_id=run_id),
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="parity",
+        iteration=2,
+    )
+
+    recovered = holder.activitysim_run
+    assert isinstance(recovered, ActivitySimRunOutputs)
+    assert tracker.queries
+    assert set(tracker.queries) == {run_id}
+    assert recovered.raw_outputs["households_asim_out"] == households
+    assert recovered.raw_outputs["persons_asim_out"] == persons
+    assert recovered.raw_outputs["beam_plans_asim_out"] == beam_plans
+    assert recovered.source_input_paths[ZARR_SKIMS] == zarr_skims
+    assert (
+        Path(artifact_to_path(coupler.get("households_asim_out"), workspace))
+        == households
+    )
+    assert Path(artifact_to_path(coupler.get("persons_asim_out"), workspace)) == persons
+    assert (
+        Path(artifact_to_path(coupler.get("beam_plans_asim_out"), workspace))
+        == beam_plans
+    )
 
 
 def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifest(
@@ -1247,6 +1392,215 @@ def test_beam_run_binding_tracks_optional_warmstart(
         assert LINKSTATS_WARMSTART in (fresh_binding.optional_input_keys or [])
     else:
         assert LINKSTATS_WARMSTART not in (fresh_binding.optional_input_keys or [])
+
+
+def test_manifest_restore_remembers_activitysim_and_beam_run_ids_by_epoch(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    state = SimpleNamespace(year=2035, forecast_year=2035, iteration=2)
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    asim_output_dir = Path(workspace.get_asim_output_dir())
+    asim_households = asim_output_dir / "year-2035-iteration-2" / "households.parquet"
+    asim_persons = asim_output_dir / "year-2035-iteration-2" / "persons.parquet"
+    asim_plans = asim_output_dir / "year-2035-iteration-2" / "beam_plans.parquet"
+    beam_output_dir = Path(workspace.get_beam_output_dir())
+    linkstats = beam_output_dir / "linkstats_2035_2.csv.gz"
+    beam_plans = beam_output_dir / "beam_plans_2035_2.parquet"
+    for path in (asim_households, asim_persons, asim_plans, linkstats, beam_plans):
+        _write_file(path)
+
+    manifest_path = tmp_path / "manifest.yaml"
+    asim_outputs = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={
+            "households_asim_out": asim_households,
+            "persons_asim_out": asim_persons,
+            "beam_plans_asim_out": asim_plans,
+        },
+    )
+    beam_outputs = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={
+            LINKSTATS: linkstats,
+            BEAM_PLANS_OUT: beam_plans,
+        },
+    )
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "run_id": "activitysim-run-2035-2",
+                    "outputs": serialize_step_outputs(asim_outputs),
+                },
+                "beam_run": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "run_id": "beam-run-2035-2",
+                    "outputs": serialize_step_outputs(beam_outputs),
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _unexpected_step(**_runtime_kwargs):
+        raise AssertionError("manifest restore should not execute steps")
+
+    _unexpected_step.__consist_step__ = object()
+
+    def _republish(outputs, _settings, _state, republish_workspace, _holder):
+        _update_coupler_from_outputs(
+            outputs,
+            coupler=coupler,
+            workspace=republish_workspace,
+        )
+
+    scenario = DummyScenarioWithRunIds()
+    run_manifested_steps(
+        stage_name="manifest_restore_run_id_resume",
+        steps=[
+            StepRef(
+                name="activitysim_run",
+                step_func=_unexpected_step,
+                output_replayer=_republish,
+                model="activitysim",
+                year=2035,
+                iteration=2,
+            ),
+            StepRef(
+                name="beam_run",
+                step_func=_unexpected_step,
+                output_replayer=_republish,
+                model="beam",
+                year=2035,
+                iteration=2,
+            ),
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="parity",
+        iteration=2,
+    )
+
+    assert scenario.calls == []
+    assert scenario.restored_run_ids == [
+        {
+            "model_name": "activitysim",
+            "year": 2035,
+            "iteration": 2,
+            "run_id": "activitysim-run-2035-2",
+        },
+        {
+            "model_name": "beam",
+            "year": 2035,
+            "iteration": 2,
+            "run_id": "beam-run-2035-2",
+        },
+    ]
+
+
+def test_stale_manifest_output_paths_are_rerun_instead_of_trusted(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    state = SimpleNamespace(year=2035, forecast_year=2035, iteration=2)
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    holder = StepOutputsHolder()
+    coupler = DummyCoupler()
+    upstream_preprocess = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=Path(workspace.get_asim_mutable_data_dir()) / "land_use.csv",
+        households_table=Path(workspace.get_asim_mutable_data_dir()) / "households.csv",
+        persons_table=Path(workspace.get_asim_mutable_data_dir()) / "persons.csv",
+    )
+    for path in (
+        upstream_preprocess.land_use_table,
+        upstream_preprocess.households_table,
+        upstream_preprocess.persons_table,
+    ):
+        _write_file(path)
+    holder.set_attribute("activitysim_preprocess", upstream_preprocess)
+
+    stale_output_dir = Path(workspace.get_asim_output_dir())
+    stale_outputs = ActivitySimRunOutputs(
+        output_dir=stale_output_dir,
+        raw_outputs={
+            "households_asim_out": stale_output_dir
+            / "year-2035-iteration-2"
+            / "missing-households.parquet",
+        },
+    )
+    stale_output_dir.mkdir(parents=True)
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(
+            {
+                "activitysim_run": {
+                    "completed_at": "2026-01-01T00:00:00",
+                    "cache_hit": True,
+                    "run_id": "stale-activitysim-run",
+                    "outputs": serialize_step_outputs(stale_outputs),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    fresh_households = (
+        stale_output_dir / "year-2035-iteration-2" / "fresh-households.parquet"
+    )
+
+    def _rerun_step(**_runtime_kwargs):
+        _write_file(fresh_households)
+        holder.set_attribute(
+            "activitysim_run",
+            ActivitySimRunOutputs(
+                output_dir=stale_output_dir,
+                raw_outputs={"households_asim_out": fresh_households},
+            ),
+        )
+
+    _rerun_step.__consist_step__ = object()
+
+    scenario = DummyScenarioWithRunIds(run_id="fresh-activitysim-run")
+    run_manifested_steps(
+        stage_name="stale_manifest_rerun",
+        steps=[
+            StepRef(
+                name="activitysim_run",
+                step_func=_rerun_step,
+                model="activitysim",
+                year=2035,
+                iteration=2,
+            )
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="parity",
+        iteration=2,
+    )
+
+    assert len(scenario.calls) == 1
+    recovered = holder.activitysim_run
+    assert isinstance(recovered, ActivitySimRunOutputs)
+    assert recovered.raw_outputs == {"households_asim_out": fresh_households}
+    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["activitysim_run"]["run_id"] == "fresh-activitysim-run"
+    assert manifest["activitysim_run"]["outputs"]["raw_outputs"][
+        "households_asim_out"
+    ] == str(fresh_households)
 
 
 def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and_manifest(

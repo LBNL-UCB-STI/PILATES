@@ -300,6 +300,85 @@ def test_hydrate_missing_restart_artifacts_hydrates_traffic_assignment_inputs(tm
     )
 
 
+def test_hydrate_missing_restart_artifacts_prefers_materialized_path_over_stale_remap(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "local" / "run"))
+    Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
+    coupler = DummyCoupler()
+
+    for key, relpath in (
+        ("households_asim_out", "ready/households.parquet"),
+        ("persons_asim_out", "ready/persons.parquet"),
+        ("zarr_skims", "ready/skims.zarr"),
+    ):
+        path = tmp_path / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("ready", encoding="utf-8")
+        coupler.set(key, str(path))
+
+    stale_absolute_path = (
+        tmp_path / "archive" / "run" / "activitysim" / "output" / "beam_plans.parquet"
+    )
+    remapped_decoy = (
+        Path(workspace.full_path) / "activitysim" / "output" / "beam_plans.parquet"
+    )
+    remapped_decoy.parent.mkdir(parents=True, exist_ok=True)
+    remapped_decoy.write_text("stale remap", encoding="utf-8")
+
+    materialized_root = tmp_path / "materialized" / "asim-post-1"
+    materialized_path = materialized_root / "beam_plans.parquet"
+    materialized_path.parent.mkdir(parents=True, exist_ok=True)
+    materialized_path.write_text("materialized", encoding="utf-8")
+
+    facet = {"scenario_id": "scenario-a", "seed": 7}
+    tracker = DummyTracker(
+        runs_by_target={
+            _query_key(
+                year=2018,
+                iteration=1,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+                facet=facet,
+            ): "asim-post-1",
+        },
+        outputs_by_run={
+            "asim-post-1": {
+                "beam_plans_asim_out": str(stale_absolute_path),
+            },
+        },
+        materialized_by_run={"asim-post-1": str(materialized_root)},
+    )
+
+    result = restart_runtime.hydrate_missing_restart_artifacts(
+        tracker=tracker,
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+        local_run_dir=workspace.full_path,
+        archive_run_dir=str(tmp_path / "archive"),
+        workflow_stage=WorkflowState.Stage,
+        query_facet=facet,
+    )
+
+    assert result["success"] is True
+    assert result["hydrated_keys"] == ["beam_plans_asim_out"]
+    assert coupler.get("beam_plans_asim_out") == str(materialized_path)
+    assert coupler.get("beam_plans_asim_out") != str(remapped_decoy)
+    assert tracker.materialize_run_output_calls == [
+        {
+            "run_id": "asim-post-1",
+            "target_root": str(Path(workspace.full_path).resolve()),
+            "source_root": str((tmp_path / "archive").resolve()),
+            "preserve_existing": True,
+            "keys": ["beam_plans_asim_out"],
+        }
+    ]
+
+
 def test_restart_artifact_producers_applies_traffic_assignment_overrides():
     producers = restart_artifact_producers(
         frontier_stage="traffic_assignment",
@@ -338,6 +417,51 @@ def test_hydrate_missing_restart_artifacts_fails_clearly_when_producer_run_missi
             archive_run_dir=str(tmp_path / "archive"),
             workflow_stage=WorkflowState.Stage,
             query_facet={"scenario_id": "scenario-a", "seed": 7},
+        )
+
+
+def test_hydrate_missing_restart_artifacts_fails_clearly_when_output_key_missing(
+    tmp_path,
+):
+    workspace = DummyWorkspace(str(tmp_path / "run"))
+    Path(workspace.full_path).mkdir(parents=True, exist_ok=True)
+
+    facet = {"scenario_id": "scenario-a", "seed": 7}
+    tracker = DummyTracker(
+        runs_by_target={
+            _query_key(
+                year=2018,
+                iteration=1,
+                model="activitysim_postprocess",
+                stage="activity_demand_postprocess",
+                phase="postprocess",
+                status="completed",
+                facet=facet,
+            ): "asim-post-1",
+        },
+        outputs_by_run={"asim-post-1": {}},
+    )
+
+    with pytest.raises(
+        restart_runtime.RestartHydrationError,
+        match=(
+            "frontier_stage=traffic_assignment "
+            "frontier_step=beam_preprocess "
+            "missing_key=beam_plans_asim_out "
+            "producer_step=activitysim_postprocess "
+            "reason=producer_run_missing_declared_output"
+        ),
+    ):
+        restart_runtime.hydrate_missing_restart_artifacts(
+            tracker=tracker,
+            settings=_settings(),
+            state=_state(),
+            workspace=workspace,
+            coupler=DummyCoupler(),
+            local_run_dir=str(tmp_path / "run"),
+            archive_run_dir=str(tmp_path / "archive"),
+            workflow_stage=WorkflowState.Stage,
+            query_facet=facet,
         )
 
 

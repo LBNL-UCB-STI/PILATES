@@ -84,12 +84,7 @@ def _settings_shared_db_path(settings: Optional[Any]) -> Optional[str]:
 
 
 def _promotion_log_path(archive_run_dir: str) -> str:
-    return str(
-        (
-            f"{archive_run_dir}/.workflow/diagnostics/"
-            "promotion_to_nfs.log"
-        )
-    )
+    return str((f"{archive_run_dir}/.workflow/diagnostics/promotion_to_nfs.log"))
 
 
 def format_consist_shell_command(
@@ -161,10 +156,7 @@ def format_promotion_nohup_command(
         return None
 
     log_path = _promotion_log_path(str(archive_run_dir))
-    return (
-        f"nohup {promotion_command} > {shlex.quote(log_path)} "
-        "2>&1 < /dev/null &"
-    )
+    return f"nohup {promotion_command} > {shlex.quote(log_path)} 2>&1 < /dev/null &"
 
 
 def log_restart_instructions_on_failure(
