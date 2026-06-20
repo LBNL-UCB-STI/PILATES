@@ -103,10 +103,14 @@ def _activitysim_config_root_dirs(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> list[Path]:
-    if settings.activitysim is None:
+    if getattr(settings, "activitysim", None) is None:
         return []
 
-    mutable_configs_root = Path(workspace.get_asim_mutable_configs_dir())
+    get_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
+    if not callable(get_configs_dir):
+        return []
+
+    mutable_configs_root = Path(get_configs_dir())
     roots: list[Path] = []
     main_configs_dir = get_setting(settings, "activitysim.main_configs_dir", "configs")
     for dirname in required_asim_config_dirs(str(main_configs_dir)):
@@ -129,7 +133,10 @@ def _materialize_activitysim_config_references_for_archive(
     the archive run workspace just like generated inputs and outputs.
     """
     materialized: Dict[str, str] = {}
-    workspace_root = Path(workspace.full_path).resolve()
+    workspace_root_raw = getattr(workspace, "full_path", None)
+    if not workspace_root_raw:
+        return materialized
+    workspace_root = Path(workspace_root_raw).resolve()
     for config_root in _activitysim_config_root_dirs(
         settings=settings,
         workspace=workspace,
@@ -359,10 +366,13 @@ def _resolve_cached_value(
     coupler: CouplerProtocol,
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
+    recovered_run_outputs: Optional[Mapping[str, Any]] = None,
 ) -> Any:
     merged = merge_canonical_output_mappings(
         cached_outputs,
-        _resolve_cached_run_outputs(run_id),
+        recovered_run_outputs
+        if recovered_run_outputs is not None
+        else _resolve_cached_run_outputs(run_id),
     )
     if key in merged:
         return merged[key]
@@ -682,6 +692,7 @@ def _recover_activitysim_preprocess_outputs(
 ) -> Optional[ActivitySimPreprocessOutputs]:
     del outputs_holder, step_inputs
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    recovered_run_outputs = _resolve_cached_run_outputs(run_id)
     candidates = {
         key: Path(path)
         for key, path in ActivitysimPreprocessor.expected_outputs(
@@ -699,6 +710,7 @@ def _recover_activitysim_preprocess_outputs(
             coupler=coupler,
             cached_outputs=cached_outputs,
             run_id=run_id,
+            recovered_run_outputs=recovered_run_outputs,
         )
         cached_path = _existing_artifact_path(cached_value, workspace)
         if cached_path:
@@ -743,9 +755,13 @@ def _recover_activitysim_run_outputs(
 ) -> Optional[ActivitySimRunOutputs]:
     del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    recovered_run_outputs = _resolve_cached_run_outputs(run_id)
     cached_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
+        cached_outputs=merge_canonical_output_mappings(
+            cached_outputs,
+            recovered_run_outputs,
+        ),
+        run_id=None,
         workspace=workspace,
         step_logger=logger,
         log_context="ActivitySim run cached output recovery",
@@ -865,6 +881,7 @@ def _recover_activitysim_run_outputs(
                 coupler=coupler,
                 cached_outputs=cached_outputs,
                 run_id=run_id,
+                recovered_run_outputs=recovered_run_outputs,
             ),
             key=ZARR_SKIMS,
             workspace=workspace,
@@ -880,6 +897,7 @@ def _recover_activitysim_run_outputs(
                 coupler=coupler,
                 cached_outputs=cached_outputs,
                 run_id=run_id,
+                recovered_run_outputs=recovered_run_outputs,
             ),
             key=ZARR_SKIMS,
             workspace=workspace,
@@ -910,9 +928,13 @@ def _recover_activitysim_postprocess_outputs(
 ) -> Optional[ActivitySimPostprocessOutputs]:
     del outputs_holder
     asim_output_dir = Path(workspace.get_asim_output_dir())
+    recovered_run_outputs = _resolve_cached_run_outputs(run_id)
     cached_paths = recovered_cached_paths(
-        cached_outputs=cached_outputs,
-        run_id=run_id,
+        cached_outputs=merge_canonical_output_mappings(
+            cached_outputs,
+            recovered_run_outputs,
+        ),
+        run_id=None,
         workspace=workspace,
         step_logger=logger,
         log_context="ActivitySim postprocess cached output recovery",
@@ -943,6 +965,7 @@ def _recover_activitysim_postprocess_outputs(
                 coupler=coupler,
                 cached_outputs=cached_outputs,
                 run_id=run_id,
+                recovered_run_outputs=recovered_run_outputs,
             ),
             key=normalized_name,
             workspace=workspace,
@@ -968,6 +991,7 @@ def _recover_activitysim_postprocess_outputs(
                     coupler=coupler,
                     cached_outputs=cached_outputs,
                     run_id=run_id,
+                    recovered_run_outputs=recovered_run_outputs,
                 ),
                 key=short_name,
                 workspace=workspace,
@@ -1005,6 +1029,7 @@ def _recover_activitysim_postprocess_outputs(
                         coupler=coupler,
                         cached_outputs=cached_outputs,
                         run_id=run_id,
+                        recovered_run_outputs=recovered_run_outputs,
                     ),
                     key=short_name,
                     workspace=workspace,
@@ -1047,6 +1072,7 @@ def _recover_activitysim_postprocess_outputs(
                 coupler=coupler,
                 cached_outputs=cached_outputs,
                 run_id=run_id,
+                recovered_run_outputs=recovered_run_outputs,
             ),
             key=short_name,
             workspace=workspace,
