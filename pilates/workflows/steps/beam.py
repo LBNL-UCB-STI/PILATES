@@ -563,7 +563,6 @@ def _resolve_existing_coupler_input(
     resolved_path = artifact_to_existing_path(
         get_value(key),
         workspace=workspace,
-        materialize_from_archive=True,
     )
     if resolved_path is None:
         return None
@@ -994,7 +993,6 @@ def _recover_beam_preprocess_outputs(
             path = artifact_to_existing_path(
                 value,
                 workspace=workspace,
-                materialize_from_archive=True,
             )
             if path is not None:
                 prepared_inputs[key] = Path(path)

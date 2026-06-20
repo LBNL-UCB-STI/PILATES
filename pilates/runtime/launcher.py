@@ -53,10 +53,6 @@ from pilates.activitysim.preprocessor import required_asim_config_dirs
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime.consist_audit import (
-    emit_artifact_lifecycle_audit_event,
-    emit_consist_audit_event,
-)
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.runtime.failure_hints import (
     RUN_FAILURE_CONTEXT,
@@ -748,24 +744,6 @@ def main(
     run_succeeded = False
 
     try:
-        emit_consist_audit_event(
-            workspace=workspace,
-            event_type="run_context",
-            scenario_id=scenario_id,
-            seed=run_seed,
-            settings_file=settings.settings_file,
-            run_name=run_name,
-            workspace_root=workspace.full_path,
-            local_run_dir=local_run_dir,
-            archive_run_dir=archive_run_dir,
-            archive_state_path=archive_state_path if is_restart_run else None,
-            restart_run=is_restart_run,
-            data_initialized=bool(state.data_initialized),
-            bootstrap_cache_enabled=bootstrap_runtime.is_bootstrap_cache_enabled(
-                settings
-            ),
-        )
-
         # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
         # Initialization runs before entering scenario step execution so bootstrap
         # lifecycle can evolve independently from normal model steps.
@@ -850,19 +828,6 @@ def main(
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "
                     "hydration and relying on scenario replay plus Consist cache hits."
-                )
-                emit_consist_audit_event(
-                    workspace=workspace,
-                    event_type="restart_hydration",
-                    frontier_stage=None,
-                    frontier_step=None,
-                    success=True,
-                    hydrated_keys=[],
-                    missing_keys=[],
-                    producer_steps_by_key={},
-                    fallback_reason="replay_mode",
-                    rewind_restore=False,
-                    overlay_root=None,
                 )
 
             # 7. MAIN WORKFLOW LOOP
@@ -959,14 +924,6 @@ def main(
     finally:
         snapshot_ok = snapshot_manager.final_snapshot()
         flush_archive_queue(timeout=300)
-        emit_artifact_lifecycle_audit_event(
-            workspace=workspace,
-            event_type="final_shutdown",
-            snapshot_ok=snapshot_ok,
-            archive_run_dir=archive_run_dir,
-            local_run_dir=local_run_dir,
-            local_to_scratch_recovery_roots_written=0,
-        )
         stop_archive_worker(timeout=30)
         if not snapshot_ok:
             mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)

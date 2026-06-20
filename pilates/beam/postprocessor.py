@@ -3816,7 +3816,6 @@ class BeamPostprocessor(GenericPostprocessor):
         all_skims_path = artifact_to_existing_path(
             zarr_skims,
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if all_skims_path is None and _activitysim_skims_target_enabled(settings):
             candidate = os.path.join(

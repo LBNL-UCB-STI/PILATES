@@ -16,7 +16,6 @@ points we can cover cheaply with lightweight fakes:
    warmstart artifacts instead of silently dropping them.
 """
 
-import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -38,7 +37,6 @@ from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import FileRecord, RecordStore
-from pilates.runtime import consist_audit
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
@@ -360,45 +358,6 @@ def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):
         "adapter_identity_changed": ["config_bundle_hash"],
         "input_keys_changed": ["atlas_vehicles2_output"],
     }
-
-
-def test_beam_restart_binding_diagnostic_persists_to_lifecycle_audit(
-    monkeypatch,
-    tmp_path,
-):
-    consist_audit.reset_consist_audit_state()
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path))
-    beam_root = tmp_path / "beam" / "input"
-    region_dir = beam_root / "sfbay"
-    region_dir.mkdir(parents=True)
-    (region_dir / "beam.conf").write_text("beam config", encoding="utf-8")
-    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(beam_root))
-    settings = SimpleNamespace(
-        run=SimpleNamespace(region="sfbay"),
-        beam=SimpleNamespace(config="beam.conf"),
-    )
-    state = SimpleNamespace(
-        is_restart_run=True, year=2019, forecast_year=2021, iteration=0
-    )
-
-    _emit_beam_preprocess_binding_diagnostic(
-        binding=BindingPlan(
-            step_name="beam_preprocess",
-            inputs={BEAM_CONFIG_FILE: str(region_dir / "beam.conf")},
-            input_keys=[BEAM_CONFIG_FILE],
-        ),
-        state=state,
-        settings=settings,
-        workspace=workspace,
-    )
-
-    events_path = (
-        tmp_path / ".workflow" / "diagnostics" / "artifact_lifecycle_audit.jsonl"
-    )
-    event = json.loads(events_path.read_text(encoding="utf-8").splitlines()[-1])
-    assert event["event_type"] == "beam_restart_binding"
-    assert event["key"] == "beam_restart_binding"
-    assert event["artifact_family"] == "beam_restart_diagnostic"
 
 
 def run_land_use_stage(

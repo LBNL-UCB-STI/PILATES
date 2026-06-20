@@ -17,11 +17,9 @@ from consist.types import (
 )
 
 from pilates.runtime.cache_recovery import (
-    cache_miss_audit_fields,
     log_cache_miss_explanation,
     run_with_cache_recovery,
 )
-from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -32,8 +30,6 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.catalog import (
-    workflow_step_contracts_by_name,
-    workflow_step_declared_output_keys,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
@@ -43,10 +39,6 @@ from pilates.utils.consist_types import (
     CouplerProtocol,
     RunLike,
     ScenarioRestorationLike,
-)
-from pilates.utils.state_access import (
-    current_year as state_current_year,
-    iteration_index,
 )
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
@@ -266,199 +258,6 @@ def _resolved_step_epoch_identity(
         year = getattr(state, "year", None)
     iteration = step.iteration if step.iteration is not None else default_iteration
     return model_name, year, iteration
-
-
-def _step_scope_fields(
-    *,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    run_id: Optional[str] = None,
-    cache_hit: Optional[bool] = None,
-) -> Dict[str, Any]:
-    current_year = state_current_year(state)
-    forecast_year = getattr(state, "forecast_year", None)
-    atlas_year = getattr(state, "atlas_year", None)
-
-    target_year = current_year
-    if step_name.startswith("activitysim_") or step_name.startswith("beam_"):
-        target_year = forecast_year if forecast_year is not None else current_year
-    elif atlas_year is not None:
-        target_year = atlas_year
-
-    return {
-        "stage_name": stage_name,
-        "step_name": step_name,
-        "year": target_year,
-        "simulation_year": current_year,
-        "forecast_year": forecast_year,
-        "iteration": iteration_index(state),
-        "atlas_year": atlas_year,
-        "run_id": run_id,
-        "cache_hit": cache_hit,
-    }
-
-
-def _resolved_output_keys(outputs: Any) -> list[str]:
-    if outputs is None:
-        return []
-    try:
-        return sorted(step_output_mapping(outputs, warn_lossy=False).keys())
-    except Exception:
-        return []
-
-
-def _declared_required_and_optional_output_keys(
-    step_name: str,
-    *,
-    settings: Any = None,
-    state: Any = None,
-) -> tuple[list[str], list[str], list[str]]:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is not None:
-        contract = workflow_step_contracts_by_name(settings=settings).get(step_name, {})
-        declared = sorted(dict.fromkeys(contract.get("output_keys", spec.output_keys)))
-        optional = sorted(
-            dict.fromkeys(
-                contract.get("optional_output_keys", spec.optional_output_keys)
-            )
-        )
-        required = list(declared)
-        outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-        if outputs_class is not None:
-            if not optional:
-                optional = list(
-                    getattr(outputs_class, "optional_output_keys", lambda: ())()
-                )
-            required = list(
-                required_outputs_for_step_outputs_class(outputs_class, state=state)
-            )
-        return declared, sorted(dict.fromkeys(required)), optional
-
-    outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-    declared = list(workflow_step_declared_output_keys(step_name))
-    if not declared and outputs_class is not None:
-        declared = list(declared_outputs_for_step_outputs_class(outputs_class))
-    required: list[str] = []
-    if outputs_class is not None:
-        required = list(
-            required_outputs_for_step_outputs_class(outputs_class, state=state)
-        )
-    optional: list[str] = []
-    if outputs_class is not None:
-        optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
-    return (
-        sorted(dict.fromkeys(declared)),
-        sorted(dict.fromkeys(required)),
-        sorted(dict.fromkeys(optional)),
-    )
-
-
-def _emit_output_hydration_audit(
-    *,
-    workspace: Any,
-    settings: Any,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    resolution_mode: str,
-    outputs: Any,
-    run_id: Optional[str],
-    cache_hit: Optional[bool],
-    recovery_meta: Optional[Mapping[str, Any]] = None,
-) -> None:
-    if outputs is None:
-        return
-    (
-        declared_outputs,
-        required_outputs,
-        optional_outputs,
-    ) = _declared_required_and_optional_output_keys(
-        step_name,
-        settings=settings,
-        state=state,
-    )
-    resolved_outputs = _resolved_output_keys(outputs)
-    missing_required_outputs = [
-        key for key in required_outputs if key not in resolved_outputs
-    ]
-    missing_declared_outputs = [
-        key for key in declared_outputs if key not in resolved_outputs
-    ]
-    missing_optional_outputs = [
-        key for key in optional_outputs if key not in resolved_outputs
-    ]
-    recovery_meta = recovery_meta or {}
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="output_hydration_check",
-        **_step_scope_fields(
-            stage_name=stage_name,
-            step_name=step_name,
-            state=state,
-            run_id=run_id,
-            cache_hit=cache_hit,
-        ),
-        resolution_mode=resolution_mode,
-        declared_outputs=declared_outputs,
-        required_outputs=required_outputs,
-        optional_outputs=optional_outputs,
-        resolved_outputs=resolved_outputs,
-        missing_required_outputs=missing_required_outputs,
-        missing_declared_outputs=missing_declared_outputs,
-        missing_optional_outputs=missing_optional_outputs,
-        typed_output_rebuilt=bool(outputs is not None),
-        hydration_complete=not missing_required_outputs,
-        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
-        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
-        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
-        used_tracker_output_lookup=bool(
-            recovery_meta.get("used_tracker_output_lookup", False)
-        ),
-        used_compatibility_fallback=bool(
-            recovery_meta.get("used_compatibility_fallback", False)
-        ),
-        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
-    )
-
-
-def _emit_step_resolution_audit(
-    *,
-    workspace: Any,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    resolution_mode: str,
-    run_id: Optional[str],
-    cache_hit: Optional[bool],
-    recovery_meta: Optional[Mapping[str, Any]] = None,
-) -> None:
-    recovery_meta = recovery_meta or {}
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="step_resolution",
-        **_step_scope_fields(
-            stage_name=stage_name,
-            step_name=step_name,
-            state=state,
-            run_id=run_id,
-            cache_hit=cache_hit,
-        ),
-        resolution_mode=resolution_mode,
-        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
-        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
-        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
-        used_tracker_output_lookup=bool(
-            recovery_meta.get("used_tracker_output_lookup", False)
-        ),
-        used_compatibility_fallback=bool(
-            recovery_meta.get("used_compatibility_fallback", False)
-        ),
-        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
-        initial_cache_hit=bool(recovery_meta.get("initial_cache_hit", False)),
-        recovery_attempts=int(recovery_meta.get("recovery_attempts", 0) or 0),
-        **cache_miss_audit_fields(recovery_meta.get("cache_miss_explanation")),
-    )
 
 
 def _build_step_run_kwargs(
@@ -1272,32 +1071,6 @@ def run_manifested_steps(
                         run_id=manifest.get(spec.name, {}).get("run_id"),
                     )
                     _merge_output_recovery_meta(outputs, recovery_meta)
-                    _emit_step_resolution_audit(
-                        workspace=workspace,
-                        stage_name=stage_name,
-                        step_name=spec.name,
-                        state=state,
-                        resolution_mode="manifest_restore",
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(
-                            manifest.get(spec.name, {}).get("cache_hit", False)
-                        ),
-                        recovery_meta=recovery_meta,
-                    )
-                    _emit_output_hydration_audit(
-                        workspace=workspace,
-                        settings=settings,
-                        stage_name=stage_name,
-                        step_name=spec.name,
-                        state=state,
-                        resolution_mode="manifest_restore",
-                        outputs=outputs,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(
-                            manifest.get(spec.name, {}).get("cache_hit", False)
-                        ),
-                        recovery_meta=recovery_meta,
-                    )
                 if isinstance(scenario, ScenarioRestorationLike):
                     scenario.remember_restored_run_id(
                         model_name=model_name,
@@ -1369,36 +1142,6 @@ def run_manifested_steps(
             if outputs is None:
                 raise RuntimeError(f"{spec.name} did not populate outputs_holder")
             serialized_outputs = serialize_step_outputs(outputs)
-            if recovery_meta.get("overwrite_rerun"):
-                resolution_mode = "overwrite_rerun_after_cache_hit"
-            elif recovery_meta.get("used_output_recoverer"):
-                resolution_mode = "cache_hit_recoverer"
-            elif recovery_meta.get("initial_cache_hit"):
-                resolution_mode = "cache_hit_direct"
-            else:
-                resolution_mode = "executed"
-            _emit_step_resolution_audit(
-                workspace=workspace,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode=resolution_mode,
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
-            _emit_output_hydration_audit(
-                workspace=workspace,
-                settings=settings,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode=resolution_mode,
-                outputs=outputs,
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
         else:
             # Steps without declared outputs can still be checkpointed. We record the
             # run id so restart reconstruction can re-materialize completed runs, but
@@ -1416,16 +1159,6 @@ def run_manifested_steps(
                 )
                 if cache_miss_explanation is not None:
                     recovery_meta["cache_miss_explanation"] = cache_miss_explanation
-            _emit_step_resolution_audit(
-                workspace=workspace,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode="executed",
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
         manifest[spec.name] = {
             "completed_at": datetime.now().isoformat(),
             "cache_hit": bool(getattr(result, "cache_hit", False)),
@@ -1554,37 +1287,6 @@ def run_workflow(
             recover_outputs=_recover_outputs,
         )
         recovery_meta.update(cache_meta)
-        if recovery_meta.get("overwrite_rerun"):
-            resolution_mode = "overwrite_rerun_after_cache_hit"
-        elif recovery_meta.get("used_output_recoverer"):
-            resolution_mode = "cache_hit_recoverer"
-        elif recovery_meta.get("initial_cache_hit"):
-            resolution_mode = "cache_hit_direct"
-        else:
-            resolution_mode = "executed"
-        _emit_step_resolution_audit(
-            workspace=workspace,
-            stage_name=stage_name,
-            step_name=spec.name,
-            state=state,
-            resolution_mode=resolution_mode,
-            run_id=getattr(getattr(result, "run", None), "id", None),
-            cache_hit=bool(getattr(result, "cache_hit", False)),
-            recovery_meta=recovery_meta,
-        )
-        _emit_output_hydration_audit(
-            workspace=workspace,
-            settings=settings,
-            stage_name=stage_name,
-            step_name=spec.name,
-            state=state,
-            resolution_mode=resolution_mode,
-            outputs=outputs,
-            run_id=getattr(getattr(result, "run", None), "id", None),
-            cache_hit=bool(getattr(result, "cache_hit", False)),
-            recovery_meta=recovery_meta,
-        )
-
         if coupler_keys is not None:
             try:
                 current_coupler_keys_fn = getattr(coupler, "keys", None)
@@ -1624,12 +1326,6 @@ def _detect_stale_steps(
         try:
             outputs = deserialize_step_outputs(outputs_class, outputs_data)
             _coerce_outputs_path_fields(outputs, outputs_class)
-            _remap_outputs_workspace_paths(
-                outputs,
-                outputs_class,
-                workspace=workspace,
-                step_name=step_name,
-            )
             validate = getattr(outputs, "validate", None)
             if callable(validate):
                 validate(
@@ -1722,7 +1418,6 @@ def _update_coupler_from_mapping(
         path = artifact_to_existing_path(
             value,
             workspace,
-            materialize_from_archive=True,
         ) or artifact_to_path(value, workspace)
         if path is None:
             continue
@@ -1754,12 +1449,6 @@ def _restore_outputs_from_manifest(
     try:
         outputs = deserialize_step_outputs(outputs_class, outputs_data)
         _coerce_outputs_path_fields(outputs, outputs_class)
-        _remap_outputs_workspace_paths(
-            outputs,
-            outputs_class,
-            workspace=workspace,
-            step_name=step_name,
-        )
         validate = getattr(outputs, "validate", None)
         if callable(validate):
             validate(
@@ -1804,88 +1493,3 @@ def _coerce_outputs_path_fields(outputs: Any, outputs_class: Any) -> None:
                 for key, path_value in value.items()
             },
         )
-
-
-def _remap_outputs_workspace_paths(
-    outputs: Any,
-    outputs_class: Any,
-    *,
-    workspace: Any,
-    step_name: Optional[str] = None,
-) -> None:
-    """
-    Remap manifest-restored workspace-local paths into the current workspace.
-
-    Restart manifests may serialize absolute paths from an older node-local
-    workspace root such as ``/local/job123/.../<run_name>/...``. On restart,
-    the run name is stable but the node-local job root changes. When the same
-    relative path now exists under the current workspace root, rewrite the
-    deserialized path so manifest restore can succeed without rerunning the
-    step.
-    """
-
-    current_root_raw = getattr(workspace, "full_path", None)
-    if not current_root_raw:
-        return
-    current_root = Path(current_root_raw)
-    current_run_dir_name = current_root.name
-    if not current_run_dir_name:
-        return
-
-    def _is_within_root(path: Path, root: Path) -> bool:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            return False
-
-    def _remap_path(path_value: Any) -> Any:
-        if not isinstance(path_value, Path):
-            return path_value
-
-        direct_existing = resolve_existing_path(
-            str(path_value),
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-        if direct_existing:
-            return Path(direct_existing)
-
-        if _is_within_root(path_value, current_root):
-            return path_value
-
-        matching_indices = [
-            index
-            for index, part in enumerate(path_value.parts)
-            if part == current_run_dir_name
-        ]
-        for index in reversed(matching_indices):
-            suffix = path_value.parts[index + 1 :]
-            candidate = current_root.joinpath(*suffix)
-            remapped_existing = resolve_existing_path(
-                str(candidate),
-                workspace=workspace,
-                materialize_from_archive=True,
-            )
-            if remapped_existing:
-                logger.info(
-                    "Manifest restore remapped %s path from old workspace root: %s -> %s",
-                    step_name or outputs_class.__name__,
-                    path_value,
-                    remapped_existing,
-                )
-                return Path(remapped_existing)
-        return path_value
-
-    for field_name in tuple(getattr(outputs_class, "required_path_fields", ()) or ()):
-        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
-
-    for field_name in tuple(getattr(outputs_class, "optional_path_fields", ()) or ()):
-        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
-
-    for field_name in tuple(getattr(outputs_class, "dict_path_fields", ()) or ()):
-        value = getattr(outputs, field_name, None)
-        if not isinstance(value, Mapping):
-            continue
-        remapped = {key: _remap_path(path_value) for key, path_value in value.items()}
-        setattr(outputs, field_name, remapped)

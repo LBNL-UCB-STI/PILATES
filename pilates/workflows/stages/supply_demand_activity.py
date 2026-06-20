@@ -509,7 +509,6 @@ def _run_activity_demand_phase(
                     workspace=workspace,
                 ),
                 workspace=workspace,
-                materialize_from_archive=True,
             )
             if zarr_path:
                 return zarr_path
@@ -517,7 +516,6 @@ def _run_activity_demand_phase(
         return resolve_existing_path(
             candidate,
             workspace=workspace,
-            materialize_from_archive=True,
         )
 
     def _resolved_existing_numba_cache_path() -> Optional[str]:
@@ -530,7 +528,6 @@ def _run_activity_demand_phase(
                     workspace=workspace,
                 ),
                 workspace=workspace,
-                materialize_from_archive=True,
             )
             if cache_path and os.path.isdir(cache_path):
                 for _root, _dirs, files in os.walk(cache_path):
@@ -539,7 +536,6 @@ def _run_activity_demand_phase(
         cache_path = resolve_existing_path(
             os.path.join(workspace.full_path, "shared_cache", "numba"),
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if cache_path and os.path.isdir(cache_path):
             for _root, _dirs, files in os.walk(cache_path):

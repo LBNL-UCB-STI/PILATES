@@ -16,6 +16,19 @@ ALLOWED_RUNTIME_FLAG_CALL_FILES = {
     Path("pilates/runtime/launcher.py"),
     Path("pilates/workflows/surface.py"),
 }
+DELETED_RESTART_AND_AUDIT_SYMBOLS = {
+    "RestartExactRewindContract",
+    "_copy_historical_artifact_to_current",
+    "_materialize_run_output_paths",
+    "_remap_outputs_workspace_paths",
+    "_remap_workspace_local_path",
+    "_resolve_historical_workspace_artifact_path",
+    "emit_artifact_lifecycle_audit_event",
+    "emit_consist_audit_event",
+    "hydrate_missing_restart_artifacts",
+    "hydrate_rewind_runner_inputs",
+    "restart_exact_rewind_contract",
+}
 
 
 def _production_python_files() -> Iterable[Path]:
@@ -180,3 +193,61 @@ def test_legacy_archive_doctor_stays_deleted() -> None:
     legacy_doctor_path = REPO_ROOT / "pilates/runtime/legacy_archive_doctor.py"
 
     assert not legacy_doctor_path.exists()
+
+
+def test_deleted_restart_and_audit_symbols_stay_out_of_production_code() -> None:
+    violations: list[str] = []
+
+    for path in _production_python_files():
+        rel = _relative(path)
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                if node.name in DELETED_RESTART_AND_AUDIT_SYMBOLS:
+                    violations.append(f"{rel}:{node.lineno}:defines:{node.name}")
+            elif isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if alias.name in DELETED_RESTART_AND_AUDIT_SYMBOLS:
+                        violations.append(f"{rel}:{node.lineno}:imports:{alias.name}")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_name = alias.name.rsplit(".", maxsplit=1)[-1]
+                    if imported_name in DELETED_RESTART_AND_AUDIT_SYMBOLS:
+                        violations.append(
+                            f"{rel}:{node.lineno}:imports:{imported_name}"
+                        )
+
+    assert not violations, (
+        "Deleted restart hydration and audit-emitter APIs must not be defined "
+        f"or imported by production code. Violations: {violations}"
+    )
+
+
+def test_archive_materialization_flag_stays_out_of_production_code() -> None:
+    violations: list[str] = []
+
+    for path in _production_python_files():
+        rel = _relative(path)
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                arg_names = [arg.arg for arg in node.args.args]
+                arg_names.extend(arg.arg for arg in node.args.kwonlyargs)
+                if "materialize_from_archive" in arg_names:
+                    violations.append(
+                        f"{rel}:{node.lineno}:defines-arg:materialize_from_archive"
+                    )
+            elif isinstance(node, ast.Call):
+                if any(
+                    keyword.arg == "materialize_from_archive"
+                    for keyword in node.keywords
+                ):
+                    violations.append(
+                        f"{rel}:{node.lineno}:passes-kwarg:materialize_from_archive"
+                    )
+
+    assert not violations, (
+        "Archive materialization should go through Consist artifact materializers, "
+        f"not resolve_existing_path(..., materialize_from_archive=True). "
+        f"Violations: {violations}"
+    )

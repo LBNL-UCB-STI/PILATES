@@ -8,10 +8,6 @@ from pathlib import Path
 import pytest
 from consist.types import CacheOptions
 
-from pilates.runtime.consist_audit import (
-    emit_consist_audit_event,
-    reset_consist_audit_state,
-)
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
@@ -360,7 +356,7 @@ def test_run_bootstrap_phase_warns_when_fast_hashing_with_bootstrap_cache(
     assert "Bootstrap cache is enabled with fast hashing" in caplog.text
 
 
-def test_run_bootstrap_phase_cache_miss_logs_explanation_and_writes_audit_fields(
+def test_run_bootstrap_phase_cache_miss_logs_explanation(
     monkeypatch, tmp_path, caplog
 ):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
@@ -407,25 +403,6 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation_and_writes_audit_fields
     assert "BOOTSTRAP cache miss details:" in caplog.text
     assert "config_keys_changed" in caplog.text
     assert "fallbacks_used" in caplog.text
-
-    events_path = (
-        Path(workspace.full_path)
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit.jsonl"
-    )
-    events = [
-        json.loads(line)
-        for line in events_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    bootstrap_event = next(
-        event for event in events if event["event_type"] == "bootstrap_resolution"
-    )
-    assert bootstrap_event["cache_miss_reason"] == "config_changed"
-    assert bootstrap_event["cache_miss_candidate_run_id"] == "bootstrap_prior"
-    assert bootstrap_event["cache_miss_explanation"] == explanation
-
 
 def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
@@ -622,7 +599,7 @@ def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
     assert "input_keys_added" in caplog.text
 
 
-def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_path):
+def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
@@ -647,71 +624,11 @@ def test_run_bootstrap_phase_writes_bootstrap_audit_artifacts(monkeypatch, tmp_p
         seed=12345,
     )
 
-    diagnostics_dir = Path(workspace.full_path) / ".workflow" / "diagnostics"
-    events_path = diagnostics_dir / "consist_restart_audit.jsonl"
-    summary_path = diagnostics_dir / "consist_restart_audit_summary.json"
-
     assert result["bootstrap_cache_hit"] is True
-    assert events_path.exists()
-    assert summary_path.exists()
-
-    events = [
-        json.loads(line)
-        for line in events_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    bootstrap_event = next(
-        event for event in events if event["event_type"] == "bootstrap_resolution"
-    )
-    assert bootstrap_event["resolution_mode"] == "cache_hit_replay_hydrated"
-    assert bootstrap_event["bootstrap_cache_enabled"] is True
-    assert bootstrap_event["bootstrap_cache_hit"] is True
-    assert bootstrap_event["cache_probe_hit"] is True
-    assert bootstrap_event["replay_hydration_complete"] is True
-    assert bootstrap_event["fallback_rerun"] is False
-    assert bootstrap_event["fallback_rerun_triggered"] is False
-    assert bootstrap_event["scenario_id"] == "seattle-baseline"
-
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["event_counts"]["bootstrap_resolution"] == 1
-
-
-def test_consist_audit_summary_tracks_restart_hydration_snapshot(tmp_path):
-    reset_consist_audit_state()
-    workspace = DummyWorkspace(full_path=str(tmp_path / "restart-audit"))
-
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="run_context",
-        run_name="restart-audit-run",
-    )
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="restart_hydration",
-        frontier_stage="traffic_assignment",
-        frontier_step="beam_preprocess",
-        success=True,
-        hydrated_keys=["beam_plans_asim_out", "households_asim_out"],
-        missing_keys=[],
-        producer_steps_by_key={"beam_plans_asim_out": "activitysim_postprocess"},
-        fallback_reason=None,
-    )
-
-    summary_path = (
-        Path(workspace.full_path)
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit_summary.json"
-    )
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-
-    assert summary["event_counts"]["restart_hydration"] == 1
-    assert summary["restart_hydration"]["event_count"] == 1
-    assert summary["restart_hydration"]["latest_frontier_stage"] == "traffic_assignment"
-    assert summary["restart_hydration"]["latest_frontier_step"] == "beam_preprocess"
-    assert summary["restart_hydration"]["latest_success"] is True
-    assert summary["restart_hydration"]["latest_hydrated_key_count"] == 2
-    assert summary["restart_hydration"]["latest_missing_key_count"] == 0
+    assert result["cache_probe_hit"] is True
+    assert result["replay_hydration_complete"] is True
+    assert result["fallback_rerun"] is False
+    assert result["fallback_rerun_triggered"] is False
 
 
 def test_run_bootstrap_phase_cache_hit_missing_replay_outputs_triggers_fallback_rerun(

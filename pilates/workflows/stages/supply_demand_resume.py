@@ -61,7 +61,6 @@ def _resolved_existing_restore_path(value: Any, workspace: Workspace) -> Optiona
     return artifact_to_existing_path(
         value,
         workspace=workspace,
-        materialize_from_archive=True,
     )
 
 
@@ -366,12 +365,10 @@ def _restore_supply_demand_usim_inputs_for_resume(
     base_path = resolve_existing_path(
         str(base_candidate),
         workspace=workspace,
-        materialize_from_archive=True,
     )
     current_path = resolve_existing_path(
         str(current_candidate),
         workspace=workspace,
-        materialize_from_archive=True,
     )
     population_snapshot_candidate = _population_source_snapshot_candidate(
         current_candidate
@@ -379,7 +376,6 @@ def _restore_supply_demand_usim_inputs_for_resume(
     population_snapshot_path = resolve_existing_path(
         str(population_snapshot_candidate),
         workspace=workspace,
-        materialize_from_archive=True,
     )
     if base_path:
         restored[USIM_DATASTORE_BASE_H5] = base_path
@@ -611,21 +607,33 @@ def _restore_activity_demand_outputs_for_resume(
     ) -> Optional[tuple[Dict[str, Any], Dict[str, Path]]]:
         if not restored_outputs:
             return None
+        effective_outputs = dict(restored_outputs)
         resolved_paths = {
             key: _resolved_existing_restore_path(value, workspace)
-            for key, value in restored_outputs.items()
+            for key, value in effective_outputs.items()
         }
+        for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS:
+            if resolved_paths.get(key):
+                continue
+            tracker_value = tracker_outputs.get(key)
+            if tracker_value is None:
+                continue
+            tracker_path = _resolved_existing_restore_path(tracker_value, workspace)
+            if tracker_path is None:
+                continue
+            effective_outputs[key] = tracker_value
+            resolved_paths[key] = tracker_path
         missing_keys = sorted(
             key
             for key in _TRAFFIC_ASSIGNMENT_RESUME_REQUIRED_OUTPUTS
-            if key not in restored_outputs or not resolved_paths.get(key)
+            if key not in effective_outputs or not resolved_paths.get(key)
         )
         if missing_keys:
             raise RuntimeError(
                 "Restart into traffic_assignment found incomplete ActivitySim "
                 f"outputs from {source}; missing {missing_keys}"
             )
-        return restored_outputs, {
+        return effective_outputs, {
             key: Path(path) for key, path in resolved_paths.items() if path is not None
         }
 
@@ -635,7 +643,6 @@ def _restore_activity_demand_outputs_for_resume(
         resolved_manifest_path = resolve_existing_path(
             str(manifest_path),
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if resolved_manifest_path is not None:
             return resolved_manifest_path

@@ -159,7 +159,6 @@ def copy_vehicles_from_atlas(
         resolved_candidate = resolve_existing_path(
             candidate,
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if resolved_candidate is not None and os.path.exists(resolved_candidate):
             atlas_vehicle_file_loc = resolved_candidate
