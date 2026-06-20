@@ -16,6 +16,7 @@ from pilates.workflows.steps import (
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
 )
+from pilates.workflows.steps import activitysim as activitysim_steps
 from pilates.workflows.steps.activitysim import (
     _materialize_activitysim_config_references_for_archive,
 )
@@ -281,6 +282,50 @@ def test_activitysim_config_reference_materialization_populates_archive_workspac
         / "configs_extended"
         / "tour_mode_choice_coefficients.csv"
     ).read_text(encoding="utf-8") == "coef,value\nx,1\n"
+
+
+def test_activitysim_config_reference_materialization_is_cached_per_workspace(
+    monkeypatch, tmp_path
+):
+    local_run = tmp_path / "local" / "run"
+    configs_root = local_run / "activitysim" / "configs"
+    base_root = configs_root / "base"
+    base_root.mkdir(parents=True)
+
+    (base_root / "settings.yaml").write_text("models: []\n", encoding="utf-8")
+    (base_root / "tour_mode_choice.yaml").write_text("spec: x\n", encoding="utf-8")
+
+    workspace = DummyWorkspace(
+        configs_root,
+        local_run / "activitysim" / "data",
+        full_path=local_run,
+    )
+    settings = _make_settings()
+
+    with activitysim_steps._ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK:
+        activitysim_steps._ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE.clear()
+
+    calls = []
+    monkeypatch.setattr(
+        activitysim_steps,
+        "enqueue_archive_copy",
+        lambda **kwargs: calls.append((kwargs["key"], kwargs["path"])),
+    )
+
+    first = _materialize_activitysim_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+    second = _materialize_activitysim_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+
+    assert first == second
+    assert calls == [
+        ("activitysim_config_references_archived", base_root / "settings.yaml"),
+        ("activitysim_config_references_archived", base_root / "tour_mode_choice.yaml"),
+    ]
 
 
 def test_activitysim_run_metadata_filters_adapter_covered_identity_inputs(

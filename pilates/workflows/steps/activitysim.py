@@ -4,6 +4,7 @@ import inspect
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
@@ -96,6 +97,10 @@ _ACTIVITYSIM_POPULATION_TABLE_KEYS = (
     USIM_POPULATION_BLOCKS_TABLE,
 )
 _ACTIVITYSIM_CONFIG_REFERENCES_ARCHIVED_KEY = "activitysim_config_references_archived"
+_ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK = threading.Lock()
+_ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE: Dict[
+    tuple[str, str, tuple[str, ...]], Dict[str, str]
+] = {}
 
 
 def _activitysim_config_root_dirs(
@@ -137,10 +142,29 @@ def _materialize_activitysim_config_references_for_archive(
     if not workspace_root_raw:
         return materialized
     workspace_root = Path(workspace_root_raw).resolve()
-    for config_root in _activitysim_config_root_dirs(
+    config_root_dirs = _activitysim_config_root_dirs(
         settings=settings,
         workspace=workspace,
-    ):
+    )
+    if not config_root_dirs:
+        return materialized
+
+    main_configs_dir = str(
+        get_setting(settings, "activitysim.main_configs_dir", "configs")
+    )
+    cache_key = (
+        str(workspace_root),
+        main_configs_dir,
+        tuple(str(path.resolve()) for path in config_root_dirs),
+    )
+    with _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK:
+        cached_materialized = _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE.get(
+            cache_key
+        )
+        if cached_materialized is not None:
+            return dict(cached_materialized)
+
+    for config_root in config_root_dirs:
         for source_path in sorted(
             (path for path in config_root.rglob("*") if path.is_file()),
             key=lambda path: path.as_posix(),
@@ -157,6 +181,9 @@ def _materialize_activitysim_config_references_for_archive(
                 workspace=workspace,
             )
             materialized[str(rel_path)] = str(source_path)
+    if materialized:
+        with _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK:
+            _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE[cache_key] = dict(materialized)
     return materialized
 
 
