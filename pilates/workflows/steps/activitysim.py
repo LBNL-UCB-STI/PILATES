@@ -158,9 +158,7 @@ def _materialize_activitysim_config_references_for_archive(
         tuple(str(path.resolve()) for path in config_root_dirs),
     )
     with _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK:
-        cached_materialized = _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE.get(
-            cache_key
-        )
+        cached_materialized = _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE.get(cache_key)
         if cached_materialized is not None:
             return dict(cached_materialized)
 
