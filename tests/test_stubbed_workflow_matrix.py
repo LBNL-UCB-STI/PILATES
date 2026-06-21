@@ -48,14 +48,16 @@ from pilates.workflows.stages.vehicle_ownership import (
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
 from pilates.workflows.steps import StepOutputsHolder
-from tests.test_golden_stub_workflow import (
+from tests.workflow_contract_harness import (
     DummyPostprocessor,
     DummyPreprocessor,
     DummyRunner,
-    _write_file,
-    _write_parquet,
+    write_file as _write_file,
+    write_parquet as _write_parquet,
 )
 from workflow_state import WorkflowState
+
+pytest_plugins = ("tests.test_golden_stub_workflow",)
 
 
 def run_land_use_stage(

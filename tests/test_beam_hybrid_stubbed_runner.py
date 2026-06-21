@@ -16,7 +16,7 @@ from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.postprocessor import BeamPostprocessor
 from pilates.utils.settings_helper import get as real_get_setting
 from pilates.workspace import Workspace
-from tests.test_golden_stub_workflow import _build_settings
+from tests.workflow_contract_harness import build_settings as _build_settings
 from workflow_state import WorkflowState
 
 

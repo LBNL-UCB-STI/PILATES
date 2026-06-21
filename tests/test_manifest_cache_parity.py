@@ -316,6 +316,99 @@ def _run_step_mode(
     }
 
 
+def _assert_cache_manifest_parity(
+    *,
+    step_name: str,
+    workspace: DummyWorkspace,
+    settings,
+    state,
+    coupler_keys,
+    fresh_step_func,
+    cache_step_func,
+    manifest_step_func,
+    fresh_holder: StepOutputsHolder,
+    cache_holder: StepOutputsHolder,
+    manifest_holder: StepOutputsHolder,
+    fresh_coupler: DummyCoupler,
+    cache_coupler: DummyCoupler,
+    manifest_coupler: DummyCoupler,
+    holder_seed=None,
+    step_inputs=None,
+    binding=None,
+):
+    if holder_seed is not None:
+        holder_seed(fresh_holder)
+        holder_seed(cache_holder)
+        holder_seed(manifest_holder)
+
+    fresh_result = _run_step_mode(
+        step_name=step_name,
+        mode_label="fresh",
+        step_func=fresh_step_func,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder=fresh_holder,
+        coupler=fresh_coupler,
+        step_inputs=step_inputs,
+        binding=binding,
+    )
+    fresh_snapshot = fresh_result["snapshot"]
+
+    cache_result = _run_step_mode(
+        step_name=step_name,
+        mode_label="cache",
+        step_func=cache_step_func,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder=cache_holder,
+        coupler=cache_coupler,
+        holder_seed=holder_seed,
+        step_inputs=step_inputs,
+        binding=binding,
+        cache_hit=True,
+    )
+
+    manifest_outputs = _recover_manifest_outputs(
+        step_name=step_name,
+        step_func=manifest_step_func,
+        holder=manifest_holder,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler=manifest_coupler,
+        step_inputs=step_inputs,
+    )
+    assert manifest_outputs is not None
+
+    manifest_result = _run_step_mode(
+        step_name=step_name,
+        mode_label="manifest",
+        step_func=manifest_step_func,
+        workspace=workspace,
+        settings=settings,
+        state=state,
+        coupler_keys=coupler_keys,
+        holder=manifest_holder,
+        coupler=manifest_coupler,
+        holder_seed=holder_seed,
+        step_inputs=step_inputs,
+        binding=binding,
+        manifest_outputs=manifest_outputs,
+    )
+
+    assert len(fresh_result["scenario"].calls) == 1
+    assert len(cache_result["scenario"].calls) == 1
+    assert manifest_result["scenario"].calls == []
+    assert cache_result["snapshot"] == fresh_snapshot
+    assert manifest_result["snapshot"] == fresh_snapshot
+
+    return fresh_result, cache_result, manifest_result
+
+
 def test_run_workflow_cache_recovery_uses_binding_inputs_for_non_manifested_steps(
     monkeypatch, tmp_path
 ):
@@ -495,37 +588,11 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
         )
 
     _fresh_step.__consist_step__ = object()
-
-    fresh_result = _run_step_mode(
-        step_name="activitysim_preprocess",
-        mode_label="fresh",
-        step_func=_fresh_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=fresh_holder,
-        coupler=fresh_coupler,
-    )
-    fresh_snapshot = fresh_result["snapshot"]
-
     cache_holder = StepOutputsHolder()
     cache_coupler = DummyCoupler()
     cache_step = make_activitysim_preprocess_step(
         coupler=cache_coupler,
         outputs_holder=cache_holder,
-    )
-    cache_result = _run_step_mode(
-        step_name="activitysim_preprocess",
-        mode_label="cache",
-        step_func=cache_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=cache_holder,
-        coupler=cache_coupler,
-        cache_hit=True,
     )
 
     manifest_holder = StepOutputsHolder()
@@ -534,34 +601,23 @@ def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_
         coupler=manifest_coupler,
         outputs_holder=manifest_holder,
     )
-    manifest_outputs = _recover_manifest_outputs(
+
+    _assert_cache_manifest_parity(
         step_name="activitysim_preprocess",
-        step_func=manifest_step,
-        holder=manifest_holder,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler=manifest_coupler,
-    )
-    assert manifest_outputs is not None
-    manifest_result = _run_step_mode(
-        step_name="activitysim_preprocess",
-        mode_label="manifest",
-        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
-        holder=StepOutputsHolder(),
-        coupler=manifest_coupler,
-        manifest_outputs=manifest_outputs,
+        fresh_step_func=_fresh_step,
+        cache_step_func=cache_step,
+        manifest_step_func=manifest_step,
+        fresh_holder=fresh_holder,
+        cache_holder=cache_holder,
+        manifest_holder=manifest_holder,
+        fresh_coupler=fresh_coupler,
+        cache_coupler=cache_coupler,
+        manifest_coupler=manifest_coupler,
     )
-
-    assert len(fresh_result["scenario"].calls) == 1
-    assert len(cache_result["scenario"].calls) == 1
-    assert manifest_result["scenario"].calls == []
-    assert cache_result["snapshot"] == fresh_snapshot
-    assert manifest_result["snapshot"] == fresh_snapshot
 
 
 def test_activitysim_postprocess_cache_hit_recovers_from_cached_output_paths(tmp_path):
@@ -845,48 +901,11 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
         )
 
     _fresh_step.__consist_step__ = object()
-
-    fresh_result = _run_step_mode(
-        step_name="beam_preprocess",
-        mode_label="fresh",
-        step_func=_fresh_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=fresh_holder,
-        coupler=fresh_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_postprocess",
-            object(),
-        ),
-        step_inputs=step_inputs,
-    )
-    fresh_snapshot = fresh_result["snapshot"]
-
     cache_holder = StepOutputsHolder()
     cache_coupler = DummyCoupler()
     cache_step = make_beam_preprocess_step(
         coupler=cache_coupler,
         outputs_holder=cache_holder,
-    )
-
-    cache_result = _run_step_mode(
-        step_name="beam_preprocess",
-        mode_label="cache",
-        step_func=cache_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=cache_holder,
-        coupler=cache_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_postprocess",
-            object(),
-        ),
-        step_inputs=step_inputs,
-        cache_hit=True,
     )
 
     manifest_holder = StepOutputsHolder()
@@ -895,40 +914,28 @@ def test_beam_preprocess_downstream_state_matches_across_fresh_cache_and_manifes
         coupler=manifest_coupler,
         outputs_holder=manifest_holder,
     )
-    manifest_outputs = _recover_manifest_outputs(
+
+    _assert_cache_manifest_parity(
         step_name="beam_preprocess",
-        step_func=manifest_step,
-        holder=manifest_holder,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=manifest_coupler,
-        step_inputs=step_inputs,
-    )
-    assert manifest_outputs is not None
-    manifest_result = _run_step_mode(
-        step_name="beam_preprocess",
-        mode_label="manifest",
-        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
-        holder=manifest_holder,
-        coupler=manifest_coupler,
+        fresh_step_func=_fresh_step,
+        cache_step_func=cache_step,
+        manifest_step_func=manifest_step,
+        fresh_holder=fresh_holder,
+        cache_holder=cache_holder,
+        manifest_holder=manifest_holder,
+        fresh_coupler=fresh_coupler,
+        cache_coupler=cache_coupler,
+        manifest_coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_postprocess",
             object(),
         ),
         step_inputs=step_inputs,
-        manifest_outputs=manifest_outputs,
     )
-
-    assert len(fresh_result["scenario"].calls) == 1
-    assert len(cache_result["scenario"].calls) == 1
-    assert manifest_result["scenario"].calls == []
-    assert cache_result["snapshot"] == fresh_snapshot
-    assert manifest_result["snapshot"] == fresh_snapshot
 
 
 def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifest(
@@ -994,85 +1001,40 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
         )
 
     _fresh_step.__consist_step__ = object()
-
-    fresh_result = _run_step_mode(
-        step_name="activitysim_run",
-        mode_label="fresh",
-        step_func=_fresh_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=fresh_holder,
-        coupler=fresh_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_preprocess",
-            upstream_preprocess,
-        ),
-    )
-    fresh_snapshot = fresh_result["snapshot"]
-
     cache_holder = StepOutputsHolder()
     cache_coupler = DummyCoupler()
     cache_step = make_activitysim_run_step(
         coupler=cache_coupler,
         outputs_holder=cache_holder,
     )
-    cache_result = _run_step_mode(
-        step_name="activitysim_run",
-        mode_label="cache",
-        step_func=cache_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=cache_holder,
-        coupler=cache_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_preprocess",
-            upstream_preprocess,
-        ),
-        cache_hit=True,
-    )
 
     manifest_holder = StepOutputsHolder()
-    manifest_holder.set_attribute("activitysim_preprocess", upstream_preprocess)
     manifest_coupler = DummyCoupler()
     manifest_step = make_activitysim_run_step(
         coupler=manifest_coupler,
         outputs_holder=manifest_holder,
     )
-    manifest_outputs = _recover_manifest_outputs(
+
+    _assert_cache_manifest_parity(
         step_name="activitysim_run",
-        step_func=manifest_step,
-        holder=manifest_holder,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler=manifest_coupler,
-    )
-    assert manifest_outputs is not None
-    manifest_result = _run_step_mode(
-        step_name="activitysim_run",
-        mode_label="manifest",
-        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
-        coupler=manifest_coupler,
+        fresh_step_func=_fresh_step,
+        cache_step_func=cache_step,
+        manifest_step_func=manifest_step,
+        fresh_holder=fresh_holder,
+        cache_holder=cache_holder,
+        manifest_holder=manifest_holder,
+        fresh_coupler=fresh_coupler,
+        cache_coupler=cache_coupler,
+        manifest_coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_preprocess",
             upstream_preprocess,
         ),
-        manifest_outputs=manifest_outputs,
     )
-
-    assert len(fresh_result["scenario"].calls) == 1
-    assert len(cache_result["scenario"].calls) == 1
-    assert manifest_result["scenario"].calls == []
-    assert cache_result["snapshot"] == fresh_snapshot
-    assert manifest_result["snapshot"] == fresh_snapshot
 
 
 @pytest.mark.parametrize(
@@ -1683,46 +1645,11 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
         )
 
     _fresh_step.__consist_step__ = object()
-
-    fresh_result = _run_step_mode(
-        step_name="activitysim_postprocess",
-        mode_label="fresh",
-        step_func=_fresh_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=fresh_holder,
-        coupler=fresh_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_run",
-            object(),
-        ),
-    )
-    fresh_snapshot = fresh_result["snapshot"]
-
     cache_holder = StepOutputsHolder()
     cache_coupler = DummyCoupler()
     cache_step = make_activitysim_postprocess_step(
         coupler=cache_coupler,
         outputs_holder=cache_holder,
-    )
-    cache_result = _run_step_mode(
-        step_name="activitysim_postprocess",
-        mode_label="cache",
-        step_func=cache_step,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler_keys=coupler_keys,
-        holder=cache_holder,
-        coupler=cache_coupler,
-        holder_seed=lambda holder: holder.set_attribute(
-            "activitysim_run",
-            object(),
-        ),
-        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
-        cache_hit=True,
     )
 
     manifest_holder = StepOutputsHolder()
@@ -1731,36 +1658,25 @@ def test_activitysim_postprocess_downstream_state_matches_across_fresh_cache_and
         coupler=manifest_coupler,
         outputs_holder=manifest_holder,
     )
-    manifest_outputs = _recover_manifest_outputs(
+
+    _assert_cache_manifest_parity(
         step_name="activitysim_postprocess",
-        step_func=manifest_step,
-        holder=manifest_holder,
-        workspace=workspace,
-        settings=settings,
-        state=state,
-        coupler=manifest_coupler,
-        step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
-    )
-    assert manifest_outputs is not None
-    manifest_result = _run_step_mode(
-        step_name="activitysim_postprocess",
-        mode_label="manifest",
-        step_func=manifest_step,
         workspace=workspace,
         settings=settings,
         state=state,
         coupler_keys=coupler_keys,
-        coupler=manifest_coupler,
+        fresh_step_func=_fresh_step,
+        cache_step_func=cache_step,
+        manifest_step_func=manifest_step,
+        fresh_holder=fresh_holder,
+        cache_holder=cache_holder,
+        manifest_holder=manifest_holder,
+        fresh_coupler=fresh_coupler,
+        cache_coupler=cache_coupler,
+        manifest_coupler=manifest_coupler,
         holder_seed=lambda holder: holder.set_attribute(
             "activitysim_run",
             object(),
         ),
         step_inputs={USIM_DATASTORE_BASE_H5: str(usim_h5)},
-        manifest_outputs=manifest_outputs,
     )
-
-    assert len(fresh_result["scenario"].calls) == 1
-    assert len(cache_result["scenario"].calls) == 1
-    assert manifest_result["scenario"].calls == []
-    assert cache_result["snapshot"] == fresh_snapshot
-    assert manifest_result["snapshot"] == fresh_snapshot

@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
+from pathlib import Path
 from typing import Any, Callable
 
+import pandas as pd
+import yaml
+
+from pilates.config import load_config
 from pilates.runtime.context import WorkflowRuntimeContext
 
 
@@ -148,12 +153,120 @@ def build_runtime_context(
     )
 
 
+def _invoke_record_builder(
+    record_builder: Callable[..., Any],
+    model_name: str,
+    phase: str,
+    **kwargs: Any,
+) -> Any:
+    """Call ``record_builder`` with only the keyword arguments it accepts."""
+    sig = inspect.signature(record_builder)
+    if any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in sig.parameters.values()
+    ):
+        return record_builder(model_name, phase, **kwargs)
+
+    accepted = set(sig.parameters.keys())
+    filtered_kwargs = {key: value for key, value in kwargs.items() if key in accepted}
+    return record_builder(model_name, phase, **filtered_kwargs)
+
+
+def build_settings(tmp_path: Any) -> Any:
+    """Build the compact workflow config used by the hybrid stub tests."""
+    config = {
+        "run": {
+            "region": "test",
+            "scenario": "test",
+            "start_year": 2017,
+            "end_year": 2018,
+            "output_directory": str(tmp_path / "outputs"),
+            "output_run_name": "golden_stub",
+            "supply_demand_iters": 1,
+            "models": {
+                "land_use": "urbansim",
+                "travel": "beam",
+                "activity_demand": "activitysim",
+                "vehicle_ownership": "atlas",
+            },
+        },
+        "shared": {
+            "geography": {
+                "FIPS": {"county": ["00001"]},
+                "local_crs": "EPSG:4326",
+            },
+            "skims": {"fname": "skims.omx"},
+            "database": {
+                "enabled": False,
+                "type": "duckdb",
+                "path": str(tmp_path / "db.duckdb"),
+            },
+        },
+        "infrastructure": {
+            "container_manager": "docker",
+            "singularity_images": {},
+            "docker_images": {},
+            "docker_config": {"stdout": False, "pull_latest": False},
+        },
+        "urbansim": {
+            "local_data_input_folder": str(tmp_path / "usim_input"),
+            "local_mutable_data_folder": "urbansim/data",
+            "client_base_folder": "/usim",
+            "client_data_folder": "/usim/data",
+            "input_file_template": "usim_{region_id}.h5",
+            "input_file_template_year": "usim_{region_id}_{year}.h5",
+            "output_file_template": "usim_{year}.h5",
+            "command_template": "run_usim",
+            "region_mappings": {"region_to_region_id": {"test": "000"}},
+        },
+        "atlas": {
+            "host_input_folder": "atlas/input",
+            "warmstart_input_folder": "atlas/warmstart",
+            "host_mutable_input_folder": "atlas/atlas_input",
+            "host_output_folder": "atlas/atlas_output",
+            "container_input_folder": "/atlas/input",
+            "container_output_folder": "/atlas/output",
+            "basedir": "/atlas",
+            "codedir": "/atlas/code",
+            "command_template": "atlas {0}",
+        },
+        "activitysim": {
+            "local_input_folder": "activitysim/input",
+            "local_mutable_data_folder": "activitysim/data",
+            "local_output_folder": "activitysim/output",
+            "local_configs_folder": "activitysim/configs",
+            "local_mutable_configs_folder": "activitysim/configs_mutable",
+            "validation_folder": "activitysim/validation",
+            "command_template": "asim run",
+            "final_plans_folder": "activitysim/final_plans",
+            "region_mappings": {"region_to_subdir": {"test": "test"}},
+        },
+        "beam": {
+            "config": "beam.conf",
+            "local_input_folder": "beam/input",
+            "local_mutable_data_folder": "beam/input",
+            "local_output_folder": "beam/output",
+            "scenario_folder": "beam/scenario",
+            "router_directory": "router",
+            "skims_shapefile": "beam/skims.shp",
+            "skim_zone_source_id_col": "id",
+            "skim_zone_geoid_col": "geoid",
+        },
+    }
+    config_path = tmp_path / "settings.yaml"
+    with config_path.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle)
+    return load_config(str(config_path))
+
+
 class DummyPreprocessor:
     """Deterministic preprocessor stub backed by ``record_builder``."""
 
-    def __init__(self, model_name: str, record_builder: Callable[..., Any]) -> None:
+    def __init__(
+        self, model_name: str, record_builder: Callable[..., Any], state: Any = None
+    ) -> None:
         self.model_name = model_name
         self._record_builder = record_builder
+        self._state = state
 
     def preprocess(
         self,
@@ -164,15 +277,24 @@ class DummyPreprocessor:
         beam_preprocess_inputs: Any = None,
         **kwargs: Any,
     ) -> Any:
-        return self._record_builder(self.model_name, "preprocess")
+        return _invoke_record_builder(
+            self._record_builder,
+            self.model_name,
+            "preprocess",
+            state=self._state,
+            workspace=workspace,
+        )
 
 
 class DummyRunner:
     """Deterministic runner stub backed by ``record_builder``."""
 
-    def __init__(self, model_name: str, record_builder: Callable[..., Any]) -> None:
+    def __init__(
+        self, model_name: str, record_builder: Callable[..., Any], state: Any = None
+    ) -> None:
         self.model_name = model_name
         self._record_builder = record_builder
+        self._state = state
 
     def run(
         self,
@@ -181,15 +303,25 @@ class DummyRunner:
         extra_inputs: Any = None,
         previous_beam_outputs: Any = None,
     ) -> Any:
-        return self._record_builder(self.model_name, "run")
+        return _invoke_record_builder(
+            self._record_builder,
+            self.model_name,
+            "run",
+            state=self._state,
+            workspace=workspace,
+            input_store=input_store,
+        )
 
 
 class DummyPostprocessor:
     """Deterministic postprocessor stub backed by ``record_builder``."""
 
-    def __init__(self, model_name: str, record_builder: Callable[..., Any]) -> None:
+    def __init__(
+        self, model_name: str, record_builder: Callable[..., Any], state: Any = None
+    ) -> None:
         self.model_name = model_name
         self._record_builder = record_builder
+        self._state = state
 
     def postprocess(
         self,
@@ -197,4 +329,77 @@ class DummyPostprocessor:
         workspace: Any,
         model_run_hash: Any = None,
     ) -> Any:
-        return self._record_builder(self.model_name, "postprocess")
+        return _invoke_record_builder(
+            self._record_builder,
+            self.model_name,
+            "postprocess",
+            state=self._state,
+            workspace=workspace,
+            raw_outputs=raw_outputs,
+        )
+
+
+def write_file(path: Any, content: str = "x") -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    file_path.write_text(content)
+
+
+def write_csv(path: Any, df: pd.DataFrame) -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_csv(file_path, index=False)
+
+
+def write_parquet(path: Any, df: pd.DataFrame) -> None:
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    df.to_parquet(file_path, index=False)
+
+
+def write_usim_toy_h5(path: Any, *, with_year_prefix: int | None = None) -> None:
+    """Create a minimal UrbanSim-style HDF5 with the core tables used in tests."""
+    file_path = Path(path)
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+
+    table_prefix = f"/{with_year_prefix}" if with_year_prefix is not None else ""
+    households_key = f"{table_prefix}/households" if table_prefix else "households"
+    blocks_key = f"{table_prefix}/blocks" if table_prefix else "blocks"
+    persons_key = f"{table_prefix}/persons" if table_prefix else "persons"
+    residential_key = (
+        f"{table_prefix}/residential_units" if table_prefix else "residential_units"
+    )
+    jobs_key = f"{table_prefix}/jobs" if table_prefix else "jobs"
+    graveyard_key = f"{table_prefix}/graveyard" if table_prefix else "graveyard"
+
+    households = pd.DataFrame({"income": [100000.0, 70000.0]}, index=[1, 2])
+    households.index.name = "household_id"
+
+    blocks = pd.DataFrame({"zone_id": [10, 11]}, index=["0001", "0002"])
+    blocks.index.name = "block_id"
+
+    persons = pd.DataFrame(
+        {"household_id": [1, 2], "age": [40, 35]},
+        index=[101, 102],
+    )
+    persons.index.name = "person_id"
+
+    residential_units = pd.DataFrame(
+        {"block_id": ["0001", "0002"], "year_built": [1990, 2005]},
+        index=[1001, 1002],
+    )
+    residential_units.index.name = "unit_id"
+
+    jobs = pd.DataFrame({"block_id": ["0001", "0002"]}, index=[5001, 5002])
+    jobs.index.name = "job_id"
+
+    graveyard = pd.DataFrame({"household_id": [1]}, index=[201])
+    graveyard.index.name = "person_id"
+
+    with pd.HDFStore(file_path, mode="w") as store:
+        store.put(households_key, households)
+        store.put(blocks_key, blocks)
+        store.put(persons_key, persons)
+        store.put(residential_key, residential_units)
+        store.put(jobs_key, jobs)
+        store.put(graveyard_key, graveyard)
