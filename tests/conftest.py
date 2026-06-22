@@ -32,3 +32,11 @@ def _disable_consist_logging_for_isolated_step_tests(request):
 @pytest.fixture(autouse=True)
 def _run_tests_from_repo_root(monkeypatch):
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
+
+
+@pytest.fixture
+def golden_stub_env(tmp_path, monkeypatch):
+    """Expose the golden stub environment without globally loading its module."""
+    from tests.test_golden_stub_workflow import golden_stub_env as _golden_stub_env
+
+    yield from _golden_stub_env.__wrapped__(tmp_path, monkeypatch)

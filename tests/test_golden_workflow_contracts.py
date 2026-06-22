@@ -40,8 +40,6 @@ from tests.test_golden_stub_workflow import (
 )
 from tests.workflow_contract_harness import build_runtime_context
 
-pytest_plugins = ("tests.test_golden_stub_workflow",)
-
 
 def run_land_use_stage(
     *, context=None, settings=None, state=None, workspace=None, **kwargs

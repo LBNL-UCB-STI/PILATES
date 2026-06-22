@@ -57,8 +57,6 @@ from tests.workflow_contract_harness import (
 )
 from workflow_state import WorkflowState
 
-pytest_plugins = ("tests.test_golden_stub_workflow",)
-
 
 def run_land_use_stage(
     *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
