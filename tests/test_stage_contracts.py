@@ -382,8 +382,26 @@ def stage_env(tmp_path, monkeypatch):
     """
 
     from pilates.utils import consist_runtime as cr
+    from pilates.workflows.stages import land_use as land_use_stage
+    from pilates.workflows.stages import supply_demand as supply_demand_stage
+    from pilates.workflows.stages import vehicle_ownership as vehicle_ownership_stage
 
     cr.set_enabled(False)
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+    monkeypatch.setattr(
+        vehicle_ownership_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
+    monkeypatch.setattr(
+        supply_demand_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
     settings = _build_settings(tmp_path)
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = True
@@ -623,11 +641,17 @@ def stage_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
-def test_land_use_stage_contract(stage_env):
+def test_land_use_stage_contract(stage_env, monkeypatch):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
+    from pilates.workflows.stages import land_use as land_use_stage
 
     _write_root_population_h5(Path(stage_env["usim_output_path"]))
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
     outputs_holder = StepOutputsHolder()
 
     usim_inputs = run_land_use_stage(
@@ -651,7 +675,6 @@ def test_land_use_stage_contract(stage_env):
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
-@pytest.mark.slow_ci
 def test_land_use_stage_aliases_root_population_snapshot_tables_for_non_start_year(
     stage_env,
 ):
