@@ -1099,11 +1099,7 @@ def _required_restart_handoff_paths(
                     continue
                 if Path(raw_path).exists():
                     paths_by_key[key].append(raw_path)
-    return {
-        key: sorted(set(paths))
-        for key, paths in paths_by_key.items()
-        if paths
-    }
+    return {key: sorted(set(paths)) for key, paths in paths_by_key.items() if paths}
 
 
 def _latest_completed_runs(tracker: Tracker) -> pd.DataFrame:
@@ -1209,9 +1205,7 @@ def _snapshot(
         ),
         "parent_edges": _normalized_parent_edges(runtime.tracker),
         "run_index_rows": _run_index_rows(runtime.tracker, runtime.workspace.full_path),
-        "compatibility_fallback_steps": sorted(
-            set(compatibility_fallback_steps or [])
-        ),
+        "compatibility_fallback_steps": sorted(set(compatibility_fallback_steps or [])),
     }
     _debug(f"snapshot:complete name={runtime.settings.run.output_run_name}")
     return out
@@ -1280,11 +1274,7 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             {"missing": missing_handoffs},
         )
         unresolved_handoffs = {
-            key: [
-                path
-                for path in paths
-                if not Path(path).exists()
-            ]
+            key: [path for path in paths if not Path(path).exists()]
             for key, paths in snapshot["restart_handoff_paths"].items()
         }
         unresolved_handoffs = {

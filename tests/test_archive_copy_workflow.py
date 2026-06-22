@@ -542,11 +542,7 @@ def test_archive_copy_coalesces_pending_updates_for_same_destination(
         str(source),
     )
 
-    dest = str(
-        archive_root
-        / ".workflow"
-        / "year_2018_iteration_0.yaml"
-    )
+    dest = str(archive_root / ".workflow" / "year_2018_iteration_0.yaml")
     assert ch._archive_queue is not None
     assert ch._archive_queue.qsize() == 1
     assert dest in ch._archive_pending_tasks

@@ -356,9 +356,7 @@ def test_run_bootstrap_phase_warns_when_fast_hashing_with_bootstrap_cache(
     assert "Bootstrap cache is enabled with fast hashing" in caplog.text
 
 
-def test_run_bootstrap_phase_cache_miss_logs_explanation(
-    monkeypatch, tmp_path, caplog
-):
+def test_run_bootstrap_phase_cache_miss_logs_explanation(monkeypatch, tmp_path, caplog):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
 
@@ -403,6 +401,7 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation(
     assert "BOOTSTRAP cache miss details:" in caplog.text
     assert "config_keys_changed" in caplog.text
     assert "fallbacks_used" in caplog.text
+
 
 def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatch):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)

@@ -159,9 +159,7 @@ class _CompileArtifactMaterializingTracker:
         assert preserve_existing is True
         assert on_missing == "warn"
         assert validate_content_hash == "if-present"
-        destination = Path(target_root) / artifact.path.relative_to(
-            artifact.local_root
-        )
+        destination = Path(target_root) / artifact.path.relative_to(artifact.local_root)
         if artifact.archive_path.is_dir():
             shutil.copytree(artifact.archive_path, destination, dirs_exist_ok=True)
         else:
