@@ -573,6 +573,7 @@ def stage_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
+@pytest.mark.slow_ci
 def test_land_use_stage_contract(stage_env):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder

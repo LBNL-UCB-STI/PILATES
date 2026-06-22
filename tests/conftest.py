@@ -34,6 +34,14 @@ def _run_tests_from_repo_root(monkeypatch):
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
 
 
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "slow_ci: tests excluded from the default CI pytest run because they are"
+        " long-running end-to-end coverage",
+    )
+
+
 @pytest.fixture
 def golden_stub_env(tmp_path, monkeypatch):
     """Expose the golden stub environment without globally loading its module."""
