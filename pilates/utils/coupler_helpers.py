@@ -34,7 +34,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
 )
 from pilates.runtime.archive_paths import (
-    ARCHIVE_LOCAL_ENV as _ARCHIVE_LOCAL_ENV,
     archive_roots as _archive_roots,
     resolve_archive_path as _resolve_archive_path,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,

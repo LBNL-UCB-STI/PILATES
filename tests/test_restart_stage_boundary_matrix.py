@@ -66,7 +66,6 @@ from pilates.workflows.stages.supply_demand import (
 )
 from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
-    _emit_beam_preprocess_binding_diagnostic,
     _emit_beam_restart_recovery_readiness_diagnostic,
     _maybe_fail_after_beam_run_for_canary,
     beam_preprocess_binding_diagnostic_payload,

@@ -1,5 +1,4 @@
 from pathlib import Path
-import json
 from types import SimpleNamespace
 from typing import Optional
 

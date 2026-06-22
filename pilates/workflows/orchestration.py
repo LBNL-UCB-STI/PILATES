@@ -25,7 +25,6 @@ from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
     record_published_coupler_keys,
-    resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
@@ -43,7 +42,6 @@ from pilates.utils.consist_types import (
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     ValidationContext,
-    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     required_outputs_for_step_outputs_class,
     step_output_mapping,
