@@ -573,11 +573,17 @@ def stage_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
-def test_land_use_stage_contract(stage_env):
+def test_land_use_stage_contract(stage_env, monkeypatch):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
+    from pilates.workflows.stages import land_use as land_use_stage
 
     _write_root_population_h5(Path(stage_env["usim_output_path"]))
+    monkeypatch.setattr(
+        land_use_stage,
+        "flush_archive_queue",
+        lambda timeout=None, fail_on_timeout=False: None,
+    )
     outputs_holder = StepOutputsHolder()
 
     usim_inputs = run_land_use_stage(
