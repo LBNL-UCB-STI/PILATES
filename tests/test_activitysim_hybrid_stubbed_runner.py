@@ -25,7 +25,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
 )
-from tests.test_golden_stub_workflow import _build_settings
+from tests.workflow_contract_harness import build_settings as _build_settings
 from workflow_state import WorkflowState
 
 

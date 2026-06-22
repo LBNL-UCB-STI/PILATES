@@ -195,6 +195,19 @@ def seed_supply_demand_parent_run_ids_for_resume(
             )
 
     seen_run_ids: set[str] = set()
+    run_by_id_cache: dict[str, Optional[Any]] = {}
+
+    def _cached_tracker_run_by_id(run_id: str) -> Optional[Any]:
+        cached_run = run_by_id_cache.get(run_id)
+        if run_id in run_by_id_cache:
+            return cached_run
+        run = _find_tracker_run_by_id(
+            tracker=tracker,
+            run_id=run_id,
+        )
+        run_by_id_cache[run_id] = run
+        return run
+
     candidate_paths: list[Path] = []
     for workflow_dir in workflow_dirs:
         if not workflow_dir.exists():
@@ -219,10 +232,7 @@ def seed_supply_demand_parent_run_ids_for_resume(
                 else exact_beam_run_id
             )
             if exact_run_id:
-                exact_run = _find_tracker_run_by_id(
-                    tracker=tracker,
-                    run_id=exact_run_id,
-                )
+                exact_run = _cached_tracker_run_by_id(exact_run_id)
                 tracker_year = (
                     getattr(exact_run, "year", None) if exact_run is not None else None
                 )

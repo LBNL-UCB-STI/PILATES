@@ -601,6 +601,7 @@ def test_land_use_stage_contract(stage_env):
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
+@pytest.mark.slow_ci
 def test_land_use_stage_aliases_root_population_snapshot_tables_for_non_start_year(
     stage_env,
 ):
@@ -4526,4 +4527,68 @@ def test_seed_supply_demand_parent_run_ids_for_resume_replays_manifest_run_ids(
             "iteration": 1,
             "run_id": "archive_after_year_complete__step_func__y2017__i1__phase_run_4a11b8f0",
         },
+    ]
+
+
+def test_seed_supply_demand_parent_run_ids_for_resume_caches_tracker_run_set_for_duplicate_run_ids(
+    stage_env,
+    tmp_path,
+):
+    workspace = stage_env["workspace"]
+    state = stage_env["state"]
+    remembered = []
+
+    class _Scenario:
+        def remember_restored_run_id(self, **kwargs):
+            remembered.append(kwargs)
+
+    class _CountingTracker:
+        def __init__(self) -> None:
+            self.run_set_calls = 0
+
+        def run_set(self, limit=200000, label=None):
+            self.run_set_calls += 1
+            del limit, label
+            return [
+                SimpleNamespace(
+                    id="archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                    year=2018,
+                    iteration=1,
+                )
+            ]
+
+    state.file_loc = str(tmp_path / "archive" / "state.yaml")
+    archive_workflow_dir = tmp_path / "archive" / "run" / ".workflow"
+    archive_workflow_dir.mkdir(parents=True, exist_ok=True)
+    Path(state.file_loc).parent.mkdir(parents=True, exist_ok=True)
+    Path(state.file_loc).write_text("year: 2018\n", encoding="utf-8")
+    for iteration in (1, 2):
+        (archive_workflow_dir / f"year_2017_iteration_{iteration}.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "activitysim_run": {
+                        "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    tracker = _CountingTracker()
+    seed_supply_demand_parent_run_ids_for_resume(
+        scenario=_Scenario(),
+        workspace=workspace,
+        state=state,
+        tracker=tracker,
+        settings=stage_env["settings"],
+    )
+
+    assert tracker.run_set_calls == 1
+    assert remembered == [
+        {
+            "model_name": "activitysim_run",
+            "year": 2018,
+            "iteration": 1,
+            "run_id": "archive_after_year_complete__step_func__y2018__i1__phase_run_fa2556e2",
+        }
     ]

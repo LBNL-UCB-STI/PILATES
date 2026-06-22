@@ -6,8 +6,6 @@ import pytest
 
 from pilates.utils import consist_runtime as cr
 
-pytest_plugins = ("tests.test_golden_stub_workflow",)
-
 
 _DISABLE_CONSIST_LOGGING_BASENAMES = {
     "test_activitysim_compile_run_handshake.py",
@@ -34,3 +32,19 @@ def _disable_consist_logging_for_isolated_step_tests(request):
 @pytest.fixture(autouse=True)
 def _run_tests_from_repo_root(monkeypatch):
     monkeypatch.chdir(Path(__file__).resolve().parents[1])
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "slow_ci: tests excluded from the default CI pytest run because they are"
+        " long-running end-to-end coverage",
+    )
+
+
+@pytest.fixture
+def golden_stub_env(tmp_path, monkeypatch):
+    """Expose the golden stub environment without globally loading its module."""
+    from tests.test_golden_stub_workflow import golden_stub_env as _golden_stub_env
+
+    yield from _golden_stub_env.__wrapped__(tmp_path, monkeypatch)

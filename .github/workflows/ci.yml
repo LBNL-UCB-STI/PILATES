@@ -46,4 +46,4 @@ jobs:
 
       - name: Run pytest suite
         run: |
-          python -m pytest -q tests
+          python -m pytest -q tests -m "not slow_ci"

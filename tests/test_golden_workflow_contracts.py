@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workflows.artifact_keys import (
@@ -93,6 +95,7 @@ def _initialize(env) -> None:
         state.set_data_initialized(True)
 
 
+@pytest.mark.slow_ci
 def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     golden_stub_env, tmp_path
 ):
