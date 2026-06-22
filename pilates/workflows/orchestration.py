@@ -29,6 +29,7 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.workflows.catalog import (
+    workflow_step_contracts_by_name,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
@@ -138,6 +139,77 @@ def _normalize_key_iter(values: Optional[Any]) -> list[str]:
     if isinstance(values, str):
         return [values]
     return [str(key) for key in values]
+
+
+def _step_scope_fields(
+    *,
+    stage_name: str,
+    step_name: str,
+    state: Any,
+) -> Dict[str, Any]:
+    simulation_year = getattr(state, "current_year", None)
+    if simulation_year is None:
+        simulation_year = getattr(state, "year", None)
+    forecast_year = getattr(state, "forecast_year", None)
+    atlas_year = getattr(state, "atlas_year", None)
+
+    if atlas_year is not None and step_name.startswith("atlas_"):
+        year = atlas_year
+    elif step_name.startswith(("activitysim_", "beam_", "atlas_")):
+        year = forecast_year if forecast_year is not None else simulation_year
+    else:
+        year = simulation_year
+
+    iteration = getattr(state, "iteration", None)
+    if iteration is None:
+        iteration = getattr(state, "current_inner_iter", None)
+
+    scope = {
+        "year": year,
+        "simulation_year": simulation_year,
+        "forecast_year": forecast_year,
+        "iteration": iteration,
+    }
+    if atlas_year is not None:
+        scope["atlas_year"] = atlas_year
+    return {key: value for key, value in scope.items() if value is not None}
+
+
+def _format_dynamic_output_key(pattern: str, scope: Mapping[str, Any]) -> Optional[str]:
+    try:
+        return pattern.format(**scope)
+    except KeyError:
+        return None
+
+
+def _declared_required_and_optional_output_keys(
+    step_name: str,
+    *,
+    settings: Optional[Any] = None,
+    state: Optional[Any] = None,
+) -> tuple[list[str], list[str], list[str]]:
+    contracts = workflow_step_contracts_by_name(settings=settings)
+    contract = contracts.get(step_name)
+    if contract is None:
+        return [], [], []
+
+    declared = list(contract.get("output_keys") or [])
+    optional = list(contract.get("optional_output_keys") or [])
+    required = list(declared)
+
+    dynamic_families = list(contract.get("dynamic_output_families") or [])
+    if dynamic_families:
+        scope = _step_scope_fields(
+            stage_name=str(contract.get("stage_name") or ""),
+            step_name=step_name,
+            state=state or SimpleNamespace(),
+        )
+        for family in dynamic_families:
+            expanded = _format_dynamic_output_key(str(family), scope)
+            if expanded is not None:
+                required.append(expanded)
+
+    return declared, list(dict.fromkeys(required)), optional
 
 
 def _resolved_input_keys_for_step(
