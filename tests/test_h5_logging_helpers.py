@@ -155,20 +155,25 @@ def test_h5_container_requires_explicit_recovery_policy(monkeypatch):
     assert calls == []
 
 
-def test_h5_recovery_policy_fields_are_preserved_for_lifecycle_metadata():
-    fields = ch._artifact_lifecycle_fields_from_meta(
-        {
-            "h5_container": True,
-            "container_recovery_unit": "parent_file",
-            "child_recovery_policy": "descriptive_only",
-            "representation_policy": "native_h5",
-        }
+def test_h5_recovery_policy_fields_are_preserved_in_container_metadata(monkeypatch):
+    calls = []
+    _install_consist_stub(monkeypatch, calls)
+
+    ch.log_output_only(
+        key="usim_datastore_h5",
+        path="/tmp/data.h5",
+        description="test",
+        h5_container=True,
+        representation_policy="native_h5",
+        **_H5_PARENT_POLICY,
     )
 
-    assert fields["h5_container"] is True
-    assert fields["container_recovery_unit"] == "parent_file"
-    assert fields["child_recovery_policy"] == "descriptive_only"
-    assert fields["representation_policy"] == "native_h5"
+    assert calls
+    assert calls[0][0] == "h5_container"
+    meta = calls[0][3]
+    assert meta["container_recovery_unit"] == "parent_file"
+    assert meta["child_recovery_policy"] == "descriptive_only"
+    assert meta["representation_policy"] == "native_h5"
 
 
 def test_log_beam_r5_osm_input_skips_when_config_cache_tables_missing(monkeypatch):

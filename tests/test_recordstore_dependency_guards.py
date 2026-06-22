@@ -108,29 +108,50 @@ def test_update_coupler_from_mapping_materializes_historical_workspace_artifact(
 ) -> None:
     current_local = tmp_path / "local" / "current-run"
     current_archive = tmp_path / "archive" / "current-run"
-    cached_archive = tmp_path / "archive" / "cached-run"
     rel_path = "activitysim/output/year-2018-iteration-0/households.parquet"
-    source = cached_archive / rel_path
+    source = current_archive / rel_path
     source.parent.mkdir(parents=True)
     source.write_text("households", encoding="utf-8")
 
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(current_local))
     monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(current_archive))
+
+    materialize_calls = []
+
+    def _materialize_artifact(
+        artifact,
+        *,
+        target_root,
+        source_root,
+        preserve_existing,
+        on_missing,
+        validate_content_hash,
+    ):
+        materialize_calls.append(
+            {
+                "artifact": artifact,
+                "target_root": target_root,
+                "source_root": source_root,
+                "preserve_existing": preserve_existing,
+                "on_missing": on_missing,
+                "validate_content_hash": validate_content_hash,
+            }
+        )
+        destination = Path(target_root) / rel_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(source.read_bytes())
+        return SimpleNamespace(path=destination)
+
     monkeypatch.setattr(
         coupler_helpers.cr,
         "current_tracker",
-        lambda: SimpleNamespace(
-            get_run=lambda run_id: SimpleNamespace(
-                id=run_id,
-                parent_run_id="cached-run",
-                meta={"_physical_run_dir": str(tmp_path / "local" / "cached-run")},
-            )
-        ),
+        lambda: SimpleNamespace(materialize_artifact=_materialize_artifact),
     )
 
     artifact = SimpleNamespace(
         key="households_asim_out",
         container_uri=f"workspace://{rel_path}",
+        path=str(current_local / rel_path),
         run_id="cached-step-run",
         meta={},
     )
@@ -144,7 +165,17 @@ def test_update_coupler_from_mapping_materializes_historical_workspace_artifact(
 
     expected_local = current_local / rel_path
     assert expected_local.read_text(encoding="utf-8") == "households"
-    assert coupler.values == {"households_asim_out": str(expected_local)}
+    assert coupler.values == {"households_asim_out": artifact}
+    assert materialize_calls == [
+        {
+            "artifact": artifact,
+            "target_root": str(current_local),
+            "source_root": str(current_archive),
+            "preserve_existing": True,
+            "on_missing": "warn",
+            "validate_content_hash": "if-present",
+        }
+    ]
 
 
 def test_iter_step_output_items_materializes_direct_typed_output_items(

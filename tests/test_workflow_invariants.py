@@ -44,6 +44,7 @@ from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
+    _detect_stale_steps,
     _recover_step_outputs,
     run_manifested_steps,
 )
@@ -913,7 +914,7 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
     ]["households_asim_out"] == str(new_post_path)
 
 
-def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
+def test_manifest_restore_treats_workspace_rooted_atlas_paths_as_stale(tmp_path):
     old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
     new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
     workspace = _ManifestWorkspace(new_root)
@@ -965,50 +966,19 @@ def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
     manifest_path.write_text(yaml.safe_dump(manifest))
 
     holder = StepOutputsHolder()
-    coupler = _ManifestCoupler()
-    scenario = _ManifestScenario(cache_hit=False)
     state = SimpleNamespace(year=2023, forecast_year=2029, atlas_year=2023, iteration=0)
 
-    run_manifested_steps(
-        stage_name="atlas",
-        steps=[
-            StepRef(
-                name="atlas_preprocess",
-                step_func=make_atlas_preprocess_step(
-                    coupler=coupler,
-                    outputs_holder=holder,
-                ),
-            ),
-            StepRef(
-                name="atlas_run",
-                step_func=make_atlas_run_step(
-                    coupler=coupler,
-                    outputs_holder=holder,
-                ),
-            ),
-        ],
-        outputs_holder=holder,
-        manifest_config=ManifestConfig(path=manifest_path),
-        scenario=scenario,
-        state=state,
+    stale_steps = _detect_stale_steps(
+        manifest,
+        holder,
+        workspace,
         settings=SimpleNamespace(),
-        workspace=workspace,
-        coupler=coupler,
-        name_suffix="2023_i0",
-        iteration=0,
+        state=state,
     )
 
-    assert scenario.calls == []
-    assert holder.atlas_preprocess is not None
-    assert holder.atlas_run is not None
-    assert holder.atlas_preprocess.atlas_mutable_input_dir == current_atlas_input_dir
-    assert (
-        holder.atlas_preprocess.prepared_inputs["atlas_households_csv"]
-        == current_households_csv
-    )
-    assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
-    assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
-    assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv
+    assert stale_steps == {"atlas_preprocess", "atlas_run"}
+    assert holder.atlas_preprocess is None
+    assert holder.atlas_run is None
 
 
 def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(
