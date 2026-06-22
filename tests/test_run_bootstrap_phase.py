@@ -1638,6 +1638,15 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     assert state.run_info_path == prepared.archive_state_path
     assert create_tracker_kwargs["run_dir"] == prepared.archive_run_dir
     assert create_tracker_kwargs["mounts"]["workspace"] == prepared.local_run_dir
+    assert create_tracker_kwargs["mounts"]["beam_input"] == os.path.join(
+        prepared.local_run_dir,
+        "beam",
+        "input",
+    )
+    assert create_tracker_kwargs["archive_mounts"] == {
+        "workspace": ".",
+        "beam_input": "beam/input",
+    }
     assert tracker.trace_calls == [
         {
             "name": "workspace_setup",
@@ -2030,6 +2039,7 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     repo_root = Path(__file__).resolve().parents[1]
     inputs_mount = Path(tracker_kwargs["mounts"]["inputs"])
     workspace_mount = Path(tracker_kwargs["mounts"]["workspace"])
+    beam_input_mount = Path(tracker_kwargs["mounts"]["beam_input"])
     project_root = Path(tracker_kwargs["project_root"])
     assert archive_run_dir.parent == archive_root
     assert archive_run_dir.name.startswith(
@@ -2038,6 +2048,11 @@ def test_main_enables_external_paths_for_archive_to_local_tracker_topology(
     assert inputs_mount == repo_root.resolve()
     assert workspace_mount.parent == local_root
     assert workspace_mount.name == archive_run_dir.name
+    assert beam_input_mount == workspace_mount / "beam" / "input"
+    assert tracker_kwargs["archive_mounts"] == {
+        "workspace": ".",
+        "beam_input": "beam/input",
+    }
     assert project_root == repo_root.resolve()
     assert tracker_kwargs["allow_external_paths"] is True
     assert os.environ["PILATES_LOCAL_RUN_DIR"] == str(workspace_mount)

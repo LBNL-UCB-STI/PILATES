@@ -16,6 +16,7 @@ from typing import Any, Iterable, Optional, Sequence
 
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
+from pilates.runtime.failure_hints import log_consist_cli_instructions
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import RunLike
 from pilates.utils.consist_db_snapshot import (
@@ -43,6 +44,7 @@ class PromotionResult:
     source_run_dir: str
     dry_run: bool
     verify_only: bool
+    merge_db_only: bool
     db_path: Optional[str]
     marker_path: Optional[str]
     root_run_id: Optional[str] = None
@@ -60,7 +62,14 @@ class PromotionResult:
 
     @property
     def success(self) -> bool:
-        return bool(self.roots) and not self.failed_roots
+        if self.failed_roots:
+            return False
+        if self.merge_db_only:
+            return bool(
+                self.merge_result is not None
+                and not self.merge_result.get("skipped", False)
+            )
+        return bool(self.roots)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -143,7 +152,12 @@ def _promotion_copy_ignore(
     except ValueError:
         return set()
     if rel == Path("activitysim") / "output":
-        return {"final_pipeline"} if "final_pipeline" in names else set()
+        ignored: set[str] = set()
+        if "final_pipeline" in names:
+            ignored.add("final_pipeline")
+        if "cache" in names:
+            ignored.add("cache")
+        return ignored
     if rel == Path("shared_cache"):
         return {"numba"} if "numba" in names else set()
     if rel == Path(".consist") / "snapshots":
@@ -156,6 +170,8 @@ def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
     destination_run_dir.parent.mkdir(parents=True, exist_ok=True)
     if (source_run_dir / "activitysim" / "output" / "final_pipeline").exists():
         logger.info("Skipping ActivitySim final_pipeline tree during promotion copy")
+    if (source_run_dir / "activitysim" / "output" / "cache").exists():
+        logger.info("Skipping ActivitySim runtime cache tree during promotion copy")
     if (source_run_dir / "shared_cache" / "numba").exists():
         logger.info("Skipping shared numba cache during promotion copy")
     if (source_run_dir / ".consist" / "snapshots" / "history").exists():
@@ -170,6 +186,7 @@ def _copy_run_tree(source_run_dir: Path, destination_run_dir: Path) -> None:
     )
     excluded_paths = [
         destination_run_dir / "activitysim" / "output" / "final_pipeline",
+        destination_run_dir / "activitysim" / "output" / "cache",
         destination_run_dir / "shared_cache" / "numba",
         destination_run_dir / ".consist" / "snapshots" / "history",
     ]
@@ -191,6 +208,8 @@ def _tree_inventory(root: Path) -> tuple[int, int, int]:
             rel = None
         if rel == Path("activitysim") / "output" and "final_pipeline" in dirs:
             dirs.remove("final_pipeline")
+        if rel == Path("activitysim") / "output" and "cache" in dirs:
+            dirs.remove("cache")
         if rel == Path("shared_cache") and "numba" in dirs:
             dirs.remove("numba")
         if rel == Path(".consist") / "snapshots" and "history" in dirs:
@@ -351,9 +370,7 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
 
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
     if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+        return set()
 
     db = DatabaseManager(str(resolved_main_db_path))
     try:
@@ -362,6 +379,20 @@ def _existing_main_run_ids(main_db_path: str | os.PathLike[str]) -> set[str]:
         return {str(row[0]) for row in rows}
     finally:
         db.engine.dispose()
+
+
+def _copy_db_file_with_wal(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    source_wal = Path(f"{source}.wal")
+    if source_wal.exists():
+        shutil.copy2(source_wal, Path(f"{destination}.wal"))
+
+
+def _remove_db_file_with_wal(path: Path) -> None:
+    path.unlink(missing_ok=True)
+    wal_path = Path(f"{path}.wal")
+    wal_path.unlink(missing_ok=True)
 
 
 def _expand_run_subtree(root_run_id: str, runs: Sequence[Any]) -> list[str]:
@@ -611,10 +642,7 @@ def _merge_scoped_run_db(
 ) -> dict[str, Any]:
     conflict = _validate_merge_conflict(conflict)
     resolved_main_db_path = _resolve_db_file_path(main_db_path)
-    if not resolved_main_db_path.exists():
-        raise FileNotFoundError(
-            f"Main Consist DB does not exist: {resolved_main_db_path}"
-        )
+    main_db_preexisting = resolved_main_db_path.exists()
 
     try:
         from consist.core.maintenance import DatabaseMaintenance
@@ -655,11 +683,16 @@ def _merge_scoped_run_db(
                 include_children=True,
                 dry_run=False,
             )
-            target_db = DatabaseManager(str(resolved_main_db_path))
+            preview_target_db_path = (
+                resolved_main_db_path
+                if main_db_preexisting
+                else Path(tmpdir) / resolved_main_db_path.name
+            )
+            target_db = DatabaseManager(str(preview_target_db_path))
             try:
                 target_maintenance = DatabaseMaintenance(
                     db=target_db,
-                    run_dir=resolved_main_db_path.parent,
+                    run_dir=preview_target_db_path.parent,
                 )
                 merge_result = target_maintenance.merge(
                     preview_shard,
@@ -669,35 +702,36 @@ def _merge_scoped_run_db(
                 )
             finally:
                 target_db.engine.dispose()
-            payload = {
-                "dry_run": True,
-                "main_db_path": str(resolved_main_db_path),
-                "root_run_id": root_run_id,
-                "shard_path": None,
-                "temporary_shard_path": str(preview_shard),
-                "temporary_shard_removed": True,
-                "export_result": asdict(export_result),
-                "merge_result": asdict(merge_result),
-            }
+                payload = {
+                    "dry_run": True,
+                    "main_db_path": str(resolved_main_db_path),
+                    "main_db_seeded": not main_db_preexisting,
+                    "root_run_id": root_run_id,
+                    "shard_path": None,
+                    "temporary_shard_path": str(preview_shard),
+                    "temporary_shard_removed": True,
+                    "export_result": asdict(export_result),
+                    "merge_result": asdict(merge_result),
+                }
             return _json_safe(payload)
 
-    target_db = DatabaseManager(str(resolved_main_db_path))
-    try:
-        target_maintenance = DatabaseMaintenance(
-            db=target_db,
-            run_dir=resolved_main_db_path.parent,
-        )
-        merge_result = target_maintenance.merge(
-            shard_output,
-            conflict=conflict,
-            include_snapshots=False,
-            dry_run=False,
-        )
-    finally:
-        target_db.engine.dispose()
-
-    return _json_safe(
-        {
+    if main_db_preexisting:
+        target_db = DatabaseManager(str(resolved_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=resolved_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+        _remove_db_file_with_wal(shard_output)
+        payload = {
             "dry_run": False,
             "main_db_path": str(resolved_main_db_path),
             "root_run_id": root_run_id,
@@ -705,7 +739,37 @@ def _merge_scoped_run_db(
             "export_result": asdict(export_result),
             "merge_result": asdict(merge_result),
         }
-    )
+        return _json_safe(payload)
+
+    with tempfile.TemporaryDirectory(prefix="pilates-promotion-main-db-") as tmpdir:
+        temp_main_db_path = Path(tmpdir) / resolved_main_db_path.name
+        target_db = DatabaseManager(str(temp_main_db_path))
+        try:
+            target_maintenance = DatabaseMaintenance(
+                db=target_db,
+                run_dir=temp_main_db_path.parent,
+            )
+            merge_result = target_maintenance.merge(
+                shard_output,
+                conflict=conflict,
+                include_snapshots=False,
+                dry_run=False,
+            )
+        finally:
+            target_db.engine.dispose()
+
+        _copy_db_file_with_wal(temp_main_db_path, resolved_main_db_path)
+        _remove_db_file_with_wal(shard_output)
+        payload = {
+            "dry_run": False,
+            "main_db_path": str(resolved_main_db_path),
+            "main_db_seeded": True,
+            "root_run_id": root_run_id,
+            "shard_path": str(shard_output),
+            "export_result": asdict(export_result),
+            "merge_result": asdict(merge_result),
+        }
+        return _json_safe(payload)
 
 
 def _merge_scoped_run_db_with_retry(
@@ -792,6 +856,7 @@ def promote_run_to_recovery_roots(
     merge_dry_run: bool = False,
     merge_shard_path: Optional[str | os.PathLike[str]] = None,
     merge_only: bool = False,
+    merge_db_only: bool = False,
     recovery_copy_verify: bool = True,
     *,
     dry_run: bool = False,
@@ -799,25 +864,32 @@ def promote_run_to_recovery_roots(
 ) -> PromotionResult:
     overall_started = time.perf_counter()
     source_run_dir = _source_archive_run_dir(settings, archive_run_dir)
-    recovery_roots = _recovery_roots(settings, roots=roots)
     db_path = _archive_db_path(settings, archive_run_dir=source_run_dir)
     require_consist_state = db_path is not None
     if merge_main_db is not None:
         merge_conflict = _validate_merge_conflict(merge_conflict)
     if merge_only and merge_main_db is None:
         raise ValueError("--merge-only requires --merge-main-db")
+    if merge_db_only and merge_main_db is None:
+        raise ValueError("--merge-db-only requires --merge-main-db")
+    if merge_db_only and merge_only:
+        raise ValueError("--merge-db-only cannot be combined with --merge-only")
+
+    recovery_roots = [] if merge_db_only else _recovery_roots(settings, roots=roots)
 
     logger.info(
         "Starting archive promotion: source=%s recovery_roots=%d db_path=%s "
         "dry_run=%s verify_only=%s merge_main_db=%s merge_only=%s "
+        "merge_db_only=%s "
         "recovery_copy_verify=%s",
         source_run_dir,
-        len(recovery_roots),
+        0 if merge_db_only else len(recovery_roots),
         db_path if db_path is not None else "none",
         dry_run,
         verify_only,
         merge_main_db if merge_main_db is not None else "none",
         merge_only,
+        merge_db_only,
         recovery_copy_verify,
     )
 
@@ -825,6 +897,7 @@ def promote_run_to_recovery_roots(
         source_run_dir=str(source_run_dir),
         dry_run=dry_run,
         verify_only=verify_only,
+        merge_db_only=merge_db_only,
         db_path=str(db_path) if db_path is not None else None,
         marker_path=None,
     )
@@ -1014,7 +1087,7 @@ def promote_run_to_recovery_roots(
             and working_tracker is not None
             and resolved_root_run_id is not None
         ):
-            if result.success:
+            if merge_db_only or result.success:
                 try:
                     merge_started = time.perf_counter()
                     logger.info(
@@ -1059,7 +1132,7 @@ def promote_run_to_recovery_roots(
                     "reason": "archive promotion did not complete for all roots",
                 }
 
-        if not dry_run and not verify_only:
+        if not dry_run and not verify_only and not merge_db_only:
             marker_path = _write_promotion_marker(
                 source_run_dir=source_run_dir,
                 result=result,
@@ -1086,6 +1159,13 @@ def promote_run_to_recovery_roots(
             "Archive promotion complete in %.2fs (success=%s)",
             time.perf_counter() - overall_started,
             result.success,
+        )
+        log_consist_cli_instructions(
+            logger=logger,
+            archive_run_dir=str(source_run_dir),
+            run_db_path=str(db_path) if db_path is not None else None,
+            main_db_path=str(merge_main_db) if merge_main_db is not None else None,
+            success=result.success,
         )
     finally:
         if opened_tracker is not None:
@@ -1177,6 +1257,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--merge-db-only",
+        action="store_true",
+        help=(
+            "Run only the Consist DB export/merge path and skip archive promotion "
+            "to recovery roots."
+        ),
+    )
+    parser.add_argument(
         "--merge-shard-path",
         help=(
             "Optional path for the filtered export shard used for a real merge. "
@@ -1216,6 +1304,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         merge_include_data=bool(args.merge_include_data),
         merge_dry_run=bool(args.merge_dry_run),
         merge_only=bool(args.merge_only),
+        merge_db_only=bool(args.merge_db_only),
         recovery_copy_verify=bool(args.recovery_copy_verify),
         merge_shard_path=args.merge_shard_path,
         dry_run=bool(args.dry_run),
@@ -1223,7 +1312,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
 
     print(json.dumps(_json_safe(result.to_dict()), indent=2, sort_keys=True))
-    return 0 if not result.failed_roots else 1
+    return 0 if result.success else 1
 
 
 if __name__ == "__main__":

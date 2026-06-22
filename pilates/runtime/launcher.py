@@ -63,6 +63,7 @@ from pilates.runtime.failure_hints import (
     clear_run_failure_context,
     format_hpc_restart_command,
     format_restart_command,
+    log_promotion_instructions_on_success,
     log_restart_instructions_on_failure,
     set_run_failure_context,
 )
@@ -504,7 +505,12 @@ def _prepare_run_context(
         mounts={
             "inputs": project_root_abs,
             "workspace": local_run_dir,
+            "beam_input": os.path.join(local_run_dir, "beam", "input"),
             "scratch": str(Path(output_path).resolve()),
+        },
+        archive_mounts={
+            "workspace": ".",
+            "beam_input": "beam/input",
         },
         project_root=project_root_abs,
         schemas=_get_consist_schemas(),
@@ -739,6 +745,7 @@ def main(
     archive_state_path = prepared.archive_state_path
     local_consist_db_path = prepared.local_consist_db_path
     archive_consist_db_path = prepared.archive_consist_db_path
+    run_succeeded = False
 
     try:
         emit_consist_audit_event(
@@ -948,6 +955,7 @@ def main(
 
         formatted_print("SIMULATION COMPLETE")
         logger.info("[Main] Simulation complete.")
+        run_succeeded = True
     finally:
         snapshot_ok = snapshot_manager.final_snapshot()
         flush_archive_queue(timeout=300)
@@ -962,3 +970,8 @@ def main(
         stop_archive_worker(timeout=30)
         if not snapshot_ok:
             mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)
+        if run_succeeded and snapshot_ok:
+            log_promotion_instructions_on_success(
+                logger=logger,
+                context=RUN_FAILURE_CONTEXT,
+            )

@@ -22,7 +22,11 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
-from pilates.workflows.steps.beam import _archive_beam_config_references
+from pilates.utils.coupler_helpers import flush_archive_queue, stop_archive_worker
+from pilates.workflows.steps.beam import (
+    _archive_beam_config_references,
+    _materialize_beam_config_references_for_archive,
+)
 from pilates.workflows.steps.beam import (
     _beam_run_inputs,
     make_beam_full_skim_step,
@@ -563,6 +567,66 @@ def test_beam_adapter_policies_suppress_dormant_runtime_and_scalar_noise(
     )
 
 
+def test_beam_config_reference_artifacts_use_beam_input_mount(tmp_path):
+    consist = pytest.importorskip("consist")
+    from consist.integrations.beam import BeamConfigAdapter
+
+    archive_run_dir = tmp_path / "archive-run"
+    beam_input_root = archive_run_dir / "beam" / "input"
+    config_root = beam_input_root / "seattle"
+    config_root.mkdir(parents=True)
+    lccm_path = config_root / "lccm-long.csv"
+    lccm_path.write_text("segment\nlow\n", encoding="utf-8")
+    primary_config = config_root / "beam.conf"
+    primary_config.write_text(
+        f'beam.agentsim.lccm.filePath = "{lccm_path}"\n',
+        encoding="utf-8",
+    )
+
+    tracker = consist.Tracker(
+        run_dir=tmp_path / "tracker-run",
+        db_path=str(tmp_path / "tracker.duckdb"),
+        mounts={
+            "workspace": str(archive_run_dir),
+            "beam_input": str(beam_input_root),
+        },
+        archive_mounts={
+            "workspace": ".",
+            "beam_input": "beam/input",
+        },
+        allow_external_paths=True,
+    )
+    adapter = BeamConfigAdapter(
+        root_dirs=[config_root],
+        primary_config=primary_config,
+        path_aliases={
+            "workspace": archive_run_dir,
+            "beam_input": beam_input_root,
+            "beam_region_input": config_root,
+        },
+    )
+
+    try:
+        result = tracker.run(
+            lambda: None,
+            name="beam-config-reference-uri",
+            model="beam_run",
+            adapter=adapter,
+        )
+        artifacts = tracker.get_artifacts_for_run(result.run.id)
+    finally:
+        tracker.db.engine.dispose()
+
+    lccm_artifact = artifacts.inputs["config:seattle/lccm-long.csv"]
+    assert lccm_artifact.container_uri == "beam_input://seattle/lccm-long.csv"
+    assert lccm_artifact.meta["mount_scheme"] == "beam_input"
+    assert result.run.meta["archive_mounts"] == {
+        "workspace": ".",
+        "beam_input": "beam/input",
+    }
+    assert lccm_artifact.meta["config_reference_key"] == "beam.agentsim.lccm.filePath"
+
+
 def test_beam_run_identity_inputs_exclude_mutable_data_dir(tmp_path):
     workspace, settings = _setup_config(tmp_path)
     zarr_skims = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
@@ -733,6 +797,73 @@ def test_beam_config_reference_archival_resolves_input_directory(
         (archive_root / "__archive_manifest.json").read_text(encoding="utf-8")
     )
     assert manifest["sample.csv"] == str(config_root / "sample.csv")
+
+
+def test_beam_config_reference_materialization_populates_archive_beam_input(
+    monkeypatch, tmp_path
+):
+    local_run = tmp_path / "local" / "run"
+    archive_run = tmp_path / "archive" / "run"
+    beam_input_root = local_run / "beam" / "input"
+    region = "seattle"
+    config_root = beam_input_root / region
+    common_root = beam_input_root / "common"
+    r5_root = config_root / "r5" / "router"
+    config_root.mkdir(parents=True, exist_ok=True)
+    common_root.mkdir(parents=True, exist_ok=True)
+    r5_root.mkdir(parents=True, exist_ok=True)
+
+    primary_config = config_root / "beam.conf"
+    primary_config.write_text(
+        "\n".join(
+            [
+                'include "../common/akka.conf"',
+                'beam.input = ${inputDirectory}"/lccm-long.csv"',
+                'beam.gtfs = ${inputDirectory}"/r5/router/seattle_gtfs.zip"',
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (common_root / "akka.conf").write_text("akka.test = 1\n", encoding="utf-8")
+    (config_root / "lccm-long.csv").write_text("value\n1\n", encoding="utf-8")
+    (r5_root / "seattle_gtfs.zip").write_bytes(b"zip")
+
+    workspace = DummyWorkspace(beam_input_root)
+    settings = _make_settings(region=region, primary_conf=primary_config.name)
+
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_run))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_run))
+
+    materialized = _materialize_beam_config_references_for_archive(
+        settings=settings,
+        workspace=workspace,
+    )
+    flush_archive_queue(timeout=5)
+    stop_archive_worker(timeout=5)
+
+    assert materialized == {
+        "common/akka.conf": str(common_root / "akka.conf"),
+        "seattle/beam.conf": str(primary_config),
+        "seattle/lccm-long.csv": str(config_root / "lccm-long.csv"),
+        "seattle/r5/router/seattle_gtfs.zip": str(r5_root / "seattle_gtfs.zip"),
+    }
+    assert (archive_run / "beam" / "input" / "common" / "akka.conf").read_text(
+        encoding="utf-8"
+    ) == "akka.test = 1\n"
+    assert (archive_run / "beam" / "input" / "seattle" / "beam.conf").exists()
+    assert (archive_run / "beam" / "input" / "seattle" / "lccm-long.csv").read_text(
+        encoding="utf-8"
+    ) == "value\n1\n"
+    assert (
+        archive_run
+        / "beam"
+        / "input"
+        / "seattle"
+        / "r5"
+        / "router"
+        / "seattle_gtfs.zip"
+    ).read_bytes() == b"zip"
 
 
 def test_beam_preprocess_consumes_fallback_input_mapping(monkeypatch, tmp_path):

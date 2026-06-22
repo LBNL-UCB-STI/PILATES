@@ -683,13 +683,34 @@ def _resolve_restart_hydrated_path(
     workspace: Any,
     materialized_path: Optional[str],
 ) -> Optional[str]:
+    raw_artifact_path = (
+        str(artifact) if isinstance(artifact, (str, os.PathLike)) else None
+    )
+
+    if materialized_path is not None:
+        resolved_materialized = resolve_existing_path(
+            str(materialized_path),
+            workspace=workspace,
+            materialize_from_archive=False,
+        )
+        if resolved_materialized is not None:
+            if os.path.isdir(resolved_materialized) and raw_artifact_path is not None:
+                basename = os.path.basename(raw_artifact_path.rstrip(os.sep))
+                if basename:
+                    candidate = os.path.join(resolved_materialized, basename)
+                    remapped_candidate = resolve_existing_path(
+                        candidate,
+                        workspace=workspace,
+                        materialize_from_archive=False,
+                    )
+                    if remapped_candidate is not None:
+                        return remapped_candidate
+            return resolved_materialized
+
     resolved = artifact_to_existing_path(artifact, workspace)
     if resolved is not None:
         return resolved
 
-    raw_artifact_path = (
-        str(artifact) if isinstance(artifact, (str, os.PathLike)) else None
-    )
     if raw_artifact_path is not None:
         remapped = _remap_workspace_local_path(
             raw_artifact_path,
@@ -697,28 +718,6 @@ def _resolve_restart_hydrated_path(
         )
         if remapped is not None:
             return remapped
-
-    if materialized_path is None:
-        return None
-
-    resolved_materialized = resolve_existing_path(
-        str(materialized_path),
-        workspace=workspace,
-        materialize_from_archive=False,
-    )
-    if resolved_materialized is not None:
-        if os.path.isdir(resolved_materialized) and raw_artifact_path is not None:
-            basename = os.path.basename(raw_artifact_path.rstrip(os.sep))
-            if basename:
-                candidate = os.path.join(resolved_materialized, basename)
-                remapped_candidate = resolve_existing_path(
-                    candidate,
-                    workspace=workspace,
-                    materialize_from_archive=False,
-                )
-                if remapped_candidate is not None:
-                    return remapped_candidate
-        return resolved_materialized
     return None
 
 

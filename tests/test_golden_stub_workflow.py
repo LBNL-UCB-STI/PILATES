@@ -937,6 +937,7 @@ def golden_stub_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
+@pytest.mark.slow_ci
 def test_golden_stub_workflow_stage_contract_with_real_consist(
     golden_stub_env, tmp_path
 ):

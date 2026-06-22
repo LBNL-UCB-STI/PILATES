@@ -282,10 +282,6 @@ def run_land_use_stage(
         path=usim_inputs.get(USIM_DATASTORE_CURRENT_H5),
     )
     archive_copy_now(
-        key=USIM_FORECAST_OUTPUT,
-        path=usim_inputs.get(USIM_FORECAST_OUTPUT),
-    )
-    archive_copy_now(
         key=USIM_POPULATION_SOURCE_H5,
         path=usim_inputs.get(USIM_POPULATION_SOURCE_H5),
     )

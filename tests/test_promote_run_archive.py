@@ -448,6 +448,12 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
     numba_cache_file.parent.mkdir(parents=True, exist_ok=True)
     numba_cache_file.write_text("numba-cache", encoding="utf-8")
 
+    runtime_cache_file = (
+        run_dir / "activitysim" / "output" / "cache" / "skims.zarr" / ".zarray"
+    )
+    runtime_cache_file.parent.mkdir(parents=True, exist_ok=True)
+    runtime_cache_file.write_text("runtime-cache", encoding="utf-8")
+
     snapshot_history_file = (
         run_dir
         / ".consist"
@@ -483,6 +489,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
             / "persons.parquet"
         ).exists()
         assert not (promoted / "activitysim" / "output" / "final_pipeline").exists()
+        assert not (promoted / "activitysim" / "output" / "cache").exists()
         assert not (promoted / "shared_cache" / "numba").exists()
         assert not (
             promoted
@@ -495,6 +502,7 @@ def test_promote_run_to_recovery_roots_skips_activitysim_final_pipeline_tree(
         assert (promoted / ".consist" / "snapshots" / "latest").exists()
         assert final_pipeline_file.exists()
         assert numba_cache_file.exists()
+        assert runtime_cache_file.exists()
         assert snapshot_history_file.exists()
         assert snapshot_latest_file.exists()
     finally:
@@ -574,6 +582,66 @@ def test_promote_run_to_recovery_roots_uses_snapshot_latest_archive_db_when_dire
         tracker.db.engine.dispose()
 
 
+def test_promote_run_to_recovery_roots_seeds_missing_main_db_from_shard(tmp_path):
+    consist = pytest.importorskip("consist")
+    recovery_root = tmp_path / "nfs"
+    settings = _minimal_config(tmp_path, recovery_roots=[str(recovery_root)])
+
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tracker = _make_tracker(consist, run_dir)
+    new_run_id, _new_output_path = _seed_output_run(
+        tracker,
+        run_dir,
+        run_name="new_root",
+        model="demo",
+        key="new_output",
+        relative_path="outputs/new-result.txt",
+        content="new-result-data",
+    )
+
+    main_db_path = tmp_path / "missing-seed" / "provenance_seattle.duckdb"
+    promoted = recovery_root / run_dir.name
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            roots=[str(recovery_root)],
+            merge_main_db=str(main_db_path),
+            merge_conflict="error",
+        )
+
+        assert result.success is True
+        assert result.root_run_id == new_run_id
+        assert result.merge_result is not None
+        assert result.merge_result["main_db_seeded"] is True
+        assert result.merge_result["merge_result"]["runs_merged"] == [new_run_id]
+        assert main_db_path.exists()
+        assert promoted.exists()
+        assert (promoted / ".consist" / "recovery_promotion.json").exists()
+
+        merged_tracker = consist.Tracker(
+            run_dir=tmp_path / "merged-reader",
+            db_path=str(main_db_path),
+            mounts={
+                "workspace": str(tmp_path / "merged-reader"),
+                "inputs": str(tmp_path),
+                "scratch": str(tmp_path),
+            },
+            allow_external_paths=True,
+        )
+        try:
+            merged_run_ids = {
+                str(run.id) for run in merged_tracker.find_runs(limit=100)
+            }
+            assert new_run_id in merged_run_ids
+        finally:
+            merged_tracker.db.engine.dispose()
+    finally:
+        tracker.db.engine.dispose()
+
+
 def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
     tmp_path, monkeypatch
 ):
@@ -645,6 +713,56 @@ def test_promote_run_to_recovery_roots_merge_only_reuses_existing_copy(
         assert second.roots[0].verified is True
         assert promoted.exists()
         assert (promoted / ".consist" / "recovery_promotion.json").exists()
+    finally:
+        tracker.db.engine.dispose()
+
+
+def test_promote_run_to_recovery_roots_merge_db_only_skips_archive_copy(
+    tmp_path, monkeypatch
+):
+    consist = pytest.importorskip("consist")
+    settings = _minimal_config(tmp_path)
+    run_dir = Path(settings.run.output_directory) / settings.run.output_run_name
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    tracker, run_id, _output_path = _seed_run_archive(consist, run_dir)
+    main_db_path = tmp_path / "seeded" / "provenance_seattle.duckdb"
+
+    def fail_copy(*_args, **_kwargs):
+        raise AssertionError("copy_run_tree should not run during merge-db-only")
+
+    def fail_register(*_args, **_kwargs):
+        raise AssertionError(
+            "recovery-copy registration should not run during merge-db-only"
+        )
+
+    monkeypatch.setattr("pilates.runtime.promote_run_archive._copy_run_tree", fail_copy)
+    monkeypatch.setattr(
+        "pilates.runtime.promote_run_archive._register_verified_run_output_recovery_copies",
+        fail_register,
+    )
+
+    try:
+        result = promote_run_to_recovery_roots(
+            settings,
+            archive_run_dir=str(run_dir),
+            tracker=tracker,
+            merge_main_db=str(main_db_path),
+            merge_db_only=True,
+        )
+
+        shard_path = run_dir / ".consist" / f"promotion-shard-{run_id}.duckdb"
+        assert result.success is True
+        assert result.merge_db_only is True
+        assert result.roots == []
+        assert result.marker_path is None
+        assert result.root_run_id == run_id
+        assert result.merge_result is not None
+        assert result.merge_result["main_db_seeded"] is True
+        assert result.merge_result["merge_result"]["runs_merged"] == [run_id]
+        assert main_db_path.exists()
+        assert not shard_path.exists()
+        assert not Path(f"{shard_path}.wal").exists()
     finally:
         tracker.db.engine.dispose()
 

@@ -174,3 +174,9 @@ def test_surface_driven_entry_points_do_not_accept_profile_any_more() -> None:
         arg_names = _function_arg_names(path, function_name)
         assert "surface" in arg_names
         assert "profile" not in arg_names
+
+
+def test_legacy_archive_doctor_stays_deleted() -> None:
+    legacy_doctor_path = REPO_ROOT / "pilates/runtime/legacy_archive_doctor.py"
+
+    assert not legacy_doctor_path.exists()
