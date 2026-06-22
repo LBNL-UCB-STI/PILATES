@@ -573,7 +573,6 @@ def stage_env(tmp_path, monkeypatch):
         cr.set_enabled(None)
 
 
-@pytest.mark.slow_ci
 def test_land_use_stage_contract(stage_env):
     """Land use must publish datastore handles needed by later stages."""
     from pilates.workflows.steps import StepOutputsHolder
@@ -602,6 +601,7 @@ def test_land_use_stage_contract(stage_env):
     assert stage_env["coupler"].get(USIM_DATASTORE_BASE_H5) is not None
 
 
+@pytest.mark.slow_ci
 def test_land_use_stage_aliases_root_population_snapshot_tables_for_non_start_year(
     stage_env,
 ):
