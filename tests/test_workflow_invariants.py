@@ -523,6 +523,63 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
     assert underlying.calls[0]["parent_run_id"] == "asim-restored-run"
 
 
+def test_manifest_entry_without_declared_outputs_reruns_instead_of_restoring(
+    tmp_path,
+):
+    manifest_path = tmp_path / "manifest_no_outputs.yaml"
+    manifest = {
+        "dummy_no_output_step": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": True,
+            "run_id": "restored-run",
+            "outputs": {},
+        }
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    @define_step(model="dummy_no_output_step")
+    def _manifest_step(settings, state, workspace):
+        return None
+
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            fn = kwargs["fn"]
+            runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+            fn(**runtime_kwargs)
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id="fresh-run"),
+            )
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    scenario = _UnderlyingScenario()
+
+    run_manifested_steps(
+        stage_name="dummy_no_output_stage",
+        steps=[StepRef(name="dummy_no_output_step", step_func=_manifest_step)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=SimpleNamespace(year=2030, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=_ManifestWorkspace(tmp_path),
+        coupler=coupler,
+        name_suffix="2030_i0",
+        iteration=0,
+    )
+
+    assert len(scenario.calls) == 1
+    assert holder.get_attribute("dummy_no_output_step") is None
+    refreshed_manifest = yaml.safe_load(manifest_path.read_text())
+    assert refreshed_manifest["dummy_no_output_step"]["run_id"] == "fresh-run"
+    assert refreshed_manifest["dummy_no_output_step"]["outputs"] == {}
+
+
 def test_restored_and_live_parent_linkage_match_for_beam_resume():
     class _UnderlyingScenario:
         def __init__(self) -> None:
