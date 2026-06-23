@@ -40,13 +40,17 @@ from pilates.utils.consist_types import (
     RunLike,
     ScenarioRestorationLike,
 )
-from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     ValidationContext,
     deserialize_step_outputs,
     required_outputs_for_step_outputs_class,
     step_output_mapping,
     serialize_step_outputs,
+)
+from pilates.workflows.recovery import (
+    NoManifestRecoveryStore,
+    StepRecoveryStore,
+    YamlManifestRecoveryStore,
 )
 from pilates.workflows.step_io import expected_inputs_for_step
 from pilates.workflows.step_runner import common_runtime_kwargs
@@ -448,6 +452,15 @@ def _build_step_run_kwargs(
             workspace=workspace,
             runtime_kwargs=runtime_kwargs,
         )
+    resolved_input_materialization_option: Optional[Literal["requested"]]
+    if resolved_input_materialization is None:
+        resolved_input_materialization_option = None
+    elif resolved_input_materialization == "requested":
+        resolved_input_materialization_option = "requested"
+    else:
+        raise ValueError(
+            f"Step '{step.name}' input_materialization must be 'requested' or None."
+        )
     # Canonicalize legacy load_inputs into the modern input_binding contract so
     # Consist sees a single binding mode regardless of whether the step still
     # publishes older metadata.
@@ -463,7 +476,7 @@ def _build_step_run_kwargs(
         resolved_load_inputs = None
     if (
         resolved_input_paths is not None
-        and resolved_input_materialization == "requested"
+        and resolved_input_materialization_option == "requested"
     ):
         resolved_input_keys = _resolved_input_keys_for_step(
             step=step,
@@ -522,7 +535,7 @@ def _build_step_run_kwargs(
         input_paths=(
             dict(resolved_input_paths) if resolved_input_paths is not None else None
         ),
-        input_materialization=resolved_input_materialization,
+        input_materialization=resolved_input_materialization_option,
     )
 
     run_cfg = getattr(settings, "run", None)
@@ -1056,6 +1069,14 @@ def _recovery_run_id_for_step_result(step_result: Any) -> Optional[str]:
     return run_id
 
 
+def _recovery_store_for_manifest_config(
+    manifest_config: Optional[ManifestConfig],
+) -> StepRecoveryStore:
+    if manifest_config is None:
+        return NoManifestRecoveryStore()
+    return YamlManifestRecoveryStore(manifest_config.path)
+
+
 def run_manifested_steps(
     *,
     stage_name: str,
@@ -1074,9 +1095,44 @@ def run_manifested_steps(
     """
     Execute steps with manifest checkpointing and stale detection.
     """
+    _run_workflow_with_recovery_store(
+        stage_name=stage_name,
+        steps=steps,
+        outputs_holder=outputs_holder,
+        recovery_store=YamlManifestRecoveryStore(manifest_config.path),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=name_suffix,
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
+
+
+def _run_workflow_with_recovery_store(
+    *,
+    stage_name: str,
+    steps: Sequence[StepRef],
+    outputs_holder: StepOutputsHolder,
+    recovery_store: StepRecoveryStore,
+    scenario: Any,
+    state: Any,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    name_suffix: str,
+    iteration: int = 0,
+    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Execute workflow steps using the supplied recovery boundary.
+    """
     validate_workflow_step_contracts(step_refs=steps)
 
-    manifest = load_step_manifest(manifest_config.path) or {}
+    manifest = dict(recovery_store.load() or {})
+    uses_persisted_entries = recovery_store.uses_persisted_entries()
     stale_steps = _detect_stale_steps(
         manifest,
         outputs_holder,
@@ -1092,7 +1148,8 @@ def run_manifested_steps(
         )
         for step_name in stale_steps:
             manifest.pop(step_name, None)
-        save_step_manifest(manifest, manifest_config.path)
+            outputs_holder.set_attribute(step_name, None)
+        recovery_store.prune(sorted(stale_steps))
 
     runtime_kwargs = common_runtime_kwargs(
         settings=settings,
@@ -1109,46 +1166,48 @@ def run_manifested_steps(
             default_iteration=iteration,
         )
         expects_outputs = STEP_OUTPUTS_CLASSES.get(spec.name) is not None
-        if spec.name in manifest:
-            if expects_outputs:
-                logger.info(
-                    "[%s] %s already completed (skipping)", stage_name, spec.name
+        decision = recovery_store.decision_for_step(
+            step_name=spec.name,
+            can_restore=expects_outputs,
+        )
+        if decision.should_restore and decision.entry is not None:
+            logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
+            outputs = outputs_holder.get_attribute(spec.name)
+            recovery_meta = {
+                "used_manifest_restore": True,
+                "used_output_replayer": bool(spec.output_replayer is not None),
+            }
+            if outputs is None:
+                outputs = _restore_outputs_from_manifest(
+                    spec.name,
+                    manifest,
+                    workspace,
+                    settings=settings,
+                    state=state,
                 )
-                outputs = outputs_holder.get_attribute(spec.name)
-                recovery_meta = {
-                    "used_manifest_restore": True,
-                    "used_output_replayer": bool(spec.output_replayer is not None),
-                }
-                if outputs is None:
-                    outputs = _restore_outputs_from_manifest(
-                        spec.name,
-                        manifest,
-                        workspace,
-                        settings=settings,
-                        state=state,
-                    )
-                    if outputs is not None:
-                        outputs_holder.set_attribute(spec.name, outputs)
                 if outputs is not None:
-                    _publish_recovered_outputs(
-                        step=spec,
-                        outputs=outputs,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        outputs_holder=outputs_holder,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                    )
-                    _merge_output_recovery_meta(outputs, recovery_meta)
-                if isinstance(scenario, ScenarioRestorationLike):
-                    scenario.remember_restored_run_id(
-                        model_name=model_name,
-                        year=resolved_year,
-                        iteration=resolved_iteration,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                    )
-                continue
+                    outputs_holder.set_attribute(spec.name, outputs)
+            if outputs is not None:
+                _publish_recovered_outputs(
+                    step=spec,
+                    outputs=outputs,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                    run_id=decision.entry.get("run_id"),
+                )
+                _merge_output_recovery_meta(outputs, recovery_meta)
+            if isinstance(scenario, ScenarioRestorationLike):
+                scenario.remember_restored_run_id(
+                    model_name=model_name,
+                    year=resolved_year,
+                    iteration=resolved_iteration,
+                    run_id=decision.entry.get("run_id"),
+                )
+            continue
+        if decision.entry is not None and not expects_outputs:
             logger.info(
                 "[%s] %s has a manifest run_id but no declared outputs; rerunning "
                 "instead of trusting manifest-only completion",
@@ -1156,133 +1215,6 @@ def run_manifested_steps(
                 spec.name,
             )
 
-        validate_step_ready(spec.name, outputs_holder)
-        run_kwargs = _build_step_run_kwargs(
-            step=spec,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            runtime_kwargs=runtime_kwargs,
-            stage_name=stage_name,
-            default_iteration=iteration,
-        )
-
-        def _run_step(cache_options: Optional[CacheOptions]) -> Any:
-            step_kwargs = dict(run_kwargs)
-            if cache_options is not None:
-                step_kwargs["cache_options"] = cache_options
-            _warn_for_undeclared_step_inputs(
-                step_name=spec.name,
-                input_keys=step_kwargs.get("input_keys"),
-                inputs=step_kwargs.get("inputs"),
-                binding=step_kwargs.get("binding"),
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )
-            return scenario.run(**step_kwargs)
-
-        recovery_meta: Dict[str, Any] = {}
-
-        def _recover_outputs(step_result: Any) -> Optional[Any]:
-            return _recover_step_outputs(
-                step=spec,
-                step_name=spec.name,
-                outputs_holder=outputs_holder,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                coupler=coupler,
-                step_inputs=_resolved_step_inputs(spec),
-                cached_outputs=getattr(step_result, "outputs", None),
-                run_id=_recovery_run_id_for_step_result(step_result),
-                publish_outputs=True,
-                audit_meta=recovery_meta,
-            )
-
-        if expects_outputs:
-            result, outputs, cache_meta = run_with_cache_recovery(
-                stage_name=stage_name,
-                step_name=spec.name,
-                run_step=_run_step,
-                read_outputs=lambda: outputs_holder.get_attribute(spec.name),
-                recover_outputs=_recover_outputs,
-            )
-            recovery_meta.update(cache_meta)
-            if outputs is None:
-                raise RuntimeError(f"{spec.name} did not populate outputs_holder")
-            serialized_outputs = serialize_step_outputs(outputs)
-        else:
-            # Steps without declared outputs can still be checkpointed. We record the
-            # run id so restart reconstruction can re-materialize completed runs, but
-            # do not force an outputs_holder hydration loop.
-            result = _run_step(None)
-            serialized_outputs = {}
-            if not getattr(result, "cache_hit", False):
-                cache_miss_explanation = log_cache_miss_explanation(
-                    logger=logger,
-                    result=result,
-                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
-                    info_args=(stage_name, spec.name),
-                    debug_message="[%s] Cache miss details for %s: %s",
-                    debug_args=(stage_name, spec.name),
-                )
-                if cache_miss_explanation is not None:
-                    recovery_meta["cache_miss_explanation"] = cache_miss_explanation
-        manifest[spec.name] = {
-            "completed_at": datetime.now().isoformat(),
-            "cache_hit": bool(getattr(result, "cache_hit", False)),
-            "run_id": getattr(getattr(result, "run", None), "id", None),
-            "outputs": serialized_outputs,
-        }
-        save_step_manifest(manifest, manifest_config.path)
-
-
-def run_workflow(
-    *,
-    stage_name: str,
-    steps: Sequence[StepRef],
-    scenario: Any,
-    state: Any,
-    settings: Any,
-    workspace: Any,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    name_suffix: str,
-    iteration: int = 0,
-    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
-    manifest_config: Optional[ManifestConfig] = None,
-) -> None:
-    """
-    Execute a sequence of workflow steps using native step metadata.
-    """
-    validate_workflow_step_contracts(step_refs=steps)
-
-    if manifest_config is not None:
-        run_manifested_steps(
-            stage_name=stage_name,
-            steps=steps,
-            outputs_holder=outputs_holder,
-            manifest_config=manifest_config,
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            name_suffix=name_suffix,
-            iteration=iteration,
-            runtime_kwargs_extra=runtime_kwargs_extra,
-        )
-        return
-
-    runtime_kwargs = common_runtime_kwargs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        **(runtime_kwargs_extra or {}),
-    )
-    for raw_step in steps:
-        spec = raw_step
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
@@ -1349,14 +1281,47 @@ def run_workflow(
                 audit_meta=recovery_meta,
             )
 
-        result, outputs, cache_meta = run_with_cache_recovery(
-            stage_name=stage_name,
+        use_output_recovery = expects_outputs or not uses_persisted_entries
+        if use_output_recovery:
+            result, outputs, cache_meta = run_with_cache_recovery(
+                stage_name=stage_name,
+                step_name=spec.name,
+                run_step=_run_step,
+                read_outputs=lambda: outputs_holder.get_attribute(spec.name),
+                recover_outputs=_recover_outputs,
+            )
+            recovery_meta.update(cache_meta)
+            if expects_outputs and outputs is None and uses_persisted_entries:
+                raise RuntimeError(f"{spec.name} did not populate outputs_holder")
+            serialized_outputs = (
+                serialize_step_outputs(outputs)
+                if expects_outputs and outputs is not None
+                else {}
+            )
+        else:
+            # Steps without declared outputs can still be checkpointed. We record the
+            # run id so restart reconstruction can re-materialize completed runs, but
+            # do not force an outputs_holder hydration loop.
+            result = _run_step(None)
+            serialized_outputs = {}
+            if not getattr(result, "cache_hit", False):
+                cache_miss_explanation = log_cache_miss_explanation(
+                    logger=logger,
+                    result=result,
+                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
+                    info_args=(stage_name, spec.name),
+                    debug_message="[%s] Cache miss details for %s: %s",
+                    debug_args=(stage_name, spec.name),
+                )
+                if cache_miss_explanation is not None:
+                    recovery_meta["cache_miss_explanation"] = cache_miss_explanation
+        recovery_store.record_step(
             step_name=spec.name,
-            run_step=_run_step,
-            read_outputs=lambda: outputs_holder.get_attribute(spec.name),
-            recover_outputs=_recover_outputs,
+            completed_at=datetime.now().isoformat(),
+            cache_hit=bool(getattr(result, "cache_hit", False)),
+            run_id=getattr(getattr(result, "run", None), "id", None),
+            outputs=serialized_outputs,
         )
-        recovery_meta.update(cache_meta)
         if coupler_keys is not None:
             try:
                 current_coupler_keys_fn = getattr(coupler, "keys", None)
@@ -1374,6 +1339,40 @@ def run_workflow(
                     stage_name,
                     spec.name,
                 )
+
+
+def run_workflow(
+    *,
+    stage_name: str,
+    steps: Sequence[StepRef],
+    scenario: Any,
+    state: Any,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    name_suffix: str,
+    iteration: int = 0,
+    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
+    manifest_config: Optional[ManifestConfig] = None,
+) -> None:
+    """
+    Execute a sequence of workflow steps using native step metadata.
+    """
+    _run_workflow_with_recovery_store(
+        stage_name=stage_name,
+        steps=steps,
+        outputs_holder=outputs_holder,
+        recovery_store=_recovery_store_for_manifest_config(manifest_config),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=name_suffix,
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
 
 
 def _detect_stale_steps(

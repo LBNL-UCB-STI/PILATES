@@ -48,6 +48,9 @@ class StepRecoveryStore(Protocol):
     ) -> None:
         """Record completed step metadata back to persisted state."""
 
+    def uses_persisted_entries(self) -> bool:
+        """Return whether this store restores or records persisted entries."""
+
 
 @dataclass
 class YamlManifestRecoveryStore:
@@ -128,6 +131,9 @@ class YamlManifestRecoveryStore:
         }
         save_step_manifest(manifest, self.manifest_path)
 
+    def uses_persisted_entries(self) -> bool:
+        return True
+
     def _ensure_loaded(self) -> dict[str, Any]:
         if not self._loaded:
             self.load()
@@ -167,3 +173,6 @@ class NoManifestRecoveryStore:
         outputs: Mapping[str, Any] | None,
     ) -> None:
         return None
+
+    def uses_persisted_entries(self) -> bool:
+        return False
