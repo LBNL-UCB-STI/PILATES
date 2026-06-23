@@ -9,7 +9,11 @@ from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workspace import Workspace
 
-from pilates.workflows.orchestration import ManifestConfig, StepRef, run_workflow
+from pilates.workflows.orchestration import (
+    StepRef,
+    manifest_config_for_stage,
+    run_workflow,
+)
 from pilates.workflows.steps import StepOutputsHolder, make_postprocessing_step
 
 logger = logging.getLogger(__name__)
@@ -55,8 +59,12 @@ def run_postprocessing_stage(
     logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
 
     outputs_holder = StepOutputsHolder()
-    manifest_config = ManifestConfig(
-        path=_build_postprocessing_manifest_path(workspace=workspace, year=year)
+    manifest_config = manifest_config_for_stage(
+        stage_name="postprocessing",
+        settings=settings,
+        manifest_path=_build_postprocessing_manifest_path(
+            workspace=workspace, year=year
+        ),
     )
     postprocess_steps = [
         StepRef(

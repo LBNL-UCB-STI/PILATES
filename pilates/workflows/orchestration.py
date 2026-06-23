@@ -1084,6 +1084,25 @@ def _recovery_store_for_manifest_config(
     )
 
 
+def manifest_config_for_stage(
+    *,
+    stage_name: str,
+    settings: Any,
+    manifest_path: Path,
+) -> Optional[ManifestConfig]:
+    """
+    Build a manifest config only when the stage is allowed to persist one.
+    """
+    recovery_store = recovery_store_for_stage(
+        stage_name=stage_name,
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+    if not recovery_store.uses_persisted_entries():
+        return None
+    return ManifestConfig(path=manifest_path)
+
+
 def run_manifested_steps(
     *,
     stage_name: str,

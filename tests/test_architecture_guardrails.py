@@ -32,7 +32,6 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
 }
 ALLOWED_DIRECT_MANIFEST_CONFIG_STAGE_IMPORTS = {
     Path("pilates/workflows/stages/land_use.py"),
-    Path("pilates/workflows/stages/postprocessing.py"),
     Path("pilates/workflows/stages/supply_demand.py"),
     Path("pilates/workflows/stages/supply_demand_activity.py"),
     Path("pilates/workflows/stages/vehicle_ownership.py"),
