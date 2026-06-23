@@ -35,6 +35,10 @@ ALLOWED_DIRECT_MANIFEST_CONFIG_STAGE_IMPORTS = {
     Path("pilates/workflows/stages/supply_demand_activity.py"),
     Path("pilates/workflows/stages/vehicle_ownership.py"),
 }
+MIGRATED_POLICY_MANAGED_MANIFEST_STAGE_FILES = {
+    Path("pilates/workflows/stages/land_use.py"),
+    Path("pilates/workflows/stages/postprocessing.py"),
+}
 
 
 def _production_python_files() -> Iterable[Path]:
@@ -249,6 +253,13 @@ def test_stage_manifest_config_imports_stay_on_migration_allowlist() -> None:
             ):
                 direct_imports.add(rel)
 
+    migrated_direct_imports = (
+        direct_imports & MIGRATED_POLICY_MANAGED_MANIFEST_STAGE_FILES
+    )
+    assert not migrated_direct_imports, (
+        "Migrated stages must use stage-level manifest policy helpers instead "
+        f"of constructing ManifestConfig directly: {sorted(migrated_direct_imports)}"
+    )
     assert direct_imports == ALLOWED_DIRECT_MANIFEST_CONFIG_STAGE_IMPORTS
 
 
