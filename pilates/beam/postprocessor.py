@@ -92,6 +92,33 @@ def _activitysim_skims_target_enabled(settings: PilatesConfig) -> bool:
     return getattr(model_cfg, "activity_demand", None) == "activitysim"
 
 
+def _format_missing_beam_skim_error(
+    *,
+    expected_names: List[str],
+    raw_output_files: List[str],
+    forecast_year: Any,
+    iteration: Any,
+) -> str:
+    skim_like_outputs = [
+        name
+        for name in raw_output_files
+        if "skim" in name.lower() or "od" in name.lower()
+    ]
+    found_suffix = (
+        f" Skim-like BEAM outputs found: {skim_like_outputs}."
+        if skim_like_outputs
+        else " No skim-like BEAM outputs were found."
+    )
+    return (
+        "BEAM postprocess cannot update ActivitySim skims because BEAM did not "
+        "emit a raw OD skim artifact for "
+        f"year={forecast_year}, iteration={iteration}. Expected one of the "
+        f"raw output short_names {expected_names}. Check the BEAM skim output "
+        "configuration before restarting. ActivitySim cannot evolve on stale "
+        f"skims.{found_suffix}"
+    )
+
+
 def find_latest_beam_iteration(beam_output_dir):
     """
     Return (path_to_latest_iteration_dir, latest_iteration_number).
@@ -3859,8 +3886,17 @@ class BeamPostprocessor(GenericPostprocessor):
 
         if not skim_name_found:
             logger.warning(
-                "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped, but post-processing on existing Zarr will proceed."
+                "Raw BEAM OD skims file not found in raw_outputs. Skim merging will be skipped."
             )
+            if _activitysim_skims_target_enabled(settings):
+                raise RuntimeError(
+                    _format_missing_beam_skim_error(
+                        expected_names=possible_skim_names,
+                        raw_output_files=raw_output_files,
+                        forecast_year=self.state.forecast_year,
+                        iteration=self.state.iteration,
+                    )
+                )
 
         elif all_skims_path is None or not os.path.exists(all_skims_path):
             logger.warning(

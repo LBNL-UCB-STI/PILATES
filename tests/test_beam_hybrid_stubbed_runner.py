@@ -175,6 +175,63 @@ def test_beam_postprocess_rejects_non_typed_run_outputs(tmp_path: Path) -> None:
         postprocessor.postprocess(object(), workspace)
 
 
+def test_beam_postprocess_activitysim_missing_raw_skims_has_specific_error(
+    monkeypatch, tmp_path: Path
+) -> None:
+    settings = _build_settings(tmp_path)
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    state.current_inner_iter = 0
+
+    beam_output_dir = Path(workspace.get_beam_output_dir())
+    beam_output_dir.mkdir(parents=True, exist_ok=True)
+    asim_cache_dir = Path(workspace.get_asim_output_dir()) / "cache"
+    asim_cache_dir.mkdir(parents=True, exist_ok=True)
+    _write_file(asim_cache_dir / "skims.zarr", b"main-zarr")
+
+    events_sub0 = beam_output_dir / "events_sub0.parquet"
+    _write_file(events_sub0)
+
+    def _fake_split_events_parquet_by_type(
+        events_path,
+        event_types=None,
+        output_dir=None,
+        output_prefix=None,
+        create_path_traversal_links=False,
+    ):
+        output_root = Path(output_dir) if output_dir else Path(events_path).parent
+        path_traversal = output_root / "split.PathTraversal.parquet"
+        links = output_root / "split.PathTraversal.links.parquet"
+        _write_file(path_traversal)
+        _write_file(links)
+        return ({"PathTraversal": str(path_traversal)}, str(links))
+
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.split_events_parquet_by_type",
+        _fake_split_events_parquet_by_type,
+    )
+
+    raw_outputs = BeamRunOutputs(
+        beam_output_dir=beam_output_dir,
+        raw_outputs={
+            f"events_parquet_{state.forecast_year}_{state.iteration}_sub0": events_sub0,
+        },
+    )
+
+    postprocessor = BeamPostprocessor("beam", state)
+    with pytest.raises(RuntimeError) as exc_info:
+        postprocessor.postprocess(raw_outputs, workspace)
+
+    message = str(exc_info.value)
+    assert "BEAM postprocess cannot update ActivitySim skims" in message
+    assert "BEAM did not emit a raw OD skim artifact" in message
+    assert f"year={state.forecast_year}" in message
+    assert f"iteration={state.iteration}" in message
+    assert f"raw_od_skims_zarr_{state.forecast_year}_{state.iteration}" in message
+    assert "ActivitySim cannot evolve on stale skims" in message
+
+
 def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_missing(
     monkeypatch, tmp_path: Path
 ) -> None:
