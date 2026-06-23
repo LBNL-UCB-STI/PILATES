@@ -21,6 +21,7 @@ from consist import define_step
 import pytest
 import yaml
 
+from pilates.config.models import WorkflowConfig
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -638,6 +639,50 @@ def test_run_workflow_manifest_config_uses_shared_recovery_loop(monkeypatch, tmp
     refreshed_manifest = yaml.safe_load(manifest_path.read_text())
     assert refreshed_manifest["dummy_no_output_step"]["run_id"] == "fresh-run"
     assert refreshed_manifest["dummy_no_output_step"]["outputs"] == {}
+
+
+def test_run_workflow_disabled_manifest_stage_uses_noop_recovery_store(tmp_path):
+    manifest_path = tmp_path / "manifest_disabled_stage.yaml"
+
+    @define_step(model="dummy_no_output_step")
+    def _manifest_step(settings, state, workspace):
+        return None
+
+    class _Scenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            fn = kwargs["fn"]
+            runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+            fn(**runtime_kwargs)
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id="fresh-run"),
+            )
+
+    scenario = _Scenario()
+    run_workflow(
+        stage_name="disabled_manifest_stage",
+        steps=[StepRef(name="dummy_no_output_step", step_func=_manifest_step)],
+        scenario=scenario,
+        state=SimpleNamespace(year=2030, iteration=0),
+        settings=SimpleNamespace(
+            workflow=WorkflowConfig(
+                manifests={"disabled_stages": ["disabled_manifest_stage"]}
+            )
+        ),
+        workspace=_ManifestWorkspace(tmp_path),
+        coupler=_ManifestCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="2030_i0",
+        iteration=0,
+        manifest_config=ManifestConfig(path=manifest_path),
+    )
+
+    assert len(scenario.calls) == 1
+    assert not manifest_path.exists()
 
 
 def test_restored_and_live_parent_linkage_match_for_beam_resume():

@@ -50,7 +50,7 @@ from pilates.workflows.outputs_base import (
 from pilates.workflows.recovery import (
     NoManifestRecoveryStore,
     StepRecoveryStore,
-    YamlManifestRecoveryStore,
+    recovery_store_for_stage,
 )
 from pilates.workflows.step_io import expected_inputs_for_step
 from pilates.workflows.step_runner import common_runtime_kwargs
@@ -1070,11 +1070,18 @@ def _recovery_run_id_for_step_result(step_result: Any) -> Optional[str]:
 
 
 def _recovery_store_for_manifest_config(
+    *,
+    stage_name: str,
+    settings: Any,
     manifest_config: Optional[ManifestConfig],
 ) -> StepRecoveryStore:
     if manifest_config is None:
         return NoManifestRecoveryStore()
-    return YamlManifestRecoveryStore(manifest_config.path)
+    return recovery_store_for_stage(
+        stage_name=stage_name,
+        settings=settings,
+        manifest_path=manifest_config.path,
+    )
 
 
 def run_manifested_steps(
@@ -1099,7 +1106,11 @@ def run_manifested_steps(
         stage_name=stage_name,
         steps=steps,
         outputs_holder=outputs_holder,
-        recovery_store=YamlManifestRecoveryStore(manifest_config.path),
+        recovery_store=recovery_store_for_stage(
+            stage_name=stage_name,
+            settings=settings,
+            manifest_path=manifest_config.path,
+        ),
         scenario=scenario,
         state=state,
         settings=settings,
@@ -1363,7 +1374,11 @@ def run_workflow(
         stage_name=stage_name,
         steps=steps,
         outputs_holder=outputs_holder,
-        recovery_store=_recovery_store_for_manifest_config(manifest_config),
+        recovery_store=_recovery_store_for_manifest_config(
+            stage_name=stage_name,
+            settings=settings,
+            manifest_config=manifest_config,
+        ),
         scenario=scenario,
         state=state,
         settings=settings,

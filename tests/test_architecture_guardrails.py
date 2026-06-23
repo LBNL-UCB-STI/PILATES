@@ -8,6 +8,7 @@ from typing import Iterable
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PILATES_ROOT = REPO_ROOT / "pilates"
 WORKFLOW_STATE_PATH = REPO_ROOT / "workflow_state.py"
+WORKFLOW_STAGES_ROOT = PILATES_ROOT / "workflows" / "stages"
 
 ALLOWED_PROFILE_IMPORT_FILES: set[Path] = set()
 ALLOWED_RUNTIME_FLAG_CALL_FILES = {
@@ -29,6 +30,13 @@ DELETED_RESTART_AND_AUDIT_SYMBOLS = {
     "hydrate_rewind_runner_inputs",
     "restart_exact_rewind_contract",
 }
+ALLOWED_DIRECT_MANIFEST_CONFIG_STAGE_IMPORTS = {
+    Path("pilates/workflows/stages/land_use.py"),
+    Path("pilates/workflows/stages/postprocessing.py"),
+    Path("pilates/workflows/stages/supply_demand.py"),
+    Path("pilates/workflows/stages/supply_demand_activity.py"),
+    Path("pilates/workflows/stages/vehicle_ownership.py"),
+}
 
 
 def _production_python_files() -> Iterable[Path]:
@@ -36,6 +44,12 @@ def _production_python_files() -> Iterable[Path]:
         if "__pycache__" not in path.parts:
             yield path
     yield WORKFLOW_STATE_PATH
+
+
+def _stage_python_files() -> Iterable[Path]:
+    for path in sorted(WORKFLOW_STAGES_ROOT.rglob("*.py")):
+        if "__pycache__" not in path.parts:
+            yield path
 
 
 def _relative(path: Path) -> Path:
@@ -221,6 +235,23 @@ def test_deleted_restart_and_audit_symbols_stay_out_of_production_code() -> None
         "Deleted restart hydration and audit-emitter APIs must not be defined "
         f"or imported by production code. Violations: {violations}"
     )
+
+
+def test_stage_manifest_config_imports_stay_on_migration_allowlist() -> None:
+    direct_imports: set[Path] = set()
+
+    for path in _stage_python_files():
+        rel = _relative(path)
+        tree = _parse(path)
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.ImportFrom)
+                and node.module == "pilates.workflows.orchestration"
+                and any(alias.name == "ManifestConfig" for alias in node.names)
+            ):
+                direct_imports.add(rel)
+
+    assert direct_imports == ALLOWED_DIRECT_MANIFEST_CONFIG_STAGE_IMPORTS
 
 
 def test_archive_materialization_flag_stays_out_of_production_code() -> None:

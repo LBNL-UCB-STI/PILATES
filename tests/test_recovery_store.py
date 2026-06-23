@@ -1,8 +1,10 @@
 from copy import deepcopy
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
+from pilates.config.models import WorkflowConfig
 from pilates.workflows import recovery
 
 
@@ -149,3 +151,37 @@ def test_no_manifest_recovery_store_never_restores_or_persists(monkeypatch, tmp_
     )
 
     assert list(tmp_path.rglob("*.yaml")) == []
+
+
+def test_recovery_store_for_stage_defaults_to_yaml_manifest_store(tmp_path):
+    settings = SimpleNamespace(workflow=WorkflowConfig())
+    manifest_path = tmp_path / ".workflow" / "land_use_year_2030.yaml"
+
+    store = recovery.recovery_store_for_stage(
+        stage_name="land_use",
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+
+    assert isinstance(store, recovery.YamlManifestRecoveryStore)
+    assert store.manifest_path == manifest_path
+
+
+def test_recovery_store_for_stage_honors_disabled_stage_policy(tmp_path):
+    settings = SimpleNamespace(
+        workflow=WorkflowConfig(manifests={"disabled_stages": ["postprocessing"]})
+    )
+
+    disabled_store = recovery.recovery_store_for_stage(
+        stage_name="postprocessing",
+        settings=settings,
+        manifest_path=tmp_path / ".workflow" / "postprocessing_year_2030.yaml",
+    )
+    enabled_store = recovery.recovery_store_for_stage(
+        stage_name="land_use",
+        settings=settings,
+        manifest_path=tmp_path / ".workflow" / "land_use_year_2030.yaml",
+    )
+
+    assert isinstance(disabled_store, recovery.NoManifestRecoveryStore)
+    assert isinstance(enabled_store, recovery.YamlManifestRecoveryStore)

@@ -176,3 +176,19 @@ class NoManifestRecoveryStore:
 
     def uses_persisted_entries(self) -> bool:
         return False
+
+
+def recovery_store_for_stage(
+    *,
+    stage_name: str,
+    settings: Any,
+    manifest_path: Path,
+) -> StepRecoveryStore:
+    try:
+        disabled_stage_values = settings.workflow.manifests.disabled_stages
+    except AttributeError:
+        disabled_stage_values = ()
+    disabled_stages = {str(stage) for stage in (disabled_stage_values or ())}
+    if stage_name in disabled_stages:
+        return NoManifestRecoveryStore()
+    return YamlManifestRecoveryStore(manifest_path)
