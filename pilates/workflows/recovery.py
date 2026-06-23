@@ -71,9 +71,7 @@ class YamlManifestRecoveryStore:
     """
 
     manifest_path: Path
-    _manifest: dict[str, Any] = field(
-        default_factory=dict, init=False, repr=False
-    )
+    _manifest: dict[str, Any] = field(default_factory=dict, init=False, repr=False)
     _loaded: bool = field(default=False, init=False, repr=False)
 
     def load(self) -> Mapping[str, Any]:
