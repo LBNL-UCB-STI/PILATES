@@ -2,9 +2,10 @@ from copy import deepcopy
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import yaml
 
-from pilates.config.models import WorkflowConfig
+from pilates.config.models import WorkflowConfig, WorkflowManifestConfig
 from pilates.workflows import recovery
 
 
@@ -169,7 +170,9 @@ def test_recovery_store_for_stage_defaults_to_yaml_manifest_store(tmp_path):
 
 def test_recovery_store_for_stage_honors_disabled_stage_policy(tmp_path):
     settings = SimpleNamespace(
-        workflow=WorkflowConfig(manifests={"disabled_stages": ["postprocessing"]})
+        workflow=WorkflowConfig(
+            manifests=WorkflowManifestConfig(disabled_stages=["postprocessing"])
+        )
     )
 
     disabled_store = recovery.recovery_store_for_stage(
@@ -185,3 +188,39 @@ def test_recovery_store_for_stage_honors_disabled_stage_policy(tmp_path):
 
     assert isinstance(disabled_store, recovery.NoManifestRecoveryStore)
     assert isinstance(enabled_store, recovery.YamlManifestRecoveryStore)
+
+
+@pytest.mark.parametrize(
+    "stage_name",
+    [
+        "supply_demand",
+        "activity_demand",
+        "activity_demand_preprocess",
+        "activity_demand_run",
+        "activity_demand_postprocess",
+        "activity_demand_compile",
+    ],
+)
+def test_recovery_store_for_stage_temporarily_blocks_supply_demand_disablement(
+    stage_name: str,
+    tmp_path,
+):
+    settings = SimpleNamespace(
+        workflow=WorkflowConfig(
+            manifests=WorkflowManifestConfig(disabled_stages=[stage_name])
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"workflow\.manifests\.disabled_stages cannot disable "
+            rf"'{stage_name}' yet\. This guard is temporary until "
+            r"tracker-native recovery and delete-track prerequisites are met\."
+        ),
+    ):
+        recovery.recovery_store_for_stage(
+            stage_name=stage_name,
+            settings=settings,
+            manifest_path=tmp_path / ".workflow" / f"{stage_name}_year_2030.yaml",
+        )

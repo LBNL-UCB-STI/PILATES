@@ -7,6 +7,18 @@ from typing import Any, Mapping, Protocol, Sequence
 from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 
 
+_TEMPORARILY_BLOCKED_MANIFEST_DISABLEMENT_STAGES = frozenset(
+    {
+        "supply_demand",
+        "activity_demand",
+        "activity_demand_preprocess",
+        "activity_demand_run",
+        "activity_demand_postprocess",
+        "activity_demand_compile",
+    }
+)
+
+
 @dataclass(frozen=True)
 class StepRecoveryDecision:
     """
@@ -184,11 +196,47 @@ def recovery_store_for_stage(
     settings: Any,
     manifest_path: Path,
 ) -> StepRecoveryStore:
+    ensure_manifest_disablement_allowed(stage_name=stage_name, settings=settings)
+    disabled_stages = _disabled_manifest_stage_names(settings)
+    if stage_name in disabled_stages:
+        return NoManifestRecoveryStore()
+    return YamlManifestRecoveryStore(manifest_path)
+
+
+def ensure_manifest_disablement_allowed(
+    *,
+    stage_name: str,
+    settings: Any,
+) -> None:
+    disabled_stages = _disabled_manifest_stage_names(settings)
+    if (
+        stage_name in disabled_stages
+        and stage_name in _TEMPORARILY_BLOCKED_MANIFEST_DISABLEMENT_STAGES
+    ):
+        raise RuntimeError(
+            f"workflow.manifests.disabled_stages cannot disable '{stage_name}' "
+            "yet. This guard is temporary until tracker-native recovery and "
+            "delete-track prerequisites are met."
+        )
+
+
+def ensure_supply_demand_manifest_disablement_allowed(*, settings: Any) -> None:
+    disabled_stages = _disabled_manifest_stage_names(settings)
+    blocked_stages = sorted(
+        disabled_stages & _TEMPORARILY_BLOCKED_MANIFEST_DISABLEMENT_STAGES
+    )
+    if blocked_stages:
+        blocked = ", ".join(f"'{stage}'" for stage in blocked_stages)
+        raise RuntimeError(
+            "workflow.manifests.disabled_stages cannot disable supply-demand "
+            f"manifest recovery names yet: {blocked}. This guard is temporary "
+            "until tracker-native recovery and delete-track prerequisites are met."
+        )
+
+
+def _disabled_manifest_stage_names(settings: Any) -> set[str]:
     try:
         disabled_stage_values = settings.workflow.manifests.disabled_stages
     except AttributeError:
         disabled_stage_values = ()
-    disabled_stages = {str(stage) for stage in (disabled_stage_values or ())}
-    if stage_name in disabled_stages:
-        return NoManifestRecoveryStore()
-    return YamlManifestRecoveryStore(manifest_path)
+    return {str(stage) for stage in (disabled_stage_values or ())}

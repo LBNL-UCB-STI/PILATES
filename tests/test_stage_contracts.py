@@ -1322,6 +1322,39 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
 
 
+def test_supply_demand_stage_temporarily_blocks_activity_demand_manifest_disablement(
+    stage_env,
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    settings.workflow.manifests.disabled_stages = ["activity_demand"]
+
+    def _build_manifest_path(_workspace, _year, _iteration):
+        raise AssertionError("supply-demand guard should fail before manifest paths")
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"workflow\.manifests\.disabled_stages cannot disable "
+            r"supply-demand manifest recovery names yet: 'activity_demand'\. "
+            r"This guard is temporary until tracker-native recovery and "
+            r"delete-track prerequisites are met\."
+        ),
+    ):
+        run_supply_demand_stage(
+            scenario=stage_env["scenario"],
+            state=state,
+            settings=settings,
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+            year=state.forecast_year,
+            usim_inputs={},
+            build_manifest_path=_build_manifest_path,
+        )
+
+
 def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     stage_env, tmp_path
 ):
