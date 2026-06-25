@@ -102,6 +102,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(
+    params=[
+        pytest.param((), id="default-manifests"),
+        pytest.param(("land_use",), id="land-use-manifest-disabled"),
+    ]
+)
+def disabled_manifest_stages(request) -> tuple[str, ...]:
+    return tuple(request.param)
+
+
 class _StopWorkflow(BaseException):
     pass
 
@@ -128,7 +138,12 @@ _RESTART_HANDOFF_KEYS = (
 )
 
 
-def _build_test_settings(root: Path, run_name: str) -> Any:
+def _build_test_settings(
+    root: Path,
+    run_name: str,
+    *,
+    disabled_manifest_stages: tuple[str, ...] = (),
+) -> Any:
     root.mkdir(parents=True, exist_ok=True)
     settings = _build_settings(root)
     settings.run.output_run_name = run_name
@@ -144,6 +159,7 @@ def _build_test_settings(root: Path, run_name: str) -> Any:
     settings.replanning_enabled = False
     settings.state_file_loc = str(root / "state.yaml")
     settings.atlas.beamac = 0
+    settings.workflow.manifests.disabled_stages = list(disabled_manifest_stages)
     return settings
 
 
@@ -673,9 +689,19 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _make_postprocessor)
 
 
-def _make_runtime(tmp_path: Path, monkeypatch, *, name: str) -> _StubRuntime:
+def _make_runtime(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    name: str,
+    disabled_manifest_stages: tuple[str, ...] = (),
+) -> _StubRuntime:
     root = tmp_path / name
-    settings = _build_test_settings(root, name)
+    settings = _build_test_settings(
+        root,
+        name,
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
     workspace = Workspace(settings, output_path=str(root), folder_name="run")
     state = WorkflowState.from_settings(settings)
     _build_workspace_inputs(settings, workspace, state)
@@ -1072,6 +1098,77 @@ def _manifest_snapshot(
     return manifests
 
 
+def _supply_demand_manifest_snapshot(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, dict[str, list[str]]]:
+    return {
+        relative_path: manifest
+        for relative_path, manifest in _manifest_snapshot(
+            workspace,
+            state=state,
+        ).items()
+        if re.match(r"year_\d{4}_iteration_\d+\.yaml$", relative_path)
+    }
+
+
+def _assert_manifest_policy_snapshot(
+    *,
+    snapshot_name: str,
+    snapshot: dict[str, Any],
+    disabled_manifest_stages: tuple[str, ...],
+) -> None:
+    manifest_snapshot = snapshot["manifest_snapshot"]
+    land_use_manifests = sorted(
+        path for path in manifest_snapshot if path.startswith("land_use_year_")
+    )
+    if "land_use" in disabled_manifest_stages:
+        assert land_use_manifests == [], (
+            f"{snapshot_name} should not write land-use manifests when land_use "
+            f"is disabled by policy: {land_use_manifests}"
+        )
+    else:
+        assert land_use_manifests, (
+            f"{snapshot_name} should retain default land-use manifests"
+        )
+
+    supply_demand_manifests = snapshot["supply_demand_manifest_snapshot"]
+    assert supply_demand_manifests, (
+        f"{snapshot_name} should retain YAML-backed supply-demand manifests"
+    )
+    for manifest_path, manifest in supply_demand_manifests.items():
+        assert {
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        } <= set(manifest["steps"]), (
+            f"{snapshot_name}.{manifest_path} is missing expected ActivitySim "
+            f"supply-demand manifest entries: {manifest}"
+        )
+        assert {
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        } <= set(manifest["steps_with_run_id"]), (
+            f"{snapshot_name}.{manifest_path} should retain run IDs for "
+            f"manifest-backed ActivitySim recovery entries: {manifest}"
+        )
+        if "beam_run" in manifest["steps"]:
+            assert "beam_run" in manifest["steps_with_run_id"], (
+                f"{snapshot_name}.{manifest_path} contains beam_run but no run_id"
+            )
+
+
+def _expected_restart_handoff_keys(
+    disabled_manifest_stages: tuple[str, ...],
+) -> set[str]:
+    expected = set(_RESTART_HANDOFF_KEYS)
+    if "land_use" in disabled_manifest_stages:
+        expected.remove(USIM_DATASTORE_BASE_H5)
+    return expected
+
+
 def _iter_manifest_key_values(value: Any, key: Optional[str] = None):
     if key in _RESTART_HANDOFF_KEYS:
         yield str(key), value
@@ -1199,6 +1296,10 @@ def _snapshot(
         "elapsed_seconds": elapsed_seconds,
         "artifact_digests": _digest_bundle(runtime.workspace),
         "manifest_snapshot": _manifest_snapshot(runtime.workspace, state=runtime.state),
+        "supply_demand_manifest_snapshot": _supply_demand_manifest_snapshot(
+            runtime.workspace,
+            state=runtime.state,
+        ),
         "restart_handoff_paths": _required_restart_handoff_paths(
             runtime.workspace,
             state=runtime.state,
@@ -1206,6 +1307,9 @@ def _snapshot(
         "parent_edges": _normalized_parent_edges(runtime.tracker),
         "run_index_rows": _run_index_rows(runtime.tracker, runtime.workspace.full_path),
         "compatibility_fallback_steps": sorted(set(compatibility_fallback_steps or [])),
+        "disabled_manifest_stages": tuple(
+            runtime.settings.workflow.manifests.disabled_stages
+        ),
     }
     _debug(f"snapshot:complete name={runtime.settings.run.output_run_name}")
     return out
@@ -1261,12 +1365,31 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             resumed["manifest_snapshot"],
         )
     )
+    assert (
+        resumed["supply_demand_manifest_snapshot"]
+        == baseline["supply_demand_manifest_snapshot"]
+    ), (
+        _describe_difference(
+            "supply_demand_manifest_snapshot",
+            baseline["supply_demand_manifest_snapshot"],
+            resumed["supply_demand_manifest_snapshot"],
+        )
+    )
     for snapshot_name, snapshot in {
         "baseline": baseline,
         "resumed": resumed,
     }.items():
+        disabled_manifest_stages = tuple(snapshot["disabled_manifest_stages"])
+        _assert_manifest_policy_snapshot(
+            snapshot_name=snapshot_name,
+            snapshot=snapshot,
+            disabled_manifest_stages=disabled_manifest_stages,
+        )
+        expected_handoff_keys = _expected_restart_handoff_keys(
+            disabled_manifest_stages
+        )
         missing_handoffs = sorted(
-            set(_RESTART_HANDOFF_KEYS) - set(snapshot["restart_handoff_paths"])
+            expected_handoff_keys - set(snapshot["restart_handoff_paths"])
         )
         assert missing_handoffs == [], _describe_difference(
             f"{snapshot_name}.restart_handoff_paths",
@@ -1285,11 +1408,11 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             {},
             unresolved_handoffs,
         )
-    assert resumed["compatibility_fallback_steps"] == [], _describe_difference(
-        "compatibility_fallback_steps",
-        [],
-        resumed["compatibility_fallback_steps"],
-    )
+        assert snapshot["compatibility_fallback_steps"] == [], _describe_difference(
+            f"{snapshot_name}.compatibility_fallback_steps",
+            [],
+            snapshot["compatibility_fallback_steps"],
+        )
     assert resumed["parent_edges"] == baseline["parent_edges"], _describe_difference(
         "parent_edges", baseline["parent_edges"], resumed["parent_edges"]
     )
@@ -1311,25 +1434,35 @@ def _interrupt_after(boundary: str) -> Callable[[str, WorkflowState], None]:
 
 def _capture_compatibility_fallback_steps(monkeypatch) -> list[str]:
     fallback_steps: list[str] = []
-    original_merge = workflow_orchestration._merge_output_recovery_meta
+    original_recover = workflow_orchestration._recover_step_outputs
 
-    def _record_recovery_meta(outputs, audit_meta):
-        original_merge(outputs, audit_meta)
-        if audit_meta.get("used_compatibility_fallback"):
-            fallback_steps.append("<unknown>")
+    def _record_recovery_step(*args, **kwargs):
+        audit_meta = kwargs.get("audit_meta")
+        if audit_meta is None:
+            audit_meta = {}
+            kwargs = {**kwargs, "audit_meta": audit_meta}
+        outputs = original_recover(*args, **kwargs)
+        if bool(audit_meta.get("used_compatibility_fallback")):
+            fallback_steps.append(str(kwargs.get("step_name") or "<unknown>"))
+        return outputs
 
     monkeypatch.setattr(
         workflow_orchestration,
-        "_merge_output_recovery_meta",
-        _record_recovery_meta,
+        "_recover_step_outputs",
+        _record_recovery_step,
     )
     return fallback_steps
 
 
 @pytest.fixture
-def baseline_snapshot(tmp_path, monkeypatch):
+def baseline_snapshot(tmp_path, monkeypatch, disabled_manifest_stages):
     compatibility_fallback_steps = _capture_compatibility_fallback_steps(monkeypatch)
-    runtime = _make_runtime(tmp_path, monkeypatch, name="baseline")
+    runtime = _make_runtime(
+        tmp_path,
+        monkeypatch,
+        name="baseline",
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
     started = perf_counter()
     _stage_runner(runtime)
     elapsed = perf_counter() - started
@@ -1342,10 +1475,19 @@ def baseline_snapshot(tmp_path, monkeypatch):
     return snapshot
 
 
-def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
+def _run_resumed_case(
+    tmp_path,
+    monkeypatch,
+    *,
+    stop_boundary: str,
+    disabled_manifest_stages: tuple[str, ...],
+) -> dict[str, Any]:
     compatibility_fallback_steps = _capture_compatibility_fallback_steps(monkeypatch)
     archive_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"archive_{stop_boundary}"
+        tmp_path,
+        monkeypatch,
+        name=f"archive_{stop_boundary}",
+        disabled_manifest_stages=disabled_manifest_stages,
     )
     _debug(f"resumed_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
@@ -1354,7 +1496,10 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     resumed_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
+        tmp_path,
+        monkeypatch,
+        name=f"resume_{stop_boundary}",
+        disabled_manifest_stages=disabled_manifest_stages,
     )
     _resume_runtime(archive_runtime, resumed_runtime)
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", resumed_runtime.workspace.full_path)
@@ -1387,8 +1532,14 @@ def test_stubbed_restart_resume_matches_uninterrupted_baseline(
     tmp_path,
     monkeypatch,
     stop_boundary,
+    disabled_manifest_stages,
 ):
-    resumed = _run_resumed_case(tmp_path, monkeypatch, stop_boundary=stop_boundary)
+    resumed = _run_resumed_case(
+        tmp_path,
+        monkeypatch,
+        stop_boundary=stop_boundary,
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
     assert resumed["mode"] == "replay"
     assert resumed["elapsed_seconds"] is not None
     _assert_equivalent(baseline_snapshot, resumed)
