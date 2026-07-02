@@ -82,7 +82,7 @@ These docs cover the things that come up day-to-day:
 - following what each stage and artifact actually means, not just where its
   code lives
 - adding a new model or step without breaking the existing contracts
-- opening archived runs for SQL, datasets, and scenario comparisons
+- opening archived runs for SQL, datasets, and faceted comparisons
 - working out whether a stopped run needs a config tweak, a data fix, a
   restart, or a closer look at the model itself
 

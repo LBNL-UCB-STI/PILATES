@@ -3,48 +3,76 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 ANALYSIS_SRC = Path(__file__).resolve().parents[2] / "analysis" / "src"
 if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
-from pilates_consist_analysis import open_archive
+from pilates_consist_analysis import difference, open_archive, rank
 
 
-def run_comparison(
+def _parse_filter(raw: str) -> tuple[str, Any]:
+    key, separator, value = str(raw).partition("=")
+    if not separator or not key.strip():
+        raise argparse.ArgumentTypeError("Filters must use KEY=VALUE form.")
+    text = value.strip()
+    if text.isdigit():
+        return key.strip(), int(text)
+    return key.strip(), text
+
+
+def _unique(values: Sequence[str]) -> list[str]:
+    return list(
+        dict.fromkeys(str(value).strip() for value in values if str(value).strip())
+    )
+
+
+def build_mode_share_comparison(
     archive,
     *,
-    left_scenario: str | None = None,
-    right_scenario: str | None = None,
-    left_run_ids: list[str] | None = None,
-    right_run_ids: list[str] | None = None,
-    year: int | None = None,
-    align_on: str = "year",
-    converged: bool = False,
+    table_name: str,
+    compare: str,
+    baseline: str | None,
+    group_by: Sequence[str],
+    filters: Mapping[str, Any],
+    mode_column: str = "trip_mode",
 ):
-    if left_scenario and right_scenario:
-        left = left_scenario
-        right = right_scenario
-    elif left_run_ids and right_run_ids:
-        left = left_run_ids
-        right = right_run_ids
-    else:
-        raise ValueError(
-            "Provide either both scenario selections or both run-id selections."
-        )
-    return archive.compare(
-        left,
-        right,
-        year=year,
-        align_on=align_on,
-        converged=converged,
+    import ibis
+
+    measured_by = _unique([*group_by, compare, mode_column])
+    facets = _unique([*measured_by, *filters.keys()])
+    table = archive.table(table_name, facets=facets, where=dict(filters))
+    counts = archive.measure(
+        table,
+        by=measured_by,
+        measures={"trip_count": lambda table_expr: table_expr.count()},
     )
+    denominator_by = [column for column in measured_by if column != mode_column]
+    denominator_window = ibis.window(
+        group_by=[counts[column] for column in denominator_by],
+    )
+    total_trips = counts["trip_count"].sum().over(denominator_window)
+    measured = counts.mutate(
+        total_trips=total_trips,
+        mode_share=counts["trip_count"] / total_trips,
+    )
+    comparison_by = [column for column in measured_by if column != compare]
+    if baseline is not None:
+        return difference(
+            measured,
+            value="mode_share",
+            compare=compare,
+            baseline=baseline,
+            at=filters,
+            by=comparison_by,
+        )
+    return rank(measured, value="mode_share", by=comparison_by)
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Compare two scenarios or explicit run selections inside one archive.",
+        description="Measure ActivitySim trip mode share and compare results over one facet.",
     )
     parser.add_argument("archive_run_dir", help="Archive run directory.")
     parser.add_argument(
@@ -52,26 +80,47 @@ def _build_parser() -> argparse.ArgumentParser:
         default=str(Path(__file__).resolve().parents[2]),
         help="Project root mounted as Consist inputs. Defaults to the current PILATES checkout.",
     )
-    parser.add_argument("--left-scenario", help="Left scenario id.")
-    parser.add_argument("--right-scenario", help="Right scenario id.")
     parser.add_argument(
-        "--left-run-id",
-        action="append",
-        dest="left_run_ids",
-        help="Explicit left run id. Repeatable.",
+        "--table",
+        default="activitysim.trips",
+        help="Logical analysis table in '<model>.<logical_name>' form.",
     )
     parser.add_argument(
-        "--right-run-id",
-        action="append",
-        dest="right_run_ids",
-        help="Explicit right run id. Repeatable.",
+        "--compare",
+        default="scenario_id",
+        help="Facet to compare, for example scenario_id or pricing_policy.",
     )
-    parser.add_argument("--year", type=int, help="Optional year filter.")
-    parser.add_argument("--align-on", default="year", help="RunSet alignment key.")
     parser.add_argument(
-        "--converged",
-        action="store_true",
-        help="Select converged epochs before comparing.",
+        "--baseline",
+        help="Optional baseline value for --compare. If omitted, mode shares are ranked instead.",
+    )
+    parser.add_argument(
+        "--group-by",
+        action="append",
+        default=None,
+        help=(
+            "Facet column to group by before adding --compare and trip_mode. "
+            "Defaults to year and iteration. Repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--where",
+        action="append",
+        default=[],
+        type=_parse_filter,
+        metavar="KEY=VALUE",
+        help="Facet filter. Repeatable.",
+    )
+    parser.add_argument(
+        "--mode-column",
+        default="trip_mode",
+        help="Trip mode column from the ActivitySim trips schema.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum result rows to print.",
     )
     return parser
 
@@ -79,28 +128,27 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
+    filters = dict(args.where)
+    group_by = args.group_by or ["year", "iteration"]
 
     archive = open_archive(
         Path(args.archive_run_dir),
         project_root=Path(args.project_root),
     )
-    comparison = run_comparison(
+    result = build_mode_share_comparison(
         archive,
-        left_scenario=args.left_scenario,
-        right_scenario=args.right_scenario,
-        left_run_ids=args.left_run_ids,
-        right_run_ids=args.right_run_ids,
-        year=args.year,
-        align_on=args.align_on,
-        converged=args.converged,
+        table_name=args.table,
+        compare=args.compare,
+        baseline=args.baseline,
+        group_by=group_by,
+        filters=filters,
+        mode_column=args.mode_column,
     )
 
-    print("Comparison summary")
-    print(comparison.summary().to_string(index=False))
-    dataset_summaries = comparison.dataset_summaries()
-    if not dataset_summaries.empty:
-        print("\nDataset summaries")
-        print(dataset_summaries.to_string(index=False))
+    print("Archive summary")
+    print(archive.summary().to_string(index=False))
+    print("\nMode share comparison")
+    print(result.to_pandas().head(args.limit).to_string(index=False))
     return 0
 
 

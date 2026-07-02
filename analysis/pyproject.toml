@@ -9,10 +9,9 @@ description = "Consist-enabled post-run analysis scaffolding for PILATES."
 readme = "README.md"
 requires-python = ">=3.8"
 dependencies = [
-  "consist",
+  "consist[ibis]",
   "numpy>=1.21",
   "pandas>=1.5",
-  "sqlmodel>=0.0.16",
 ]
 
 [project.scripts]

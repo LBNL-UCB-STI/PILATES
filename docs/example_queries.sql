@@ -9,14 +9,14 @@
 --
 --   * analysis/README.md for the notebook-first `open_archive(...)` workflow
 --   * docs/analysis/sql_and_duckdb.md for current SQL entry points
---   * docs/analysis/consist_analysis_cli.md for packaged CLI commands
+--   * docs/analysis/consist_analysis_cli.md for discovery and health commands
 --
 -- Preferred API surfaces:
 --
 --   * `open_archive(...)`
+--   * `Archive.table(...)`
 --   * `Archive.views(epoch)`
 --   * `Epoch.sql(...)` / `Epoch.query(...)`
---   * `pilates-consist-analysis export-sql`
 --
 -- This stub remains only so old links fail softly and redirect readers to the
 -- maintained documentation.

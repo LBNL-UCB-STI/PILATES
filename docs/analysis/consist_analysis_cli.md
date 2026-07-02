@@ -1,6 +1,6 @@
 ---
 title: Consist Analysis CLI
-summary: Public analysis CLI and API entrypoints for archived-run inspection and export workflows.
+summary: Public CLI entrypoints for archived-run discovery and health checks.
 ---
 
 # Consist Analysis CLI
@@ -8,8 +8,8 @@ summary: Public analysis CLI and API entrypoints for archived-run inspection and
 ## Adjacent Pages
 
 - Start with [Opening Archives](opening_archives.md).
-- Pair this with [Run Discovery and Runsets](run_discovery_and_runsets.md) and [Datasets](datasets.md).
-- Use [Scenario Comparison](scenario_comparison.md) for paired-run workflows.
+- Pair this with [Run Discovery and Runsets](run_discovery_and_runsets.md).
+- Use [Faceted Comparison](scenario_comparison.md) for beginner comparison workflows.
 
 ## Command Groups
 
@@ -22,25 +22,9 @@ The CLI is built in `analysis/src/pilates_consist_analysis/cli.py` and uses the 
 - `db-health` runs the Consist DB health checks for the archive DB.
 - `run-tagging` inspects missing run tags and parent linkage consistency.
 
-### Dataset builders
-
-- `build-linkstats-dataset` writes `linkstats_artifacts.csv`, `linkstats_summary.csv`, and `linkstats_deltas.csv`.
-- `build-asim-trips-dataset` writes the ActivitySim trips dataset CSVs.
-- `build-skim-dataset` writes skim artifacts, matrices, summary, and deltas CSVs.
-- `equilibrium-metrics` and `activitysim-equilibrium-metrics` compute metrics from the exported dataset outputs.
-
-### Export and inspection
-
-- `export-bundle` writes a portable Consist bundle for explicit run IDs.
-- `export-scenario-db` resolves a runset from filters and exports a scenario bundle.
-- `export-sql` runs ad hoc SQL and writes CSV or Parquet.
-- `export-asim-inputs` writes ActivitySim trips/persons tables for one epoch.
-- `ingest-artifacts` logs files as artifacts in a dedicated analysis run and can ingest them.
-- `list-run-artifacts` prints a run artifact inventory.
-
-### Scenario comparison
-
-- `compare-scenarios` aligns two runsets, builds comparison frames, and writes a manifest plus CSV outputs.
+The CLI intentionally does not expose dataset builders, SQL exporters, artifact
+ingest, or paired-scenario comparison commands. Use the Python `Archive` API for
+analysis tables and call `.to_pandas()` or Ibis export methods at the boundary.
 
 ## Shared Arguments
 
@@ -57,12 +41,17 @@ These are the same values used by `create_analysis_tracker()`.
 
 ## Python Counterparts
 
-If you are already in Python, the same surfaces are available through:
+If you are already in Python, prefer the smaller faceted surface:
+
+- `open_archive(...)`
+- `Archive.table(...)`
+- `Archive.measure(...)`
+- `delta(...)`, `difference(...)`, `delta_change(...)`, and `rank(...)`
+
+Compatibility and lower-level surfaces are still available through:
 
 - `AnalysisSession`
 - `Archive`
 - `RunIndex`
 - `RunSet`
 - `EpochPanel`
-- `Comparison`
-- the dataset builder functions in `analysis/src/pilates_consist_analysis`

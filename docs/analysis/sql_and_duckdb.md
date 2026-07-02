@@ -8,14 +8,13 @@ summary: Current SQL entry points for Consist-backed PILATES archive analysis.
 ## Adjacent Pages
 
 - Read [Opening Archives](opening_archives.md) first.
-- Use [Consist Analysis CLI](consist_analysis_cli.md) for packaged commands.
+- Use [Consist Analysis CLI](consist_analysis_cli.md) for discovery and health checks.
 - See the repo-local `analysis/README.md` for notebook-first examples.
 
 ## Recommended Path
 
 PILATES analysis is Consist-first. Start from an archived run directory, open it
-through the analysis API, and query the archive-backed epoch views rather than
-copying raw SQL against legacy table names.
+through the analysis API, and prefer faceted Ibis tables before writing raw SQL.
 
 ```python
 from pathlib import Path
@@ -27,37 +26,29 @@ archive = open_archive(
     project_root=Path("/Users/zaneedell/git/PILATES"),
 )
 
-epoch = archive.scenario("baseline").epoch(year=2030, converged=True)
-epoch.sql("SELECT * FROM {views.trips} LIMIT 10")
+trips = archive.table(
+    "activitysim.trips",
+    facets=["scenario_id", "year", "iteration"],
+    where={"year": 2030},
+)
+
+trips.limit(10).to_pandas()
 ```
 
 The maintained SQL surfaces are:
 
 - `open_archive(...)`, the preferred notebook entry point for archived runs
+- `Archive.table(...)`, for faceted Ibis tables over grouped artifacts
 - `Archive.views(epoch)`, for archive-local view discovery and direct view access
 - `Epoch.sql(sql)` and `Epoch.query(sql)`, for epoch-scoped SQL with named views
 - `EpochTables.load(...)` and table helpers such as `epoch.tables.trips(...)`
-- `export_sql_query(...)`, for programmatic tracker-DB exports
-- `pilates-consist-analysis export-sql`, for CLI CSV or Parquet exports
-
-## CLI Export
-
-Use `export-sql` when you want a reproducible file output from SQL:
-
-```bash
-pilates-consist-analysis export-sql \
-  --archive-run-dir /path/to/archive/run \
-  --project-root /Users/zaneedell/git/PILATES \
-  --sql "SELECT * FROM runs LIMIT 20" \
-  --output-path /path/to/output/runs.csv
-```
-
-For longer SQL, pass `--sql-file` instead of `--sql`.
+For file outputs, materialize the Ibis expression or DataFrame explicitly at the
+end of the notebook/script.
 
 ## Named Epoch Tables
 
-The notebook API exposes common epoch-backed tables through `epoch.tables` when
-the underlying artifacts are present:
+The compatibility API exposes common epoch-backed tables through `epoch.tables`
+when the underlying artifacts are present:
 
 - `trips`
 - `persons`
@@ -69,8 +60,9 @@ the underlying artifacts are present:
 - `urbansim_households`
 - `urbansim_jobs`
 
-Prefer those helpers for common analysis. Drop to `Epoch.sql(...)` when you need
-joins, projections, or diagnostics that the table helpers do not cover.
+Prefer `Archive.table(...)` for new notebook work. Drop to `Epoch.sql(...)` when
+you need an older epoch-scoped path, exact SQL text, joins, projections, or
+diagnostics that the Ibis table path does not cover.
 
 ## DuckDB Health
 

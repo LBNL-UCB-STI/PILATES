@@ -316,3 +316,18 @@ def runset_from_runs(
         except TypeError:
             pass
     return RunSet.from_runs(run_list, label=name)
+
+
+def runset_from_run_ids(
+    tracker: Any,
+    run_ids: Sequence[str],
+    *,
+    name: str = "runset",
+) -> RunSet:
+    runs = []
+    for rid in run_ids:
+        run = tracker.get_run(rid) if hasattr(tracker, "get_run") else None
+        if run is not None:
+            runs.append(run)
+    return runset_from_runs(runs, name=name, tracker=tracker)
+
