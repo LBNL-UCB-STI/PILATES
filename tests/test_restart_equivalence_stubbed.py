@@ -1368,12 +1368,10 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
     assert (
         resumed["supply_demand_manifest_snapshot"]
         == baseline["supply_demand_manifest_snapshot"]
-    ), (
-        _describe_difference(
-            "supply_demand_manifest_snapshot",
-            baseline["supply_demand_manifest_snapshot"],
-            resumed["supply_demand_manifest_snapshot"],
-        )
+    ), _describe_difference(
+        "supply_demand_manifest_snapshot",
+        baseline["supply_demand_manifest_snapshot"],
+        resumed["supply_demand_manifest_snapshot"],
     )
     for snapshot_name, snapshot in {
         "baseline": baseline,
@@ -1385,9 +1383,7 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             snapshot=snapshot,
             disabled_manifest_stages=disabled_manifest_stages,
         )
-        expected_handoff_keys = _expected_restart_handoff_keys(
-            disabled_manifest_stages
-        )
+        expected_handoff_keys = _expected_restart_handoff_keys(disabled_manifest_stages)
         missing_handoffs = sorted(
             expected_handoff_keys - set(snapshot["restart_handoff_paths"])
         )
