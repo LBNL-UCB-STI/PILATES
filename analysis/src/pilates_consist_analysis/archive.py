@@ -51,7 +51,9 @@ def _copy_path(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
-def _stable_view_name(name: str, facets: Sequence[str], where: Mapping[str, Any]) -> str:
+def _stable_view_name(
+    name: str, facets: Sequence[str], where: Mapping[str, Any]
+) -> str:
     payload = json.dumps(
         {
             "name": name,
@@ -469,8 +471,7 @@ class Archive:
         model, separator, logical_name = str(name).strip().lower().partition(".")
         if not separator or not model or not logical_name:
             raise ValueError(
-                "Table name must use '<model>.<logical_name>' form, "
-                f"got {name!r}."
+                f"Table name must use '<model>.<logical_name>' form, got {name!r}."
             )
         return model, logical_name
 

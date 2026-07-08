@@ -136,12 +136,9 @@ def difference(
     keys = list(dict.fromkeys([*(by or ()), *((at or {}).keys())]))
     baseline_column = f"{value}_baseline"
     diff_column = output or f"{value}_difference"
-    baseline_table = (
-        filtered.filter(filtered[compare] == baseline)
-        .select(
-            *[filtered[column] for column in keys],
-            filtered[value].name(baseline_column),
-        )
+    baseline_table = filtered.filter(filtered[compare] == baseline).select(
+        *[filtered[column] for column in keys],
+        filtered[value].name(baseline_column),
     )
     predicates = [filtered[column] == baseline_table[column] for column in keys]
     joined = filtered.left_join(baseline_table, predicates=predicates)

@@ -109,9 +109,7 @@ def test_run_comparison_example_builds_mode_share_comparison():
 
         def measure(self, table, *, by, measures):
             calls["measure"] = {"table": table, "by": by, "measures": measures}
-            aggregations = {
-                name: builder(table) for name, builder in measures.items()
-            }
+            aggregations = {name: builder(table) for name, builder in measures.items()}
             return table.group_by(list(by)).agg(**aggregations)
 
     archive = ArchiveStub()
@@ -126,12 +124,10 @@ def test_run_comparison_example_builds_mode_share_comparison():
     ).to_pandas()
 
     cordon_drive = result.loc[
-        (result["pricing_policy"] == "cordon")
-        & (result["trip_mode"] == "DRIVE")
+        (result["pricing_policy"] == "cordon") & (result["trip_mode"] == "DRIVE")
     ].iloc[0]
     cordon_walk = result.loc[
-        (result["pricing_policy"] == "cordon")
-        & (result["trip_mode"] == "WALK")
+        (result["pricing_policy"] == "cordon") & (result["trip_mode"] == "WALK")
     ].iloc[0]
 
     assert cordon_drive["trip_count"] == 1

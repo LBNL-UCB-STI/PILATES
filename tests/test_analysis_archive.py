@@ -98,7 +98,9 @@ class FakeGroupedTable:
                 elif isinstance(expr, tuple) and expr[0] == "sum":
                     row[name] = group[expr[1]].sum()
                 else:
-                    raise AssertionError(f"Unhandled fake aggregate expression: {expr!r}")
+                    raise AssertionError(
+                        f"Unhandled fake aggregate expression: {expr!r}"
+                    )
             rows.append(row)
         return FakeIbisTable(pd.DataFrame(rows))
 
@@ -749,9 +751,7 @@ def test_archive_measure_groups_by_arbitrary_facets():
         measures={"trips": lambda t: t.count()},
     )
 
-    frame = measured.to_pandas().sort_values(
-        ["scenario_id", "pricing_policy", "year"]
-    )
+    frame = measured.to_pandas().sort_values(["scenario_id", "pricing_policy", "year"])
     assert frame.to_dict("records") == [
         {
             "scenario_id": "baseline",
@@ -778,10 +778,30 @@ def test_faceted_helpers_handle_scenario_and_parameter_sweep_comparisons():
     measured = FakeIbisTable(
         pd.DataFrame(
             [
-                {"scenario_id": "baseline", "pricing_policy": "none", "year": 2020, "trips": 10},
-                {"scenario_id": "baseline", "pricing_policy": "none", "year": 2030, "trips": 14},
-                {"scenario_id": "policy-a", "pricing_policy": "cordon", "year": 2030, "trips": 20},
-                {"scenario_id": "policy-b", "pricing_policy": "mileage", "year": 2030, "trips": 18},
+                {
+                    "scenario_id": "baseline",
+                    "pricing_policy": "none",
+                    "year": 2020,
+                    "trips": 10,
+                },
+                {
+                    "scenario_id": "baseline",
+                    "pricing_policy": "none",
+                    "year": 2030,
+                    "trips": 14,
+                },
+                {
+                    "scenario_id": "policy-a",
+                    "pricing_policy": "cordon",
+                    "year": 2030,
+                    "trips": 20,
+                },
+                {
+                    "scenario_id": "policy-b",
+                    "pricing_policy": "mileage",
+                    "year": 2030,
+                    "trips": 18,
+                },
             ]
         )
     )
@@ -797,15 +817,23 @@ def test_faceted_helpers_handle_scenario_and_parameter_sweep_comparisons():
     ].iloc[0]
     assert int(baseline_2030["trips_delta"]) == 4
 
-    sweep = difference(
-        measured,
-        value="trips",
-        compare="pricing_policy",
-        baseline="none",
-        at={"year": 2030},
-    ).to_pandas().sort_values("pricing_policy")
-    assert sweep.loc[sweep["pricing_policy"] == "cordon", "trips_difference"].iloc[0] == 6
-    assert sweep.loc[sweep["pricing_policy"] == "mileage", "trips_difference"].iloc[0] == 4
+    sweep = (
+        difference(
+            measured,
+            value="trips",
+            compare="pricing_policy",
+            baseline="none",
+            at={"year": 2030},
+        )
+        .to_pandas()
+        .sort_values("pricing_policy")
+    )
+    assert (
+        sweep.loc[sweep["pricing_policy"] == "cordon", "trips_difference"].iloc[0] == 6
+    )
+    assert (
+        sweep.loc[sweep["pricing_policy"] == "mileage", "trips_difference"].iloc[0] == 4
+    )
 
     ranked = rank(
         measured,
@@ -813,7 +841,9 @@ def test_faceted_helpers_handle_scenario_and_parameter_sweep_comparisons():
         by=["year"],
         descending=True,
     ).to_pandas()
-    assert list(ranked.loc[ranked["year"] == 2030].sort_values("trips_rank")["pricing_policy"]) == [
+    assert list(
+        ranked.loc[ranked["year"] == 2030].sort_values("trips_rank")["pricing_policy"]
+    ) == [
         "cordon",
         "mileage",
         "none",
@@ -843,7 +873,9 @@ def test_delta_change_computes_change_in_iteration_delta():
     assert int(row["trips_delta_change"]) == -15
 
 
-def test_open_archive_local_cache_copies_db_and_selected_artifacts(monkeypatch, tmp_path):
+def test_open_archive_local_cache_copies_db_and_selected_artifacts(
+    monkeypatch, tmp_path
+):
     persistent = tmp_path / "persistent" / "run"
     db_path = persistent / ".consist" / "consist.duckdb"
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -894,13 +926,11 @@ def test_open_archive_local_cache_copies_db_and_selected_artifacts(monkeypatch, 
     assert sessions[0].archive_run_dir == local_cache / "run"
     assert sessions[0].db_path == local_cache / "run" / ".consist" / "consist.duckdb"
     assert sessions[0].db_path.read_text(encoding="utf-8") == "db"
-    assert (
-        local_cache / "run" / "activitysim" / "output" / "trips.parquet"
-    ).read_text(encoding="utf-8") == "trips"
+    assert (local_cache / "run" / "activitysim" / "output" / "trips.parquet").read_text(
+        encoding="utf-8"
+    ) == "trips"
     manifest = archive.localization_manifest()
     assert manifest["artifacts"][0]["artifact_id"] == "artifact-1"
     assert manifest["artifacts"][0]["local_path"].endswith(
         "activitysim/output/trips.parquet"
     )
-
-
