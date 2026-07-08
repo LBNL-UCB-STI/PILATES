@@ -12,11 +12,9 @@ if str(ANALYSIS_SRC) not in sys.path:
     sys.path.insert(0, str(ANALYSIS_SRC))
 
 import pilates_consist_analysis.archive as archive_module
-import pilates_consist_analysis.comparison_api as comparison_module
-from pilates_consist_analysis import open_archive
+from pilates_consist_analysis import delta, delta_change, difference, open_archive, rank
 from pilates_consist_analysis.run_index import build_run_index
 from pilates_consist_analysis.runset import runset_from_runs
-from pilates_consist_analysis.scenario_compare import ScenarioComparison
 
 
 @dataclass
@@ -38,10 +36,115 @@ class TrackerStub:
     def __init__(self, runs):
         self._runs = list(runs)
         self.db = None
+        self._artifacts = []
 
     def run_set(self, label, limit=200000):
         del label, limit
         return list(self._runs)
+
+    def find_artifacts_by_params(self, *, params, namespace=None, limit=1000):
+        del namespace, limit
+        wanted = {}
+        for param in params:
+            key, _, value = str(param).partition("=")
+            wanted[key.split(".")[-1]] = value
+        output = []
+        for artifact in self._artifacts:
+            meta = getattr(artifact, "meta", {}) or {}
+            facet = meta.get("facet", {}) if isinstance(meta, dict) else {}
+            if all(str(facet.get(key, "")) == value for key, value in wanted.items()):
+                output.append(artifact)
+        return output
+
+
+@dataclass
+class FakeArtifact:
+    id: str
+    key: str
+    run_id: str
+    uri: str
+    abs_path: str
+    meta: dict
+
+
+class FakeColumn:
+    def __init__(self, table, name):
+        self.table = table
+        self.name = name
+
+    def isin(self, values):
+        return ("isin", self.name, set(values))
+
+    def __eq__(self, other):
+        return ("eq", self.name, other)
+
+
+class FakeGroupedTable:
+    def __init__(self, table, by):
+        self.table = table
+        self.by = list(by)
+
+    def agg(self, **measures):
+        rows = []
+        grouped = self.table._frame.groupby(self.by, dropna=False)
+        for keys, group in grouped:
+            if not isinstance(keys, tuple):
+                keys = (keys,)
+            row = dict(zip(self.by, keys))
+            for name, expr in measures.items():
+                if expr == ("count",):
+                    row[name] = len(group)
+                elif isinstance(expr, tuple) and expr[0] == "sum":
+                    row[name] = group[expr[1]].sum()
+                else:
+                    raise AssertionError(
+                        f"Unhandled fake aggregate expression: {expr!r}"
+                    )
+            rows.append(row)
+        return FakeIbisTable(pd.DataFrame(rows))
+
+
+class FakeIbisTable:
+    _pilates_fake_table = True
+
+    def __init__(self, frame):
+        self._frame = frame.copy()
+
+    @property
+    def columns(self):
+        return list(self._frame.columns)
+
+    def __getitem__(self, name):
+        return FakeColumn(self, name)
+
+    def count(self):
+        return ("count",)
+
+    def sum(self, column):
+        return ("sum", column)
+
+    def filter(self, predicate):
+        op, column, value = predicate
+        if op == "isin":
+            return FakeIbisTable(self._frame.loc[self._frame[column].isin(value)])
+        if op == "eq":
+            return FakeIbisTable(self._frame.loc[self._frame[column] == value])
+        raise AssertionError(f"Unhandled fake predicate: {predicate!r}")
+
+    def mutate(self, **values):
+        frame = self._frame.copy()
+        for name, value in values.items():
+            if isinstance(value, FakeColumn):
+                frame[name] = frame[value.name]
+            else:
+                frame[name] = value
+        return FakeIbisTable(frame)
+
+    def group_by(self, by):
+        return FakeGroupedTable(self, by)
+
+    def to_pandas(self):
+        return self._frame.copy()
 
 
 class QueryResultStub:
@@ -531,241 +634,302 @@ def test_open_archive_exposes_notebook_friendly_discovery(monkeypatch, tmp_path)
     }
 
 
-def test_archive_compare_exposes_notebook_friendly_comparison(monkeypatch, tmp_path):
+def test_archive_table_returns_faceted_ibis_table(monkeypatch, tmp_path):
     archive_run_dir = tmp_path / "archive"
     db_path = archive_run_dir / ".consist" / "consist.duckdb"
     db_path.parent.mkdir(parents=True, exist_ok=True)
     db_path.write_bytes(b"")
+    artifact_path = archive_run_dir / "activitysim" / "output" / "trips.parquet"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("placeholder", encoding="utf-8")
 
-    runs = [
-        _run(
-            "baseline-2030-i0",
-            model_name="beam",
-            scenario_id="baseline",
-            year=2030,
-            iteration=0,
-        ),
-        _run(
-            "baseline-2030-i1",
-            model_name="beam",
-            scenario_id="baseline",
-            year=2030,
-            iteration=1,
-        ),
-        _run(
-            "policy-2030-i0",
-            model_name="beam",
-            scenario_id="policy",
-            year=2030,
-            iteration=0,
-        ),
-        _run(
-            "policy-2030-i2",
-            model_name="beam",
-            scenario_id="policy",
-            year=2030,
-            iteration=2,
-        ),
-    ]
-    tracker = TrackerStub(runs)
-    epochs = [
-        EpochStub(2030, 0, "baseline", {"beam": runs[0]}),
-        EpochStub(2030, 1, "baseline", {"beam": runs[1]}),
-        EpochStub(2030, 0, "policy", {"beam": runs[2]}),
-        EpochStub(2030, 2, "policy", {"beam": runs[3]}),
+    tracker = TrackerStub(
+        [
+            _run(
+                "asim-2020",
+                model_name="activitysim",
+                scenario_id="baseline",
+                year=2020,
+                iteration=0,
+            )
+        ]
+    )
+    tracker._artifacts = [
+        FakeArtifact(
+            id="artifact-1",
+            key="trips_asim_out",
+            run_id="asim-2020",
+            uri="workspace://activitysim/output/trips.parquet",
+            abs_path=str(artifact_path),
+            meta={"facet": {"artifact_family": "trips", "pricing_policy": "none"}},
+        )
     ]
     session = SessionStub(
         tracker=tracker,
         archive_run_dir=archive_run_dir,
         db_path=db_path,
-        epochs=epochs,
+        epochs=[],
     )
 
-    def _comparison_factory(left, right, **kwargs):
-        del kwargs
-        return ScenarioComparison(
-            left_name=getattr(left, "label", "baseline"),
-            right_name=getattr(right, "label", "policy"),
-            left_run_ids=[run.id for run in left],
-            right_run_ids=[run.id for run in right],
-            aligned_on="year",
-            aligned_keys=[2030],
-            config_diff=pd.DataFrame(
+    captured = {}
+
+    def fake_grouped_view(**kwargs):
+        captured.update(kwargs)
+        return FakeIbisTable(
+            pd.DataFrame(
                 [
                     {
-                        "align_on": "year",
-                        "on_value": 2030,
-                        "key": "beam.param",
-                        "namespace": "beam",
-                        "status": "changed",
-                        "left": "1",
-                        "right": "2",
-                        "run_id_left": "baseline-2030-i1",
-                        "run_id_right": "policy-2030-i2",
-                        "left_status": "completed",
-                        "right_status": "completed",
-                    }
-                ]
-            ),
-            dataset_summaries=pd.DataFrame(
-                [
-                    {
-                        "dataset": "asim_trips",
-                        "row_count": 2,
-                        "overlap_rows": 2,
+                        "trip_id": 1,
+                        "facet_scenario_id": "baseline",
+                        "facet_year": 2020,
+                        "facet_iteration": 0,
+                        "facet_pricing_policy": "none",
                     },
                     {
-                        "dataset": "linkstats",
-                        "row_count": 1,
-                        "overlap_rows": 1,
+                        "trip_id": 2,
+                        "facet_scenario_id": "baseline",
+                        "facet_year": 2030,
+                        "facet_iteration": 0,
+                        "facet_pricing_policy": "none",
+                    },
+                    {
+                        "trip_id": 3,
+                        "facet_scenario_id": "policy",
+                        "facet_year": 2040,
+                        "facet_iteration": 0,
+                        "facet_pricing_policy": "cordon",
                     },
                 ]
-            ),
-            dataset_frames={
-                "linkstats": pd.DataFrame(
-                    [
-                        {
-                            "year": 2030,
-                            "iteration": 1,
-                            "volume_baseline": 10.0,
-                            "volume_policy": 12.0,
-                            "volume_delta": 2.0,
-                        }
-                    ]
-                ),
-                "asim_trips": pd.DataFrame(
-                    [
-                        {
-                            "year": 2030,
-                            "iteration": 1,
-                            "total_trips_baseline": 100,
-                            "total_trips_policy": 110,
-                            "total_trips_delta": 10,
-                        }
-                    ]
-                ),
-            },
+            )
         )
-
-    session._compare_factory = _comparison_factory
-
-    class TripsDatasetStub:
-        def __init__(self):
-            self.mode_counts = pd.DataFrame(
-                [
-                    {
-                        "comparison_group": "baseline-2030-i1",
-                        "run_id": "baseline-2030-i1",
-                        "year": 2030,
-                        "iteration": 1,
-                        "trip_mode": "DRIVE",
-                        "trip_count": 60,
-                        "mode_share": 0.6,
-                    },
-                    {
-                        "comparison_group": "policy-2030-i2",
-                        "run_id": "policy-2030-i2",
-                        "year": 2030,
-                        "iteration": 2,
-                        "trip_mode": "DRIVE",
-                        "trip_count": 50,
-                        "mode_share": 0.5,
-                    },
-                    {
-                        "comparison_group": "baseline-2030-i1",
-                        "run_id": "baseline-2030-i1",
-                        "year": 2030,
-                        "iteration": 1,
-                        "trip_mode": "WALK",
-                        "trip_count": 40,
-                        "mode_share": 0.4,
-                    },
-                    {
-                        "comparison_group": "policy-2030-i2",
-                        "run_id": "policy-2030-i2",
-                        "year": 2030,
-                        "iteration": 2,
-                        "trip_mode": "WALK",
-                        "trip_count": 60,
-                        "mode_share": 0.5,
-                    },
-                ]
-            )
-            self.purpose_mode_counts = pd.DataFrame(
-                [
-                    {
-                        "comparison_group": "baseline-2030-i1",
-                        "run_id": "baseline-2030-i1",
-                        "year": 2030,
-                        "iteration": 1,
-                        "primary_purpose": "work",
-                        "trip_mode": "DRIVE",
-                        "trip_count": 35,
-                    },
-                    {
-                        "comparison_group": "policy-2030-i2",
-                        "run_id": "policy-2030-i2",
-                        "year": 2030,
-                        "iteration": 2,
-                        "primary_purpose": "work",
-                        "trip_mode": "DRIVE",
-                        "trip_count": 30,
-                    },
-                ]
-            )
 
     monkeypatch.setattr(
         archive_module.AnalysisSession, "open", lambda **kwargs: session
     )
-    monkeypatch.setattr(
-        archive_module,
-        "get_db_health",
-        lambda *_args, **_kwargs: {"healthy": True},
-    )
-    monkeypatch.setattr(
-        archive_module,
-        "get_db_health_issues",
-        lambda *_args, **_kwargs: [],
-    )
-    monkeypatch.setattr(
-        comparison_module,
-        "build_activitysim_trips_dataset",
-        lambda *args, **kwargs: TripsDatasetStub(),
-    )
+    monkeypatch.setattr(archive_module, "_open_grouped_ibis_table", fake_grouped_view)
 
     archive = open_archive(archive_run_dir, project_root=tmp_path / "project")
-    comparison = archive.compare(
-        "baseline",
-        "policy",
-        year=2030,
-        converged=True,
-        datasets=["linkstats", "asim_trips"],
+    table = archive.table(
+        "activitysim.trips",
+        facets=["scenario_id", "year", "iteration", "pricing_policy"],
+        where={"year": [2020, 2030]},
     )
 
-    summary = comparison.summary()
-    assert int(summary.iloc[0]["aligned_key_count"]) == 1
-    assert bool(summary.iloc[0]["use_converged"]) is True
-    assert comparison.aligned_keys == [2030]
-
-    config_diff = comparison.config_diff()
-    assert list(config_diff["key"]) == ["beam.param"]
-
-    linkstats = comparison.linkstats_summary()
-    assert list(linkstats["volume_delta"]) == [2.0]
-
-    mode_shares = comparison.mode_shares()
-    assert set(mode_shares["trip_mode"]) == {"DRIVE", "WALK"}
-    assert "mode_share_delta" in mode_shares.columns
-
-    trip_purposes = comparison.trip_purposes()
-    assert set(trip_purposes["primary_purpose"]) == {"work"}
-    assert "trip_count_delta" in trip_purposes.columns
-
-    scenario_comparison = archive.scenario("baseline").compare(
-        "policy",
-        year=2030,
-        converged=True,
-        datasets=["linkstats"],
+    assert captured["artifact_id"] == "artifact-1"
+    assert captured["namespace"] == "activitysim"
+    assert "artifact_family=trips" in captured["params"]
+    assert captured["attach_facets"] == [
+        "scenario_id",
+        "year",
+        "iteration",
+        "pricing_policy",
+    ]
+    frame = table.to_pandas()
+    assert set(["scenario_id", "year", "iteration", "pricing_policy"]).issubset(
+        frame.columns
     )
-    assert scenario_comparison.left_name == "baseline"
-    assert scenario_comparison.right_name == "policy"
+    assert list(frame["year"]) == [2020, 2030]
+
+
+def test_archive_measure_groups_by_arbitrary_facets():
+    table = FakeIbisTable(
+        pd.DataFrame(
+            [
+                {"scenario_id": "baseline", "pricing_policy": "none", "year": 2020},
+                {"scenario_id": "baseline", "pricing_policy": "none", "year": 2020},
+                {"scenario_id": "baseline", "pricing_policy": "none", "year": 2030},
+                {"scenario_id": "policy", "pricing_policy": "cordon", "year": 2030},
+            ]
+        )
+    )
+    archive = archive_module.Archive.__new__(archive_module.Archive)
+
+    measured = archive.measure(
+        table,
+        by=["scenario_id", "pricing_policy", "year"],
+        measures={"trips": lambda t: t.count()},
+    )
+
+    frame = measured.to_pandas().sort_values(["scenario_id", "pricing_policy", "year"])
+    assert frame.to_dict("records") == [
+        {
+            "scenario_id": "baseline",
+            "pricing_policy": "none",
+            "year": 2020,
+            "trips": 2,
+        },
+        {
+            "scenario_id": "baseline",
+            "pricing_policy": "none",
+            "year": 2030,
+            "trips": 1,
+        },
+        {
+            "scenario_id": "policy",
+            "pricing_policy": "cordon",
+            "year": 2030,
+            "trips": 1,
+        },
+    ]
+
+
+def test_faceted_helpers_handle_scenario_and_parameter_sweep_comparisons():
+    measured = FakeIbisTable(
+        pd.DataFrame(
+            [
+                {
+                    "scenario_id": "baseline",
+                    "pricing_policy": "none",
+                    "year": 2020,
+                    "trips": 10,
+                },
+                {
+                    "scenario_id": "baseline",
+                    "pricing_policy": "none",
+                    "year": 2030,
+                    "trips": 14,
+                },
+                {
+                    "scenario_id": "policy-a",
+                    "pricing_policy": "cordon",
+                    "year": 2030,
+                    "trips": 20,
+                },
+                {
+                    "scenario_id": "policy-b",
+                    "pricing_policy": "mileage",
+                    "year": 2030,
+                    "trips": 18,
+                },
+            ]
+        )
+    )
+
+    year_delta = delta(
+        measured,
+        value="trips",
+        over="year",
+        by=["scenario_id", "pricing_policy"],
+    ).to_pandas()
+    baseline_2030 = year_delta.loc[
+        (year_delta["scenario_id"] == "baseline") & (year_delta["year"] == 2030)
+    ].iloc[0]
+    assert int(baseline_2030["trips_delta"]) == 4
+
+    sweep = (
+        difference(
+            measured,
+            value="trips",
+            compare="pricing_policy",
+            baseline="none",
+            at={"year": 2030},
+        )
+        .to_pandas()
+        .sort_values("pricing_policy")
+    )
+    assert (
+        sweep.loc[sweep["pricing_policy"] == "cordon", "trips_difference"].iloc[0] == 6
+    )
+    assert (
+        sweep.loc[sweep["pricing_policy"] == "mileage", "trips_difference"].iloc[0] == 4
+    )
+
+    ranked = rank(
+        measured,
+        value="trips",
+        by=["year"],
+        descending=True,
+    ).to_pandas()
+    assert list(
+        ranked.loc[ranked["year"] == 2030].sort_values("trips_rank")["pricing_policy"]
+    ) == [
+        "cordon",
+        "mileage",
+        "none",
+    ]
+
+
+def test_delta_change_computes_change_in_iteration_delta():
+    measured = FakeIbisTable(
+        pd.DataFrame(
+            [
+                {"scenario_id": "baseline", "year": 2030, "iteration": 0, "trips": 100},
+                {"scenario_id": "baseline", "year": 2030, "iteration": 1, "trips": 130},
+                {"scenario_id": "baseline", "year": 2030, "iteration": 2, "trips": 145},
+            ]
+        )
+    )
+
+    changed = delta_change(
+        measured,
+        value="trips",
+        over="iteration",
+        by=["scenario_id", "year"],
+    ).to_pandas()
+
+    row = changed.loc[changed["iteration"] == 2].iloc[0]
+    assert int(row["trips_delta"]) == 15
+    assert int(row["trips_delta_change"]) == -15
+
+
+def test_open_archive_local_cache_copies_db_and_selected_artifacts(
+    monkeypatch, tmp_path
+):
+    persistent = tmp_path / "persistent" / "run"
+    db_path = persistent / ".consist" / "consist.duckdb"
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    db_path.write_text("db", encoding="utf-8")
+    artifact_path = persistent / "activitysim" / "output" / "trips.parquet"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("trips", encoding="utf-8")
+    local_cache = tmp_path / "local-cache"
+
+    sessions = []
+
+    def fake_open(**kwargs):
+        archive_dir = Path(kwargs["archive_run_dir"])
+        tracker = TrackerStub([])
+        tracker._artifacts = [
+            FakeArtifact(
+                id="artifact-1",
+                key="trips_asim_out",
+                run_id="asim-2020",
+                uri="workspace://activitysim/output/trips.parquet",
+                abs_path=str(artifact_path),
+                meta={"facet": {"artifact_family": "trips"}},
+            )
+        ]
+        session = SessionStub(
+            tracker=tracker,
+            archive_run_dir=archive_dir,
+            db_path=Path(kwargs["db_path"]),
+            epochs=[],
+        )
+        sessions.append(session)
+        return session
+
+    monkeypatch.setattr(archive_module.AnalysisSession, "open", fake_open)
+    monkeypatch.setattr(
+        archive_module,
+        "_open_grouped_ibis_table",
+        lambda **_kwargs: FakeIbisTable(pd.DataFrame([{"facet_year": 2030}])),
+    )
+
+    archive = open_archive(
+        persistent,
+        project_root=tmp_path / "project",
+        local_cache=local_cache,
+    )
+    archive.table("activitysim.trips", facets=["year"])
+
+    assert sessions[0].archive_run_dir == local_cache / "run"
+    assert sessions[0].db_path == local_cache / "run" / ".consist" / "consist.duckdb"
+    assert sessions[0].db_path.read_text(encoding="utf-8") == "db"
+    assert (local_cache / "run" / "activitysim" / "output" / "trips.parquet").read_text(
+        encoding="utf-8"
+    ) == "trips"
+    manifest = archive.localization_manifest()
+    assert manifest["artifacts"][0]["artifact_id"] == "artifact-1"
+    assert manifest["artifacts"][0]["local_path"].endswith(
+        "activitysim/output/trips.parquet"
+    )

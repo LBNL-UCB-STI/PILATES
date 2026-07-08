@@ -1,6 +1,6 @@
 ---
 title: Consist in Action
-summary: Small, read-only walkthroughs for cache-hit inspection, run comparison, and replay-aware archive inspection.
+summary: Small, read-only walkthroughs for cache-hit inspection, faceted outcome comparison, and replay-aware archive inspection.
 ---
 
 # Consist in Action
@@ -11,7 +11,7 @@ These examples are the shortest path to seeing what PILATES gets from Consist
 without reading the runtime code first:
 
 - cache-aware rerun inspection
-- run or scenario comparison
+- faceted output comparison
 - replay/restart inspection against archived outputs
 
 All three scripts are read-only. They operate on archive run directories and
@@ -38,35 +38,28 @@ What it shows:
 Use this when you want a fast answer to "what reran and what stayed logically
 the same?"
 
-## 2. Scenario Or Run Comparison
+## 2. Faceted Output Comparison
 
-Compare two scenarios inside one archive:
-
-```bash
-python examples/consist/run_comparison.py \
-  /path/to/archive-run \
-  --left-scenario baseline \
-  --right-scenario pricing_policy \
-  --year 2030 \
-  --converged
-```
-
-Or compare explicit run ids:
+Measure ActivitySim trip mode share and compare over a facet:
 
 ```bash
 python examples/consist/run_comparison.py \
   /path/to/archive-run \
-  --left-run-id RUN_A \
-  --right-run-id RUN_B
+  --table activitysim.trips \
+  --compare pricing_policy \
+  --baseline none \
+  --where year=2030
 ```
 
 What it shows:
 
-- comparison alignment summary
-- dataset summary rows for the compared outputs
+- archive summary
+- trip counts, total trips, and mode share by `trip_mode`
+- either differences against a baseline facet value or ranks when no baseline is supplied
 
-This is the quickest script-level entrypoint before dropping into notebooks or
-the full analysis CLI.
+This is the quickest script-level entrypoint before moving into notebooks. It
+works for two scenarios and for larger parameter sweeps because both are just
+facet comparisons.
 
 ## 3. Replay / Restart Archive Inspection
 
@@ -101,5 +94,5 @@ that replay/restart tooling can recover from.
 ## Where To Go Next
 
 - Read [Opening Archives](opening_archives.md) for the tracker and mount model.
-- Read [Scenario Comparison](scenario_comparison.md) for the higher-level analysis surface.
+- Read [Faceted Comparison](scenario_comparison.md) for the beginner comparison surface.
 - Read [Consist in PILATES](../workflow/consist_in_pilates.md) for the runtime ownership split.

@@ -27,20 +27,34 @@ It resolves the Consist database from one of these paths under that directory wh
 - `workspace` -> the archive run directory
 - `scratch` -> optional output root when provided
 
-`AnalysisSession.open()` and `open_archive()` both use that same archive resolution path.
-`open_run()` returns the session itself; `open_archive()` wraps the session in an `Archive`.
+`open_archive()` uses that same archive resolution path and returns the beginner-facing `Archive` object.
+`open_run()` still returns the lower-level `AnalysisSession` for compatibility and run-discovery workflows.
 
 ## Local DB Copy For Notebooks
 
-On HPC, it can be faster and less fragile to copy the archive DuckDB file to
-node-local scratch before starting a notebook. The archive mount should still
-point at the preserved archive run directory; only the DB path changes.
+On HPC, it can be faster and less fragile to use node-local scratch. The
+beginner path is `local_cache`, which copies the DB up front and localizes
+selected artifact files when you request faceted tables.
 
 Use the starter notebook:
 
 - repo-local `analysis/notebooks/local_duckdb_scratch_starter.ipynb`
 
-Or copy from a shell first:
+```python
+archive = open_archive(
+    ARCHIVE_RUN_DIR,
+    project_root=PROJECT_ROOT,
+    local_cache=LOCAL_CACHE,
+)
+```
+
+The helper writes a manifest under:
+
+```text
+<local-cache>/<archive-name>/.pilates/analysis_localization_manifest.json
+```
+
+If you only want to copy the DB manually, the shell helper is still available:
 
 ```bash
 hpc/copy_duckdb_local.sh --src /path/to/archive/run/.consist/provenance.duckdb
@@ -63,7 +77,8 @@ If you only need the opening rule, it is:
 1. point analysis at the archive run directory
 2. let the helper resolve the Consist DB under `.consist/`
 3. let the tracker mount that archive as `workspace`
-4. build higher-level views such as sessions, archives, runsets, epochs, or comparisons from there
+4. ask `Archive.table(...)` for a faceted Ibis table
+5. aggregate and compare over ordinary facet columns
 
 ## What Fails Early
 

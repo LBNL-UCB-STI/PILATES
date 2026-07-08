@@ -1,18 +1,111 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
+import shutil
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 import pandas as pd
 
 from .api import AnalysisSession
-from .comparison_api import Comparison, build_comparison
 from .epoch_api import Epoch
+from .epoch_views import ARTIFACT_FAMILIES
 from .epochs import SimulationEpoch
 from .run_index import RunIndex, build_run_index
-from .runset import RunSet
-from .runtime import get_db_health, get_db_health_issues
+from .runtime import (
+    get_db_health,
+    get_db_health_issues,
+    resolve_archive_run_dir,
+    resolve_db_path,
+)
+
+
+SYSTEM_FACET_COLUMNS = {
+    "scenario_id": ("scenario_id", "facet_scenario_id", "consist_scenario_id"),
+    "year": ("year", "facet_year", "consist_year"),
+    "iteration": ("iteration", "facet_iteration", "consist_iteration"),
+    "model": ("model", "facet_model", "consist_model"),
+    "seed": ("seed", "facet_seed", "consist_seed"),
+}
+
+
+def _open_grouped_ibis_table(**kwargs: Any) -> Any:
+    import consist
+
+    context = consist.ibis_grouped_view(**kwargs)
+    table = context.__enter__()
+    return table, context
+
+
+def _copy_path(source: Path, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        if destination.exists():
+            return
+        shutil.copytree(source, destination)
+        return
+    if destination.exists():
+        return
+    shutil.copy2(source, destination)
+
+
+def _stable_view_name(
+    name: str, facets: Sequence[str], where: Mapping[str, Any]
+) -> str:
+    payload = json.dumps(
+        {
+            "name": name,
+            "facets": list(facets),
+            "where": {key: str(value) for key, value in sorted(where.items())},
+        },
+        sort_keys=True,
+    )
+    digest = hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
+    return f"v_pilates_analysis_{digest}"
+
+
+def _table_columns(table: Any) -> list[str]:
+    try:
+        return list(table.columns)
+    except Exception:
+        return []
+
+
+def _alias_facets(table: Any, facets: Sequence[str]) -> Any:
+    columns = _table_columns(table)
+    for facet in facets:
+        if facet in columns:
+            continue
+        candidates = SYSTEM_FACET_COLUMNS.get(
+            facet, (facet, f"facet_{facet}", f"consist_{facet}")
+        )
+        source = next(
+            (candidate for candidate in candidates if candidate in columns),
+            None,
+        )
+        if source is None:
+            continue
+        table = table.mutate(**{facet: table[source]})
+        columns = _table_columns(table)
+    return table
+
+
+def _apply_where(table: Any, where: Mapping[str, Any]) -> Any:
+    for column, value in where.items():
+        if isinstance(value, range):
+            table = table.filter(table[column].isin(list(value)))
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            if len(value) == 2 and isinstance(value, tuple):
+                lower, upper = value
+                table = table.filter(table[column] >= lower)
+                table = table.filter(table[column] <= upper)
+            else:
+                table = table.filter(table[column].isin(list(value)))
+        else:
+            table = table.filter(table[column] == value)
+    return table
 
 
 @dataclass(frozen=True)
@@ -82,49 +175,34 @@ class ArchiveScenario:
             models=models,
         )
 
-    def compare(
-        self,
-        other: str | "ArchiveScenario" | RunSet | Iterable[str],
-        *,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        model: Optional[str] = None,
-        status: Optional[str] = "completed",
-        datasets: Optional[Sequence[str]] = None,
-        config_namespace: Optional[str] = None,
-        config_prefix: Optional[str] = None,
-        config_include_equal: bool = False,
-        align_on: str = "year",
-        latest_group_by: Optional[Sequence[str]] = None,
-        converged: bool = False,
-        converged_group_by: Optional[Sequence[str]] = None,
-        left_name: Optional[str] = None,
-        right_name: Optional[str] = None,
-    ) -> Comparison:
-        return self.archive.compare(
-            self,
-            other,
-            year=year,
-            iteration=iteration,
-            model=model,
-            status=status,
-            datasets=datasets,
-            config_namespace=config_namespace,
-            config_prefix=config_prefix,
-            config_include_equal=config_include_equal,
-            align_on=align_on,
-            latest_group_by=latest_group_by,
-            converged=converged,
-            converged_group_by=converged_group_by,
-            left_name=left_name or self.scenario_id,
-            right_name=right_name,
-        )
-
 
 class Archive:
-    def __init__(self, session: AnalysisSession) -> None:
+    def __init__(
+        self,
+        session: AnalysisSession,
+        *,
+        persistent_archive_run_dir: Optional[str | Path] = None,
+        local_cache_run_dir: Optional[str | Path] = None,
+    ) -> None:
         self.session = session
         self._run_index: Optional[RunIndex] = None
+        self.persistent_archive_run_dir = (
+            Path(persistent_archive_run_dir).expanduser().resolve()
+            if persistent_archive_run_dir is not None
+            else Path(session.archive_run_dir)
+        )
+        self.local_cache_run_dir = (
+            Path(local_cache_run_dir).expanduser().resolve()
+            if local_cache_run_dir is not None
+            else None
+        )
+        self._localization_manifest: dict[str, Any] = {
+            "persistent_archive_run_dir": str(self.persistent_archive_run_dir),
+            "local_archive_run_dir": str(self.archive_run_dir),
+            "db_path": str(self.db_path),
+            "artifacts": [],
+        }
+        self._ibis_contexts: list[Any] = []
 
     @classmethod
     def open(
@@ -144,7 +222,20 @@ class Archive:
         ] = None,
         artifact_families_json_path: Optional[str | Path] = None,
         artifact_families_env_var: Optional[str] = None,
+        local_cache: Optional[str | Path] = None,
     ) -> "Archive":
+        persistent_archive = resolve_archive_run_dir(archive_run_dir)
+        local_cache_run_dir = None
+        if local_cache is not None:
+            local_cache_run_dir = (
+                Path(local_cache).expanduser().resolve() / persistent_archive.name
+            )
+            local_db_path = local_cache_run_dir / ".consist" / "consist.duckdb"
+            source_db_path = resolve_db_path(persistent_archive, db_path=db_path)
+            _copy_path(source_db_path, local_db_path)
+            archive_run_dir = local_cache_run_dir
+            db_path = local_db_path
+
         session_kwargs: dict[str, Any] = {
             "archive_run_dir": archive_run_dir,
             "project_root": project_root,
@@ -160,7 +251,11 @@ class Archive:
         }
         if artifact_families_env_var is not None:
             session_kwargs["artifact_families_env_var"] = artifact_families_env_var
-        return cls(AnalysisSession.open(**session_kwargs))
+        return cls(
+            AnalysisSession.open(**session_kwargs),
+            persistent_archive_run_dir=persistent_archive,
+            local_cache_run_dir=local_cache_run_dir,
+        )
 
     @property
     def tracker(self) -> Any:
@@ -262,6 +357,73 @@ class Archive:
         simulation_epoch = epoch.raw if isinstance(epoch, Epoch) else epoch
         return self.session.views(simulation_epoch)
 
+    def table(
+        self,
+        name: str,
+        *,
+        facets: Optional[Sequence[str]] = None,
+        where: Optional[Mapping[str, Any]] = None,
+        mode: str = "hybrid",
+        missing_files: str = "warn",
+        schema_compatible: bool = False,
+    ) -> Any:
+        model, logical_name = self._parse_table_name(name)
+        family_spec = self._artifact_family_spec(model, logical_name)
+        artifact_family = family_spec["artifact_family"]
+        requested_facets = list(dict.fromkeys(facets or ()))
+        filters = dict(where or {})
+        params = [f"artifact_family={artifact_family}"]
+        seed = self._seed_artifact(model=model, artifact_family=artifact_family)
+        self._localize_artifacts([seed])
+        opened = _open_grouped_ibis_table(
+            tracker=self.tracker,
+            view_name=_stable_view_name(name, requested_facets, filters),
+            artifact_id=seed.id,
+            namespace=model,
+            params=params,
+            attach_facets=requested_facets,
+            include_system_columns=True,
+            mode=mode,
+            if_exists="replace",
+            missing_files=missing_files,
+            schema_compatible=schema_compatible,
+        )
+        if isinstance(opened, tuple) and len(opened) == 2:
+            table, context = opened
+            self._ibis_contexts.append(context)
+        else:
+            table = opened
+        table = _alias_facets(table, requested_facets)
+        return _apply_where(table, filters)
+
+    def measure(
+        self,
+        table: Any,
+        *,
+        by: Sequence[str],
+        measures: Mapping[str, Any],
+    ) -> Any:
+        aggregations = {name: builder(table) for name, builder in measures.items()}
+        return table.group_by(list(by)).agg(**aggregations)
+
+    def localization_manifest(self) -> dict[str, Any]:
+        return {
+            **self._localization_manifest,
+            "artifacts": list(self._localization_manifest["artifacts"]),
+        }
+
+    def close(self) -> None:
+        while self._ibis_contexts:
+            context = self._ibis_contexts.pop()
+            context.__exit__(None, None, None)
+
+    def __enter__(self) -> "Archive":
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        del exc_type, exc, tb
+        self.close()
+
     def epoch(
         self,
         *,
@@ -305,100 +467,118 @@ class Archive:
         simulation_epoch = candidates[0]
         return Epoch(archive=self, simulation_epoch=simulation_epoch)
 
-    def compare(
-        self,
-        left: str | ArchiveScenario | RunSet | Iterable[str],
-        right: str | ArchiveScenario | RunSet | Iterable[str],
-        *,
-        year: Optional[int] = None,
-        iteration: Optional[int] = None,
-        model: Optional[str] = None,
-        status: Optional[str] = "completed",
-        datasets: Optional[Sequence[str]] = None,
-        config_namespace: Optional[str] = None,
-        config_prefix: Optional[str] = None,
-        config_include_equal: bool = False,
-        align_on: str = "year",
-        latest_group_by: Optional[Sequence[str]] = None,
-        converged: bool = False,
-        converged_group_by: Optional[Sequence[str]] = None,
-        left_name: Optional[str] = None,
-        right_name: Optional[str] = None,
-    ) -> Comparison:
-        left_runset = self._resolve_runset(
-            left,
-            year=year,
-            iteration=iteration,
-            model=model,
-            status=status,
-            default_name=left_name or "left",
-        )
-        right_runset = self._resolve_runset(
-            right,
-            year=year,
-            iteration=iteration,
-            model=model,
-            status=status,
-            default_name=right_name or "right",
-        )
-        return build_comparison(
-            self,
-            left=left,
-            right=right,
-            left_runset=left_runset,
-            right_runset=right_runset,
-            year=year,
-            iteration=iteration,
-            datasets=datasets,
-            config_namespace=config_namespace,
-            config_prefix=config_prefix,
-            config_include_equal=config_include_equal,
-            align_on=align_on,
-            latest_group_by=latest_group_by,
-            use_converged=converged,
-            converged_group_by=converged_group_by,
-            left_name=left_name,
-            right_name=right_name,
-        )
-
-    def _resolve_runset(
-        self,
-        selection: str | ArchiveScenario | RunSet | Iterable[str],
-        *,
-        year: Optional[int],
-        iteration: Optional[int],
-        model: Optional[str],
-        status: Optional[str],
-        default_name: str,
-    ) -> RunSet:
-        if isinstance(selection, RunSet):
-            return selection
-        if isinstance(selection, ArchiveScenario):
-            selection = selection.scenario_id
-        if isinstance(selection, str):
-            resolved_name = str(selection).strip() or default_name
-            frame = self.runs(
-                scenario_id=resolved_name,
-                year=year,
-                iteration=iteration,
-                model=model,
-                status=status,
+    def _parse_table_name(self, name: str) -> tuple[str, str]:
+        model, separator, logical_name = str(name).strip().lower().partition(".")
+        if not separator or not model or not logical_name:
+            raise ValueError(
+                f"Table name must use '<model>.<logical_name>' form, got {name!r}."
             )
-            run_ids = [
-                str(value).strip()
-                for value in frame["run_id"].tolist()
-                if str(value).strip()
-            ]
-            if not run_ids:
-                raise ValueError(
-                    f"No runs matched comparison selection {resolved_name!r} "
-                    f"(year={year}, iteration={iteration}, model={model}, status={status})."
+        return model, logical_name
+
+    def _artifact_family_spec(self, model: str, logical_name: str) -> Mapping[str, str]:
+        families = getattr(self.session, "artifact_families", None) or ARTIFACT_FAMILIES
+        model_families = families.get(model)
+        if model_families is None or logical_name not in model_families:
+            available = {
+                model_name: sorted(logicals.keys())
+                for model_name, logicals in families.items()
+            }
+            raise KeyError(
+                f"Unknown analysis table {model}.{logical_name}. Available: {available}."
+            )
+        return model_families[logical_name]
+
+    def _seed_artifact(self, *, model: str, artifact_family: str) -> Any:
+        finder = self.tracker.find_artifacts_by_params
+        artifacts = list(
+            finder(
+                params=[f"{model}.artifact_family={artifact_family}"],
+                namespace=model,
+                limit=1,
+            )
+        )
+        if not artifacts:
+            artifacts = list(
+                finder(
+                    params=[f"artifact_family={artifact_family}"],
+                    namespace=model,
+                    limit=1,
                 )
-            return self.session.runset_from_ids(run_ids, name=resolved_name)
-        run_ids = [str(value).strip() for value in selection if str(value).strip()]
-        if not run_ids:
-            raise ValueError("Comparison selection contained no run IDs.")
-        return self.session.runset_from_ids(run_ids, name=default_name)
+            )
+        if not artifacts:
+            raise RuntimeError(
+                f"No artifacts found for {model}.artifact_family={artifact_family}."
+            )
+        return artifacts[0]
+
+    def _localize_artifacts(self, artifacts: Sequence[Any]) -> None:
+        if self.local_cache_run_dir is None:
+            return
+        existing = {
+            entry["artifact_id"] for entry in self._localization_manifest["artifacts"]
+        }
+        for artifact in artifacts:
+            artifact_id = str(getattr(artifact, "id", ""))
+            if artifact_id in existing:
+                continue
+            source = self._artifact_source_path(artifact)
+            destination = self._artifact_local_path(artifact, source=source)
+            _copy_path(source, destination)
+            entry = {
+                "artifact_id": artifact_id,
+                "key": str(getattr(artifact, "key", "")),
+                "persistent_path": str(source),
+                "local_path": str(destination),
+            }
+            self._localization_manifest["artifacts"].append(entry)
+        self._write_localization_manifest()
+
+    def _artifact_source_path(self, artifact: Any) -> Path:
+        raw_abs_path = str(getattr(artifact, "abs_path", "") or "").strip()
+        if raw_abs_path:
+            abs_path = Path(raw_abs_path).expanduser()
+            if abs_path.exists():
+                return abs_path.resolve()
+        uri = str(
+            getattr(artifact, "uri", None)
+            or getattr(artifact, "container_uri", None)
+            or ""
+        )
+        if uri.startswith("workspace://"):
+            relative = uri.removeprefix("workspace://").lstrip("/")
+            source = self.persistent_archive_run_dir / relative
+            if source.exists():
+                return source.resolve()
+        key = str(getattr(artifact, "key", "<unknown>"))
+        raise FileNotFoundError(f"Could not resolve artifact path for {key}.")
+
+    def _artifact_local_path(self, artifact: Any, *, source: Path) -> Path:
+        uri = str(
+            getattr(artifact, "uri", None)
+            or getattr(artifact, "container_uri", None)
+            or ""
+        )
+        if uri.startswith("workspace://"):
+            relative = uri.removeprefix("workspace://").lstrip("/")
+            return self.archive_run_dir / relative
+        try:
+            relative = source.resolve().relative_to(self.persistent_archive_run_dir)
+        except ValueError:
+            relative = (
+                Path(".pilates")
+                / "localized_artifacts"
+                / str(getattr(artifact, "id", "artifact"))
+                / source.name
+            )
+        return self.archive_run_dir / relative
+
+    def _write_localization_manifest(self) -> None:
+        path = self.archive_run_dir / ".pilates" / "analysis_localization_manifest.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(self._localization_manifest, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.session, name)
@@ -418,6 +598,7 @@ def open_archive(
     artifact_families: Optional[Mapping[str, Mapping[str, Mapping[str, Any]]]] = None,
     artifact_families_json_path: Optional[str | Path] = None,
     artifact_families_env_var: Optional[str] = None,
+    local_cache: Optional[str | Path] = None,
 ) -> Archive:
     return Archive.open(
         archive_run_dir=archive_run_dir,
@@ -432,4 +613,5 @@ def open_archive(
         artifact_families=artifact_families,
         artifact_families_json_path=artifact_families_json_path,
         artifact_families_env_var=artifact_families_env_var,
+        local_cache=local_cache,
     )

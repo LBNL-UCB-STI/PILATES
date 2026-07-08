@@ -8,7 +8,7 @@ summary: Discovering runs, building run indexes, grouping runsets, and reasoning
 ## Adjacent Pages
 
 - Read [Analysis Overview](overview.md) first.
-- Then use [Scenario Comparison](scenario_comparison.md) or [Datasets](datasets.md).
+- Then use [Faceted Comparison](scenario_comparison.md) for output comparisons.
 - Pair this with [Glossary](../reference/glossary.md) for shared terms.
 
 ## Run Index

@@ -56,23 +56,133 @@ def test_cache_hit_example_builds_boundary_overlap_summary():
     assert beam_row["status"] == "baseline_only"
 
 
-def test_run_comparison_example_builds_selection_from_run_ids():
+def test_run_comparison_example_builds_mode_share_comparison():
+    import ibis
+
     module = _load_example_module("examples/consist/run_comparison.py")
-    archive = SimpleNamespace(
-        compare=lambda left, right, **kwargs: (left, right, kwargs)
-    )
+    calls = {}
 
-    left, right, kwargs = module.run_comparison(
+    class ArchiveStub:
+        def table(self, name, *, facets, where):
+            calls["table"] = {"name": name, "facets": facets, "where": where}
+            frame = pd.DataFrame(
+                [
+                    {
+                        "pricing_policy": "none",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "DRIVE",
+                    },
+                    {
+                        "pricing_policy": "none",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "DRIVE",
+                    },
+                    {
+                        "pricing_policy": "none",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "WALK",
+                    },
+                    {
+                        "pricing_policy": "cordon",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "DRIVE",
+                    },
+                    {
+                        "pricing_policy": "cordon",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "WALK",
+                    },
+                    {
+                        "pricing_policy": "cordon",
+                        "year": 2030,
+                        "iteration": 0,
+                        "trip_mode": "WALK",
+                    },
+                ]
+            )
+            return ibis.memtable(frame)
+
+        def measure(self, table, *, by, measures):
+            calls["measure"] = {"table": table, "by": by, "measures": measures}
+            aggregations = {name: builder(table) for name, builder in measures.items()}
+            return table.group_by(list(by)).agg(**aggregations)
+
+    archive = ArchiveStub()
+
+    result = module.build_mode_share_comparison(
         archive,
-        left_run_ids=["run-a"],
-        right_run_ids=["run-b"],
-        year=2030,
+        table_name="activitysim.trips",
+        compare="pricing_policy",
+        baseline="none",
+        group_by=["year", "iteration"],
+        filters={"year": 2030},
+    ).to_pandas()
+
+    cordon_drive = result.loc[
+        (result["pricing_policy"] == "cordon") & (result["trip_mode"] == "DRIVE")
+    ].iloc[0]
+    cordon_walk = result.loc[
+        (result["pricing_policy"] == "cordon") & (result["trip_mode"] == "WALK")
+    ].iloc[0]
+
+    assert cordon_drive["trip_count"] == 1
+    assert cordon_drive["total_trips"] == 3
+    assert round(float(cordon_drive["mode_share"]), 6) == 0.333333
+    assert round(float(cordon_drive["mode_share_difference"]), 6) == -0.333333
+    assert round(float(cordon_walk["mode_share_difference"]), 6) == 0.333333
+    assert calls["table"] == {
+        "name": "activitysim.trips",
+        "facets": ["year", "iteration", "pricing_policy", "trip_mode"],
+        "where": {"year": 2030},
+    }
+    assert calls["measure"]["by"] == [
+        "year",
+        "iteration",
+        "pricing_policy",
+        "trip_mode",
+    ]
+    assert list(calls["measure"]["measures"]) == ["trip_count"]
+
+
+def test_run_comparison_example_ranks_mode_share_without_baseline():
+    import ibis
+
+    module = _load_example_module("examples/consist/run_comparison.py")
+
+    class ArchiveStub:
+        def table(self, name, *, facets, where):
+            del name, facets, where
+            return ibis.memtable(
+                pd.DataFrame(
+                    [
+                        {"year": 2030, "iteration": 0, "trip_mode": "DRIVE"},
+                        {"year": 2030, "iteration": 0, "trip_mode": "DRIVE"},
+                        {"year": 2030, "iteration": 0, "trip_mode": "WALK"},
+                    ]
+                )
+            )
+
+        def measure(self, table, *, by, measures):
+            return table.group_by(list(by)).agg(
+                **{name: builder(table) for name, builder in measures.items()}
+            )
+
+    result = module.build_mode_share_comparison(
+        ArchiveStub(),
+        table_name="activitysim.trips",
+        compare="trip_mode",
+        baseline=None,
+        group_by=["year", "iteration"],
+        filters={"year": 2030},
     )
 
-    assert left == ["run-a"]
-    assert right == ["run-b"]
-    assert kwargs["year"] == 2030
-    assert kwargs["align_on"] == "year"
+    ranked = result.to_pandas().sort_values("mode_share_rank")
+    assert list(ranked["trip_mode"]) == ["DRIVE", "WALK"]
 
 
 def test_restart_replay_example_summarizes_run_outputs():

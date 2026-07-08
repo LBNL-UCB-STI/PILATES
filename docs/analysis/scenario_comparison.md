@@ -1,70 +1,93 @@
 ---
-title: Scenario Comparison
-summary: Comparing scenario outputs, aligned runs, and summarized differences across runsets.
+title: Faceted Comparison
+summary: Comparing archived outputs across scenario, year, iteration, and policy-parameter facets.
 ---
 
-# Scenario Comparison
+# Faceted Comparison
 
 ## Adjacent Pages
 
-- Read [Run Discovery and Runsets](run_discovery_and_runsets.md) first.
-- Pair this with [Datasets](datasets.md).
-- Use [Analysis Patterns](analysis_patterns.md) for question-driven workflows.
+- Read [Opening Archives](opening_archives.md) first.
+- Use [Consist in Action](consist_in_action.md) for script examples.
+- Use [SQL and DuckDB](sql_and_duckdb.md) only when the Ibis table path is too narrow.
 
-## Comparison Objects
+## Mental Model
 
-`compare_scenarios()` builds a `ScenarioComparison` object with:
+Do not start with a hand-built pair. Start with a measured table:
 
-- `left_name` and `right_name`
-- `left_run_ids` and `right_run_ids`
-- `aligned_on`
-- `aligned_keys`
-- `config_diff`
-- `dataset_summaries`
-- `dataset_frames`
+1. choose a logical artifact table such as `activitysim.trips`
+2. request the facets you want as columns
+3. group by those facets
+4. compare over one facet
 
-The higher-level `Comparison` wrapper adds convenience accessors for:
+`scenario_id` is just a facet. Parameter sweeps use the same shape as baseline
+versus policy comparisons.
 
-- `summary()`
-- `dataset_summaries()`
-- `config_diff()`
-- `frame(dataset)`
-- `linkstats_summary()`
-- `asim_iteration_summary()`
-- `skims_summary()`
-- `mode_shares()`
-- `trip_purposes()`
+## Notebook Shape
 
-## Alignment
+```python
+import ibis
 
-The comparison path first aligns the selected run sets.
-It can:
+from pilates_consist_analysis import delta, difference, open_archive
 
-- use `align_on` to choose the key used for pairing
-- call `latest(group_by=...)` before alignment
-- call `converged(group_by=...)` before alignment when `use_converged=True`
+archive = open_archive("/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES")
 
-If converged comparison is requested but one side does not have complete epoch candidates for the overlapping alignment keys, the code raises a `ValueError`.
-That failure is intentional and pinned by tests.
+trips = archive.table(
+    "activitysim.trips",
+    facets=["year", "iteration", "pricing_policy", "trip_mode"],
+    where={"year": [2020, 2030]},
+)
 
-## Dataset Surfaces
+counts = archive.measure(
+    trips,
+    by=["pricing_policy", "year", "iteration", "trip_mode"],
+    measures={"trip_count": lambda table: table.count()},
+)
+total_window = ibis.window(
+    group_by=[counts.pricing_policy, counts.year, counts.iteration],
+)
+mode_shares = counts.mutate(
+    total_trips=counts.trip_count.sum().over(total_window),
+    mode_share=counts.trip_count / counts.trip_count.sum().over(total_window),
+)
 
-The comparison builder compares these dataset families:
+over_time = delta(
+    mode_shares,
+    value="mode_share",
+    over="year",
+    by=["pricing_policy", "trip_mode"],
+)
 
-- `linkstats`
-- `asim_trips`
-- `skims`
+sweep = difference(
+    mode_shares,
+    value="mode_share",
+    compare="pricing_policy",
+    baseline="none",
+    at={"year": 2030},
+    by=["iteration", "trip_mode"],
+)
+```
 
-For each dataset it builds:
+Call `.to_pandas()` at the display or export boundary.
 
-- a per-aligned-pair comparison frame
-- a dataset summary row with row counts, overlap counts, and delta aggregates
+## Script Shape
 
-It also builds a config-diff frame from the tracker query service when available.
+The small read-only example script measures ActivitySim trip mode share and
+compares over a chosen facet:
 
-`write_scenario_comparison()` writes:
+```bash
+python examples/consist/run_comparison.py \
+  /path/to/archive-run \
+  --table activitysim.trips \
+  --compare pricing_policy \
+  --baseline none \
+  --where year=2030
+```
 
-- `scenario_comparison_summary.csv`
-- `scenario_comparison_config_diff.csv`
-- one CSV per dataset family, such as `scenario_linkstats_comparison.csv`
-- `dataset_manifest.json`
+If `--baseline` is omitted, the script ranks facet values instead of computing
+differences.
+
+## Lower-Level Path
+
+Use `RunSet` only when the question is about selecting or aligning runs
+themselves. For output comparisons, keep the simpler measured-table shape above.
