@@ -6,7 +6,6 @@ from pathlib import Path
 import sys
 
 import pandas as pd
-import pytest
 
 ANALYSIS_SRC = Path(__file__).resolve().parents[1] / "analysis" / "src"
 if str(ANALYSIS_SRC) not in sys.path:

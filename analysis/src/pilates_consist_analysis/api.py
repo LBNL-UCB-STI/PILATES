@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional
 
 import pandas as pd
-from consist import RunSet as ConsistRunSet
 
 from .epochs import (
     EpochPanel,
@@ -21,9 +20,7 @@ from .epoch_views import (
 from .runset import (
     RunSet,
     runset_from_query,
-    runset_from_runs,
     runset_from_run_ids,
-    runset_label,
     runs_to_frame,
 )
 from .runtime import (

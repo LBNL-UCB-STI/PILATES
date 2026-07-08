@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-import pandas as pd
 
 from .catalog import find_runs, runs_to_frame
 from .epochs import build_epoch_panel
@@ -16,8 +15,6 @@ from .runtime import (
     get_db_health_issues,
     get_run_tagging_issues,
     inspect_run_tagging,
-    resolve_archive_run_dir,
-    resolve_db_path,
     run_tagging_to_frame,
 )
 
