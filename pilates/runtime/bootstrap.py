@@ -14,11 +14,7 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
-from pilates.runtime.cache_recovery import (
-    cache_miss_audit_fields,
-    log_cache_miss_explanation,
-)
-from pilates.runtime.consist_audit import emit_consist_audit_event
+from pilates.runtime.cache_recovery import log_cache_miss_explanation
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
@@ -370,25 +366,6 @@ def run_bootstrap_phase(
             "fallback_rerun_triggered": fallback_rerun_triggered,
             "cache_miss_explanation": cache_miss_explanation,
         }
-        emit_consist_audit_event(
-            workspace=workspace,
-            event_type="bootstrap_resolution",
-            scenario_id=scenario_id,
-            seed=seed,
-            year=state.start_year,
-            iteration=0,
-            resolution_mode=resolution_mode,
-            bootstrap_cache_enabled=is_bootstrap_cache_enabled(settings),
-            bootstrap_cache_hit=cache_hit,
-            cache_probe_hit=cache_probe_hit,
-            replay_hydration_complete=bool(replay_hydration_complete),
-            fallback_rerun=fallback_rerun,
-            fallback_rerun_triggered=fallback_rerun_triggered,
-            probe_run_id=probe_run_id,
-            materialization_run_id=fallback_run_id,
-            staged_artifact_summary=staged_artifact_summary,
-            **cache_miss_audit_fields(cache_miss_explanation),
-        )
         return result
 
     run_kwargs: Dict[str, Any] = {

@@ -18,13 +18,8 @@ import pytest
 from consist import Tracker
 
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime import restart as restart_runtime
 from pilates.runtime import launcher as launcher_runtime
 from pilates.runtime.context import WorkflowRuntimeContext
-from pilates.runtime.consist_audit import (
-    emit_consist_audit_event,
-    reset_consist_audit_state,
-)
 from pilates.runtime.scenario_runtime import (
     ScenarioParentLinkProxy,
     resolve_cache_epoch,
@@ -40,6 +35,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
+from pilates.workflows import orchestration as workflow_orchestration
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import (
     run_supply_demand_stage as _run_supply_demand_stage,
@@ -106,6 +102,16 @@ pytestmark = pytest.mark.skipif(
 )
 
 
+@pytest.fixture(
+    params=[
+        pytest.param((), id="default-manifests"),
+        pytest.param(("land_use",), id="land-use-manifest-disabled"),
+    ]
+)
+def disabled_manifest_stages(request) -> tuple[str, ...]:
+    return tuple(request.param)
+
+
 class _StopWorkflow(BaseException):
     pass
 
@@ -122,7 +128,22 @@ class _StubRuntime:
     db_path: Path
 
 
-def _build_test_settings(root: Path, run_name: str) -> Any:
+_RESTART_HANDOFF_KEYS = (
+    "beam_plans_asim_out",
+    "households_asim_out",
+    "persons_asim_out",
+    "zarr_skims",
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+)
+
+
+def _build_test_settings(
+    root: Path,
+    run_name: str,
+    *,
+    disabled_manifest_stages: tuple[str, ...] = (),
+) -> Any:
     root.mkdir(parents=True, exist_ok=True)
     settings = _build_settings(root)
     settings.run.output_run_name = run_name
@@ -138,6 +159,7 @@ def _build_test_settings(root: Path, run_name: str) -> Any:
     settings.replanning_enabled = False
     settings.state_file_loc = str(root / "state.yaml")
     settings.atlas.beamac = 0
+    settings.workflow.manifests.disabled_stages = list(disabled_manifest_stages)
     return settings
 
 
@@ -667,9 +689,19 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _make_postprocessor)
 
 
-def _make_runtime(tmp_path: Path, monkeypatch, *, name: str) -> _StubRuntime:
+def _make_runtime(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    name: str,
+    disabled_manifest_stages: tuple[str, ...] = (),
+) -> _StubRuntime:
     root = tmp_path / name
-    settings = _build_test_settings(root, name)
+    settings = _build_test_settings(
+        root,
+        name,
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
     workspace = Workspace(settings, output_path=str(root), folder_name="run")
     state = WorkflowState.from_settings(settings)
     _build_workspace_inputs(settings, workspace, state)
@@ -700,26 +732,6 @@ def _query_facet(runtime: _StubRuntime) -> dict[str, Any]:
     if runtime.seed is not None:
         facet["seed"] = runtime.seed
     return facet
-
-
-def _emit_run_context(
-    runtime: _StubRuntime, *, restart_run: bool, archive_run_dir: Optional[Path] = None
-) -> None:
-    emit_consist_audit_event(
-        workspace=runtime.workspace,
-        event_type="run_context",
-        scenario_id=runtime.scenario_id,
-        seed=runtime.seed,
-        run_name=runtime.settings.run.output_run_name,
-        workspace_root=runtime.workspace.full_path,
-        local_run_dir=runtime.workspace.full_path,
-        archive_run_dir=str(archive_run_dir) if archive_run_dir is not None else None,
-        archive_state_path=str(archive_run_dir / "state.yaml")
-        if archive_run_dir is not None
-        else None,
-        restart_run=restart_run,
-        data_initialized=bool(runtime.state.data_initialized),
-    )
 
 
 def _debug(message: str) -> None:
@@ -822,6 +834,14 @@ def _stage_runner(
                     workspace=runtime.workspace,
                     coupler=coupler,
                 )
+                if runtime.state.is_restart_run:
+                    seed_supply_demand_parent_run_ids_for_resume(
+                        scenario=tagged,
+                        workspace=runtime.workspace,
+                        state=runtime.state,
+                        tracker=runtime.tracker,
+                        settings=runtime.settings,
+                    )
                 for year in runtime.state:
                     _debug(
                         f"year_loop name={runtime.settings.run.output_run_name} year={year} "
@@ -1012,14 +1032,13 @@ def _digest_bundle(workspace: Workspace) -> dict[str, str]:
     return bundle
 
 
-def _manifest_snapshot(
+def _workflow_manifest_dirs(
     workspace: Workspace,
     *,
     state: Optional[WorkflowState] = None,
-) -> dict[str, dict[str, list[str]]]:
-    manifests: dict[str, dict[str, list[str]]] = {}
+) -> list[Path]:
     workflow_dirs = [Path(workspace.full_path) / ".workflow"]
-    archive_state_path = Path(getattr(state, "file_loc", "") or "")
+    archive_state_path = Path(getattr(state, "file_loc", "") or "") if state else Path()
     if archive_state_path:
         current_workspace_root = Path(workspace.full_path).resolve()
         try:
@@ -1032,14 +1051,23 @@ def _manifest_snapshot(
                     archive_state_root / ".workflow",
                 ]
             )
-    for workflow_dir in workflow_dirs:
+    return workflow_dirs
+
+
+def _load_manifest_payloads(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, dict[str, Any]]:
+    manifests: dict[str, dict[str, Any]] = {}
+    for workflow_dir in _workflow_manifest_dirs(workspace, state=state):
         if not workflow_dir.exists():
             continue
         for manifest_path in sorted(workflow_dir.rglob("*.yaml")):
             relative_path = str(manifest_path.relative_to(workflow_dir))
             if relative_path in manifests:
                 continue
-            payload = json.loads(
+            manifests[relative_path] = json.loads(
                 json.dumps(
                     __import__("yaml").safe_load(
                         manifest_path.read_text(encoding="utf-8")
@@ -1047,15 +1075,128 @@ def _manifest_snapshot(
                     or {}
                 )
             )
-            manifests[relative_path] = {
-                "steps": sorted(payload.keys()),
-                "steps_with_run_id": sorted(
-                    step_name
-                    for step_name, step_meta in payload.items()
-                    if (step_meta or {}).get("run_id")
-                ),
-            }
     return manifests
+
+
+def _manifest_snapshot(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, dict[str, list[str]]]:
+    manifests: dict[str, dict[str, list[str]]] = {}
+    for relative_path, payload in _load_manifest_payloads(
+        workspace, state=state
+    ).items():
+        manifests[relative_path] = {
+            "steps": sorted(payload.keys()),
+            "steps_with_run_id": sorted(
+                step_name
+                for step_name, step_meta in payload.items()
+                if (step_meta or {}).get("run_id")
+            ),
+        }
+    return manifests
+
+
+def _supply_demand_manifest_snapshot(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, dict[str, list[str]]]:
+    return {
+        relative_path: manifest
+        for relative_path, manifest in _manifest_snapshot(
+            workspace,
+            state=state,
+        ).items()
+        if re.match(r"year_\d{4}_iteration_\d+\.yaml$", relative_path)
+    }
+
+
+def _assert_manifest_policy_snapshot(
+    *,
+    snapshot_name: str,
+    snapshot: dict[str, Any],
+    disabled_manifest_stages: tuple[str, ...],
+) -> None:
+    manifest_snapshot = snapshot["manifest_snapshot"]
+    land_use_manifests = sorted(
+        path for path in manifest_snapshot if path.startswith("land_use_year_")
+    )
+    if "land_use" in disabled_manifest_stages:
+        assert land_use_manifests == [], (
+            f"{snapshot_name} should not write land-use manifests when land_use "
+            f"is disabled by policy: {land_use_manifests}"
+        )
+    else:
+        assert land_use_manifests, (
+            f"{snapshot_name} should retain default land-use manifests"
+        )
+
+    supply_demand_manifests = snapshot["supply_demand_manifest_snapshot"]
+    assert supply_demand_manifests, (
+        f"{snapshot_name} should retain YAML-backed supply-demand manifests"
+    )
+    for manifest_path, manifest in supply_demand_manifests.items():
+        assert {
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        } <= set(manifest["steps"]), (
+            f"{snapshot_name}.{manifest_path} is missing expected ActivitySim "
+            f"supply-demand manifest entries: {manifest}"
+        )
+        assert {
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        } <= set(manifest["steps_with_run_id"]), (
+            f"{snapshot_name}.{manifest_path} should retain run IDs for "
+            f"manifest-backed ActivitySim recovery entries: {manifest}"
+        )
+        if "beam_run" in manifest["steps"]:
+            assert "beam_run" in manifest["steps_with_run_id"], (
+                f"{snapshot_name}.{manifest_path} contains beam_run but no run_id"
+            )
+
+
+def _expected_restart_handoff_keys(
+    disabled_manifest_stages: tuple[str, ...],
+) -> set[str]:
+    expected = set(_RESTART_HANDOFF_KEYS)
+    if "land_use" in disabled_manifest_stages:
+        expected.remove(USIM_DATASTORE_BASE_H5)
+    return expected
+
+
+def _iter_manifest_key_values(value: Any, key: Optional[str] = None):
+    if key in _RESTART_HANDOFF_KEYS:
+        yield str(key), value
+    if isinstance(value, Mapping):
+        for child_key, child_value in value.items():
+            yield from _iter_manifest_key_values(child_value, str(child_key))
+    elif isinstance(value, list):
+        for child_value in value:
+            yield from _iter_manifest_key_values(child_value)
+
+
+def _required_restart_handoff_paths(
+    workspace: Workspace,
+    *,
+    state: Optional[WorkflowState] = None,
+) -> dict[str, list[str]]:
+    paths_by_key: dict[str, list[str]] = {key: [] for key in _RESTART_HANDOFF_KEYS}
+    for payload in _load_manifest_payloads(workspace, state=state).values():
+        for key, value in _iter_manifest_key_values(payload):
+            values = value if isinstance(value, list) else [value]
+            for raw_path in values:
+                if not isinstance(raw_path, str):
+                    continue
+                if not raw_path:
+                    continue
+                if Path(raw_path).exists():
+                    paths_by_key[key].append(raw_path)
+    return {key: sorted(set(paths)) for key, paths in paths_by_key.items() if paths}
 
 
 def _latest_completed_runs(tracker: Tracker) -> pd.DataFrame:
@@ -1142,125 +1283,36 @@ def _run_index_rows(tracker: Tracker, archive_run_dir: str) -> set[tuple[Any, ..
     }
 
 
-def _audit_snapshot(workspace: Workspace) -> dict[str, Any]:
-    summary_path = (
-        Path(workspace.full_path)
-        / ".workflow"
-        / "diagnostics"
-        / "consist_restart_audit_summary.json"
-    )
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    return {
-        "contract_status_by_family": summary.get("contract_status_by_family", {}),
-        "phase2_candidate_families": summary.get("phase2_candidate_families", []),
-        "safe_families_for_phase2": summary.get("safe_families_for_phase2", []),
-        "blocked_families_for_phase2": summary.get("blocked_families_for_phase2", []),
-        "copied_artifacts_eligible_for_recovery_root_registration": summary.get(
-            "copied_artifacts_eligible_for_recovery_root_registration", 0
-        ),
-        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration": summary.get(
-            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
-            0,
-        ),
-        "copied_artifacts_blocked_artifact_logging_after_copying": summary.get(
-            "copied_artifacts_blocked_artifact_logging_after_copying", 0
-        ),
-        "directory_artifacts_blocked_shallow_directory_signatures": summary.get(
-            "directory_artifacts_blocked_shallow_directory_signatures", 0
-        ),
-        "snapshot_artifacts_missing_required_facets": summary.get(
-            "snapshot_artifacts_missing_required_facets", 0
-        ),
-        "unknown_event_keys": summary.get("unknown_event_keys", []),
-        "phase2_recommendation": summary.get("phase2_recommendation"),
-        "steps_with_incomplete_hydration": summary.get(
-            "steps_with_incomplete_hydration", {}
-        ),
-        "steps_using_custom_recovery": summary.get("steps_using_custom_recovery", {}),
-        "restart_hydration": summary.get("restart_hydration", {}),
-    }
-
-
-def _run_metrics(tracker: Tracker, workspace: Workspace) -> dict[str, Any]:
-    by_model: dict[str, dict[str, int]] = {}
-    cache_hit_steps = 0
-    executed_steps = 0
-    total_steps = 0
-
-    for run in tracker.run_set(label="equivalence", limit=200000):
-        if str(getattr(run, "status", "")).lower() != "completed":
-            continue
-        model = getattr(run, "model_name", None) or getattr(run, "model", None)
-        if not model or model == "pilates_orchestrator":
-            continue
-        total_steps += 1
-        meta = getattr(run, "meta", None)
-        if not isinstance(meta, Mapping):
-            meta = {}
-        is_cache_hit = bool(meta.get("cache_hit", False))
-        if is_cache_hit:
-            cache_hit_steps += 1
-        else:
-            executed_steps += 1
-        model_counts = by_model.setdefault(
-            str(model),
-            {"total": 0, "cache_hit": 0, "executed": 0},
-        )
-        model_counts["total"] += 1
-        model_counts["cache_hit" if is_cache_hit else "executed"] += 1
-
-    audit = _audit_snapshot(workspace)
-    restart_hydration = audit.get("restart_hydration", {})
-    return {
-        "step_counts": {
-            "total": total_steps,
-            "cache_hit": cache_hit_steps,
-            "executed": executed_steps,
-        },
-        "by_model": by_model,
-        "restart_hydration_event_count": int(
-            restart_hydration.get("event_count", 0) or 0
-        ),
-        "custom_recovery_steps": sorted(
-            audit.get("steps_using_custom_recovery", {}).keys()
-        ),
-    }
-
-
 def _snapshot(
     runtime: _StubRuntime,
     *,
     mode: str,
     elapsed_seconds: Optional[float] = None,
+    compatibility_fallback_steps: Optional[list[str]] = None,
 ) -> dict[str, Any]:
     _debug(f"snapshot:start name={runtime.settings.run.output_run_name}")
-    coupler = getattr(getattr(runtime.tracker, "scenario", None), "coupler", None)
     out = {
         "mode": mode,
         "elapsed_seconds": elapsed_seconds,
         "artifact_digests": _digest_bundle(runtime.workspace),
         "manifest_snapshot": _manifest_snapshot(runtime.workspace, state=runtime.state),
+        "supply_demand_manifest_snapshot": _supply_demand_manifest_snapshot(
+            runtime.workspace,
+            state=runtime.state,
+        ),
+        "restart_handoff_paths": _required_restart_handoff_paths(
+            runtime.workspace,
+            state=runtime.state,
+        ),
         "parent_edges": _normalized_parent_edges(runtime.tracker),
         "run_index_rows": _run_index_rows(runtime.tracker, runtime.workspace.full_path),
-        "audit": _audit_snapshot(runtime.workspace),
-        "metrics": _run_metrics(runtime.tracker, runtime.workspace),
+        "compatibility_fallback_steps": sorted(set(compatibility_fallback_steps or [])),
+        "disabled_manifest_stages": tuple(
+            runtime.settings.workflow.manifests.disabled_stages
+        ),
     }
     _debug(f"snapshot:complete name={runtime.settings.run.output_run_name}")
     return out
-
-
-def _assert_audit_contract(snapshot: dict[str, Any]) -> None:
-    audit = snapshot["audit"]
-    metrics = snapshot["metrics"]
-    assert audit["event_counts"]["run_context"] == 1
-    assert audit["event_counts"]["step_resolution"] > 0
-    assert audit["event_counts"]["output_hydration_check"] > 0
-    assert metrics["restart_hydration_event_count"] == int(
-        audit.get("restart_hydration", {}).get("event_count", 0) or 0
-    )
-    assert metrics["custom_recovery_steps"] == sorted(
-        audit.get("steps_using_custom_recovery", {}).keys()
-    )
 
 
 def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> None:
@@ -1313,6 +1365,50 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             resumed["manifest_snapshot"],
         )
     )
+    assert (
+        resumed["supply_demand_manifest_snapshot"]
+        == baseline["supply_demand_manifest_snapshot"]
+    ), _describe_difference(
+        "supply_demand_manifest_snapshot",
+        baseline["supply_demand_manifest_snapshot"],
+        resumed["supply_demand_manifest_snapshot"],
+    )
+    for snapshot_name, snapshot in {
+        "baseline": baseline,
+        "resumed": resumed,
+    }.items():
+        disabled_manifest_stages = tuple(snapshot["disabled_manifest_stages"])
+        _assert_manifest_policy_snapshot(
+            snapshot_name=snapshot_name,
+            snapshot=snapshot,
+            disabled_manifest_stages=disabled_manifest_stages,
+        )
+        expected_handoff_keys = _expected_restart_handoff_keys(disabled_manifest_stages)
+        missing_handoffs = sorted(
+            expected_handoff_keys - set(snapshot["restart_handoff_paths"])
+        )
+        assert missing_handoffs == [], _describe_difference(
+            f"{snapshot_name}.restart_handoff_paths",
+            {},
+            {"missing": missing_handoffs},
+        )
+        unresolved_handoffs = {
+            key: [path for path in paths if not Path(path).exists()]
+            for key, paths in snapshot["restart_handoff_paths"].items()
+        }
+        unresolved_handoffs = {
+            key: paths for key, paths in unresolved_handoffs.items() if paths
+        }
+        assert unresolved_handoffs == {}, _describe_difference(
+            f"{snapshot_name}.restart_handoff_paths.unresolved",
+            {},
+            unresolved_handoffs,
+        )
+        assert snapshot["compatibility_fallback_steps"] == [], _describe_difference(
+            f"{snapshot_name}.compatibility_fallback_steps",
+            [],
+            snapshot["compatibility_fallback_steps"],
+        )
     assert resumed["parent_edges"] == baseline["parent_edges"], _describe_difference(
         "parent_edges", baseline["parent_edges"], resumed["parent_edges"]
     )
@@ -1320,121 +1416,6 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
         _describe_difference(
             "run_index_rows", baseline["run_index_rows"], resumed["run_index_rows"]
         )
-    )
-    assert (
-        resumed["audit"]["contract_status_by_family"]
-        == baseline["audit"]["contract_status_by_family"]
-    ), _describe_difference(
-        "contract_status_by_family",
-        baseline["audit"]["contract_status_by_family"],
-        resumed["audit"]["contract_status_by_family"],
-    )
-    assert (
-        resumed["audit"]["phase2_candidate_families"]
-        == baseline["audit"]["phase2_candidate_families"]
-    ), _describe_difference(
-        "phase2_candidate_families",
-        baseline["audit"]["phase2_candidate_families"],
-        resumed["audit"]["phase2_candidate_families"],
-    )
-    assert (
-        resumed["audit"]["safe_families_for_phase2"]
-        == baseline["audit"]["safe_families_for_phase2"]
-    ), _describe_difference(
-        "safe_families_for_phase2",
-        baseline["audit"]["safe_families_for_phase2"],
-        resumed["audit"]["safe_families_for_phase2"],
-    )
-    assert (
-        resumed["audit"]["blocked_families_for_phase2"]
-        == baseline["audit"]["blocked_families_for_phase2"]
-    ), _describe_difference(
-        "blocked_families_for_phase2",
-        baseline["audit"]["blocked_families_for_phase2"],
-        resumed["audit"]["blocked_families_for_phase2"],
-    )
-    assert (
-        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
-        == baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"]
-    ), _describe_difference(
-        "copied_artifacts_eligible_for_recovery_root_registration",
-        baseline["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
-        resumed["audit"]["copied_artifacts_eligible_for_recovery_root_registration"],
-    )
-    assert (
-        resumed["audit"][
-            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
-        ]
-        == baseline["audit"][
-            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
-        ]
-    ), _describe_difference(
-        "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration",
-        baseline["audit"][
-            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
-        ],
-        resumed["audit"][
-            "phase2_candidate_copied_artifacts_eligible_for_recovery_root_registration"
-        ],
-    )
-    assert (
-        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
-        == baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"]
-    ), _describe_difference(
-        "copied_artifacts_blocked_artifact_logging_after_copying",
-        baseline["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
-        resumed["audit"]["copied_artifacts_blocked_artifact_logging_after_copying"],
-    )
-    assert (
-        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
-        == baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"]
-    ), _describe_difference(
-        "directory_artifacts_blocked_shallow_directory_signatures",
-        baseline["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
-        resumed["audit"]["directory_artifacts_blocked_shallow_directory_signatures"],
-    )
-    assert (
-        resumed["audit"]["snapshot_artifacts_missing_required_facets"]
-        == baseline["audit"]["snapshot_artifacts_missing_required_facets"]
-    ), _describe_difference(
-        "snapshot_artifacts_missing_required_facets",
-        baseline["audit"]["snapshot_artifacts_missing_required_facets"],
-        resumed["audit"]["snapshot_artifacts_missing_required_facets"],
-    )
-    assert (
-        resumed["audit"]["unknown_event_keys"]
-        == baseline["audit"]["unknown_event_keys"]
-    ), _describe_difference(
-        "unknown_event_keys",
-        baseline["audit"]["unknown_event_keys"],
-        resumed["audit"]["unknown_event_keys"],
-    )
-    assert (
-        resumed["audit"]["phase2_recommendation"]
-        == baseline["audit"]["phase2_recommendation"]
-    ), _describe_difference(
-        "phase2_recommendation",
-        baseline["audit"]["phase2_recommendation"],
-        resumed["audit"]["phase2_recommendation"],
-    )
-    assert resumed["audit"]["steps_with_incomplete_hydration"] == {}, (
-        _describe_difference(
-            "steps_with_incomplete_hydration",
-            {},
-            resumed["audit"]["steps_with_incomplete_hydration"],
-        )
-    )
-    compatibility_fallbacks = {
-        step_name: mode_counts
-        for step_name, mode_counts in resumed["audit"][
-            "steps_using_custom_recovery"
-        ].items()
-        if "used_compatibility_fallback" in mode_counts
-    }
-    assert compatibility_fallbacks == {}, _describe_difference(
-        "steps_using_custom_recovery.compatibility_fallbacks",
-        {},
-        compatibility_fallbacks,
     )
 
 
@@ -1447,29 +1428,63 @@ def _interrupt_after(boundary: str) -> Callable[[str, WorkflowState], None]:
     return _fn
 
 
-@pytest.fixture(autouse=True)
-def _reset_audit_state():
-    reset_consist_audit_state()
-    yield
-    reset_consist_audit_state()
+def _capture_compatibility_fallback_steps(monkeypatch) -> list[str]:
+    fallback_steps: list[str] = []
+    original_recover = workflow_orchestration._recover_step_outputs
+
+    def _record_recovery_step(*args, **kwargs):
+        audit_meta = kwargs.get("audit_meta")
+        if audit_meta is None:
+            audit_meta = {}
+            kwargs = {**kwargs, "audit_meta": audit_meta}
+        outputs = original_recover(*args, **kwargs)
+        if bool(audit_meta.get("used_compatibility_fallback")):
+            fallback_steps.append(str(kwargs.get("step_name") or "<unknown>"))
+        return outputs
+
+    monkeypatch.setattr(
+        workflow_orchestration,
+        "_recover_step_outputs",
+        _record_recovery_step,
+    )
+    return fallback_steps
 
 
 @pytest.fixture
-def baseline_snapshot(tmp_path, monkeypatch):
-    runtime = _make_runtime(tmp_path, monkeypatch, name="baseline")
-    _emit_run_context(runtime, restart_run=False)
+def baseline_snapshot(tmp_path, monkeypatch, disabled_manifest_stages):
+    compatibility_fallback_steps = _capture_compatibility_fallback_steps(monkeypatch)
+    runtime = _make_runtime(
+        tmp_path,
+        monkeypatch,
+        name="baseline",
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
     started = perf_counter()
     _stage_runner(runtime)
     elapsed = perf_counter() - started
-    snapshot = _snapshot(runtime, mode="baseline", elapsed_seconds=elapsed)
+    snapshot = _snapshot(
+        runtime,
+        mode="baseline",
+        elapsed_seconds=elapsed,
+        compatibility_fallback_steps=compatibility_fallback_steps,
+    )
     return snapshot
 
 
-def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
+def _run_resumed_case(
+    tmp_path,
+    monkeypatch,
+    *,
+    stop_boundary: str,
+    disabled_manifest_stages: tuple[str, ...],
+) -> dict[str, Any]:
+    compatibility_fallback_steps = _capture_compatibility_fallback_steps(monkeypatch)
     archive_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"archive_{stop_boundary}"
+        tmp_path,
+        monkeypatch,
+        name=f"archive_{stop_boundary}",
+        disabled_manifest_stages=disabled_manifest_stages,
     )
-    _emit_run_context(archive_runtime, restart_run=False)
     _debug(f"resumed_case:interrupting boundary={stop_boundary}")
     with pytest.raises(_StopWorkflow):
         _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
@@ -1477,160 +1492,24 @@ def _run_resumed_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str,
         _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
 
     resumed_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"resume_{stop_boundary}"
-    )
-    _emit_run_context(
-        resumed_runtime,
-        restart_run=True,
-        archive_run_dir=Path(archive_runtime.workspace.full_path),
+        tmp_path,
+        monkeypatch,
+        name=f"resume_{stop_boundary}",
+        disabled_manifest_stages=disabled_manifest_stages,
     )
     _resume_runtime(archive_runtime, resumed_runtime)
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", resumed_runtime.workspace.full_path)
     monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", archive_runtime.workspace.full_path)
-
-    surface = build_enabled_workflow_surface(
-        resumed_runtime.settings,
-        state=resumed_runtime.state,
-    )
-    context = WorkflowRuntimeContext.from_parts(
-        settings=resumed_runtime.settings,
-        state=resumed_runtime.state,
-        workspace=resumed_runtime.workspace,
-        surface=surface,
-    )
-    contract = launcher_runtime._build_scenario_runtime_contract(
-        settings=resumed_runtime.settings,
-        state=resumed_runtime.state,
-        workspace=resumed_runtime.workspace,
-        scenario_id=resumed_runtime.scenario_id,
-        seed=resumed_runtime.seed,
-        cache_epoch=resolve_cache_epoch(resumed_runtime.settings),
-        surface=surface,
-    )
-    scenario_kwargs = dict(contract["scenario_kwargs"])
-    coupler_schema = contract["coupler_schema"]
-    cr.set_enabled(True)
-    try:
-        _debug(f"resumed_case:resume_execute boundary={stop_boundary}")
-        started = perf_counter()
-        with cr.use_tracker(resumed_runtime.tracker):
-            with cr.scenario(
-                name=resumed_runtime.settings.run.output_run_name,
-                tracker=resumed_runtime.tracker,
-                tags=[resumed_runtime.settings.run.output_run_name],
-                model="pilates_orchestrator",
-                **scenario_kwargs,
-            ) as scenario:
-                tagged = ScenarioParentLinkProxy(scenario)
-                coupler = tagged.coupler
-                coupler.declare_outputs(
-                    *coupler_schema.keys(),
-                    warn_undefined=True,
-                    description=coupler_schema,
-                )
-                bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-                    settings=resumed_runtime.settings,
-                    state=resumed_runtime.state,
-                    workspace=resumed_runtime.workspace,
-                    coupler=coupler,
-                )
-                seed_supply_demand_parent_run_ids_for_resume(
-                    scenario=tagged,
-                    workspace=resumed_runtime.workspace,
-                    state=resumed_runtime.state,
-                    tracker=resumed_runtime.tracker,
-                    settings=resumed_runtime.settings,
-                )
-                restart_runtime.hydrate_missing_restart_artifacts(
-                    tracker=resumed_runtime.tracker,
-                    settings=resumed_runtime.settings,
-                    state=resumed_runtime.state,
-                    workspace=resumed_runtime.workspace,
-                    coupler=coupler,
-                    local_run_dir=resumed_runtime.workspace.full_path,
-                    archive_run_dir=archive_runtime.workspace.full_path,
-                    workflow_stage=WorkflowState.Stage,
-                    query_facet=_query_facet(resumed_runtime),
-                )
-                for year in resumed_runtime.state:
-                    usim_inputs: Dict[str, Any] = {}
-                    outputs_holder_year = StepOutputsHolder()
-                    if resumed_runtime.state.should_run(WorkflowState.Stage.land_use):
-                        usim_inputs = run_land_use_stage(
-                            scenario=tagged,
-                            coupler=coupler,
-                            year=year,
-                            outputs_holder_year=outputs_holder_year,
-                            context=context,
-                        )
-                        resumed_runtime.state.complete_step(
-                            WorkflowState.Stage.land_use
-                        )
-                    if resumed_runtime.state.should_run(
-                        WorkflowState.Stage.vehicle_ownership_model
-                    ):
-                        run_vehicle_ownership_stage(
-                            scenario=tagged,
-                            coupler=coupler,
-                            year=year,
-                            build_atlas_static_inputs_fallback=launcher_runtime.build_atlas_static_inputs_fallback,
-                            context=context,
-                        )
-                        resumed_runtime.state.complete_step(
-                            WorkflowState.Stage.vehicle_ownership_model
-                        )
-                    if resumed_runtime.state.should_run(
-                        WorkflowState.Stage.supply_demand_loop
-                    ):
-                        run_supply_demand_stage(
-                            scenario=tagged,
-                            coupler=coupler,
-                            year=year,
-                            usim_inputs=usim_inputs,
-                            build_manifest_path=launcher_runtime.build_manifest_path,
-                            context=context,
-                        )
-        elapsed = perf_counter() - started
-    finally:
-        cr.set_enabled(None)
+    _debug(f"resumed_case:resume_execute boundary={stop_boundary}")
+    started = perf_counter()
+    _stage_runner(resumed_runtime)
+    elapsed = perf_counter() - started
     _debug(f"resumed_case:resume_complete boundary={stop_boundary}")
     snapshot = _snapshot(
         resumed_runtime,
-        mode="restart_hydration",
-        elapsed_seconds=elapsed,
-    )
-    return snapshot
-
-
-def _run_replay_case(tmp_path, monkeypatch, *, stop_boundary: str) -> dict[str, Any]:
-    archive_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"replay_archive_{stop_boundary}"
-    )
-    _emit_run_context(archive_runtime, restart_run=False)
-    _debug(f"replay_case:interrupting boundary={stop_boundary}")
-    with pytest.raises(_StopWorkflow):
-        _stage_runner(archive_runtime, interruption=_interrupt_after(stop_boundary))
-    if stop_boundary == "after_activitysim_postprocess":
-        _assert_land_use_population_source_snapshot_contract(archive_runtime.workspace)
-
-    replay_runtime = _make_runtime(
-        tmp_path, monkeypatch, name=f"replay_{stop_boundary}"
-    )
-    _emit_run_context(
-        replay_runtime,
-        restart_run=True,
-        archive_run_dir=Path(archive_runtime.workspace.full_path),
-    )
-    _copy_tracker_db(archive_runtime.db_path, replay_runtime.db_path)
-
-    started = perf_counter()
-    _stage_runner(replay_runtime)
-    elapsed = perf_counter() - started
-    _debug(f"replay_case:replay_complete boundary={stop_boundary}")
-    snapshot = _snapshot(
-        replay_runtime,
         mode="replay",
         elapsed_seconds=elapsed,
+        compatibility_fallback_steps=compatibility_fallback_steps,
     )
     return snapshot
 
@@ -1649,46 +1528,14 @@ def test_stubbed_restart_resume_matches_uninterrupted_baseline(
     tmp_path,
     monkeypatch,
     stop_boundary,
+    disabled_manifest_stages,
 ):
-    resumed = _run_resumed_case(tmp_path, monkeypatch, stop_boundary=stop_boundary)
+    resumed = _run_resumed_case(
+        tmp_path,
+        monkeypatch,
+        stop_boundary=stop_boundary,
+        disabled_manifest_stages=disabled_manifest_stages,
+    )
+    assert resumed["mode"] == "replay"
+    assert resumed["elapsed_seconds"] is not None
     _assert_equivalent(baseline_snapshot, resumed)
-
-
-@pytest.mark.parametrize(
-    "stop_boundary",
-    [
-        "after_activitysim_postprocess",
-        "after_beam_postprocess",
-        "after_first_atlas_subyear",
-        "after_year_complete",
-    ],
-)
-def test_stubbed_replay_resume_tracks_phase0_metrics(
-    baseline_snapshot,
-    tmp_path,
-    monkeypatch,
-    stop_boundary,
-):
-    replayed = _run_replay_case(tmp_path, monkeypatch, stop_boundary=stop_boundary)
-
-    assert replayed["mode"] == "replay"
-    assert replayed["elapsed_seconds"] is not None
-    assert (
-        replayed["metrics"]["step_counts"]["total"]
-        >= replayed["metrics"]["step_counts"]["cache_hit"]
-    )
-    assert (
-        replayed["metrics"]["step_counts"]["total"]
-        >= replayed["metrics"]["step_counts"]["executed"]
-    )
-    assert replayed["metrics"]["restart_hydration_event_count"] == 0
-    assert replayed["audit"]["steps_with_incomplete_hydration"] == {}
-    compatibility_fallbacks = {
-        step_name: mode_counts
-        for step_name, mode_counts in replayed["audit"][
-            "steps_using_custom_recovery"
-        ].items()
-        if "used_compatibility_fallback" in mode_counts
-    }
-    assert compatibility_fallbacks == {}
-    assert replayed["artifact_digests"] == baseline_snapshot["artifact_digests"]

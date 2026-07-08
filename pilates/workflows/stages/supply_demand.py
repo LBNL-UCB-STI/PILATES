@@ -13,6 +13,7 @@ from pilates.utils.coupler_helpers import archive_copy_now, flush_archive_queue
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.orchestration import ManifestConfig
 from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.recovery import ensure_supply_demand_manifest_disablement_allowed
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_CURRENT_H5,
@@ -163,6 +164,9 @@ def run_supply_demand_stage(
             state=state,
             settings=settings,
         )
+    # Keep the stage YAML-backed, but fail fast if someone tries to disable the
+    # legacy supply-demand manifest path before tracker-native recovery exists.
+    ensure_supply_demand_manifest_disablement_allowed(settings=settings)
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")

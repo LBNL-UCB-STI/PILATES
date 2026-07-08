@@ -1,5 +1,4 @@
 from pathlib import Path
-import json
 from types import SimpleNamespace
 from typing import Optional
 
@@ -49,6 +48,13 @@ from pilates.workflows.steps import (
     make_beam_preprocess_step,
     make_beam_run_step,
 )
+
+
+def test_transition_audit_module_is_removed() -> None:
+    removed_module = "consist" + "_audit.py"
+    assert not (
+        Path(__file__).parents[1] / "pilates" / "runtime" / removed_module
+    ).exists()
 
 
 class DummyCoupler:
@@ -448,10 +454,11 @@ def test_run_workflow_cache_recovery_uses_binding_inputs_for_non_manifested_step
     assert captured["step_inputs"] == {"artifact_a": "value-a"}
 
 
-def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
+def test_run_workflow_replays_cache_hit_outputs_without_audit_files(
     monkeypatch, tmp_path
 ):
     workspace = DummyWorkspace(tmp_path)
+    outputs_holder = StepOutputsHolder()
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     land_use = asim_dir / "land_use.csv"
     households = asim_dir / "households.csv"
@@ -490,60 +497,11 @@ def test_run_workflow_writes_consist_audit_for_cache_hit_recovery(
         settings=SimpleNamespace(),
         workspace=workspace,
         coupler=DummyCoupler(),
-        outputs_holder=StepOutputsHolder(),
+        outputs_holder=outputs_holder,
         name_suffix="audit",
     )
 
-    diagnostics_dir = Path(workspace.full_path) / ".workflow" / "diagnostics"
-    events_path = diagnostics_dir / "consist_restart_audit.jsonl"
-    summary_path = diagnostics_dir / "consist_restart_audit_summary.json"
-
-    assert events_path.exists()
-    assert summary_path.exists()
-
-    events = [
-        json.loads(line)
-        for line in events_path.read_text(encoding="utf-8").splitlines()
-        if line.strip()
-    ]
-    step_resolution = next(
-        event for event in events if event["event_type"] == "step_resolution"
-    )
-    hydration_check = next(
-        event for event in events if event["event_type"] == "output_hydration_check"
-    )
-
-    assert step_resolution["step_name"] == "activitysim_preprocess"
-    assert step_resolution["resolution_mode"] == "cache_hit_recoverer"
-    assert step_resolution["used_output_recoverer"] is True
-    assert step_resolution["used_tracker_output_lookup"] is False
-
-    assert hydration_check["step_name"] == "activitysim_preprocess"
-    assert hydration_check["hydration_complete"] is True
-    assert hydration_check["required_outputs"] == [
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_LAND_USE_IN,
-        ASIM_PERSONS_IN,
-    ]
-    assert hydration_check["optional_outputs"] == []
-    assert hydration_check["missing_optional_outputs"] == []
-    assert hydration_check["resolved_outputs"] == [
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_LAND_USE_IN,
-        ASIM_PERSONS_IN,
-    ]
-    assert step_resolution["used_compatibility_fallback"] is False
-    assert hydration_check["used_compatibility_fallback"] is False
-
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    assert summary["event_counts"]["step_resolution"] == 1
-    assert summary["event_counts"]["output_hydration_check"] == 1
-    assert (
-        summary["resolution_mode_counts_by_step"]["activitysim_preprocess"][
-            "cache_hit_recoverer"
-        ]
-        == 1
-    )
+    assert outputs_holder.activitysim_preprocess == recovered_outputs
 
 
 def test_activitysim_preprocess_downstream_state_matches_across_fresh_cache_and_manifest(

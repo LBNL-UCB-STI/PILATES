@@ -21,6 +21,7 @@ from consist import define_step
 import pytest
 import yaml
 
+from pilates.config.models import WorkflowConfig
 from pilates.activitysim.outputs import (
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
@@ -44,8 +45,10 @@ from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StepRef,
+    _detect_stale_steps,
     _recover_step_outputs,
     run_manifested_steps,
+    run_workflow,
 )
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import (
@@ -522,6 +525,166 @@ def test_manifest_restore_reseeds_epoch_parent_linkage(tmp_path):
     assert underlying.calls[0]["parent_run_id"] == "asim-restored-run"
 
 
+def test_manifest_entry_without_declared_outputs_reruns_instead_of_restoring(
+    tmp_path,
+):
+    manifest_path = tmp_path / "manifest_no_outputs.yaml"
+    manifest = {
+        "dummy_no_output_step": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": True,
+            "run_id": "restored-run",
+            "outputs": {},
+        }
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    @define_step(model="dummy_no_output_step")
+    def _manifest_step(settings, state, workspace):
+        return None
+
+    class _UnderlyingScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            fn = kwargs["fn"]
+            runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+            fn(**runtime_kwargs)
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id="fresh-run"),
+            )
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    scenario = _UnderlyingScenario()
+
+    run_manifested_steps(
+        stage_name="dummy_no_output_stage",
+        steps=[StepRef(name="dummy_no_output_step", step_func=_manifest_step)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=SimpleNamespace(year=2030, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=_ManifestWorkspace(tmp_path),
+        coupler=coupler,
+        name_suffix="2030_i0",
+        iteration=0,
+    )
+
+    assert len(scenario.calls) == 1
+    assert holder.get_attribute("dummy_no_output_step") is None
+    refreshed_manifest = yaml.safe_load(manifest_path.read_text())
+    assert refreshed_manifest["dummy_no_output_step"]["run_id"] == "fresh-run"
+    assert refreshed_manifest["dummy_no_output_step"]["outputs"] == {}
+
+
+def test_run_workflow_manifest_config_uses_shared_recovery_loop(monkeypatch, tmp_path):
+    """
+    ``manifest_config`` is a compatibility input to ``run_workflow``.
+
+    It should select the YAML-backed recovery store directly instead of
+    delegating back through the public ``run_manifested_steps`` wrapper.
+    """
+    manifest_path = tmp_path / "manifest_shared_loop.yaml"
+
+    @define_step(model="dummy_no_output_step")
+    def _manifest_step(settings, state, workspace):
+        return None
+
+    class _Scenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            fn = kwargs["fn"]
+            runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+            fn(**runtime_kwargs)
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id="fresh-run"),
+            )
+
+    def _unexpected_wrapper_call(**_kwargs):
+        raise AssertionError("run_workflow should not delegate to wrapper")
+
+    import pilates.workflows.orchestration as orchestration
+
+    monkeypatch.setattr(
+        orchestration,
+        "run_manifested_steps",
+        _unexpected_wrapper_call,
+    )
+
+    scenario = _Scenario()
+    run_workflow(
+        stage_name="dummy_no_output_stage",
+        steps=[StepRef(name="dummy_no_output_step", step_func=_manifest_step)],
+        scenario=scenario,
+        state=SimpleNamespace(year=2030, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=_ManifestWorkspace(tmp_path),
+        coupler=_ManifestCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="2030_i0",
+        iteration=0,
+        manifest_config=ManifestConfig(path=manifest_path),
+    )
+
+    assert len(scenario.calls) == 1
+    refreshed_manifest = yaml.safe_load(manifest_path.read_text())
+    assert refreshed_manifest["dummy_no_output_step"]["run_id"] == "fresh-run"
+    assert refreshed_manifest["dummy_no_output_step"]["outputs"] == {}
+
+
+def test_run_workflow_disabled_manifest_stage_uses_noop_recovery_store(tmp_path):
+    manifest_path = tmp_path / "manifest_disabled_stage.yaml"
+
+    @define_step(model="dummy_no_output_step")
+    def _manifest_step(settings, state, workspace):
+        return None
+
+    class _Scenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            fn = kwargs["fn"]
+            runtime_kwargs = kwargs["execution_options"].runtime_kwargs
+            fn(**runtime_kwargs)
+            return SimpleNamespace(
+                cache_hit=False,
+                run=SimpleNamespace(id="fresh-run"),
+            )
+
+    scenario = _Scenario()
+    run_workflow(
+        stage_name="disabled_manifest_stage",
+        steps=[StepRef(name="dummy_no_output_step", step_func=_manifest_step)],
+        scenario=scenario,
+        state=SimpleNamespace(year=2030, iteration=0),
+        settings=SimpleNamespace(
+            workflow=WorkflowConfig(
+                manifests={"disabled_stages": ["disabled_manifest_stage"]}
+            )
+        ),
+        workspace=_ManifestWorkspace(tmp_path),
+        coupler=_ManifestCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        name_suffix="2030_i0",
+        iteration=0,
+        manifest_config=ManifestConfig(path=manifest_path),
+    )
+
+    assert len(scenario.calls) == 1
+    assert not manifest_path.exists()
+
+
 def test_restored_and_live_parent_linkage_match_for_beam_resume():
     class _UnderlyingScenario:
         def __init__(self) -> None:
@@ -913,7 +1076,137 @@ def test_stale_manifest_entry_invalidates_downstream_steps_across_invocations(tm
     ]["households_asim_out"] == str(new_post_path)
 
 
-def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
+def test_pruned_downstream_manifest_entry_clears_hydrated_holder_before_cache_hit(
+    monkeypatch, tmp_path
+):
+    workspace = _ManifestWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    _write_file(asim_dir / "households.csv")
+    _write_file(asim_dir / "persons.csv")
+    _write_file(asim_dir / "land_use.csv")
+    old_run_path = tmp_path / "run-old" / "households.parquet"
+    fresh_run_path = tmp_path / "run-fresh" / "households.parquet"
+    _write_file(old_run_path)
+    _write_file(fresh_run_path)
+
+    manifest_path = tmp_path / "manifest_cache_hit_downstream_stale.yaml"
+    manifest = {
+        "activitysim_preprocess": {
+            "completed_at": "2026-01-01T00:00:00",
+            "cache_hit": False,
+            "outputs": serialize_step_outputs(
+                ActivitySimPreprocessOutputs(
+                    mutable_data_dir=asim_dir,
+                    households_table=tmp_path / "missing_households.csv",
+                    persons_table=asim_dir / "persons.csv",
+                    land_use_table=asim_dir / "land_use.csv",
+                )
+            ),
+        },
+        "activitysim_run": {
+            "completed_at": "2026-01-01T00:05:00",
+            "cache_hit": True,
+            "run_id": "old-run",
+            "outputs": serialize_step_outputs(
+                ActivitySimRunOutputs(
+                    output_dir=tmp_path / "run-old",
+                    raw_outputs={"households_asim_out_temp": old_run_path},
+                )
+            ),
+        },
+    }
+    manifest_path.write_text(yaml.safe_dump(manifest))
+
+    holder = StepOutputsHolder()
+    coupler = _ManifestCoupler()
+    state = SimpleNamespace(year=2018, forecast_year=2018, iteration=0)
+
+    def _rerun_preprocess(**_kwargs):
+        holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_dir,
+            households_table=asim_dir / "households.csv",
+            persons_table=asim_dir / "persons.csv",
+            land_use_table=asim_dir / "land_use.csv",
+        )
+
+    @define_step(model="activitysim_run")
+    def _cache_hit_run(settings, state, workspace):
+        raise AssertionError("cache hit should not execute the step function")
+
+    _rerun_preprocess.__consist_step__ = SimpleNamespace(model="activitysim_preprocess")
+
+    class _Scenario:
+        def __init__(self, *, cache_hit: bool, run_id: str) -> None:
+            self.cache_hit = cache_hit
+            self.run_id = run_id
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            if not self.cache_hit:
+                kwargs["fn"]()
+            return SimpleNamespace(
+                cache_hit=self.cache_hit,
+                run=SimpleNamespace(id=self.run_id),
+                outputs={},
+            )
+
+    preprocess_scenario = _Scenario(cache_hit=False, run_id="preprocess-rerun")
+    run_manifested_steps(
+        stage_name="activity_demand_preprocess",
+        steps=[StepRef(name="activitysim_preprocess", step_func=_rerun_preprocess)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=preprocess_scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_i0",
+        iteration=0,
+    )
+
+    assert holder.get_attribute("activitysim_run") is None
+
+    import pilates.workflows.orchestration as orchestration
+
+    recovered_outputs = ActivitySimRunOutputs(
+        output_dir=tmp_path / "run-fresh",
+        raw_outputs={"households_asim_out_temp": fresh_run_path},
+    )
+    recovery_calls = []
+
+    def _recover_fresh_outputs(**kwargs):
+        recovery_calls.append(kwargs["step_name"])
+        kwargs["outputs_holder"].set_attribute("activitysim_run", recovered_outputs)
+        return recovered_outputs
+
+    monkeypatch.setattr(orchestration, "_recover_step_outputs", _recover_fresh_outputs)
+
+    downstream_scenario = _Scenario(cache_hit=True, run_id="fresh-run")
+    run_manifested_steps(
+        stage_name="activity_demand_run",
+        steps=[StepRef(name="activitysim_run", step_func=_cache_hit_run)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=downstream_scenario,
+        state=state,
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_i0",
+        iteration=0,
+    )
+
+    assert recovery_calls == ["activitysim_run"]
+    refreshed_manifest = yaml.safe_load(manifest_path.read_text())
+    assert refreshed_manifest["activitysim_run"]["run_id"] == "fresh-run"
+    assert refreshed_manifest["activitysim_run"]["outputs"]["raw_outputs"][
+        "households_asim_out_temp"
+    ] == str(fresh_run_path)
+
+
+def test_manifest_restore_treats_workspace_rooted_atlas_paths_as_stale(tmp_path):
     old_root = tmp_path / "old-job" / "pilates-workspace" / "consist-run"
     new_root = tmp_path / "new-job" / "pilates-workspace" / "consist-run"
     workspace = _ManifestWorkspace(new_root)
@@ -965,50 +1258,19 @@ def test_manifest_restore_remaps_workspace_rooted_atlas_paths(tmp_path):
     manifest_path.write_text(yaml.safe_dump(manifest))
 
     holder = StepOutputsHolder()
-    coupler = _ManifestCoupler()
-    scenario = _ManifestScenario(cache_hit=False)
     state = SimpleNamespace(year=2023, forecast_year=2029, atlas_year=2023, iteration=0)
 
-    run_manifested_steps(
-        stage_name="atlas",
-        steps=[
-            StepRef(
-                name="atlas_preprocess",
-                step_func=make_atlas_preprocess_step(
-                    coupler=coupler,
-                    outputs_holder=holder,
-                ),
-            ),
-            StepRef(
-                name="atlas_run",
-                step_func=make_atlas_run_step(
-                    coupler=coupler,
-                    outputs_holder=holder,
-                ),
-            ),
-        ],
-        outputs_holder=holder,
-        manifest_config=ManifestConfig(path=manifest_path),
-        scenario=scenario,
-        state=state,
+    stale_steps = _detect_stale_steps(
+        manifest,
+        holder,
+        workspace,
         settings=SimpleNamespace(),
-        workspace=workspace,
-        coupler=coupler,
-        name_suffix="2023_i0",
-        iteration=0,
+        state=state,
     )
 
-    assert scenario.calls == []
-    assert holder.atlas_preprocess is not None
-    assert holder.atlas_run is not None
-    assert holder.atlas_preprocess.atlas_mutable_input_dir == current_atlas_input_dir
-    assert (
-        holder.atlas_preprocess.prepared_inputs["atlas_households_csv"]
-        == current_households_csv
-    )
-    assert holder.atlas_run.atlas_output_dir == current_atlas_output_dir
-    assert holder.atlas_run.raw_outputs["householdv_2023"] == current_householdv_csv
-    assert holder.atlas_run.raw_outputs["vehicles_2023"] == current_vehicles_csv
+    assert stale_steps == {"atlas_preprocess", "atlas_run"}
+    assert holder.atlas_preprocess is None
+    assert holder.atlas_run is None
 
 
 def test_atlas_preprocess_output_replayer_restores_restart_prior_subyear_inputs(

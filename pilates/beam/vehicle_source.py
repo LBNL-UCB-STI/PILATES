@@ -5,7 +5,12 @@ from pathlib import Path
 from typing import Any, Optional, Tuple
 
 from pilates.runtime.archive_paths import archive_fallback_path
-from pilates.utils.coupler_helpers import resolve_existing_path
+from pilates.utils.consist_types import ArtifactLike
+from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
+    resolve_artifact_from_value,
+    resolve_existing_path,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 
@@ -97,7 +102,6 @@ def resolve_atlas_vehicles2_source(
         env_resolved = resolve_existing_path(
             str(local_path),
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if env_resolved:
             resolved_path = Path(env_resolved)
@@ -111,6 +115,23 @@ def resolve_atlas_vehicles2_source(
                 ),
                 candidates=candidates,
             )
+        artifact = resolve_artifact_from_value(
+            str(local_path),
+            key=ATLAS_VEHICLES2_OUTPUT,
+            workspace=workspace,
+        )
+        if isinstance(artifact, ArtifactLike):
+            materialized = artifact_to_existing_path(artifact, workspace=workspace)
+            if materialized:
+                resolved_path = Path(materialized)
+                candidates.append(str(resolved_path))
+                return _resolved_source(
+                    selected_path=resolved_path,
+                    forecast_year=forecast_year,
+                    source_year=source_year,
+                    storage_location="materialized_artifact",
+                    candidates=candidates,
+                )
 
     if require_exact_year:
         raise FileNotFoundError(

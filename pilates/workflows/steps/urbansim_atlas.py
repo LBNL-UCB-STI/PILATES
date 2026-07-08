@@ -271,7 +271,6 @@ def _recover_atlas_postprocess_outputs(
         vehicles2_path = artifact_to_existing_path(
             expected_outputs.get(ATLAS_VEHICLES2_OUTPUT),
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if vehicles2_path is not None:
             recovered_paths[ATLAS_VEHICLES2_OUTPUT] = Path(vehicles2_path)
@@ -286,7 +285,6 @@ def _recover_atlas_postprocess_outputs(
         candidate_path = artifact_to_existing_path(
             expected_outputs.get(USIM_POPULATION_SOURCE_H5),
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if candidate_path is not None:
             usim_datastore_h5 = Path(candidate_path)

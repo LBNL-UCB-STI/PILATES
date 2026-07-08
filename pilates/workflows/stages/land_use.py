@@ -23,9 +23,9 @@ from pilates.workflows.steps import (
     urbansim_run_output_paths,
 )
 from pilates.workflows.orchestration import (
-    ManifestConfig,
     StageRunner,
     StepRef,
+    manifest_config_for_stage,
     run_workflow,
 )
 from pilates.workflows.coupler_namespace import resolve_coupler_value
@@ -116,8 +116,10 @@ def run_land_use_stage(
         settings, state, workspace, year, surface=surface
     )
     log_inputs(usim_inputs, cast(Dict[str, Optional[str]], usim_input_descriptions))
-    manifest_config = ManifestConfig(
-        path=_build_land_use_manifest_path(workspace=workspace, year=year)
+    manifest_config = manifest_config_for_stage(
+        stage_name="land_use",
+        settings=settings,
+        manifest_path=_build_land_use_manifest_path(workspace=workspace, year=year),
     )
     stage_runner = StageRunner(
         stage_name="land_use",

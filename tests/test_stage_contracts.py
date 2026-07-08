@@ -30,6 +30,7 @@ import pandas as pd
 from pilates.config import load_config
 from pilates.config.models import FullSkimsCreatorConfig
 from pilates.generic.records import RecordStore
+from pilates.utils import coupler_helpers
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.activitysim.outputs import (
     ActivitySimCompileOutputs,
@@ -118,6 +119,53 @@ from tests.workflow_contract_harness import (
 )
 from workflow_state import WorkflowState
 from pilates.runtime.context import WorkflowRuntimeContext
+
+
+class _ArchivedCompileArtifact:
+    def __init__(
+        self,
+        *,
+        key: str,
+        local_path: Path,
+        local_root: Path,
+        archive_root: Path,
+    ) -> None:
+        self.id = f"archived-{key}"
+        self.key = key
+        self._path = local_path
+        self.local_root = local_root
+        self.archive_root = archive_root
+        rel_path = local_path.relative_to(local_root)
+        self.container_uri = f"workspace://{rel_path}"
+        self.archive_path = archive_root / rel_path
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+
+class _CompileArtifactMaterializingTracker:
+    def materialize_artifact(
+        self,
+        artifact: _ArchivedCompileArtifact,
+        *,
+        target_root: Path | str,
+        source_root: Path | str | None,
+        preserve_existing: bool,
+        on_missing: str,
+        validate_content_hash: str,
+    ):
+        assert Path(source_root) == artifact.archive_root
+        assert preserve_existing is True
+        assert on_missing == "warn"
+        assert validate_content_hash == "if-present"
+        destination = Path(target_root) / artifact.path.relative_to(artifact.local_root)
+        if artifact.archive_path.is_dir():
+            shutil.copytree(artifact.archive_path, destination, dirs_exist_ok=True)
+        else:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(artifact.archive_path, destination)
+        return SimpleNamespace(path=destination, resolvable=True)
 
 
 def run_land_use_stage(
@@ -1274,6 +1322,39 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
 
 
+def test_supply_demand_stage_temporarily_blocks_activity_demand_manifest_disablement(
+    stage_env,
+):
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    settings.workflow.manifests.disabled_stages = ["activity_demand"]
+
+    def _build_manifest_path(_workspace, _year, _iteration):
+        raise AssertionError("supply-demand guard should fail before manifest paths")
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            r"workflow\.manifests\.disabled_stages cannot disable "
+            r"supply-demand manifest recovery names yet: 'activity_demand'\. "
+            r"This guard is temporary until tracker-native recovery and "
+            r"delete-track prerequisites are met\."
+        ),
+    ):
+        run_supply_demand_stage(
+            scenario=stage_env["scenario"],
+            state=state,
+            settings=settings,
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+            year=state.forecast_year,
+            usim_inputs={},
+            build_manifest_path=_build_manifest_path,
+        )
+
+
 def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     stage_env, tmp_path
 ):
@@ -1439,8 +1520,29 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
 
     shutil.rmtree(zarr_path)
     shutil.rmtree(numba_cache_dir)
-    stage_env["coupler"]._values.pop(ZARR_SKIMS, None)
-    stage_env["coupler"]._values.pop(ASIM_SHARROW_CACHE_DIR, None)
+    stage_env["coupler"].set(
+        ZARR_SKIMS,
+        _ArchivedCompileArtifact(
+            key=ZARR_SKIMS,
+            local_path=zarr_path,
+            local_root=local_root,
+            archive_root=archive_root,
+        ),
+    )
+    stage_env["coupler"].set(
+        ASIM_SHARROW_CACHE_DIR,
+        _ArchivedCompileArtifact(
+            key=ASIM_SHARROW_CACHE_DIR,
+            local_path=numba_cache_dir,
+            local_root=local_root,
+            archive_root=archive_root,
+        ),
+    )
+    monkeypatch.setattr(
+        coupler_helpers.cr,
+        "current_tracker",
+        lambda: _CompileArtifactMaterializingTracker(),
+    )
 
     def _build_manifest_path(workspace, year, iteration):
         return tmp_path / f"manifest_archive_republish_{year}_{iteration}.json"

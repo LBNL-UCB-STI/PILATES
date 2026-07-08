@@ -247,7 +247,7 @@ def test_recover_activitysim_preprocess_outputs_preserves_input_hashes(
     )
 
 
-def test_recover_activitysim_preprocess_outputs_from_archive_only(
+def test_recover_activitysim_preprocess_outputs_ignores_archive_only_paths(
     tmp_path, monkeypatch
 ):
     local_root = tmp_path / "local-run"
@@ -275,16 +275,15 @@ def test_recover_activitysim_preprocess_outputs_from_archive_only(
         coupler=coupler,
     )
 
-    assert outputs is not None
-    assert holder.activitysim_preprocess is not None
-    assert (local_asim_dir / "households.csv").exists()
-    assert (local_asim_dir / "persons.csv").exists()
-    assert (local_asim_dir / "land_use.csv").exists()
-    assert (local_asim_dir / "skims.omx").exists()
-    assert coupler.get(ASIM_HOUSEHOLDS_IN) is not None
-    assert coupler.get(ASIM_PERSONS_IN) is not None
-    assert coupler.get(ASIM_LAND_USE_IN) is not None
-    holder.activitysim_preprocess.validate()
+    assert outputs is None
+    assert holder.activitysim_preprocess is None
+    assert not (local_asim_dir / "households.csv").exists()
+    assert not (local_asim_dir / "persons.csv").exists()
+    assert not (local_asim_dir / "land_use.csv").exists()
+    assert not (local_asim_dir / "skims.omx").exists()
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) is None
+    assert coupler.get(ASIM_PERSONS_IN) is None
+    assert coupler.get(ASIM_LAND_USE_IN) is None
 
 
 def test_recover_beam_preprocess_outputs(tmp_path):
@@ -1091,21 +1090,17 @@ def test_recover_atlas_postprocess_outputs_requires_vehicles2_output(
     assert holder.atlas_postprocess is None
 
 
-def test_copy_vehicles_from_atlas_materializes_archive_fallback(tmp_path, monkeypatch):
+def test_copy_vehicles_from_atlas_uses_existing_local_source(tmp_path):
     local_root = tmp_path / "local"
-    archive_root = tmp_path / "archive"
     workspace = DummyWorkspace(local_root / "run")
     state = SimpleNamespace(forecast_year=2018)
 
-    archived_source = archive_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
-    archived_source.parent.mkdir(parents=True, exist_ok=True)
-    archived_source.write_text(
+    local_source = local_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
+    local_source.parent.mkdir(parents=True, exist_ok=True)
+    local_source.write_text(
         "vehicle_id,household_id,vehicleTypeId\n101,1,7\n",
         encoding="utf-8",
     )
-
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root / "run"))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root / "run"))
 
     def _resolve_beam_exchange_scenario_folder_fn(_workspace):
         return str(local_root / "run" / "beam" / "input" / "test" / "scenario")
@@ -1113,13 +1108,13 @@ def test_copy_vehicles_from_atlas_materializes_archive_fallback(tmp_path, monkey
     record = copy_vehicles_from_atlas(
         workspace=workspace,
         state=state,
+        source_path=str(local_source),
         resolve_beam_exchange_scenario_folder_fn=_resolve_beam_exchange_scenario_folder_fn,
         preferred_format="parquet",
     )
 
     assert record is not None
     assert record.short_name == "vehicles_beam_in"
-    local_source = local_root / "run" / "atlas" / "output" / "vehicles2_2018.csv"
     beam_vehicles = (
         local_root / "run" / "beam" / "input" / "test" / "scenario" / "vehicles.parquet"
     )

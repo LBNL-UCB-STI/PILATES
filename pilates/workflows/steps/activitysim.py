@@ -411,7 +411,6 @@ def _existing_artifact_path(value: Any, workspace: Workspace) -> Optional[str]:
     return artifact_to_existing_path(
         value,
         workspace=workspace,
-        materialize_from_archive=True,
     )
 
 
@@ -421,7 +420,6 @@ def _existing_local_path(path: Any, workspace: Workspace) -> Optional[str]:
     return resolve_existing_path(
         str(path),
         workspace=workspace,
-        materialize_from_archive=True,
     )
 
 
@@ -441,7 +439,6 @@ def _resolve_activitysim_h5_runtime_path(
     resolved_path = artifact_to_existing_path(
         value,
         workspace=workspace,
-        materialize_from_archive=True,
     )
     if resolved_path:
         return resolved_path

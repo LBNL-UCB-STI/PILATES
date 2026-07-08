@@ -575,7 +575,6 @@ def _hydrate_completed_beam_run_outputs(
         path = artifact_to_existing_path(
             value,
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if path is not None:
             raw_outputs[str(key)] = Path(path)
@@ -603,7 +602,6 @@ def _hydrate_completed_beam_run_outputs(
             path = artifact_to_existing_path(
                 value,
                 workspace=workspace,
-                materialize_from_archive=True,
             )
             if path is not None:
                 raw_outputs[str(key)] = Path(path)

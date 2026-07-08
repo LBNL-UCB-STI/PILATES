@@ -474,6 +474,12 @@ def beam_preprocess_binding_plan(
         and resolved_profile.vehicle_ownership_model_enabled
         and iteration_index(state, default=0) == 0
     )
+    get_value = getattr(coupler, "get", None)
+    restored_atlas_vehicle = None
+    if callable(get_value):
+        restored_atlas_vehicle = artifact_to_existing_path(
+            get_value(ATLAS_VEHICLES2_OUTPUT), workspace
+        )
     atlas_inputs = _beam_preprocess_atlas_inputs(
         settings=settings,
         state=state,
@@ -493,12 +499,7 @@ def beam_preprocess_binding_plan(
         for key, value in atlas_inputs.items():
             explicit_inputs.setdefault(key, value)
 
-    get_value = getattr(coupler, "get", None)
-    restored_atlas_vehicle = None
     if callable(get_value):
-        restored_atlas_vehicle = artifact_to_path(
-            get_value(ATLAS_VEHICLES2_OUTPUT), workspace
-        )
         current_atlas_vehicle = (
             atlas_inputs.get(ATLAS_VEHICLES2_OUTPUT) if atlas_inputs else None
         )
@@ -937,7 +938,6 @@ def _beam_preprocess_warmstart_inputs(
         warmstart_path = artifact_to_existing_path(
             value,
             workspace,
-            materialize_from_archive=True,
         )
         if warmstart_path:
             return {LINKSTATS_WARMSTART: warmstart_path}

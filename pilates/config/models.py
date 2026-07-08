@@ -699,14 +699,34 @@ class PostprocessingConfig(BaseModel):
 
     def to_consist_facet(self) -> Dict[str, Any]:
         return {
-            "config": self.config,
-            "sample": self.sample,
-            "replanning_portion": self.replanning_portion,
-            "memory": self.memory,
-            "discard_plans_every_year": self.discard_plans_every_year,
-            "max_plans_memory": self.max_plans_memory,
-            "simulated_hwy_paths": list(self.simulated_hwy_paths),
+            "output_folder": self.output_folder,
+            "mep_output_folder": self.mep_output_folder,
+            "scenario_definitions": self.scenario_definitions,
+            "validation_metrics": self.validation_metrics,
         }
+
+
+# =============================================================================
+# WORKFLOW CONFIGURATION
+# =============================================================================
+
+
+class WorkflowManifestConfig(BaseModel):
+    """Stage-level workflow manifest recovery policy."""
+
+    disabled_stages: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Stage names whose YAML manifest recovery should be disabled. "
+            "Disabled stages use native Consist execution without writing step manifests."
+        ),
+    )
+
+
+class WorkflowConfig(BaseModel):
+    """Workflow orchestration configuration."""
+
+    manifests: WorkflowManifestConfig = Field(default_factory=WorkflowManifestConfig)
 
 
 # =============================================================================
@@ -732,6 +752,7 @@ class PilatesConfig(BaseModel):
     activitysim: Optional[ActivitySimConfig] = None
     beam: Optional[BeamConfig] = None
     postprocessing: Optional[PostprocessingConfig] = None
+    workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
 
     @model_validator(mode="after")
     def validate_model_configs(self):

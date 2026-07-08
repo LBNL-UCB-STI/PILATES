@@ -12,7 +12,11 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.steps import StepOutputsHolder
-from tests.workflow_contract_harness import CouplerStub, build_runtime_context
+from tests.workflow_contract_harness import (
+    CouplerStub,
+    FakeScenario,
+    build_runtime_context,
+)
 
 pytest_plugins = ("tests.test_stage_contracts",)
 
@@ -30,6 +34,13 @@ def run_land_use_stage(
 
 def _land_use_manifest_path(*, workspace, year: int) -> Path:
     return Path(workspace.full_path) / ".workflow" / f"land_use_year_{year}.yaml"
+
+
+def _clone_coupler(coupler: CouplerStub) -> CouplerStub:
+    clone = CouplerStub()
+    for key in coupler.keys():
+        clone.set(key, coupler.get(key))
+    return clone
 
 
 def test_land_use_stage_persists_year_scoped_run_ids_and_restores_from_manifest(
@@ -122,3 +133,51 @@ def test_land_use_stage_persists_year_scoped_run_ids_and_restores_from_manifest(
     assert {
         step: manifest_a_after_restore[step]["run_id"] for step in expected_steps
     } == run_ids_a
+
+
+def test_land_use_stage_skips_manifest_yaml_when_disabled(
+    stage_env,
+):
+    state = stage_env["state"]
+    settings = stage_env["settings"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    year = int(state.forecast_year)
+    manifest_path = _land_use_manifest_path(workspace=workspace, year=year)
+    baseline_coupler = _clone_coupler(coupler)
+
+    default_coupler = _clone_coupler(baseline_coupler)
+    default_scenario = FakeScenario(default_coupler)
+    default_outputs = StepOutputsHolder()
+    default_handoff = run_land_use_stage(
+        scenario=default_scenario,
+        coupler=default_coupler,
+        year=year,
+        outputs_holder_year=default_outputs,
+        context=stage_env["context"],
+    )
+
+    assert manifest_path.exists()
+    default_mapping = default_handoff.to_input_mapping()
+
+    manifest_path.unlink()
+    settings.workflow.manifests.disabled_stages = ["land_use"]
+
+    disabled_coupler = _clone_coupler(baseline_coupler)
+    disabled_scenario = FakeScenario(disabled_coupler)
+    disabled_outputs = StepOutputsHolder()
+    disabled_handoff = run_land_use_stage(
+        scenario=disabled_scenario,
+        coupler=disabled_coupler,
+        year=year,
+        outputs_holder_year=disabled_outputs,
+        context=stage_env["context"],
+    )
+
+    assert [call["model"] for call in disabled_scenario.calls] == [
+        "urbansim_preprocess",
+        "urbansim_run",
+        "urbansim_postprocess",
+    ]
+    assert not manifest_path.exists()
+    assert disabled_handoff.to_input_mapping() == default_mapping

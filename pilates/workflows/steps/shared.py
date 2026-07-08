@@ -1812,7 +1812,6 @@ def recovered_cached_paths(
         path = artifact_to_existing_path(
             value,
             workspace=workspace,
-            materialize_from_archive=True,
         )
         if path is not None:
             recovered[key] = Path(path)

@@ -17,23 +17,19 @@ from consist.types import (
 )
 
 from pilates.runtime.cache_recovery import (
-    cache_miss_audit_fields,
     log_cache_miss_explanation,
     run_with_cache_recovery,
 )
-from pilates.runtime.consist_audit import emit_consist_audit_event
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     artifact_to_path,
     record_published_coupler_keys,
-    resolve_existing_path,
     resolve_artifact_from_value,
     set_coupler_from_artifact,
 )
 from pilates.workflows.catalog import (
     workflow_step_contracts_by_name,
-    workflow_step_declared_output_keys,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
@@ -44,18 +40,17 @@ from pilates.utils.consist_types import (
     RunLike,
     ScenarioRestorationLike,
 )
-from pilates.utils.state_access import (
-    current_year as state_current_year,
-    iteration_index,
-)
-from pilates.utils.step_manifest import load_step_manifest, save_step_manifest
 from pilates.workflows.outputs_base import (
     ValidationContext,
-    declared_outputs_for_step_outputs_class,
     deserialize_step_outputs,
     required_outputs_for_step_outputs_class,
     step_output_mapping,
     serialize_step_outputs,
+)
+from pilates.workflows.recovery import (
+    NoManifestRecoveryStore,
+    StepRecoveryStore,
+    recovery_store_for_stage,
 )
 from pilates.workflows.step_io import expected_inputs_for_step
 from pilates.workflows.step_runner import common_runtime_kwargs
@@ -148,6 +143,77 @@ def _normalize_key_iter(values: Optional[Any]) -> list[str]:
     if isinstance(values, str):
         return [values]
     return [str(key) for key in values]
+
+
+def _step_scope_fields(
+    *,
+    stage_name: str,
+    step_name: str,
+    state: Any,
+) -> Dict[str, Any]:
+    simulation_year = getattr(state, "current_year", None)
+    if simulation_year is None:
+        simulation_year = getattr(state, "year", None)
+    forecast_year = getattr(state, "forecast_year", None)
+    atlas_year = getattr(state, "atlas_year", None)
+
+    if atlas_year is not None and step_name.startswith("atlas_"):
+        year = atlas_year
+    elif step_name.startswith(("activitysim_", "beam_", "atlas_")):
+        year = forecast_year if forecast_year is not None else simulation_year
+    else:
+        year = simulation_year
+
+    iteration = getattr(state, "iteration", None)
+    if iteration is None:
+        iteration = getattr(state, "current_inner_iter", None)
+
+    scope = {
+        "year": year,
+        "simulation_year": simulation_year,
+        "forecast_year": forecast_year,
+        "iteration": iteration,
+    }
+    if atlas_year is not None:
+        scope["atlas_year"] = atlas_year
+    return {key: value for key, value in scope.items() if value is not None}
+
+
+def _format_dynamic_output_key(pattern: str, scope: Mapping[str, Any]) -> Optional[str]:
+    try:
+        return pattern.format(**scope)
+    except KeyError:
+        return None
+
+
+def _declared_required_and_optional_output_keys(
+    step_name: str,
+    *,
+    settings: Optional[Any] = None,
+    state: Optional[Any] = None,
+) -> tuple[list[str], list[str], list[str]]:
+    contracts = workflow_step_contracts_by_name(settings=settings)
+    contract = contracts.get(step_name)
+    if contract is None:
+        return [], [], []
+
+    declared = list(contract.get("output_keys") or [])
+    optional = list(contract.get("optional_output_keys") or [])
+    required = list(declared)
+
+    dynamic_families = list(contract.get("dynamic_output_families") or [])
+    if dynamic_families:
+        scope = _step_scope_fields(
+            stage_name=str(contract.get("stage_name") or ""),
+            step_name=step_name,
+            state=state or SimpleNamespace(),
+        )
+        for family in dynamic_families:
+            expanded = _format_dynamic_output_key(str(family), scope)
+            if expanded is not None:
+                required.append(expanded)
+
+    return declared, list(dict.fromkeys(required)), optional
 
 
 def _resolved_input_keys_for_step(
@@ -268,199 +334,6 @@ def _resolved_step_epoch_identity(
     return model_name, year, iteration
 
 
-def _step_scope_fields(
-    *,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    run_id: Optional[str] = None,
-    cache_hit: Optional[bool] = None,
-) -> Dict[str, Any]:
-    current_year = state_current_year(state)
-    forecast_year = getattr(state, "forecast_year", None)
-    atlas_year = getattr(state, "atlas_year", None)
-
-    target_year = current_year
-    if step_name.startswith("activitysim_") or step_name.startswith("beam_"):
-        target_year = forecast_year if forecast_year is not None else current_year
-    elif atlas_year is not None:
-        target_year = atlas_year
-
-    return {
-        "stage_name": stage_name,
-        "step_name": step_name,
-        "year": target_year,
-        "simulation_year": current_year,
-        "forecast_year": forecast_year,
-        "iteration": iteration_index(state),
-        "atlas_year": atlas_year,
-        "run_id": run_id,
-        "cache_hit": cache_hit,
-    }
-
-
-def _resolved_output_keys(outputs: Any) -> list[str]:
-    if outputs is None:
-        return []
-    try:
-        return sorted(step_output_mapping(outputs, warn_lossy=False).keys())
-    except Exception:
-        return []
-
-
-def _declared_required_and_optional_output_keys(
-    step_name: str,
-    *,
-    settings: Any = None,
-    state: Any = None,
-) -> tuple[list[str], list[str], list[str]]:
-    spec = workflow_step_spec_for_step_name(step_name)
-    if spec is not None:
-        contract = workflow_step_contracts_by_name(settings=settings).get(step_name, {})
-        declared = sorted(dict.fromkeys(contract.get("output_keys", spec.output_keys)))
-        optional = sorted(
-            dict.fromkeys(
-                contract.get("optional_output_keys", spec.optional_output_keys)
-            )
-        )
-        required = list(declared)
-        outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-        if outputs_class is not None:
-            if not optional:
-                optional = list(
-                    getattr(outputs_class, "optional_output_keys", lambda: ())()
-                )
-            required = list(
-                required_outputs_for_step_outputs_class(outputs_class, state=state)
-            )
-        return declared, sorted(dict.fromkeys(required)), optional
-
-    outputs_class = STEP_OUTPUTS_CLASSES.get(step_name)
-    declared = list(workflow_step_declared_output_keys(step_name))
-    if not declared and outputs_class is not None:
-        declared = list(declared_outputs_for_step_outputs_class(outputs_class))
-    required: list[str] = []
-    if outputs_class is not None:
-        required = list(
-            required_outputs_for_step_outputs_class(outputs_class, state=state)
-        )
-    optional: list[str] = []
-    if outputs_class is not None:
-        optional = list(getattr(outputs_class, "optional_output_keys", lambda: ())())
-    return (
-        sorted(dict.fromkeys(declared)),
-        sorted(dict.fromkeys(required)),
-        sorted(dict.fromkeys(optional)),
-    )
-
-
-def _emit_output_hydration_audit(
-    *,
-    workspace: Any,
-    settings: Any,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    resolution_mode: str,
-    outputs: Any,
-    run_id: Optional[str],
-    cache_hit: Optional[bool],
-    recovery_meta: Optional[Mapping[str, Any]] = None,
-) -> None:
-    if outputs is None:
-        return
-    (
-        declared_outputs,
-        required_outputs,
-        optional_outputs,
-    ) = _declared_required_and_optional_output_keys(
-        step_name,
-        settings=settings,
-        state=state,
-    )
-    resolved_outputs = _resolved_output_keys(outputs)
-    missing_required_outputs = [
-        key for key in required_outputs if key not in resolved_outputs
-    ]
-    missing_declared_outputs = [
-        key for key in declared_outputs if key not in resolved_outputs
-    ]
-    missing_optional_outputs = [
-        key for key in optional_outputs if key not in resolved_outputs
-    ]
-    recovery_meta = recovery_meta or {}
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="output_hydration_check",
-        **_step_scope_fields(
-            stage_name=stage_name,
-            step_name=step_name,
-            state=state,
-            run_id=run_id,
-            cache_hit=cache_hit,
-        ),
-        resolution_mode=resolution_mode,
-        declared_outputs=declared_outputs,
-        required_outputs=required_outputs,
-        optional_outputs=optional_outputs,
-        resolved_outputs=resolved_outputs,
-        missing_required_outputs=missing_required_outputs,
-        missing_declared_outputs=missing_declared_outputs,
-        missing_optional_outputs=missing_optional_outputs,
-        typed_output_rebuilt=bool(outputs is not None),
-        hydration_complete=not missing_required_outputs,
-        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
-        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
-        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
-        used_tracker_output_lookup=bool(
-            recovery_meta.get("used_tracker_output_lookup", False)
-        ),
-        used_compatibility_fallback=bool(
-            recovery_meta.get("used_compatibility_fallback", False)
-        ),
-        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
-    )
-
-
-def _emit_step_resolution_audit(
-    *,
-    workspace: Any,
-    stage_name: str,
-    step_name: str,
-    state: Any,
-    resolution_mode: str,
-    run_id: Optional[str],
-    cache_hit: Optional[bool],
-    recovery_meta: Optional[Mapping[str, Any]] = None,
-) -> None:
-    recovery_meta = recovery_meta or {}
-    emit_consist_audit_event(
-        workspace=workspace,
-        event_type="step_resolution",
-        **_step_scope_fields(
-            stage_name=stage_name,
-            step_name=step_name,
-            state=state,
-            run_id=run_id,
-            cache_hit=cache_hit,
-        ),
-        resolution_mode=resolution_mode,
-        used_manifest_restore=bool(recovery_meta.get("used_manifest_restore", False)),
-        used_output_replayer=bool(recovery_meta.get("used_output_replayer", False)),
-        used_output_recoverer=bool(recovery_meta.get("used_output_recoverer", False)),
-        used_tracker_output_lookup=bool(
-            recovery_meta.get("used_tracker_output_lookup", False)
-        ),
-        used_compatibility_fallback=bool(
-            recovery_meta.get("used_compatibility_fallback", False)
-        ),
-        overwrite_rerun=bool(recovery_meta.get("overwrite_rerun", False)),
-        initial_cache_hit=bool(recovery_meta.get("initial_cache_hit", False)),
-        recovery_attempts=int(recovery_meta.get("recovery_attempts", 0) or 0),
-        **cache_miss_audit_fields(recovery_meta.get("cache_miss_explanation")),
-    )
-
-
 def _build_step_run_kwargs(
     *,
     step: StepRef,
@@ -579,6 +452,15 @@ def _build_step_run_kwargs(
             workspace=workspace,
             runtime_kwargs=runtime_kwargs,
         )
+    resolved_input_materialization_option: Optional[Literal["requested"]]
+    if resolved_input_materialization is None:
+        resolved_input_materialization_option = None
+    elif resolved_input_materialization == "requested":
+        resolved_input_materialization_option = "requested"
+    else:
+        raise ValueError(
+            f"Step '{step.name}' input_materialization must be 'requested' or None."
+        )
     # Canonicalize legacy load_inputs into the modern input_binding contract so
     # Consist sees a single binding mode regardless of whether the step still
     # publishes older metadata.
@@ -594,7 +476,7 @@ def _build_step_run_kwargs(
         resolved_load_inputs = None
     if (
         resolved_input_paths is not None
-        and resolved_input_materialization == "requested"
+        and resolved_input_materialization_option == "requested"
     ):
         resolved_input_keys = _resolved_input_keys_for_step(
             step=step,
@@ -653,7 +535,7 @@ def _build_step_run_kwargs(
         input_paths=(
             dict(resolved_input_paths) if resolved_input_paths is not None else None
         ),
-        input_materialization=resolved_input_materialization,
+        input_materialization=resolved_input_materialization_option,
     )
 
     run_cfg = getattr(settings, "run", None)
@@ -1187,6 +1069,40 @@ def _recovery_run_id_for_step_result(step_result: Any) -> Optional[str]:
     return run_id
 
 
+def _recovery_store_for_manifest_config(
+    *,
+    stage_name: str,
+    settings: Any,
+    manifest_config: Optional[ManifestConfig],
+) -> StepRecoveryStore:
+    if manifest_config is None:
+        return NoManifestRecoveryStore()
+    return recovery_store_for_stage(
+        stage_name=stage_name,
+        settings=settings,
+        manifest_path=manifest_config.path,
+    )
+
+
+def manifest_config_for_stage(
+    *,
+    stage_name: str,
+    settings: Any,
+    manifest_path: Path,
+) -> Optional[ManifestConfig]:
+    """
+    Build a manifest config only when the stage is allowed to persist one.
+    """
+    recovery_store = recovery_store_for_stage(
+        stage_name=stage_name,
+        settings=settings,
+        manifest_path=manifest_path,
+    )
+    if not recovery_store.uses_persisted_entries():
+        return None
+    return ManifestConfig(path=manifest_path)
+
+
 def run_manifested_steps(
     *,
     stage_name: str,
@@ -1205,9 +1121,48 @@ def run_manifested_steps(
     """
     Execute steps with manifest checkpointing and stale detection.
     """
+    _run_workflow_with_recovery_store(
+        stage_name=stage_name,
+        steps=steps,
+        outputs_holder=outputs_holder,
+        recovery_store=recovery_store_for_stage(
+            stage_name=stage_name,
+            settings=settings,
+            manifest_path=manifest_config.path,
+        ),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=name_suffix,
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
+
+
+def _run_workflow_with_recovery_store(
+    *,
+    stage_name: str,
+    steps: Sequence[StepRef],
+    outputs_holder: StepOutputsHolder,
+    recovery_store: StepRecoveryStore,
+    scenario: Any,
+    state: Any,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    name_suffix: str,
+    iteration: int = 0,
+    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Execute workflow steps using the supplied recovery boundary.
+    """
     validate_workflow_step_contracts(step_refs=steps)
 
-    manifest = load_step_manifest(manifest_config.path) or {}
+    manifest = dict(recovery_store.load() or {})
+    uses_persisted_entries = recovery_store.uses_persisted_entries()
     stale_steps = _detect_stale_steps(
         manifest,
         outputs_holder,
@@ -1223,7 +1178,8 @@ def run_manifested_steps(
         )
         for step_name in stale_steps:
             manifest.pop(step_name, None)
-        save_step_manifest(manifest, manifest_config.path)
+            outputs_holder.set_attribute(step_name, None)
+        recovery_store.prune(sorted(stale_steps))
 
     runtime_kwargs = common_runtime_kwargs(
         settings=settings,
@@ -1240,72 +1196,48 @@ def run_manifested_steps(
             default_iteration=iteration,
         )
         expects_outputs = STEP_OUTPUTS_CLASSES.get(spec.name) is not None
-        if spec.name in manifest:
-            if expects_outputs:
-                logger.info(
-                    "[%s] %s already completed (skipping)", stage_name, spec.name
+        decision = recovery_store.decision_for_step(
+            step_name=spec.name,
+            can_restore=expects_outputs,
+        )
+        if decision.should_restore and decision.entry is not None:
+            logger.info("[%s] %s already completed (skipping)", stage_name, spec.name)
+            outputs = outputs_holder.get_attribute(spec.name)
+            recovery_meta = {
+                "used_manifest_restore": True,
+                "used_output_replayer": bool(spec.output_replayer is not None),
+            }
+            if outputs is None:
+                outputs = _restore_outputs_from_manifest(
+                    spec.name,
+                    manifest,
+                    workspace,
+                    settings=settings,
+                    state=state,
                 )
-                outputs = outputs_holder.get_attribute(spec.name)
-                recovery_meta = {
-                    "used_manifest_restore": True,
-                    "used_output_replayer": bool(spec.output_replayer is not None),
-                }
-                if outputs is None:
-                    outputs = _restore_outputs_from_manifest(
-                        spec.name,
-                        manifest,
-                        workspace,
-                        settings=settings,
-                        state=state,
-                    )
-                    if outputs is not None:
-                        outputs_holder.set_attribute(spec.name, outputs)
                 if outputs is not None:
-                    _publish_recovered_outputs(
-                        step=spec,
-                        outputs=outputs,
-                        settings=settings,
-                        state=state,
-                        workspace=workspace,
-                        coupler=coupler,
-                        outputs_holder=outputs_holder,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                    )
-                    _merge_output_recovery_meta(outputs, recovery_meta)
-                    _emit_step_resolution_audit(
-                        workspace=workspace,
-                        stage_name=stage_name,
-                        step_name=spec.name,
-                        state=state,
-                        resolution_mode="manifest_restore",
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(
-                            manifest.get(spec.name, {}).get("cache_hit", False)
-                        ),
-                        recovery_meta=recovery_meta,
-                    )
-                    _emit_output_hydration_audit(
-                        workspace=workspace,
-                        settings=settings,
-                        stage_name=stage_name,
-                        step_name=spec.name,
-                        state=state,
-                        resolution_mode="manifest_restore",
-                        outputs=outputs,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                        cache_hit=bool(
-                            manifest.get(spec.name, {}).get("cache_hit", False)
-                        ),
-                        recovery_meta=recovery_meta,
-                    )
-                if isinstance(scenario, ScenarioRestorationLike):
-                    scenario.remember_restored_run_id(
-                        model_name=model_name,
-                        year=resolved_year,
-                        iteration=resolved_iteration,
-                        run_id=manifest.get(spec.name, {}).get("run_id"),
-                    )
-                continue
+                    outputs_holder.set_attribute(spec.name, outputs)
+            if outputs is not None:
+                _publish_recovered_outputs(
+                    step=spec,
+                    outputs=outputs,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    coupler=coupler,
+                    outputs_holder=outputs_holder,
+                    run_id=decision.entry.get("run_id"),
+                )
+                _merge_output_recovery_meta(outputs, recovery_meta)
+            if isinstance(scenario, ScenarioRestorationLike):
+                scenario.remember_restored_run_id(
+                    model_name=model_name,
+                    year=resolved_year,
+                    iteration=resolved_iteration,
+                    run_id=decision.entry.get("run_id"),
+                )
+            continue
+        if decision.entry is not None and not expects_outputs:
             logger.info(
                 "[%s] %s has a manifest run_id but no declared outputs; rerunning "
                 "instead of trusting manifest-only completion",
@@ -1313,173 +1245,6 @@ def run_manifested_steps(
                 spec.name,
             )
 
-        validate_step_ready(spec.name, outputs_holder)
-        run_kwargs = _build_step_run_kwargs(
-            step=spec,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            runtime_kwargs=runtime_kwargs,
-            stage_name=stage_name,
-            default_iteration=iteration,
-        )
-
-        def _run_step(cache_options: Optional[CacheOptions]) -> Any:
-            step_kwargs = dict(run_kwargs)
-            if cache_options is not None:
-                step_kwargs["cache_options"] = cache_options
-            _warn_for_undeclared_step_inputs(
-                step_name=spec.name,
-                input_keys=step_kwargs.get("input_keys"),
-                inputs=step_kwargs.get("inputs"),
-                binding=step_kwargs.get("binding"),
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )
-            return scenario.run(**step_kwargs)
-
-        recovery_meta: Dict[str, Any] = {}
-
-        def _recover_outputs(step_result: Any) -> Optional[Any]:
-            return _recover_step_outputs(
-                step=spec,
-                step_name=spec.name,
-                outputs_holder=outputs_holder,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                coupler=coupler,
-                step_inputs=_resolved_step_inputs(spec),
-                cached_outputs=getattr(step_result, "outputs", None),
-                run_id=_recovery_run_id_for_step_result(step_result),
-                publish_outputs=True,
-                audit_meta=recovery_meta,
-            )
-
-        if expects_outputs:
-            result, outputs, cache_meta = run_with_cache_recovery(
-                stage_name=stage_name,
-                step_name=spec.name,
-                run_step=_run_step,
-                read_outputs=lambda: outputs_holder.get_attribute(spec.name),
-                recover_outputs=_recover_outputs,
-            )
-            recovery_meta.update(cache_meta)
-            if outputs is None:
-                raise RuntimeError(f"{spec.name} did not populate outputs_holder")
-            serialized_outputs = serialize_step_outputs(outputs)
-            if recovery_meta.get("overwrite_rerun"):
-                resolution_mode = "overwrite_rerun_after_cache_hit"
-            elif recovery_meta.get("used_output_recoverer"):
-                resolution_mode = "cache_hit_recoverer"
-            elif recovery_meta.get("initial_cache_hit"):
-                resolution_mode = "cache_hit_direct"
-            else:
-                resolution_mode = "executed"
-            _emit_step_resolution_audit(
-                workspace=workspace,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode=resolution_mode,
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
-            _emit_output_hydration_audit(
-                workspace=workspace,
-                settings=settings,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode=resolution_mode,
-                outputs=outputs,
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
-        else:
-            # Steps without declared outputs can still be checkpointed. We record the
-            # run id so restart reconstruction can re-materialize completed runs, but
-            # do not force an outputs_holder hydration loop.
-            result = _run_step(None)
-            serialized_outputs = {}
-            if not getattr(result, "cache_hit", False):
-                cache_miss_explanation = log_cache_miss_explanation(
-                    logger=logger,
-                    result=result,
-                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
-                    info_args=(stage_name, spec.name),
-                    debug_message="[%s] Cache miss details for %s: %s",
-                    debug_args=(stage_name, spec.name),
-                )
-                if cache_miss_explanation is not None:
-                    recovery_meta["cache_miss_explanation"] = cache_miss_explanation
-            _emit_step_resolution_audit(
-                workspace=workspace,
-                stage_name=stage_name,
-                step_name=spec.name,
-                state=state,
-                resolution_mode="executed",
-                run_id=getattr(getattr(result, "run", None), "id", None),
-                cache_hit=bool(getattr(result, "cache_hit", False)),
-                recovery_meta=recovery_meta,
-            )
-        manifest[spec.name] = {
-            "completed_at": datetime.now().isoformat(),
-            "cache_hit": bool(getattr(result, "cache_hit", False)),
-            "run_id": getattr(getattr(result, "run", None), "id", None),
-            "outputs": serialized_outputs,
-        }
-        save_step_manifest(manifest, manifest_config.path)
-
-
-def run_workflow(
-    *,
-    stage_name: str,
-    steps: Sequence[StepRef],
-    scenario: Any,
-    state: Any,
-    settings: Any,
-    workspace: Any,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    name_suffix: str,
-    iteration: int = 0,
-    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
-    manifest_config: Optional[ManifestConfig] = None,
-) -> None:
-    """
-    Execute a sequence of workflow steps using native step metadata.
-    """
-    validate_workflow_step_contracts(step_refs=steps)
-
-    if manifest_config is not None:
-        run_manifested_steps(
-            stage_name=stage_name,
-            steps=steps,
-            outputs_holder=outputs_holder,
-            manifest_config=manifest_config,
-            scenario=scenario,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-            coupler=coupler,
-            name_suffix=name_suffix,
-            iteration=iteration,
-            runtime_kwargs_extra=runtime_kwargs_extra,
-        )
-        return
-
-    runtime_kwargs = common_runtime_kwargs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        **(runtime_kwargs_extra or {}),
-    )
-    for raw_step in steps:
-        spec = raw_step
         validate_step_ready(spec.name, outputs_holder)
         run_kwargs = _build_step_run_kwargs(
             step=spec,
@@ -1546,45 +1311,47 @@ def run_workflow(
                 audit_meta=recovery_meta,
             )
 
-        result, outputs, cache_meta = run_with_cache_recovery(
-            stage_name=stage_name,
-            step_name=spec.name,
-            run_step=_run_step,
-            read_outputs=lambda: outputs_holder.get_attribute(spec.name),
-            recover_outputs=_recover_outputs,
-        )
-        recovery_meta.update(cache_meta)
-        if recovery_meta.get("overwrite_rerun"):
-            resolution_mode = "overwrite_rerun_after_cache_hit"
-        elif recovery_meta.get("used_output_recoverer"):
-            resolution_mode = "cache_hit_recoverer"
-        elif recovery_meta.get("initial_cache_hit"):
-            resolution_mode = "cache_hit_direct"
+        use_output_recovery = expects_outputs or not uses_persisted_entries
+        if use_output_recovery:
+            result, outputs, cache_meta = run_with_cache_recovery(
+                stage_name=stage_name,
+                step_name=spec.name,
+                run_step=_run_step,
+                read_outputs=lambda: outputs_holder.get_attribute(spec.name),
+                recover_outputs=_recover_outputs,
+            )
+            recovery_meta.update(cache_meta)
+            if expects_outputs and outputs is None and uses_persisted_entries:
+                raise RuntimeError(f"{spec.name} did not populate outputs_holder")
+            serialized_outputs = (
+                serialize_step_outputs(outputs)
+                if expects_outputs and outputs is not None
+                else {}
+            )
         else:
-            resolution_mode = "executed"
-        _emit_step_resolution_audit(
-            workspace=workspace,
-            stage_name=stage_name,
+            # Steps without declared outputs can still be checkpointed. We record the
+            # run id so restart reconstruction can re-materialize completed runs, but
+            # do not force an outputs_holder hydration loop.
+            result = _run_step(None)
+            serialized_outputs = {}
+            if not getattr(result, "cache_hit", False):
+                cache_miss_explanation = log_cache_miss_explanation(
+                    logger=logger,
+                    result=result,
+                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
+                    info_args=(stage_name, spec.name),
+                    debug_message="[%s] Cache miss details for %s: %s",
+                    debug_args=(stage_name, spec.name),
+                )
+                if cache_miss_explanation is not None:
+                    recovery_meta["cache_miss_explanation"] = cache_miss_explanation
+        recovery_store.record_step(
             step_name=spec.name,
-            state=state,
-            resolution_mode=resolution_mode,
-            run_id=getattr(getattr(result, "run", None), "id", None),
+            completed_at=datetime.now().isoformat(),
             cache_hit=bool(getattr(result, "cache_hit", False)),
-            recovery_meta=recovery_meta,
-        )
-        _emit_output_hydration_audit(
-            workspace=workspace,
-            settings=settings,
-            stage_name=stage_name,
-            step_name=spec.name,
-            state=state,
-            resolution_mode=resolution_mode,
-            outputs=outputs,
             run_id=getattr(getattr(result, "run", None), "id", None),
-            cache_hit=bool(getattr(result, "cache_hit", False)),
-            recovery_meta=recovery_meta,
+            outputs=serialized_outputs,
         )
-
         if coupler_keys is not None:
             try:
                 current_coupler_keys_fn = getattr(coupler, "keys", None)
@@ -1602,6 +1369,44 @@ def run_workflow(
                     stage_name,
                     spec.name,
                 )
+
+
+def run_workflow(
+    *,
+    stage_name: str,
+    steps: Sequence[StepRef],
+    scenario: Any,
+    state: Any,
+    settings: Any,
+    workspace: Any,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    name_suffix: str,
+    iteration: int = 0,
+    runtime_kwargs_extra: Optional[Dict[str, Any]] = None,
+    manifest_config: Optional[ManifestConfig] = None,
+) -> None:
+    """
+    Execute a sequence of workflow steps using native step metadata.
+    """
+    _run_workflow_with_recovery_store(
+        stage_name=stage_name,
+        steps=steps,
+        outputs_holder=outputs_holder,
+        recovery_store=_recovery_store_for_manifest_config(
+            stage_name=stage_name,
+            settings=settings,
+            manifest_config=manifest_config,
+        ),
+        scenario=scenario,
+        state=state,
+        settings=settings,
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix=name_suffix,
+        iteration=iteration,
+        runtime_kwargs_extra=runtime_kwargs_extra,
+    )
 
 
 def _detect_stale_steps(
@@ -1624,12 +1429,6 @@ def _detect_stale_steps(
         try:
             outputs = deserialize_step_outputs(outputs_class, outputs_data)
             _coerce_outputs_path_fields(outputs, outputs_class)
-            _remap_outputs_workspace_paths(
-                outputs,
-                outputs_class,
-                workspace=workspace,
-                step_name=step_name,
-            )
             validate = getattr(outputs, "validate", None)
             if callable(validate):
                 validate(
@@ -1722,7 +1521,6 @@ def _update_coupler_from_mapping(
         path = artifact_to_existing_path(
             value,
             workspace,
-            materialize_from_archive=True,
         ) or artifact_to_path(value, workspace)
         if path is None:
             continue
@@ -1754,12 +1552,6 @@ def _restore_outputs_from_manifest(
     try:
         outputs = deserialize_step_outputs(outputs_class, outputs_data)
         _coerce_outputs_path_fields(outputs, outputs_class)
-        _remap_outputs_workspace_paths(
-            outputs,
-            outputs_class,
-            workspace=workspace,
-            step_name=step_name,
-        )
         validate = getattr(outputs, "validate", None)
         if callable(validate):
             validate(
@@ -1804,88 +1596,3 @@ def _coerce_outputs_path_fields(outputs: Any, outputs_class: Any) -> None:
                 for key, path_value in value.items()
             },
         )
-
-
-def _remap_outputs_workspace_paths(
-    outputs: Any,
-    outputs_class: Any,
-    *,
-    workspace: Any,
-    step_name: Optional[str] = None,
-) -> None:
-    """
-    Remap manifest-restored workspace-local paths into the current workspace.
-
-    Restart manifests may serialize absolute paths from an older node-local
-    workspace root such as ``/local/job123/.../<run_name>/...``. On restart,
-    the run name is stable but the node-local job root changes. When the same
-    relative path now exists under the current workspace root, rewrite the
-    deserialized path so manifest restore can succeed without rerunning the
-    step.
-    """
-
-    current_root_raw = getattr(workspace, "full_path", None)
-    if not current_root_raw:
-        return
-    current_root = Path(current_root_raw)
-    current_run_dir_name = current_root.name
-    if not current_run_dir_name:
-        return
-
-    def _is_within_root(path: Path, root: Path) -> bool:
-        try:
-            path.relative_to(root)
-            return True
-        except ValueError:
-            return False
-
-    def _remap_path(path_value: Any) -> Any:
-        if not isinstance(path_value, Path):
-            return path_value
-
-        direct_existing = resolve_existing_path(
-            str(path_value),
-            workspace=workspace,
-            materialize_from_archive=True,
-        )
-        if direct_existing:
-            return Path(direct_existing)
-
-        if _is_within_root(path_value, current_root):
-            return path_value
-
-        matching_indices = [
-            index
-            for index, part in enumerate(path_value.parts)
-            if part == current_run_dir_name
-        ]
-        for index in reversed(matching_indices):
-            suffix = path_value.parts[index + 1 :]
-            candidate = current_root.joinpath(*suffix)
-            remapped_existing = resolve_existing_path(
-                str(candidate),
-                workspace=workspace,
-                materialize_from_archive=True,
-            )
-            if remapped_existing:
-                logger.info(
-                    "Manifest restore remapped %s path from old workspace root: %s -> %s",
-                    step_name or outputs_class.__name__,
-                    path_value,
-                    remapped_existing,
-                )
-                return Path(remapped_existing)
-        return path_value
-
-    for field_name in tuple(getattr(outputs_class, "required_path_fields", ()) or ()):
-        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
-
-    for field_name in tuple(getattr(outputs_class, "optional_path_fields", ()) or ()):
-        setattr(outputs, field_name, _remap_path(getattr(outputs, field_name, None)))
-
-    for field_name in tuple(getattr(outputs_class, "dict_path_fields", ()) or ()):
-        value = getattr(outputs, field_name, None)
-        if not isinstance(value, Mapping):
-            continue
-        remapped = {key: _remap_path(path_value) for key, path_value in value.items()}
-        setattr(outputs, field_name, remapped)

@@ -34,11 +34,8 @@ from pilates.workflows.artifact_keys import (
     ASIM_SHARROW_CACHE_DIR,
 )
 from pilates.runtime.archive_paths import (
-    ARCHIVE_LOCAL_ENV as _ARCHIVE_LOCAL_ENV,
     archive_roots as _archive_roots,
-    copy_archive_to_local as _copy_archive_to_local,
     resolve_archive_path as _resolve_archive_path,
-    resolve_local_path as _resolve_local_path,
     resolve_workspace_uri_path as _resolve_workspace_uri_path,
 )
 from pilates.runtime import recovery_root_adoption
@@ -78,25 +75,6 @@ _published_coupler_keys: ContextVar[Optional[set[str]]] = ContextVar(
     "published_coupler_keys",
     default=None,
 )
-_ARTIFACT_LIFECYCLE_RESERVED_FIELDS = {
-    "event_type",
-    "key",
-    "path",
-    "src",
-    "dest",
-    "year",
-    "iteration",
-    "direction",
-    "description",
-    "artifact_id",
-    "producing_run_id",
-    "recorded_at",
-    "sanitized_lifecycle_fields",
-}
-_ARTIFACT_LIFECYCLE_SANITIZED_FIELDS = {
-    field: f"artifact_{field}" for field in _ARTIFACT_LIFECYCLE_RESERVED_FIELDS
-}
-_ARTIFACT_LIFECYCLE_SANITIZED_FIELDS["event_type"] = "artifact_event_type"
 _H5_CONTAINER_RECOVERY_POLICY_FIELDS = (
     "container_recovery_unit",
     "child_recovery_policy",
@@ -149,144 +127,58 @@ def _resolve_artifact_source_workspace_path(value: Any) -> Optional[str]:
     return os.path.abspath(os.path.join(str(mount_root), rel_path))
 
 
-def _workspace_uri_relative_path(value: Any) -> Optional[str]:
-    container_uri = getattr(value, "container_uri", None) or getattr(value, "uri", None)
-    if not isinstance(container_uri, str) or not container_uri.startswith(
-        "workspace://"
-    ):
-        return None
-    rel_path = container_uri[len("workspace://") :].lstrip("/")
-    return rel_path or None
-
-
-def _current_workspace_path_for_relative(
-    rel_path: str,
+def _materialization_roots(
     workspace: Optional["Workspace"],
-) -> Optional[str]:
-    if workspace is not None and getattr(workspace, "full_path", None):
-        return os.path.abspath(os.path.join(str(workspace.full_path), rel_path))
+) -> tuple[Optional[str], Optional[str]]:
     roots = _archive_roots()
+    source_root = os.path.abspath(roots[1]) if roots is not None else None
+    if workspace is not None and getattr(workspace, "full_path", None):
+        return os.path.abspath(str(workspace.full_path)), source_root
     if roots is None:
-        return None
+        return None, None
     local_root, _archive_root = roots
-    return os.path.abspath(os.path.join(local_root, rel_path))
+    return os.path.abspath(local_root), source_root
 
 
-def _copy_historical_artifact_to_current(
-    *,
-    source_path: str,
-    rel_path: str,
-    workspace: Optional["Workspace"],
-    materialize_from_archive: bool,
-) -> Optional[str]:
-    if not os.path.exists(source_path):
-        return None
-    if not materialize_from_archive:
-        return source_path
-    local_path = _current_workspace_path_for_relative(rel_path, workspace)
-    if not local_path:
-        return source_path
-    if os.path.abspath(local_path) == os.path.abspath(source_path):
-        return source_path
-    logger.info(
-        "[Archive] Local path missing; materializing historical cached artifact %s -> %s",
-        source_path,
-        local_path,
-    )
-    materialized = _copy_archive_to_local(
-        local_path=local_path, archive_path=source_path
-    )
-    if materialized and os.path.exists(materialized):
-        logger.info(
-            "[Archive] Materialized historical cached artifact locally: %s",
-            materialized,
-        )
-        return materialized
-    logger.warning(
-        "[Archive] Historical cached artifact materialization did not produce local path: %s",
-        local_path,
-    )
-    return source_path
-
-
-def _resolve_historical_workspace_artifact_path(
+def _materialize_artifact_to_existing_path(
     value: Any,
     *,
     workspace: Optional["Workspace"],
-    materialize_from_archive: bool,
 ) -> Optional[str]:
-    rel_path = _workspace_uri_relative_path(value)
-    if not rel_path:
+    if not isinstance(value, ArtifactLike):
         return None
-
-    candidates: list[str] = []
-    meta = getattr(value, "meta", None)
-    if isinstance(meta, Mapping):
-        recovery_roots = meta.get("recovery_roots")
-        if isinstance(recovery_roots, (str, os.PathLike)):
-            recovery_roots = [recovery_roots]
-        if isinstance(recovery_roots, Sequence):
-            for root in recovery_roots:
-                if isinstance(root, (str, os.PathLike)):
-                    candidates.append(
-                        os.path.abspath(os.path.join(str(root), rel_path))
-                    )
-
-    run_id = getattr(value, "run_id", None)
-    if run_id:
-        try:
-            tracker = cr.current_tracker()
-        except Exception:
-            tracker = None
-        run = None
-        if tracker is not None:
-            get_run = getattr(tracker, "get_run", None)
-            if callable(get_run):
-                try:
-                    run = get_run(str(run_id))
-                except Exception:
-                    run = None
-            if run is None:
-                db = getattr(tracker, "db", None)
-                db_get_run = getattr(db, "get_run", None)
-                if callable(db_get_run):
-                    try:
-                        run = db_get_run(str(run_id))
-                    except Exception:
-                        run = None
-
-        run_dir = None
-        run_meta = getattr(run, "meta", None)
-        if isinstance(run_meta, Mapping):
-            physical_run_dir = run_meta.get("_physical_run_dir")
-            if isinstance(physical_run_dir, str) and physical_run_dir:
-                run_dir = physical_run_dir
-        if run_dir:
-            candidates.append(os.path.abspath(os.path.join(run_dir, rel_path)))
-
-        roots = _archive_roots()
-        if roots is not None:
-            _local_root, archive_root = roots
-            archive_parent = os.path.dirname(os.path.abspath(archive_root))
-            sibling_names = []
-            if run_dir:
-                sibling_names.append(os.path.basename(os.path.abspath(run_dir)))
-            parent_run_id = getattr(run, "parent_run_id", None)
-            if isinstance(parent_run_id, str) and parent_run_id:
-                sibling_names.append(parent_run_id)
-            for sibling in dict.fromkeys(sibling_names):
-                candidates.append(
-                    os.path.abspath(os.path.join(archive_parent, sibling, rel_path))
-                )
-
-    for candidate in dict.fromkeys(candidates):
-        if os.path.exists(candidate):
-            return _copy_historical_artifact_to_current(
-                source_path=candidate,
-                rel_path=rel_path,
-                workspace=workspace,
-                materialize_from_archive=materialize_from_archive,
-            )
+    target_root, source_root = _materialization_roots(workspace)
+    if target_root is None:
+        return None
+    try:
+        tracker = cr.current_tracker()
+    except Exception:
+        tracker = None
+    materialize_artifact = getattr(tracker, "materialize_artifact", None)
+    if not callable(materialize_artifact):
+        return None
+    try:
+        result = materialize_artifact(
+            value,
+            target_root=target_root,
+            source_root=source_root,
+            preserve_existing=True,
+            on_missing="warn",
+            validate_content_hash="if-present",
+        )
+    except Exception:
+        logger.debug(
+            "[Archive] Consist artifact materialization failed for %s",
+            getattr(value, "key", value),
+            exc_info=True,
+        )
+        return None
+    materialized_path = getattr(result, "path", None)
+    if materialized_path is None:
+        return None
+    resolved_path = os.path.abspath(os.fspath(materialized_path))
+    if os.path.exists(resolved_path):
+        return resolved_path
     return None
 
 
@@ -349,47 +241,13 @@ def _archive_path_signature(path: str, is_dir: bool) -> Optional[tuple[int, int,
 
 
 def _archive_log_method(key: str) -> Callable[..., None]:
-    # Restart diagnostics are latest-state artifacts; keep their archive churn
-    # out of INFO logs while still preserving the archive copies.
-    if str(key).startswith("workflow_diagnostics_"):
-        return logger.debug
+    del key
     return logger.info
 
 
-def _emit_artifact_lifecycle_event(
-    event_type: str,
-    *,
-    require_existing_summary: bool = False,
-    **fields: Any,
-) -> None:
-    """Emit a shadow-mode artifact lifecycle audit event.
-
-    When ``require_existing_summary`` is true, archive-copy events are dropped
-    until the lifecycle audit summary file exists. That preserves the Phase 1
-    audit ordering invariant: copied artifacts should not appear before the
-    corresponding artifact log has initialized the audit stream.
-
-    Lifecycle auditing is observability only and must not affect execution; all
-    exceptions are caught and logged at debug level.
-    """
-    try:
-        if require_existing_summary:
-            local_root = os.environ.get(_ARCHIVE_LOCAL_ENV)
-            if not local_root:
-                return
-            summary_path = (
-                Path(local_root)
-                / ".workflow"
-                / "diagnostics"
-                / "artifact_lifecycle_audit_summary.json"
-            )
-            if not summary_path.exists():
-                return
-        from pilates.runtime.consist_audit import emit_artifact_lifecycle_audit_event
-
-        emit_artifact_lifecycle_audit_event(event_type=event_type, **fields)
-    except Exception:
-        logger.debug("Artifact lifecycle audit event failed", exc_info=True)
+def _emit_artifact_lifecycle_event(*_args: Any, **_kwargs: Any) -> None:
+    """Compatibility hook retained after lifecycle audit emission removal."""
+    return None
 
 
 def _register_phase2_recovery_root_copies() -> int:
@@ -400,70 +258,6 @@ def _register_phase2_recovery_root_copies() -> int:
         ),
         emit_lifecycle_event=_emit_artifact_lifecycle_event,
     )
-
-
-def _artifact_lifecycle_ids(artifact: Optional[Any]) -> Dict[str, Any]:
-    try:
-        run = cr.current_run()
-    except Exception:
-        run = None
-    try:
-        tracker = cr.current_tracker()
-    except Exception:
-        tracker = None
-    current_consist = getattr(tracker, "current_consist", None)
-    producing_run_id = (
-        getattr(run, "id", None)
-        or getattr(current_consist, "id", None)
-        or getattr(current_consist, "run_id", None)
-    )
-    artifact_driver = getattr(artifact, "driver", None)
-    return {
-        "artifact_id": getattr(artifact, "id", None),
-        "producing_run_id": producing_run_id,
-        "artifact_driver": artifact_driver,
-    }
-
-
-def _artifact_lifecycle_fields_from_meta(meta: Mapping[str, Any]) -> Dict[str, Any]:
-    fields: Dict[str, Any] = {}
-    sanitized_fields: Dict[str, str] = {}
-
-    def add_field(key: str, value: Any) -> None:
-        field_key = str(key)
-        sanitized_key = _ARTIFACT_LIFECYCLE_SANITIZED_FIELDS.get(field_key)
-        if sanitized_key is not None:
-            sanitized_fields[field_key] = sanitized_key
-            field_key = sanitized_key
-        fields[field_key] = value
-
-    facet = meta.get("facet")
-    if isinstance(facet, Mapping):
-        for key, value in facet.items():
-            add_field(str(key), value)
-    for key in (
-        "facet_schema_version",
-        "facet_index",
-        "h5_container",
-        "hash_tables",
-        "child_selection",
-        "h5_tables_used",
-        "h5_table_paths",
-        "h5_table_count",
-        "container_recovery_unit",
-        "child_recovery_policy",
-        "representation_policy",
-    ):
-        if key in meta:
-            add_field(key, meta[key])
-    child_specs = meta.get("child_specs")
-    if isinstance(child_specs, Mapping):
-        fields["h5_child_count"] = len(child_specs)
-    if sanitized_fields:
-        fields["sanitized_lifecycle_fields"] = {
-            key: sanitized_fields[key] for key in sorted(sanitized_fields)
-        }
-    return fields
 
 
 def _copy_archive_payload(
@@ -492,17 +286,6 @@ def _copy_archive_payload(
         signature=signature,
     )
     _archive_log_method(key)("[Archive] Copied %s -> %s (key=%s)", src, dest, key)
-    _emit_artifact_lifecycle_event(
-        "archive_copy_completed",
-        key=key,
-        src=src,
-        path=src,
-        dest=dest,
-        is_dir=is_dir,
-        signature=signature,
-        storage_event="local_to_scratch_copy",
-        local_to_scratch_recovery_roots_written=0,
-    )
 
 
 def _archive_worker() -> None:
@@ -730,18 +513,6 @@ def archive_copy_now(
             resolved,
             key,
         )
-        _emit_artifact_lifecycle_event(
-            "archive_copy_checkpoint",
-            require_existing_summary=True,
-            key=key,
-            src=resolved,
-            path=resolved,
-            dest=dest,
-            is_dir=is_dir,
-            signature=signature,
-            storage_event="local_to_scratch_copy_already_present",
-            local_to_scratch_recovery_roots_written=0,
-        )
         _register_phase2_recovery_root_copies()
         return True
 
@@ -779,13 +550,6 @@ def flush_archive_queue(
 ) -> bool:
     if _archive_queue is None:
         _register_phase2_recovery_root_copies()
-        _emit_artifact_lifecycle_event(
-            "archive_copy_checkpoint",
-            require_existing_summary=True,
-            pending=0,
-            flushed=True,
-            local_to_scratch_recovery_roots_written=0,
-        )
         return True
     pending = _archive_queue.unfinished_tasks
     logger.info("[Archive] Flushing queue (pending=%s)", pending)
@@ -793,40 +557,18 @@ def flush_archive_queue(
         _archive_queue.join()
         logger.info("[Archive] Flush complete")
         _register_phase2_recovery_root_copies()
-        _emit_artifact_lifecycle_event(
-            "archive_copy_checkpoint",
-            require_existing_summary=True,
-            pending=0,
-            flushed=True,
-            local_to_scratch_recovery_roots_written=0,
-        )
         return True
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if _archive_queue.unfinished_tasks == 0:
             logger.info("[Archive] Flush complete")
             _register_phase2_recovery_root_copies()
-            _emit_artifact_lifecycle_event(
-                "archive_copy_checkpoint",
-                require_existing_summary=True,
-                pending=0,
-                flushed=True,
-                local_to_scratch_recovery_roots_written=0,
-            )
             return True
         time.sleep(0.1)
     message = f"[Archive] Flush timed out (pending={_archive_queue.unfinished_tasks})"
     if fail_on_timeout:
         raise TimeoutError(message)
     logger.warning(message)
-    _emit_artifact_lifecycle_event(
-        "archive_copy_checkpoint",
-        require_existing_summary=True,
-        pending=_archive_queue.unfinished_tasks,
-        flushed=False,
-        timeout=timeout,
-        local_to_scratch_recovery_roots_written=0,
-    )
     return False
 
 
@@ -931,10 +673,9 @@ def resolve_existing_path(
     path: Optional[str],
     *,
     workspace: Optional["Workspace"] = None,
-    materialize_from_archive: bool = False,
 ) -> Optional[str]:
     """
-    Resolve a path to one that currently exists, optionally using archive fallback.
+    Resolve a path or workspace URI to a local path that currently exists.
     """
     if not path:
         return None
@@ -947,51 +688,6 @@ def resolve_existing_path(
     if os.path.exists(abs_path):
         logger.debug("[Archive] Using local path: %s", abs_path)
         return abs_path
-
-    roots = _archive_roots()
-    if roots is None:
-        logger.debug(
-            "[Archive] No archive roots configured while resolving missing path: %s",
-            abs_path,
-        )
-        return None
-    local_root, archive_root = roots
-
-    archive_path = _resolve_archive_path(abs_path, local_root, archive_root)
-    if archive_path and os.path.exists(archive_path):
-        if materialize_from_archive:
-            local_path = _resolve_local_path(archive_path, local_root, archive_root)
-            if local_path:
-                logger.info(
-                    "[Archive] Local path missing; materializing from archive %s -> %s",
-                    archive_path,
-                    local_path,
-                )
-                materialized = _copy_archive_to_local(
-                    local_path=local_path, archive_path=archive_path
-                )
-                if materialized and os.path.exists(materialized):
-                    logger.info(
-                        "[Archive] Materialized local path from archive: %s",
-                        materialized,
-                    )
-                    return materialized
-                logger.warning(
-                    "[Archive] Materialization attempt did not produce local path: %s",
-                    local_path,
-                )
-        logger.info(
-            "[Archive] Local path missing; using archive path directly: %s",
-            archive_path,
-        )
-        return archive_path
-
-    local_path = _resolve_local_path(abs_path, local_root, archive_root)
-    if local_path and os.path.exists(local_path):
-        logger.debug(
-            "[Archive] Resolved path already available locally: %s", local_path
-        )
-        return local_path
     logger.debug("[Archive] Unable to resolve existing path for: %s", abs_path)
     return None
 
@@ -999,32 +695,24 @@ def resolve_existing_path(
 def artifact_to_existing_path(
     value: Any,
     workspace: Optional["Workspace"] = None,
-    *,
-    materialize_from_archive: bool = False,
 ) -> Optional[str]:
     """
-    Resolve an artifact-like value to an existing path with optional archive fallback.
+    Resolve an artifact-like value to an existing local path.
     """
     path = artifact_to_path(value, workspace=workspace)
     if path is None and isinstance(value, str):
         path = value
-    resolved = resolve_existing_path(
-        path,
-        workspace=workspace,
-        materialize_from_archive=materialize_from_archive,
-    )
+    resolved = resolve_existing_path(path, workspace=workspace)
     if resolved is not None:
         return resolved
     source_workspace_path = _resolve_artifact_source_workspace_path(value)
     if source_workspace_path and os.path.exists(source_workspace_path):
         return source_workspace_path
-    historical_workspace_path = _resolve_historical_workspace_artifact_path(
-        value,
-        workspace=workspace,
-        materialize_from_archive=materialize_from_archive,
+    materialized_path = _materialize_artifact_to_existing_path(
+        value, workspace=workspace
     )
-    if historical_workspace_path:
-        return historical_workspace_path
+    if materialized_path:
+        return materialized_path
     return None
 
 
@@ -1671,17 +1359,6 @@ def _log_and_maybe_publish_artifact(
         )
         if isinstance(artifact, tuple):
             artifact = artifact[0] if artifact else None
-
-    if direction == "output":
-        _emit_artifact_lifecycle_event(
-            "artifact_logged",
-            key=key,
-            path=path,
-            direction=direction,
-            description=description,
-            **_artifact_lifecycle_ids(artifact),
-            **_artifact_lifecycle_fields_from_meta(meta),
-        )
 
     if enqueue_archive_copy:
         _enqueue_archive_copy(key, path)
