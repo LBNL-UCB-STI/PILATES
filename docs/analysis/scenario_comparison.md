@@ -26,8 +26,6 @@ versus policy comparisons.
 ## Notebook Shape
 
 ```python
-import ibis
-
 from pilates_consist_analysis import delta, difference, open_archive
 
 archive = open_archive("/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES")
@@ -43,12 +41,14 @@ counts = archive.measure(
     by=["pricing_policy", "year", "iteration", "trip_mode"],
     measures={"trip_count": lambda table: table.count()},
 )
-total_window = ibis.window(
-    group_by=[counts.pricing_policy, counts.year, counts.iteration],
+totals = counts.group_by(["pricing_policy", "year", "iteration"]).agg(
+    total_trips=counts["trip_count"].sum(),
 )
-mode_shares = counts.mutate(
-    total_trips=counts.trip_count.sum().over(total_window),
-    mode_share=counts.trip_count / counts.trip_count.sum().over(total_window),
+mode_shares = counts.join(
+    totals,
+    ["pricing_policy", "year", "iteration"],
+).mutate(
+    mode_share=counts["trip_count"] / totals["total_trips"],
 )
 
 over_time = delta(
