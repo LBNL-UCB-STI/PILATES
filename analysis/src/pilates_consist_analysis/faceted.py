@@ -195,7 +195,7 @@ def rank(
     import ibis
 
     rank_column = output or f"{value}_rank"
-    rank_value = -table[value] if descending else table[value]
+    rank_value = table[value].desc() if descending else table[value]
     window = ibis.window(
         group_by=[table[column] for column in by],
         order_by=[rank_value],

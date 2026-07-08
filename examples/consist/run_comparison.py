@@ -38,7 +38,6 @@ def build_mode_share_comparison(
     filters: Mapping[str, Any],
     mode_column: str = "trip_mode",
 ):
-    import ibis
 
     measured_by = _unique([*group_by, compare, mode_column])
     facets = _unique([*measured_by, *filters.keys()])
@@ -49,13 +48,11 @@ def build_mode_share_comparison(
         measures={"trip_count": lambda table_expr: table_expr.count()},
     )
     denominator_by = [column for column in measured_by if column != mode_column]
-    denominator_window = ibis.window(
-        group_by=[counts[column] for column in denominator_by],
+    totals = counts.group_by(denominator_by).agg(
+        total_trips=counts["trip_count"].sum(),
     )
-    total_trips = counts["trip_count"].sum().over(denominator_window)
-    measured = counts.mutate(
-        total_trips=total_trips,
-        mode_share=counts["trip_count"] / total_trips,
+    measured = counts.join(totals, denominator_by).mutate(
+        mode_share=counts["trip_count"] / totals["total_trips"],
     )
     comparison_by = [column for column in measured_by if column != compare]
     if baseline is not None:
