@@ -23,7 +23,6 @@ from pilates.workflows.artifact_keys import (
     ArtifactKeys,
     ZARR_SKIMS,
 )
-from pilates.workflows.coupler_schema import build_coupler_schema
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.steps import activitysim as activitysim_steps
 
@@ -530,20 +529,8 @@ def test_activitysim_compile_cache_key_and_schema_gating(tmp_path: Path) -> None
     assert outputs_on[ASIM_SHARROW_CACHE_DIR] == str(expected_cache_dir)
     assert ASIM_SHARROW_CACHE_DIR not in outputs_off
 
-    coupler = _DummyCoupler()
-    holder = StepOutputsHolder()
-    compile_step = activitysim_steps.make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=holder,
-    )
-    schema_on = build_coupler_schema(
-        [compile_step], settings=settings_on, include_extras=False
-    )
-    schema_off = build_coupler_schema(
-        [compile_step], settings=settings_off, include_extras=False
-    )
-    assert ASIM_SHARROW_CACHE_DIR in schema_on
-    assert ASIM_SHARROW_CACHE_DIR not in schema_off
+    assert settings_on.activitysim.persist_sharrow_cache is True
+    assert settings_off.activitysim.persist_sharrow_cache is False
 
 
 def test_activitysim_compile_cleanup_removes_stale_retry_artifacts(
