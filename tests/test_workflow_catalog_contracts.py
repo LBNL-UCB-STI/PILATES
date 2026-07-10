@@ -25,7 +25,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_PLANS_XML,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_R5_OSM_FILE,
     FINAL_SKIMS_OMX,
     LINKSTATS_WARMSTART,
     OMX_SKIMS,
@@ -245,7 +244,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "optional_output_keys": (
                 "vehicles_beam_in",
                 LINKSTATS_WARMSTART,
-                BEAM_R5_OSM_FILE,
             ),
             "dynamic_input_families": (),
             "output_keys": (*BeamPreprocessOutputs.required_output_keys(),),
@@ -451,7 +449,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
         "optional_output_keys": [
             "vehicles_beam_in",
             LINKSTATS_WARMSTART,
-            BEAM_R5_OSM_FILE,
         ],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_postprocess"],

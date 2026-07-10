@@ -133,6 +133,7 @@ def resolve_r5_network_reference(*, settings: Any, workspace: Any) -> R5NetworkL
         config_key="beam.routing.r5.directory",
         required=True,
     )
+
     secondary_network_directory = _resolve_hocon_path_reference(
         settings=settings,
         workspace=workspace,
@@ -159,6 +160,35 @@ def resolve_r5_network_reference(*, settings: Any, workspace: Any) -> R5NetworkL
         gtfs_paths=gtfs_paths,
         ignored_osm_paths=ignored_osm_paths,
     )
+
+
+def validate_r5_execution_reference(
+    *, settings: Any, workspace: Any, run_context: Any
+) -> R5NetworkLaunchReference:
+    """Verify Consist's selected R5 OSM member is the file BEAM will read."""
+
+    snapshot = run_context.canonicalization
+    if snapshot is None:
+        raise BeamLaunchPathError("beam_run requires a Consist canonicalization snapshot.")
+    r5_snapshot = next(
+        (item for item in snapshot.references if item.reference.config_key == "beam.routing.r5.directory"),
+        None,
+    )
+    if r5_snapshot is None:
+        raise BeamLaunchPathError("Consist canonicalization did not observe beam.routing.r5.directory.")
+    members = tuple(member for member in r5_snapshot.artifact_members if member.role == "r5_osm_source")
+    if len(members) != 1:
+        raise BeamLaunchPathError(f"Consist canonicalization must expose exactly one r5_osm_source member; observed {len(members)}.")
+    member = members[0]
+    if member.artifact_key not in r5_snapshot.artifact_keys:
+        raise BeamLaunchPathError("Consist r5_osm_source member key is absent from its R5 directory reference.")
+    execution_reference = resolve_r5_network_reference(settings=settings, workspace=workspace)
+    if member.resolved_path.resolve() != execution_reference.selected_osm_physical_target_path:
+        raise BeamLaunchPathError(
+            "Consist selected R5 OSM member differs from the file BEAM will read: "
+            f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
+        )
+    return execution_reference
 
 
 def prepare_r5_raw_rebuild(*, settings: Any, workspace: Any) -> R5NetworkLaunchReference:

@@ -66,7 +66,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
 )
@@ -323,7 +322,6 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 role="beam_r5_raw_network_directory",
                 required=True,
                 reason="r5_raw_osm_member_selected_and_recorded_by_beam_preprocess",
-                delegated_artifact_keys=(BEAM_R5_OSM_FILE,),
             ),
             "beam.routing.r5.osmFile": BeamReferencePolicy(
                 identity_policy="ignored",

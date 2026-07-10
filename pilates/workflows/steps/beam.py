@@ -27,6 +27,7 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     load_resolved_beam_config_tree,
 )
+from pilates.beam.launch_paths import validate_r5_execution_reference
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -49,7 +50,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_NETWORK_FINAL,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_R5_OSM_FILE,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -163,7 +163,6 @@ _BEAM_RUN_ARCHIVE_KEY_MAP: Dict[str, str] = {
     BEAM_CONFIG_FILE: BEAM_INPUT_CONFIG_ARCHIVED,
     "vehicles_beam_in": BEAM_INPUT_VEHICLES_ARCHIVED,
     LINKSTATS_WARMSTART: BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
-    BEAM_R5_OSM_FILE: BEAM_R5_OSM_FILE,
     BEAM_PLANS_OUT: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_OUTPUT_PLANS_XML: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_EXPERIENCED_PLANS_XML: BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
@@ -184,7 +183,6 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: (
         "Archived BEAM runner warm-start linkstats input snapshot"
     ),
-    BEAM_R5_OSM_FILE: "Archived BEAM R5 raw OSM input snapshot",
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: (
         "Archived BEAM runner warm-start plans input snapshot"
     ),
@@ -201,7 +199,6 @@ _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
     BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: "beam_config_references",
     BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles_beam_in",
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: LINKSTATS_WARMSTART,
-    BEAM_R5_OSM_FILE: BEAM_R5_OSM_FILE,
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: "beam_plans_warmstart",
     BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
         "beam_experienced_plans_warmstart"
@@ -890,6 +887,7 @@ def _execute_beam_run(
     outputs_holder: StepOutputsHolder,
     *,
     extra_inputs: Optional[Dict[str, Any]] = None,
+    _consist_ctx: Any = None,
     **_: Any,
 ) -> BeamRunOutputs:
     upstream = outputs_holder.beam_preprocess
@@ -897,6 +895,13 @@ def _execute_beam_run(
         raise RuntimeError("BEAM preprocess must complete first")
     if not isinstance(upstream, BeamPreprocessOutputs):
         raise TypeError("beam_run requires BeamPreprocessOutputs from beam_preprocess")
+    if _consist_ctx is None:
+        raise RuntimeError("beam_run requires the Consist run context for R5 validation.")
+    validate_r5_execution_reference(
+        settings=runner.state.full_settings,
+        workspace=workspace,
+        run_context=_consist_ctx,
+    )
     return runner.run(
         upstream,
         workspace,
@@ -1410,6 +1415,7 @@ def make_beam_run_step(
             inputs=_beam_run_inputs,
             output_paths=_beam_run_output_paths,
             input_binding="paths",
+            inject_context="_consist_ctx",
             cache_hydration="inputs-missing",
             use_logged_wrapper=False,
         ),

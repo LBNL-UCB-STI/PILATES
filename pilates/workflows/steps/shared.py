@@ -636,6 +636,7 @@ class StandardStepSpec:
     cache_mode: Optional[str] = None
     cache_hydration: Optional[str] = None
     input_binding: Optional[str] = None
+    inject_context: Optional[str] = None
     input_paths: Any = None
     input_materialization: Optional[str] = None
     use_logged_wrapper: bool = True

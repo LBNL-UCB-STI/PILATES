@@ -1173,6 +1173,7 @@ def _run_beam_steps(
                     workspace=context.workspace,
                     year=year,
                 ),
+                inject_context="_consist_ctx",
                 year=year,
             )
         )

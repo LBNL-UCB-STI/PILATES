@@ -18,7 +18,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_R5_OSM_FILE,
     BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -257,7 +256,7 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
     r5_policy = adapter.reference_policies["beam.routing.r5.directory"]
     assert _policy_value(r5_policy, "identity_policy") == "delegated_to_artifacts"
     assert _policy_value(r5_policy, "required") is True
-    assert _policy_value(r5_policy, "delegated_artifact_keys") == (BEAM_R5_OSM_FILE,)
+    assert _policy_value(r5_policy, "delegated_artifact_keys") == ()
     _assert_policy(
         adapter.reference_policies["beam.routing.r5.osmFile"],
         identity_policy="ignored",

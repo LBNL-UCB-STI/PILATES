@@ -60,7 +60,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_PLANS_XML,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
-    BEAM_R5_OSM_FILE,
     FINAL_SKIMS_OMX,
     ATLAS_VEHICLES2_OUTPUT,
     ASIM_SHARROW_CACHE_DIR,
@@ -498,7 +497,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         optional_output_keys=(
             "vehicles_beam_in",
             LINKSTATS_WARMSTART,
-            BEAM_R5_OSM_FILE,
         ),
         depends_on=("activitysim_postprocess",),
         holder_inputs=("activitysim_postprocess",),
