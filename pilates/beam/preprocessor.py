@@ -11,6 +11,10 @@ if TYPE_CHECKING:
 
 from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
+from pilates.beam.launch_paths import (
+    configure_staged_linkstats_reference,
+    prepare_r5_raw_rebuild,
+)
 from pilates.beam.config_hocon import (
     BeamConfigHoconError,
     beam_config_env_overrides,
@@ -36,6 +40,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_MUTABLE_DATA_DIR,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_R5_OSM_FILE,
     LINKSTATS_WARMSTART,
 )
 from workflow_state import WorkflowState
@@ -464,6 +469,30 @@ class BeamPreprocessor(GenericPreprocessor):
 
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)
+        self._configure_linkstats_warmstart(workspace, store)
+
+        # Force BEAM/R5 onto its raw-source rebuild branch, then expose the
+        # exact OSM member R5 will select as a prepared input.  beam_run logs
+        # every prepared input as a child-run input before container launch.
+        r5_reference = prepare_r5_raw_rebuild(
+            settings=self.settings,
+            workspace=workspace,
+        )
+        store.add_record(
+            FileRecord(
+                file_path=os.path.relpath(
+                    r5_reference.selected_osm_path,
+                    str(workspace.full_path),
+                ),
+                short_name=BEAM_R5_OSM_FILE,
+                description="BEAM R5 raw OSM member selected for network rebuild",
+                metadata={
+                    "semantic_role": "beam_r5_raw_osm",
+                    "config_key": r5_reference.network_directory.config_key,
+                    "container_path": r5_reference.selected_osm_container_path,
+                },
+            )
+        )
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
@@ -714,6 +743,43 @@ class BeamPreprocessor(GenericPreprocessor):
             store=store,
             state=self.state,
             settings=self.settings,
+        )
+
+    def _configure_linkstats_warmstart(
+        self,
+        workspace: "Workspace",
+        store: RecordStore,
+    ) -> None:
+        """Bind an optional staged warm-start record to final BEAM HOCON."""
+
+        warmstart_record = next(
+            (
+                record
+                for record in store.all_records()
+                if getattr(record, "short_name", None) == LINKSTATS_WARMSTART
+            ),
+            None,
+        )
+        if warmstart_record is None:
+            return
+        record_path = Path(warmstart_record.file_path)
+        staged_path = (
+            record_path
+            if record_path.is_absolute()
+            else Path(workspace.full_path) / record_path
+        )
+        reference = configure_staged_linkstats_reference(
+            settings=self.settings,
+            workspace=workspace,
+            staged_path=staged_path,
+        )
+        warmstart_record.metadata.update(
+            {
+                "config_key": reference.config_key,
+                "execution_path": str(reference.execution_path),
+                "physical_target_path": str(reference.physical_target_path),
+                "container_path": reference.container_path,
+            }
         )
 
     def _validate_population_consistency(self, workspace: "Workspace") -> None:

@@ -188,7 +188,6 @@ from __future__ import annotations
 #
 import inspect as pyinspect
 import logging
-import os
 from dataclasses import dataclass, fields
 from pathlib import Path
 from types import SimpleNamespace
@@ -205,10 +204,8 @@ from typing import (
     TYPE_CHECKING,
     Type,
     TypeVar,
-    cast,
 )
 from consist import define_step
-from sqlalchemy import inspect
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils.beam_warmstart import (
@@ -233,7 +230,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_OUTPUT_EXPERIENCED_PLANS_XML as BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
     BEAM_OUTPUT_PLANS_XML as BEAM_OUTPUT_PLANS_XML,
     BEAM_PLANS_OUT as BEAM_PLANS_OUT,
-    BEAM_R5_OSM_FILE,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5 as USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
@@ -590,153 +586,6 @@ def _atlas_artifact_facet_meta(
         "facet_schema_version": "v1",
         "facet_index": True,
     }
-
-
-def _log_beam_r5_osm_input(
-    *,
-    tracker: Any,
-    settings: "PilatesConfig",
-    workspace: "Workspace",
-) -> None:
-    """Log the BEAM R5 OSM/mapdb file referenced by ingested BEAM config."""
-    from pathlib import Path
-
-    config_root = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
-
-    try:
-        from sqlmodel import Session, select
-        from consist.models.beam import BeamConfigCache, BeamConfigIngestRunLink
-    except Exception:
-        logger.debug("SQLModel/Consist beam models unavailable; skipping OSM logging.")
-        return
-
-    run_id = cr.current_run_id()
-    if not run_id or tracker.db is None:
-        return
-    beam_settings = settings.beam
-    if beam_settings is None:
-        return
-
-    try:
-        inspector = inspect(tracker.db.engine)
-        required_tables = (
-            "beam_config_cache",
-            "beam_config_ingest_run_link",
-        )
-        missing_tables = [
-            table_name
-            for table_name in required_tables
-            if not inspector.has_table(table_name, schema="global_tables")
-        ]
-        if missing_tables:
-            logger.debug(
-                "Skipping BEAM OSM config logging; missing Consist tables: %s",
-                ", ".join(missing_tables),
-            )
-            return
-        with Session(tracker.db.engine) as session:
-            ingest_join = cast(
-                Any,
-                BeamConfigCache.content_hash == BeamConfigIngestRunLink.content_hash,
-            )
-            base_stmt = (
-                select(
-                    BeamConfigCache.value_str,
-                    BeamConfigCache.content_hash,
-                )
-                .join(
-                    BeamConfigIngestRunLink,
-                    ingest_join,
-                )
-                .where(BeamConfigIngestRunLink.run_id == run_id)
-            )
-            config_name = beam_settings.config
-            if config_name:
-                base_stmt = base_stmt.where(
-                    BeamConfigIngestRunLink.config_name == config_name
-                )
-            osm_rows = session.exec(
-                base_stmt.where(BeamConfigCache.key == "beam.routing.r5.osmFile")
-            ).all()
-            if len(osm_rows) > 1:
-                logger.warning(
-                    "Multiple BEAM osmFile rows found for run_id=%s config=%s",
-                    run_id,
-                    config_name,
-                )
-            osm_value = osm_rows[0][0] if osm_rows else None
-            osm_hash = osm_rows[0][1] if osm_rows else None
-            logger.debug(
-                "BEAM config osmFile resolved value: %s (run_id=%s, db=%s, config=%s, hash=%s)",
-                osm_value,
-                run_id,
-                tracker.db.engine.url,
-                config_name,
-                osm_hash,
-            )
-            if osm_value == "/":
-                cache_join = cast(
-                    Any,
-                    BeamConfigCache.content_hash
-                    == BeamConfigIngestRunLink.content_hash,
-                )
-                all_osm_rows = session.exec(
-                    select(
-                        BeamConfigIngestRunLink.config_name,
-                        BeamConfigCache.value_str,
-                        BeamConfigCache.content_hash,
-                    )
-                    .join(
-                        BeamConfigCache,
-                        cache_join,
-                    )
-                    .where(BeamConfigIngestRunLink.run_id == run_id)
-                    .where(BeamConfigCache.key == "beam.routing.r5.osmFile")
-                ).all()
-                logger.warning(
-                    "BEAM osmFile resolved to '/' for run_id=%s; rows=%s",
-                    run_id,
-                    all_osm_rows,
-                )
-            resolved_osm_path = None
-            if osm_value and "${" not in osm_value:
-                resolved_osm_path = osm_value
-                if not os.path.isabs(resolved_osm_path):
-                    resolved_osm_path = str((config_root / resolved_osm_path).resolve())
-                if not os.path.exists(resolved_osm_path):
-                    resolved_osm_path = None
-
-            if resolved_osm_path is None:
-                mapdb_row = session.exec(
-                    base_stmt.where(
-                        BeamConfigCache.key == "beam.routing.r5.osmMapdbFile"
-                    )
-                ).first()
-                mapdb_value = mapdb_row[0] if mapdb_row else None
-                logger.debug(
-                    "BEAM config osmMapdbFile resolved value: %s",
-                    mapdb_value,
-                )
-                if mapdb_value and "${" not in mapdb_value:
-                    resolved_osm_path = mapdb_value
-                    if not os.path.isabs(resolved_osm_path):
-                        resolved_osm_path = str(
-                            (config_root / resolved_osm_path).resolve()
-                        )
-                    if not os.path.exists(resolved_osm_path):
-                        resolved_osm_path = None
-
-            if resolved_osm_path:
-                cr.log_input(
-                    resolved_osm_path,
-                    key=BEAM_R5_OSM_FILE,
-                    description=("BEAM R5 OSM input referenced by config"),
-                )
-    except Exception:
-        logger.debug(
-            "Failed to resolve/log BEAM R5 OSM file from config.",
-            exc_info=True,
-        )
 
 
 StepOutputsT = TypeVar("StepOutputsT", bound=StepOutputsBase)

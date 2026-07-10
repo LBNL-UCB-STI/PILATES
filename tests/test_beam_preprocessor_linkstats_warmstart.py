@@ -59,7 +59,12 @@ def test_handle_linkstats_accepts_versioned_parquet_warmstart(tmp_path):
         if getattr(rec, "short_name", "") == "linkstats_warmstart"
     ]
     assert len(warmstart) == 1
-    assert warmstart[0].file_path.endswith("beam_output/2.linkstats.parquet")
+    assert warmstart[0].file_path.endswith(
+        "beam/input/seattle/_pilates/linkstats/warmstart.linkstats.parquet"
+    )
+    staged_path = tmp_path / warmstart[0].file_path
+    assert staged_path.read_text(encoding="utf-8") == "stub"
+    assert warmstart[0].metadata["staged_from"] == str(parquet_path.resolve())
 
 
 def test_preprocess_accepts_artifact_mappings_and_returns_typed_outputs(tmp_path):

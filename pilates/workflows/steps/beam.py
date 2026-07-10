@@ -49,6 +49,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_NETWORK_FINAL,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    BEAM_R5_OSM_FILE,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -74,11 +75,9 @@ from .shared import (
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
     build_standard_step,
-    _log_beam_r5_osm_input,
     _log_step_records,
     make_default_recoverer,
     _schema_outputs_from_class,
-    cr,
     find_last_run_output_plans,
     log_and_set_output,
     log_input_only,
@@ -164,6 +163,7 @@ _BEAM_RUN_ARCHIVE_KEY_MAP: Dict[str, str] = {
     BEAM_CONFIG_FILE: BEAM_INPUT_CONFIG_ARCHIVED,
     "vehicles_beam_in": BEAM_INPUT_VEHICLES_ARCHIVED,
     LINKSTATS_WARMSTART: BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED,
+    BEAM_R5_OSM_FILE: BEAM_R5_OSM_FILE,
     BEAM_PLANS_OUT: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_OUTPUT_PLANS_XML: BEAM_INPUT_PLANS_WARMSTART_ARCHIVED,
     BEAM_EXPERIENCED_PLANS_XML: BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED,
@@ -184,6 +184,7 @@ _BEAM_RUN_ARCHIVE_DESCRIPTION_MAP: Dict[str, str] = {
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: (
         "Archived BEAM runner warm-start linkstats input snapshot"
     ),
+    BEAM_R5_OSM_FILE: "Archived BEAM R5 raw OSM input snapshot",
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: (
         "Archived BEAM runner warm-start plans input snapshot"
     ),
@@ -200,6 +201,7 @@ _BEAM_RUN_ARCHIVE_SOURCE_ROLE_MAP: Dict[str, str] = {
     BEAM_INPUT_CONFIG_REFERENCES_ARCHIVED: "beam_config_references",
     BEAM_INPUT_VEHICLES_ARCHIVED: "vehicles_beam_in",
     BEAM_INPUT_LINKSTATS_WARMSTART_ARCHIVED: LINKSTATS_WARMSTART,
+    BEAM_R5_OSM_FILE: BEAM_R5_OSM_FILE,
     BEAM_INPUT_PLANS_WARMSTART_ARCHIVED: "beam_plans_warmstart",
     BEAM_INPUT_EXPERIENCED_PLANS_WARMSTART_ARCHIVED: (
         "beam_experienced_plans_warmstart"
@@ -1299,13 +1301,6 @@ def make_beam_run_step(
             description="BEAM config file consumed by the BEAM run",
         )
 
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            _log_beam_r5_osm_input(
-                tracker=tracker,
-                settings=settings,
-                workspace=workspace,
-            )
         for short_name, path, description in upstream._iter_record_items():
             log_input_only(
                 key=short_name,

@@ -29,6 +29,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     BEAM_PERSONS_IN,
+    BEAM_R5_OSM_FILE,
     FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
@@ -115,6 +116,7 @@ class BeamPreprocessOutputs(StepOutputsBase):
         BEAM_PERSONS_IN,
         LINKSTATS_WARMSTART,
         "vehicles_beam_in",
+        BEAM_R5_OSM_FILE,
     )
     required_outputs: ClassVar[Tuple[str, ...]] = (
         BEAM_PLANS_IN,
