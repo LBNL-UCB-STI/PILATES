@@ -253,6 +253,22 @@ def test_beam_run_metadata_emits_adapter_and_identity_inputs(monkeypatch, tmp_pa
         / settings.run.region,
     }
     assert getattr(adapter, "allow_heuristic_refs", None) is False
+    r5_policy = adapter.reference_policies["beam.routing.r5.directory"]
+    assert _policy_value(r5_policy, "identity_policy") == "delegated_to_artifacts"
+    assert _policy_value(r5_policy, "required") is True
+    assert _policy_value(r5_policy, "delegated_artifact_keys") == ()
+    _assert_policy(
+        adapter.reference_policies["beam.routing.r5.osmFile"],
+        identity_policy="ignored",
+        required=False,
+        reason="legacy_r5_osm_file_key_not_consulted_by_beam",
+    )
+    _assert_policy(
+        adapter.reference_policies["beam.routing.r5.osmMapdbFile"],
+        identity_policy="output_or_runtime_ignored",
+        required=False,
+        reason="generated_r5_mapdb_cache_destination",
+    )
     scenario_policy = adapter.reference_policies["beam.exchange.scenario.folder"]
     assert _policy_value(scenario_policy, "identity_policy") == "delegated_to_artifacts"
     assert _policy_value(scenario_policy, "required") is True

@@ -241,7 +241,10 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 BEAM_PERSONS_IN,
             ),
             "optional_input_keys": (LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
-            "optional_output_keys": ("vehicles_beam_in", LINKSTATS_WARMSTART),
+            "optional_output_keys": (
+                "vehicles_beam_in",
+                LINKSTATS_WARMSTART,
+            ),
             "dynamic_input_families": (),
             "output_keys": (*BeamPreprocessOutputs.required_output_keys(),),
             "dynamic_output_families": (),
@@ -443,7 +446,10 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             BEAM_PERSONS_IN,
         ],
         "optional_input_keys": [LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT],
-        "optional_output_keys": ["vehicles_beam_in", LINKSTATS_WARMSTART],
+        "optional_output_keys": [
+            "vehicles_beam_in",
+            LINKSTATS_WARMSTART,
+        ],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_postprocess"],
         "output_keys": [

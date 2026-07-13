@@ -91,6 +91,7 @@ class StepRef:
     input_binding: Optional[str] = None
     input_paths: Optional[Mapping[str, Any]] = None
     input_materialization: Optional[str] = None
+    inject_context: Optional[str] = None
     output_missing: Optional[Literal["warn", "error", "ignore"]] = None
     output_mismatch: Optional[Literal["warn", "error", "ignore"]] = None
     model: Optional[str] = None
@@ -536,6 +537,7 @@ def _build_step_run_kwargs(
             dict(resolved_input_paths) if resolved_input_paths is not None else None
         ),
         input_materialization=resolved_input_materialization_option,
+        inject_context=step.inject_context,
     )
 
     run_cfg = getattr(settings, "run", None)

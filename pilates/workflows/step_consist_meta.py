@@ -317,6 +317,22 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         path_aliases["beam_region_input"] = config_root
 
         reference_policies = {
+            "beam.routing.r5.directory": BeamReferencePolicy(
+                identity_policy="delegated_to_artifacts",
+                role="beam_r5_raw_network_directory",
+                required=True,
+                reason="r5_raw_osm_member_selected_and_recorded_by_beam_preprocess",
+            ),
+            "beam.routing.r5.osmFile": BeamReferencePolicy(
+                identity_policy="ignored",
+                required=False,
+                reason="legacy_r5_osm_file_key_not_consulted_by_beam",
+            ),
+            "beam.routing.r5.osmMapdbFile": BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+                reason="generated_r5_mapdb_cache_destination",
+            ),
             "beam.exchange.scenario.folder": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
                 role="beam_population_input_root",

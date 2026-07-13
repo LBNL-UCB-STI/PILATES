@@ -1,12 +1,10 @@
 import types
-from types import SimpleNamespace
 
 import pytest
 from consist.types import H5ChildSpec
 
 from pilates.utils import consist_runtime as cr
 from pilates.utils import coupler_helpers as ch
-from pilates.workflows.steps import shared as steps_shared
 
 _H5_PARENT_POLICY = {
     "container_recovery_unit": "parent_file",
@@ -174,39 +172,3 @@ def test_h5_recovery_policy_fields_are_preserved_in_container_metadata(monkeypat
     assert meta["container_recovery_unit"] == "parent_file"
     assert meta["child_recovery_policy"] == "descriptive_only"
     assert meta["representation_policy"] == "native_h5"
-
-
-def test_log_beam_r5_osm_input_skips_when_config_cache_tables_missing(monkeypatch):
-    session_opened = {"value": False}
-
-    class _UnexpectedSession:
-        def __init__(self, *_args, **_kwargs):
-            session_opened["value"] = True
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, exc_type, exc, tb):
-            return False
-
-    class _Inspector:
-        def has_table(self, table_name, schema=None):
-            return False
-
-    monkeypatch.setattr(cr, "current_run", lambda: SimpleNamespace(id="beam-run-1"))
-    monkeypatch.setattr(steps_shared, "inspect", lambda _engine: _Inspector())
-
-    import sqlmodel
-
-    monkeypatch.setattr(sqlmodel, "Session", _UnexpectedSession)
-
-    steps_shared._log_beam_r5_osm_input(
-        tracker=SimpleNamespace(db=SimpleNamespace(engine=object())),
-        settings=SimpleNamespace(
-            beam=SimpleNamespace(config="seattle-pilates.conf"),
-            run=SimpleNamespace(region="seattle"),
-        ),
-        workspace=SimpleNamespace(get_beam_mutable_data_dir=lambda: "/tmp/beam"),
-    )
-
-    assert session_opened["value"] is False

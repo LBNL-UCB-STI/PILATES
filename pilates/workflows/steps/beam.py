@@ -27,6 +27,8 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     load_resolved_beam_config_tree,
 )
+from pilates.beam.launch_paths import validate_r5_execution_reference
+from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -74,11 +76,9 @@ from .shared import (
     _beam_log_facet_meta,
     _beam_postprocess_split_facet_meta,
     build_standard_step,
-    _log_beam_r5_osm_input,
     _log_step_records,
     make_default_recoverer,
     _schema_outputs_from_class,
-    cr,
     find_last_run_output_plans,
     log_and_set_output,
     log_input_only,
@@ -888,6 +888,7 @@ def _execute_beam_run(
     outputs_holder: StepOutputsHolder,
     *,
     extra_inputs: Optional[Dict[str, Any]] = None,
+    _consist_ctx: Any = None,
     **_: Any,
 ) -> BeamRunOutputs:
     upstream = outputs_holder.beam_preprocess
@@ -895,6 +896,16 @@ def _execute_beam_run(
         raise RuntimeError("BEAM preprocess must complete first")
     if not isinstance(upstream, BeamPreprocessOutputs):
         raise TypeError("beam_run requires BeamPreprocessOutputs from beam_preprocess")
+    if isinstance(runner, BeamRunner):
+        if _consist_ctx is None:
+            raise RuntimeError(
+                "beam_run requires the Consist run context for R5 validation."
+            )
+        validate_r5_execution_reference(
+            settings=runner.state.full_settings,
+            workspace=workspace,
+            run_context=_consist_ctx,
+        )
     return runner.run(
         upstream,
         workspace,
@@ -1299,13 +1310,6 @@ def make_beam_run_step(
             description="BEAM config file consumed by the BEAM run",
         )
 
-        tracker = cr.current_tracker()
-        if tracker is not None:
-            _log_beam_r5_osm_input(
-                tracker=tracker,
-                settings=settings,
-                workspace=workspace,
-            )
         for short_name, path, description in upstream._iter_record_items():
             log_input_only(
                 key=short_name,
@@ -1415,6 +1419,7 @@ def make_beam_run_step(
             inputs=_beam_run_inputs,
             output_paths=_beam_run_output_paths,
             input_binding="paths",
+            inject_context="_consist_ctx",
             cache_hydration="inputs-missing",
             use_logged_wrapper=False,
         ),

@@ -145,12 +145,20 @@ def update_staged_beam_config_value(
 ) -> bool:
     _require_pyhocon()
 
+    resolution_context = load_resolved_beam_config_tree(
+        config_path,
+        env_overrides=env_overrides,
+    )
     current_value = resolve_beam_config_value(
         config_path,
         key=key,
         env_overrides=env_overrides,
     )
-    target_value = _resolve_value_semantics(value, env_overrides=env_overrides)
+    target_value = _resolve_value_semantics(
+        value,
+        env_overrides=env_overrides,
+        resolution_context=resolution_context,
+    )
     if current_value == target_value:
         return False
 
@@ -211,15 +219,28 @@ def _remove_dotted_key(config: Any, key: str) -> None:
             break
 
 
-def _resolve_value_semantics(value: Any, *, env_overrides: Mapping[str, str]) -> Any:
+def _resolve_value_semantics(
+    value: Any,
+    *,
+    env_overrides: Mapping[str, str],
+    resolution_context: Optional[Mapping[str, Any]] = None,
+) -> Any:
     if not isinstance(value, str) or "${" not in value:
         return value
     config_factory, hocon_converter, config_parser, non_existent_key = (
         _require_pyhocon()
     )
     try:
+        context_lines: list[str] = []
+        if resolution_context is not None:
+            flattened_context: dict[str, Any] = {}
+            _flatten_mapping(resolution_context, flattened_context)
+            context_lines = [
+                f"{key} = {_render_hocon_scalar(context_value)}"
+                for key, context_value in sorted(flattened_context.items())
+            ]
         expression_config = config_factory.parse_string(
-            f"pilates_override = {value}\n",
+            "\n".join([*context_lines, f"pilates_override = {value}"]) + "\n",
             resolve=False,
         )
     except Exception as exc:

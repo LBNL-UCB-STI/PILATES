@@ -494,7 +494,10 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         ),
         optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
         output_keys=(*BeamPreprocessOutputs.required_output_keys(),),
-        optional_output_keys=("vehicles_beam_in", LINKSTATS_WARMSTART),
+        optional_output_keys=(
+            "vehicles_beam_in",
+            LINKSTATS_WARMSTART,
+        ),
         depends_on=("activitysim_postprocess",),
         holder_inputs=("activitysim_postprocess",),
         upstream_step_inputs=("activitysim_postprocess",),

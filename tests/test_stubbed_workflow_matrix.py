@@ -288,6 +288,10 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
     monkeypatch.setattr(ModelFactory, "get_runner", _get_runner)
     monkeypatch.setattr(ModelFactory, "get_postprocessor", _get_postprocessor)
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
+    monkeypatch.setattr(
+        "pilates.workflows.steps.beam.validate_r5_execution_reference",
+        lambda **_kwargs: None,
+    )
 
     run_supply_demand_stage(
         scenario=scenario,

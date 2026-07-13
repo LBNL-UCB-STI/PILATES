@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
@@ -1229,13 +1230,24 @@ def handle_linkstats(
         )
         return
 
-    warmstart_rel_path = os.path.relpath(warmstart_abs_path, str(workspace.full_path))
+    staged_warmstart = _stage_warmstart_linkstats(
+        source_path=Path(warmstart_abs_path),
+        workspace=workspace,
+        region=getattr(getattr(settings, "run", None), "region", None),
+    )
+
+    warmstart_rel_path = os.path.relpath(staged_warmstart, str(workspace.full_path))
     warmstart_record = FileRecord(
         file_path=warmstart_rel_path,
         short_name="linkstats_warmstart",
         description=f"BEAM warm-start linkstats (source={warmstart_source})",
         year=getattr(state, "forecast_year", None),
         iteration=getattr(state, "current_inner_iter", None),
+        metadata={
+            "semantic_role": "beam_linkstats_warmstart",
+            "source": warmstart_source,
+            "staged_from": str(Path(warmstart_abs_path).resolve()),
+        },
     )
 
     logger.info(
@@ -1244,3 +1256,28 @@ def handle_linkstats(
         warmstart_rel_path,
     )
     store.add_record(warmstart_record)
+
+
+def _stage_warmstart_linkstats(
+    *, source_path: Path, workspace: Any, region: Any
+) -> Path:
+    """Copy one selected warm-start source into BEAM's mutable input mount."""
+
+    if not region:
+        raise ValueError("BEAM warm-start staging requires a configured region.")
+    source_path = source_path.resolve()
+    if not source_path.is_file():
+        raise FileNotFoundError(
+            f"BEAM warm-start source must be one regular file: {source_path}"
+        )
+    staged_path = (
+        Path(workspace.get_beam_mutable_data_dir())
+        / str(region)
+        / "_pilates"
+        / "linkstats"
+        / f"warmstart{''.join(source_path.suffixes)}"
+    )
+    staged_path.parent.mkdir(parents=True, exist_ok=True)
+    if source_path != staged_path.resolve():
+        shutil.copy2(source_path, staged_path)
+    return staged_path
