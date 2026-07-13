@@ -10,7 +10,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
-    ASIM_SHARROW_CACHE_DIR,
     BEAM_PLANS_OUT,
     BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
@@ -1283,7 +1282,6 @@ def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding
     asim_dir = Path(workspace.get_asim_mutable_data_dir())
     output_dir = Path(workspace.get_asim_output_dir())
     iter_dir = output_dir / "year-2018-iteration-0"
-    cache_dir = output_dir / "cache" / "numba"
     for path in (
         asim_dir / "households.csv",
         asim_dir / "persons.csv",
@@ -1291,7 +1289,6 @@ def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding
         asim_dir / "skims.omx",
         iter_dir / "households.parquet",
         output_dir / "cache" / "skims.zarr",
-        cache_dir / "cache.bin",
     ):
         _write_file(path)
 
@@ -1300,7 +1297,6 @@ def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding
     coupler.set(ASIM_PERSONS_IN, str(asim_dir / "persons.csv"))
     coupler.set(ASIM_LAND_USE_IN, str(asim_dir / "land_use.csv"))
     coupler.set(ZARR_SKIMS, str(output_dir / "cache" / "skims.zarr"))
-    coupler.set(ASIM_SHARROW_CACHE_DIR, str(cache_dir))
 
     holder = StepOutputsHolder()
     holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
@@ -1319,9 +1315,8 @@ def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding
             ASIM_PERSONS_IN,
             ASIM_LAND_USE_IN,
             ZARR_SKIMS,
-            ASIM_SHARROW_CACHE_DIR,
         ],
-        optional_input_keys=[ASIM_SHARROW_CACHE_DIR],
+        optional_input_keys=[],
         coupler=coupler,
     )
 
@@ -1340,8 +1335,103 @@ def test_run_workflow_cache_hit_activitysim_run_preserves_optional_cache_binding
 
     assert holder.activitysim_run is not None
     step_binding = scenario.calls[0]["binding"]
-    assert ASIM_SHARROW_CACHE_DIR not in (step_binding.input_keys or [])
-    assert ASIM_SHARROW_CACHE_DIR in (step_binding.optional_input_keys or [])
+    assert step_binding.input_keys == [
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_LAND_USE_IN,
+        ZARR_SKIMS,
+    ]
+
+
+def test_activitysim_omx_cache_hit_recovers_and_republishes_generated_zarr(tmp_path):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    output_dir = Path(workspace.get_asim_output_dir())
+    iter_dir = output_dir / "year-2018-iteration-0"
+    zarr_path = output_dir / "cache" / "skims.zarr"
+    for path in (
+        asim_dir / "households.csv",
+        asim_dir / "persons.csv",
+        asim_dir / "land_use.csv",
+        asim_dir / "skims.omx",
+        iter_dir / "households.parquet",
+        zarr_path,
+    ):
+        _write_file(path)
+
+    class CacheHitScenario(DummyScenario):
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            return SimpleNamespace(
+                cache_hit=True,
+                outputs={
+                    "households_asim_out": str(iter_dir / "households.parquet"),
+                    ZARR_SKIMS: str(zarr_path),
+                },
+            )
+
+    coupler = DummyCoupler()
+    for key, path in (
+        (ASIM_HOUSEHOLDS_IN, asim_dir / "households.csv"),
+        (ASIM_PERSONS_IN, asim_dir / "persons.csv"),
+        (ASIM_LAND_USE_IN, asim_dir / "land_use.csv"),
+        (ASIM_OMX_SKIMS, asim_dir / "skims.omx"),
+    ):
+        coupler.set(key, str(path))
+
+    holder = StepOutputsHolder(
+        activitysim_preprocess=ActivitySimPreprocessOutputs(
+            mutable_data_dir=asim_dir,
+            land_use_table=asim_dir / "land_use.csv",
+            households_table=asim_dir / "households.csv",
+            persons_table=asim_dir / "persons.csv",
+            omx_skims=asim_dir / "skims.omx",
+        )
+    )
+    step_func = make_activitysim_run_step(
+        coupler=coupler,
+        outputs_holder=holder,
+        skim_mode="omx",
+    )
+    scenario = CacheHitScenario(cache_hit=True)
+    binding = build_key_only_binding_plan(
+        step_name="activitysim_run",
+        input_keys=[
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ASIM_LAND_USE_IN,
+            ASIM_OMX_SKIMS,
+        ],
+        coupler=coupler,
+    )
+
+    run_workflow(
+        stage_name="activity_demand_run",
+        steps=[
+            StepRef(
+                name="activitysim_run",
+                step_func=step_func,
+                binding=binding,
+                declared_outputs=["households_asim_out", ZARR_SKIMS],
+                cache_hydration="outputs-requested",
+                validate_cached_outputs="eager",
+            )
+        ],
+        scenario=scenario,
+        state=SimpleNamespace(year=2018, forecast_year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=holder,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.activitysim_run is not None
+    assert holder.activitysim_run.zarr_skims == zarr_path
+    assert coupler.get(ZARR_SKIMS) == str(zarr_path)
+    assert tuple(scenario.calls[0]["outputs"]) == ("households_asim_out", ZARR_SKIMS)
+    assert scenario.calls[0]["cache_options"].cache_hydration == "outputs-requested"
 
 
 def test_run_workflow_cache_hit_beam_postprocess_replays_promoted_outputs(tmp_path):

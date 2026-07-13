@@ -23,7 +23,7 @@ def test_step_dependencies_are_catalog_derived():
     assert step_shared.STEP_DEPENDENCIES == expected
 
 
-def test_runtime_step_dependencies_include_untracked_schema_steps():
+def test_runtime_step_dependencies_match_catalog_steps():
     expected = {
         spec.step_name: {
             "depends_on": list(spec.depends_on),
@@ -69,16 +69,14 @@ def test_tracked_steps_define_provenance_builder_keys():
         )
 
 
-def test_provenance_metadata_is_optional_for_untracked_steps():
+def test_provenance_metadata_is_optional_for_postprocessing():
     untracked_without_provenance = [
         spec.step_name
         for spec in catalog.WORKFLOW_STEP_SPECS
         if not spec.tracked and spec.provenance is None
     ]
-    assert "activitysim_compile" in untracked_without_provenance
     assert "postprocessing" in untracked_without_provenance
 
-    assert catalog.provenance_builder_key_for_model_name("activitysim_compile") is None
     assert catalog.provenance_builder_key_for_model_name("postprocessing") is None
 
 

@@ -227,10 +227,20 @@ def test_execute_activitysim_run_forwards_typed_preprocess_outputs(
     captured = {}
 
     class _Runner:
-        def run(self, input_outputs, workspace, *, extra_inputs=None):
+        def run(
+            self,
+            input_outputs,
+            workspace,
+            *,
+            extra_inputs=None,
+            skim_mode="zarr",
+            skip_numba_warmup=False,
+        ):
             captured["runner"] = self
             captured["input_outputs"] = input_outputs
             captured["extra_inputs"] = extra_inputs
+            captured["skim_mode"] = skim_mode
+            captured["skip_numba_warmup"] = skip_numba_warmup
             captured["workspace"] = workspace
             return runner_outputs
 
@@ -242,6 +252,8 @@ def test_execute_activitysim_run_forwards_typed_preprocess_outputs(
     assert captured["workspace"] is workspace
     assert captured["input_outputs"] is upstream
     assert captured["extra_inputs"] is None
+    assert captured["skim_mode"] == "zarr"
+    assert captured["skip_numba_warmup"] is False
     assert result is runner_outputs
 
 

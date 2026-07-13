@@ -14,6 +14,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     USIM_DATASTORE_H5,
+    ZARR_SKIMS,
 )
 from pilates.workflows.artifact_key_migrations import resolve_artifact_key
 from pilates.workflows.outputs_base import (
@@ -312,20 +313,6 @@ class ActivitySimPreprocessOutputs(StepOutputsBase):
 
 
 @dataclass
-class ActivitySimCompileOutputs:
-    """
-    Path-based outputs from the ActivitySim compile step.
-
-    This is intentionally a small local contract rather than a workflow
-    boundary dataclass because `activitysim_compile` publishes directly to the
-    coupler and is not persisted in the typed step-output holder.
-    """
-
-    zarr_skims: Optional[Path] = None
-    sharrow_cache_dir: Optional[Path] = None
-
-
-@dataclass
 class ActivitySimRunOutputs(StepOutputsBase):
     """
     Outputs from the ActivitySim run step.
@@ -351,6 +338,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
     dict_path_fields: ClassVar[Tuple[str, ...]] = ("raw_outputs",)
     validators: ClassVar[Tuple[OutputValidator, ...]] = ()
     output_dir: Path
+    zarr_skims: Optional[Path] = None
     raw_outputs: Dict[str, Path] = field(default_factory=dict)
     raw_output_hashes: Dict[str, str] = field(default_factory=dict)
     source_input_paths: Dict[str, Path] = field(default_factory=dict)
@@ -363,6 +351,8 @@ class ActivitySimRunOutputs(StepOutputsBase):
         for key, path in self.raw_outputs.items():
             normalized_key = _normalize_activitysim_run_output_key(key)
             yield normalized_key, path, f"ActivitySim raw output: {normalized_key}"
+        if self.zarr_skims is not None:
+            yield ZARR_SKIMS, self.zarr_skims, "ActivitySim generated Zarr skims"
 
     @classmethod
     def from_record_store(
@@ -385,6 +375,7 @@ class ActivitySimRunOutputs(StepOutputsBase):
         """
         raw_outputs: Dict[str, Path] = {}
         raw_output_hashes: Dict[str, str] = {}
+        zarr_skims: Optional[Path] = None
         for record in record_store.all_records():
             key = getattr(record, "short_name", None)
             if not key:
@@ -392,12 +383,16 @@ class ActivitySimRunOutputs(StepOutputsBase):
             record_path = _record_path(record, workspace)
             if record_path is None:
                 continue
+            if key == ZARR_SKIMS:
+                zarr_skims = record_path
+                continue
             raw_outputs[key] = record_path
             content_hash = getattr(record, "content_hash", None)
             if content_hash:
                 raw_output_hashes[key] = content_hash
         return cls(
             output_dir=Path(workspace.get_asim_output_dir()),
+            zarr_skims=zarr_skims,
             raw_outputs=raw_outputs,
             raw_output_hashes=raw_output_hashes,
         )
@@ -419,6 +414,15 @@ class ActivitySimRunOutputs(StepOutputsBase):
                         self.raw_output_hashes.get(raw_key)
                         or self.raw_output_hashes.get(short_name)
                     ),
+                )
+            )
+        if self.zarr_skims is not None:
+            records.append(
+                FileRecord(
+                    file_path=str(self.zarr_skims),
+                    short_name=ZARR_SKIMS,
+                    description="ActivitySim generated Zarr skims",
+                    content_hash=self.raw_output_hashes.get(ZARR_SKIMS),
                 )
             )
         return RecordStore(recordList=records)

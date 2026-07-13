@@ -88,10 +88,7 @@ from __future__ import annotations
 #                                                                                              - asim_persons_in
 #                                                                                              - asim_omx_skims (if present)
 #
-# activitysim_compile             (none)                                                      Outputs:
-#                                                                                              - zarr_skims
-#
-# activitysim_run                 activitysim_preprocess outputs + zarr_skims                 Raw outputs (parquet allowlist; keys as listed):
+# activitysim_run                 activitysim_preprocess outputs + OMX or zarr skims           Raw outputs (parquet allowlist; keys as listed):
 #                                                                                              - households
 #                                                                                              - persons
 #                                                                                              - land_use
@@ -769,7 +766,7 @@ STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
 STEP_DEPENDENCIES = step_dependencies_from_catalog()
 STEP_RUNTIME_DEPENDENCIES = runtime_step_dependencies_from_catalog()
 
-DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"activitysim_compile", "postprocessing"})
+DEFAULT_UNTRACKED_STEP_NAMES = frozenset({"postprocessing"})
 STRICT_OUTPUT_PATH_CONTRACT_STEPS = frozenset(
     {
         "activitysim_preprocess",

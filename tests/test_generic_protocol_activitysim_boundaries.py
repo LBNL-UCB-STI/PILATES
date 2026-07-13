@@ -7,13 +7,13 @@ from types import SimpleNamespace
 import pytest
 
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
 )
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
+from pilates.activitysim.runner import ActivitysimNumbaWarmup
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
@@ -23,7 +23,6 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.step_exec import warm_start_activities
-from pilates.workflows.steps import activitysim as activitysim_steps
 
 
 class _StageTrackingState:
@@ -180,107 +179,24 @@ def test_activitysim_preprocess_public_method_constructs_expected_outputs(
     assert state.sub_stages == ["preprocessor"]
 
 
-def test_activitysim_compile_step_does_not_fallback_to_workspace_cache_path(
-    monkeypatch, tmp_path: Path
-) -> None:
-    workspace_output_dir = tmp_path / "workspace-output"
-    workspace_cache_zarr = workspace_output_dir / "cache" / "skims.zarr"
-    workspace_cache_zarr.parent.mkdir(parents=True)
-    workspace_cache_zarr.write_text("workspace-cache", encoding="utf-8")
-
-    omx_skims = tmp_path / "asim-data" / "skims.omx"
-    omx_skims.parent.mkdir(parents=True)
-    omx_skims.write_text("omx", encoding="utf-8")
-
-    expected_zarr_path = tmp_path / "expected-output" / "cache" / "skims.zarr"
-    workspace = _DummyWorkspace(tmp_path, workspace_output_dir)
-    outputs_holder = SimpleNamespace(
-        activitysim_preprocess=ActivitySimPreprocessOutputs(
-            mutable_data_dir=omx_skims.parent,
-            land_use_table=omx_skims.parent / "land_use.csv",
-            households_table=omx_skims.parent / "households.csv",
-            persons_table=omx_skims.parent / "persons.csv",
-            omx_skims=omx_skims,
-        )
-    )
-    for path in (
-        outputs_holder.activitysim_preprocess.land_use_table,
-        outputs_holder.activitysim_preprocess.households_table,
-        outputs_holder.activitysim_preprocess.persons_table,
-    ):
-        path.write_text("csv", encoding="utf-8")
-    settings = SimpleNamespace(
-        activitysim=SimpleNamespace(
-            file_format="parquet",
-            persist_sharrow_cache=False,
-        )
-    )
-    state = SimpleNamespace(forecast_year=2020, iteration=0)
-    published = []
-    captured = {}
-
-    class _CompileRunner:
-        def run(self, inputs, workspace_arg):
-            captured["runner_workspace"] = workspace_arg
-            captured["runner_inputs"] = inputs
-            return ActivitySimCompileOutputs()
-
-    monkeypatch.setattr(
-        activitysim_steps.ModelFactory,
-        "get_runner",
-        lambda self, model_name, workflow_state: _CompileRunner(),
-    )
-    monkeypatch.setattr(activitysim_steps.cr, "log_input", lambda *args, **kwargs: None)
-    monkeypatch.setattr(
-        activitysim_steps,
-        "log_and_set_output",
-        lambda **kwargs: published.append(kwargs),
+def test_activitysim_numba_warmup_has_no_workflow_output_contract() -> None:
+    warmup = ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=SimpleNamespace())
     )
 
-    step_fn = activitysim_steps.make_activitysim_compile_step(
-        coupler=_DummyCoupler(),
-        outputs_holder=outputs_holder,
+    assert warmup.model_name == "activitysim_numba_warmup"
+    assert not hasattr(warmup, "expected_outputs")
+
+
+def test_activitysim_numba_warmup_rejects_wrong_upstream_type(tmp_path: Path) -> None:
+    warmup = ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=SimpleNamespace())
     )
-    step_fn(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        expected_outputs={ZARR_SKIMS: str(expected_zarr_path)},
-    )
-
-    assert captured["runner_workspace"] is workspace
-    assert captured["runner_inputs"] is outputs_holder.activitysim_preprocess
-    assert captured["runner_inputs"].omx_skims == omx_skims
-    assert published == []
-
-
-def test_activitysim_compile_step_rejects_wrong_upstream_type(tmp_path: Path) -> None:
-    workspace_output_dir = tmp_path / "workspace-output"
-    workspace_output_dir.mkdir(parents=True)
-
-    step_fn = activitysim_steps.make_activitysim_compile_step(
-        coupler=_DummyCoupler(),
-        outputs_holder=SimpleNamespace(activitysim_preprocess=RecordStore()),
-    )
-
     with pytest.raises(
         TypeError,
-        match=(
-            "activitysim_compile requires ActivitySimPreprocessOutputs "
-            "from activitysim_preprocess"
-        ),
+        match="ActivitysimNumbaWarmup.run expects ActivitySimPreprocessOutputs",
     ):
-        step_fn(
-            settings=SimpleNamespace(
-                activitysim=SimpleNamespace(
-                    file_format="parquet",
-                    persist_sharrow_cache=False,
-                )
-            ),
-            state=SimpleNamespace(forecast_year=2020, iteration=0),
-            workspace=_DummyWorkspace(tmp_path, workspace_output_dir),
-            expected_outputs={ZARR_SKIMS: str(tmp_path / "expected" / "skims.zarr")},
-        )
+        warmup.run(RecordStore(), _DummyWorkspace(tmp_path, tmp_path / "output"))
 
 
 def test_activitysim_postprocess_forwards_typed_run_outputs(

@@ -41,7 +41,6 @@ import yaml
 from pilates.config import load_config
 from pilates.atlas.outputs import AtlasRunOutputs
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -93,7 +92,6 @@ EXPECTED_STAGE_MODELS = (
     "atlas_run",
     "atlas_postprocess",
     "activitysim_preprocess",
-    "activitysim_compile",
     "activitysim_run",
     "activitysim_postprocess",
     "beam_preprocess",
@@ -726,11 +724,6 @@ def golden_stub_env(tmp_path, monkeypatch):
                     raw_outputs={
                         USIM_FORECAST_OUTPUT: usim_output_path,
                     },
-                )
-            if model_name == "activitysim_compile":
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=sharrow_cache_dir,
                 )
             if model_name == "activitysim":
                 assert workspace is not None

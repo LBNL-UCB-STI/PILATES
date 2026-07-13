@@ -1258,7 +1258,9 @@ def handle_linkstats(
     store.add_record(warmstart_record)
 
 
-def _stage_warmstart_linkstats(*, source_path: Path, workspace: Any, region: Any) -> Path:
+def _stage_warmstart_linkstats(
+    *, source_path: Path, workspace: Any, region: Any
+) -> Path:
     """Copy one selected warm-start source into BEAM's mutable input mount."""
 
     if not region:

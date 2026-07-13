@@ -24,8 +24,6 @@ from .shared import (
     _urbansim_output_facet_meta as _urbansim_output_facet_meta,
 )
 from .activitysim import (
-    activitysim_compile_output_paths as activitysim_compile_output_paths,
-    make_activitysim_compile_step as make_activitysim_compile_step,
     make_activitysim_postprocess_step as make_activitysim_postprocess_step,
     make_activitysim_preprocess_step as make_activitysim_preprocess_step,
     make_activitysim_run_step as make_activitysim_run_step,
@@ -67,7 +65,6 @@ SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
     "atlas_run": make_atlas_run_step,
     "atlas_postprocess": make_atlas_postprocess_step,
     "activitysim_preprocess": make_activitysim_preprocess_step,
-    "activitysim_compile": make_activitysim_compile_step,
     "activitysim_run": make_activitysim_run_step,
     "activitysim_postprocess": make_activitysim_postprocess_step,
     "beam_preprocess": make_beam_preprocess_step,

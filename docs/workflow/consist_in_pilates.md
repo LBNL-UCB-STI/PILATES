@@ -86,6 +86,24 @@ Consist records the tracked workflow publications, but the semantic public surfa
 
 Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.md), and [Lineage Map](lineage_map.md) for the contract-level meaning of those publications.
 
+## ActivitySim Boundary
+
+`activitysim_run` is the single tracked ActivitySim execution boundary. It
+consumes `ZARR_SKIMS` when a valid shared skim artifact is available. Otherwise
+it consumes the staged OMX skims input and publishes finalized `ZARR_SKIMS` as
+an output for later ActivitySim and BEAM work.
+
+Numba/Sharrow compilation is deliberately outside that artifact contract. It
+is workspace-local execution preparation, not an archived or recovered
+artifact and not part of Consist cache identity. PILATES warms it only when a
+primary ActivitySim execution actually occurs and the local cache is empty;
+a primary cache hit invokes neither production ActivitySim nor warmup.
+
+The historical root-level `workflow_state.py` remains in place for now. Its
+legacy `asim_compiled` value is still parsed for persisted-state compatibility,
+but it no longer controls ActivitySim execution. Relocating that module is an
+explicitly deferred, import-only follow-up.
+
 ## Replay, Restart, and Hydration
 
 - Fresh runs execute bootstrap first, then enter the scenario context.

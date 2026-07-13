@@ -33,7 +33,6 @@ from pilates.generic.records import RecordStore
 from pilates.utils import coupler_helpers
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -55,7 +54,6 @@ from pilates.urbansim.outputs import (
     UrbanSimRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -543,13 +541,6 @@ def stage_env(tmp_path, monkeypatch):
                 return ActivitySimRunOutputs(
                     output_dir=asim_out_dir,
                     raw_outputs={},
-                )
-            if model_name == "activitysim_compile":
-                _write_file(zarr_path)
-                _write_file(numba_cache_path / "cache.bin")
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=numba_cache_path,
                 )
             if model_name == "beam":
                 return BeamRunOutputs(
@@ -1408,7 +1399,7 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
     assert compile_calls, (
         "Expected forced ActivitySim compile when numba cache is missing."
@@ -1461,7 +1452,7 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
     assert not compile_calls, (
         "Did not expect ActivitySim compile when local artifacts already exist."
@@ -1529,15 +1520,6 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
             archive_root=archive_root,
         ),
     )
-    stage_env["coupler"].set(
-        ASIM_SHARROW_CACHE_DIR,
-        _ArchivedCompileArtifact(
-            key=ASIM_SHARROW_CACHE_DIR,
-            local_path=numba_cache_dir,
-            local_root=local_root,
-            archive_root=archive_root,
-        ),
-    )
     monkeypatch.setattr(
         coupler_helpers.cr,
         "current_tracker",
@@ -1561,15 +1543,13 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
     assert not compile_calls, (
         "Did not expect ActivitySim compile when archive artifacts exist."
     )
     assert zarr_path.exists()
-    assert numba_cache_dir.exists()
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
-    assert stage_env["coupler"].get(ASIM_SHARROW_CACHE_DIR) is not None
 
 
 def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
@@ -2238,8 +2218,6 @@ def test_supply_demand_activitysim_run_keeps_numba_cache_optional(stage_env, tmp
     assert run_calls, "Expected an ActivitySim run step call."
     binding = run_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert ASIM_SHARROW_CACHE_DIR not in (binding.input_keys or [])
-    assert ASIM_SHARROW_CACHE_DIR in (binding.optional_input_keys or [])
 
 
 def test_supply_demand_stage_flushes_and_enqueues_manifest(

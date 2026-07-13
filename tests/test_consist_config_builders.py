@@ -197,13 +197,13 @@ def test_catalog_dispatch_falls_back_when_provenance_metadata_is_missing(tmp_pat
     asim_dir = tmp_path / "activitysim" / "configs"
     asim_dir.mkdir(parents=True)
 
-    # activitysim_compile intentionally has no catalog provenance metadata.
+    # Non-catalog ActivitySim models use legacy prefix fallback dispatch.
     result = build_step_consist_kwargs(
-        "activitysim_compile",
+        "activitysim_legacy_step",
         settings,
         workspace_path=str(tmp_path),
     )
-    assert result["facet_schema_version"] == "activitysim_compile_v1"
+    assert result["facet_schema_version"] == "activitysim_v1"
 
     # Non-catalog models still use legacy prefix fallback dispatch.
     result = build_step_consist_kwargs(

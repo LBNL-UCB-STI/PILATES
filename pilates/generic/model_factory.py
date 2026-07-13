@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING, Tuple
 
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
-from pilates.activitysim.runner import ActivitysimRunner, ActivitysimCompileRunner
+from pilates.activitysim.runner import ActivitysimRunner
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.beam.runner import BeamRunner, BeamFullSkimRunner
@@ -25,11 +25,6 @@ class ModelFactory:
         "activitysim": {
             "preprocessor": ActivitysimPreprocessor,
             "runner": ActivitysimRunner,
-            "postprocessor": ActivitysimPostprocessor,
-        },
-        "activitysim_compile": {
-            "preprocessor": ActivitysimPreprocessor,
-            "runner": ActivitysimCompileRunner,
             "postprocessor": ActivitysimPostprocessor,
         },
         "beam": {

@@ -48,8 +48,8 @@ Main published boundary roles:
 ### Activity Demand
 
 - `activitysim_preprocess` reads the population-source datastore and the currently selected skims input, then stages the land-use, households, and persons tables that the ActivitySim run consumes.
-- `activitysim_compile` may publish reusable compile products such as `ASIM_SHARROW_CACHE_DIR` and can republish `ZARR_SKIMS` when that shared skims handoff is part of the compile path.
-- `activitysim_run` consumes the staged ActivitySim inputs and publishes the standard ActivitySim run outputs.
+- `activitysim_run` consumes the staged ActivitySim inputs and an existing `ZARR_SKIMS` handoff when one is available. Otherwise it consumes `ASIM_OMX_SKIMS` and produces the durable `ZARR_SKIMS` handoff alongside its standard run outputs.
+- Numba/Sharrow warming is private node-local preparation for a multiprocessing cache miss, not an archived or replayed workflow artifact.
 - `activitysim_postprocess` archives ActivitySim inputs and outputs, and republishes the UrbanSim-side datastore state that later workflow logic or archive inspection needs.
 
 Main published boundary roles:
@@ -58,8 +58,7 @@ Main published boundary roles:
 - `ASIM_HOUSEHOLDS_IN`
 - `ASIM_PERSONS_IN`
 - `ASIM_OMX_SKIMS`
-- `ASIM_SHARROW_CACHE_DIR`
-- `ZARR_SKIMS` as the shared skims handoff used by ActivitySim and BEAM
+- `ZARR_SKIMS` as the shared skims handoff produced by an OMX-mode ActivitySim run and consumed by a Zarr-mode ActivitySim run or BEAM
 
 ### Traffic Assignment
 

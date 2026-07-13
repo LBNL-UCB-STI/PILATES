@@ -15,11 +15,9 @@ from pilates.activitysim.preprocessor import (
     required_asim_config_dirs,
 )
 from pilates.activitysim.runner import (
-    ActivitysimCompileRunner,
+    ActivitysimSkimMode,
     ActivitysimRunner,
     asim_runtime_zarr_path,
-    asim_sharrow_cache_dir,
-    persist_sharrow_cache_enabled,
 )
 from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_output_key
@@ -33,10 +31,8 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
-from pilates.generic.model_factory import ModelFactory
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
@@ -66,12 +62,10 @@ from .shared import (
     StepOutputsHolder,
     WorkflowState,
     _activitysim_output_facet_meta,
-    _decorate_step_with_consist,
     build_standard_step,
     load_recovered_cached_outputs,
     _log_step_records,
     artifact_to_path,
-    cr,
     log_and_set_input,
     log_and_set_output,
     log_input_only,
@@ -101,6 +95,20 @@ _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK = threading.Lock()
 _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE: Dict[
     tuple[str, str, tuple[str, ...]], Dict[str, str]
 ] = {}
+
+
+def activitysim_run_output_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    produces_zarr: bool,
+) -> Dict[str, Any]:
+    """Return the immutable primary output contract for one skim mode."""
+    outputs = ActivitysimRunner.expected_outputs(settings, state, workspace)
+    if produces_zarr:
+        outputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
+    return outputs
 
 
 def _activitysim_config_root_dirs(
@@ -313,6 +321,8 @@ def _execute_activitysim_run(
     outputs_holder: StepOutputsHolder,
     *,
     extra_inputs: Optional[Dict[str, Any]] = None,
+    skim_mode: ActivitysimSkimMode = "zarr",
+    skip_numba_warmup: bool = False,
     **kwargs: Any,
 ) -> ActivitySimRunOutputs:
     upstream = outputs_holder.activitysim_preprocess
@@ -322,7 +332,13 @@ def _execute_activitysim_run(
         raise TypeError(
             "activitysim_run requires ActivitySimPreprocessOutputs from activitysim_preprocess"
         )
-    return runner.run(upstream, workspace, extra_inputs=extra_inputs)
+    return runner.run(
+        upstream,
+        workspace,
+        extra_inputs=extra_inputs,
+        skim_mode=skim_mode,
+        skip_numba_warmup=skip_numba_warmup,
+    )
 
 
 def _execute_activitysim_postprocess(
@@ -774,6 +790,7 @@ def _recover_activitysim_run_outputs(
     step_inputs: Optional[Mapping[str, Any]],
     cached_outputs: Optional[Mapping[str, Any]],
     run_id: Optional[str],
+    skim_mode: ActivitysimSkimMode = "zarr",
 ) -> Optional[ActivitySimRunOutputs]:
     del step_inputs
     asim_output_dir = Path(workspace.get_asim_output_dir())
@@ -882,20 +899,28 @@ def _recover_activitysim_run_outputs(
             if content_hash:
                 source_input_hashes[short_name] = str(content_hash)
 
-    runner_expected_inputs = ActivitysimRunner.expected_inputs(
-        settings, state, workspace
-    )
-    runtime_zarr_candidate = Path(
-        cast(
-            str,
-            runner_expected_inputs.get(ZARR_SKIMS) or asim_runtime_zarr_path(workspace),
+    zarr_skims: Optional[Path] = None
+    if skim_mode == "zarr":
+        runner_expected_inputs = ActivitysimRunner.expected_inputs(
+            settings, state, workspace
         )
-    )
-    zarr_candidate = Path(
-        _existing_local_path(runtime_zarr_candidate, workspace)
-        or runtime_zarr_candidate
-    )
-    if zarr_candidate.exists():
+        runtime_zarr_candidate = Path(
+            cast(
+                str,
+                runner_expected_inputs.get(ZARR_SKIMS)
+                or asim_runtime_zarr_path(workspace),
+            )
+        )
+        zarr_candidate = Path(
+            _existing_local_path(runtime_zarr_candidate, workspace)
+            or runtime_zarr_candidate
+        )
+    else:
+        zarr_candidate = cached_paths.get(ZARR_SKIMS)
+        if zarr_candidate is None or not zarr_candidate.exists():
+            return None
+        zarr_skims = zarr_candidate
+    if skim_mode == "zarr" and zarr_candidate.exists():
         source_input_paths[ZARR_SKIMS] = zarr_candidate
         content_hash = _resolved_content_hash(
             value=_resolve_cached_value(
@@ -911,7 +936,7 @@ def _recover_activitysim_run_outputs(
         )
         if content_hash:
             source_input_hashes[ZARR_SKIMS] = content_hash
-    elif ZARR_SKIMS in cached_paths:
+    elif skim_mode == "zarr" and ZARR_SKIMS in cached_paths:
         source_input_paths[ZARR_SKIMS] = cached_paths[ZARR_SKIMS]
         content_hash = _resolved_content_hash(
             value=_resolve_cached_value(
@@ -930,6 +955,7 @@ def _recover_activitysim_run_outputs(
 
     return ActivitySimRunOutputs(
         output_dir=asim_output_dir,
+        zarr_skims=zarr_skims,
         raw_outputs=raw_outputs,
         raw_output_hashes=raw_output_hashes,
         source_input_paths=source_input_paths,
@@ -1146,180 +1172,6 @@ def _recover_activitysim_postprocess_outputs(
     )
 
 
-def _compile_step_schema_outputs(ctx: Any) -> list[str]:
-    settings = ctx.require_runtime("settings")
-    outputs = [ZARR_SKIMS]
-    if settings is not None and persist_sharrow_cache_enabled(settings):
-        outputs.append(ASIM_SHARROW_CACHE_DIR)
-    return outputs
-
-
-def activitysim_compile_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, Any]:
-    return ActivitysimCompileRunner.expected_outputs(settings, state, workspace)
-
-
-def _is_non_empty_directory(path: str) -> bool:
-    if not os.path.isdir(path):
-        return False
-    for _root, _dirs, files in os.walk(path):
-        if files:
-            return True
-    return False
-
-
-def make_activitysim_compile_step(
-    *,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-) -> Callable[..., None]:
-    """
-    Build the ActivitySim compile step function.
-
-    This step compiles ActivitySim inputs (prepared by preprocess) into
-    optimized skim artifacts (Zarr) used by ActivitySim runs and BEAM.
-
-    Parameters
-    ----------
-    coupler : object
-        Consist coupler for input/output logging.
-
-    Returns
-    -------
-    callable
-        Step function for ActivitySim compile.
-    """
-
-    def _run_activitysim_compile_step(
-        *,
-        settings: PilatesConfig,
-        state: WorkflowState,
-        workspace: Workspace,
-        expected_outputs: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        forecast_year = state.forecast_year
-        if forecast_year is None:
-            raise RuntimeError(
-                "WorkflowState.forecast_year must be set before ActivitySim compile."
-            )
-        factory = ModelFactory()
-
-        compile_runner = cast(
-            ActivitysimCompileRunner,
-            factory.get_runner(
-                "activitysim_compile",
-                state,
-            ),
-        )
-        upstream = outputs_holder.activitysim_preprocess
-        if upstream is None:
-            raise RuntimeError(
-                "ActivitySim compile must run after activitysim_preprocess"
-            )
-        if not isinstance(upstream, ActivitySimPreprocessOutputs):
-            raise TypeError(
-                "activitysim_compile requires ActivitySimPreprocessOutputs from activitysim_preprocess"
-            )
-        _enqueue_activitysim_config_references_for_archive(
-            settings=settings,
-            workspace=workspace,
-        )
-        if expected_outputs is None:
-            expected_outputs = activitysim_compile_output_paths(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            )
-        omx_path = (
-            artifact_to_path(upstream.omx_skims, workspace)
-            if upstream.omx_skims is not None
-            else None
-        )
-        if omx_path and os.path.exists(omx_path):
-            cr.log_input(
-                omx_path,
-                key=upstream.record_keys["omx_skims"],
-                description="ActivitySim compile input skims (OMX)",
-            )
-        compile_outputs = compile_runner.run(upstream, workspace)
-
-        zarr_output_path = expected_outputs.get(ZARR_SKIMS)
-        if not zarr_output_path and compile_outputs.zarr_skims is not None:
-            zarr_output_path = str(compile_outputs.zarr_skims)
-        if zarr_output_path and os.path.exists(zarr_output_path):
-            log_and_set_output(
-                key=ZARR_SKIMS,
-                path=zarr_output_path,
-                description="ActivitySim compiled zarr skims",
-                coupler=coupler,
-                step_name="activitysim_compile",
-                **_activitysim_output_facet_meta(
-                    ZARR_SKIMS,
-                    year=forecast_year,
-                    iteration=state.iteration,
-                ),
-            )
-
-        if persist_sharrow_cache_enabled(settings):
-            cache_path = (
-                str(compile_outputs.sharrow_cache_dir)
-                if compile_outputs.sharrow_cache_dir is not None
-                else asim_sharrow_cache_dir(workspace)
-            )
-
-            if cache_path and _is_non_empty_directory(cache_path):
-                log_and_set_output(
-                    key=ASIM_SHARROW_CACHE_DIR,
-                    path=cache_path,
-                    description=(
-                        "ActivitySim persisted compile cache directory (numba/sharrow)"
-                    ),
-                    coupler=coupler,
-                    step_name="activitysim_compile",
-                    **_activitysim_output_facet_meta(
-                        ASIM_SHARROW_CACHE_DIR,
-                        year=forecast_year,
-                        iteration=state.iteration,
-                    ),
-                )
-            elif (
-                cache_path
-                and os.path.exists(cache_path)
-                and not os.path.isdir(cache_path)
-            ):
-                logger.warning(
-                    "ActivitySim compile cache output path is not a directory: %s",
-                    cache_path,
-                )
-            elif cache_path and os.path.isdir(cache_path):
-                logger.info(
-                    "ActivitySim compile cache output is enabled but directory is empty: %s",
-                    cache_path,
-                )
-            elif cache_path:
-                logger.warning(
-                    "ActivitySim compile cache output is enabled but directory was not found: %s",
-                    cache_path,
-                )
-
-    step_func = _decorate_step_with_consist(
-        step_func=_run_activitysim_compile_step,
-        step_model="activitysim_compile",
-        description="activitysim compile workflow step",
-        outputs=[ZARR_SKIMS],
-        schema_outputs=_compile_step_schema_outputs,
-        output_paths=activitysim_compile_output_paths,
-        cache_mode="overwrite",
-        cache_hydration="metadata",
-        tags=["activitysim", "compile"],
-    )
-    return step_func
-
-
 def make_activitysim_preprocess_step(
     *,
     coupler: CouplerProtocol,
@@ -1526,6 +1378,7 @@ def make_activitysim_run_step(
     *,
     coupler: CouplerProtocol,
     outputs_holder: StepOutputsHolder,
+    skim_mode: ActivitysimSkimMode = "zarr",
 ) -> Callable[..., None]:
     """
     Build the ActivitySim run step function.
@@ -1546,7 +1399,7 @@ def make_activitysim_run_step(
         Step function for ActivitySim run.
     """
 
-    compile_input_hashes: Dict[str, str] = {}
+    produces_zarr = skim_mode == "omx"
 
     def _log_inputs(
         settings: PilatesConfig,
@@ -1565,7 +1418,7 @@ def make_activitysim_run_step(
 
         profile_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
         for short_name, path, description in upstream._iter_record_items():
-            if short_name == ASIM_OMX_SKIMS:
+            if short_name == ASIM_OMX_SKIMS and skim_mode == "zarr":
                 continue
             meta: Dict[str, Any] = {}
             if short_name in profile_keys:
@@ -1579,7 +1432,6 @@ def make_activitysim_run_step(
             )
 
         extra_inputs: Dict[str, str] = {}
-        compile_input_hashes.clear()
         zarr_value = None
         get_value = getattr(coupler, "get", None)
         if callable(get_value):
@@ -1588,11 +1440,8 @@ def make_activitysim_run_step(
                 key=ZARR_SKIMS,
                 workspace=workspace,
             )
-        zarr_content_hash = artifact_fingerprint(zarr_value)
-        if zarr_content_hash:
-            compile_input_hashes[ZARR_SKIMS] = zarr_content_hash
         zarr_path = artifact_to_path(zarr_value, workspace)
-        if zarr_path and os.path.exists(zarr_path):
+        if skim_mode == "zarr" and zarr_path and os.path.exists(zarr_path):
             extra_inputs[ZARR_SKIMS] = zarr_path
             log_input_only(
                 key=ZARR_SKIMS,
@@ -1602,26 +1451,6 @@ def make_activitysim_run_step(
                 ),
             )
 
-        cache_value = None
-        if callable(get_value):
-            cache_value = resolve_artifact_from_value(
-                get_value(ASIM_SHARROW_CACHE_DIR),
-                key=ASIM_SHARROW_CACHE_DIR,
-                workspace=workspace,
-            )
-        cache_content_hash = artifact_fingerprint(cache_value)
-        if cache_content_hash:
-            compile_input_hashes[ASIM_SHARROW_CACHE_DIR] = cache_content_hash
-        cache_path = artifact_to_path(cache_value, workspace)
-        if cache_path and _is_non_empty_directory(cache_path):
-            extra_inputs[ASIM_SHARROW_CACHE_DIR] = cache_path
-            log_input_only(
-                key=ASIM_SHARROW_CACHE_DIR,
-                path=cache_path,
-                description=(
-                    "ActivitySim persisted compile cache directory (numba/sharrow)"
-                ),
-            )
         return {"extra_inputs": extra_inputs}
 
     def _log_outputs(
@@ -1647,34 +1476,12 @@ def make_activitysim_run_step(
 
         get_value = getattr(coupler, "get", None)
         zarr_value = get_value(ZARR_SKIMS) if callable(get_value) else None
-        runtime_zarr_path = asim_runtime_zarr_path(workspace)
-        zarr_path = (
-            runtime_zarr_path
-            if os.path.exists(runtime_zarr_path)
-            else artifact_to_path(zarr_value, workspace)
-        )
-        if zarr_path and os.path.exists(zarr_path):
+        zarr_path = artifact_to_path(zarr_value, workspace)
+        if skim_mode == "zarr" and zarr_path and os.path.exists(zarr_path):
             outputs.source_input_paths[ZARR_SKIMS] = Path(zarr_path)
-            content_hash = artifact_fingerprint(zarr_value) or compile_input_hashes.get(
-                ZARR_SKIMS
-            )
+            content_hash = artifact_fingerprint(zarr_value)
             if content_hash:
                 outputs.source_input_hashes[ZARR_SKIMS] = content_hash
-
-        cache_value = get_value(ASIM_SHARROW_CACHE_DIR) if callable(get_value) else None
-        runtime_cache_path = asim_sharrow_cache_dir(workspace)
-        cache_path = (
-            runtime_cache_path
-            if _is_non_empty_directory(runtime_cache_path)
-            else artifact_to_path(cache_value, workspace)
-        )
-        if cache_path and _is_non_empty_directory(cache_path):
-            outputs.source_input_paths[ASIM_SHARROW_CACHE_DIR] = Path(cache_path)
-            content_hash = artifact_fingerprint(
-                cache_value
-            ) or compile_input_hashes.get(ASIM_SHARROW_CACHE_DIR)
-            if content_hash:
-                outputs.source_input_hashes[ASIM_SHARROW_CACHE_DIR] = content_hash
 
         for short_name, path, description in outputs._iter_record_items():
             output_key = _canonical_activitysim_run_output_key(short_name)
@@ -1695,6 +1502,30 @@ def make_activitysim_run_step(
                 outputs.raw_output_hashes[short_name] = content_hash
                 outputs.raw_output_hashes.setdefault(output_key, content_hash)
 
+    def _executor(
+        runner: Any, workspace: Workspace, holder: StepOutputsHolder, **kwargs: Any
+    ) -> ActivitySimRunOutputs:
+        return _execute_activitysim_run(
+            runner,
+            workspace,
+            holder,
+            skim_mode=skim_mode,
+            **kwargs,
+        )
+
+    def _recoverer(**kwargs: Any) -> Optional[ActivitySimRunOutputs]:
+        return _recover_activitysim_run_outputs(skim_mode=skim_mode, **kwargs)
+
+    def _output_paths(
+        *, settings: PilatesConfig, state: WorkflowState, workspace: Workspace
+    ) -> Dict[str, Any]:
+        return activitysim_run_output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            produces_zarr=produces_zarr,
+        )
+
     step_func = build_standard_step(
         coupler=coupler,
         outputs_holder=outputs_holder,
@@ -1706,15 +1537,21 @@ def make_activitysim_run_step(
             component_getter=lambda factory, state: factory.get_runner(
                 "activitysim", state
             ),
-            component_executor=_execute_activitysim_run,
+            component_executor=_executor,
             input_logger=_log_inputs,
             output_logger=_log_outputs,
-            output_recoverer=_recover_activitysim_run_outputs,
-            declared_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
-            schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+            output_recoverer=_recoverer,
+            declared_outputs=[
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+                *([ZARR_SKIMS] if produces_zarr else []),
+            ],
+            schema_outputs=[
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+                *([ZARR_SKIMS] if produces_zarr else []),
+            ],
             input_paths=ActivitysimRunner.declared_expected_inputs,
-            output_paths=ActivitysimRunner.expected_outputs,
-            cache_hydration="metadata",
+            output_paths=_output_paths,
+            cache_hydration="outputs-requested" if produces_zarr else "metadata",
             input_binding="paths",
             input_materialization="requested",
             step_logger=logger,

@@ -261,7 +261,6 @@ def _build_workspace_inputs(
 
 def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
     from pilates.activitysim.outputs import (
-        ActivitySimCompileOutputs,
         ActivitySimPostprocessOutputs,
         ActivitySimPreprocessOutputs,
         ActivitySimRunOutputs,
@@ -459,17 +458,6 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                 return UrbanSimRunOutputs(
                     usim_datastore_h5=output_path,
                     raw_outputs={"usim_forecast_output": output_path},
-                )
-            if model_name == "activitysim_compile":
-                zarr_path = (
-                    Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-                )
-                _write_file(zarr_path)
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=Path(workspace.full_path)
-                    / "shared_cache"
-                    / "numba",
                 )
             if model_name == "activitysim":
                 return ActivitySimRunOutputs(

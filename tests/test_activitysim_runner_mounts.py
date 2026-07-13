@@ -2,7 +2,7 @@ import os
 from types import SimpleNamespace
 
 from pilates.activitysim.runner import (
-    ActivitysimCompileRunner,
+    ActivitysimNumbaWarmup,
     ActivitysimRunner,
     _asim_container_environment,
 )
@@ -43,12 +43,12 @@ def test_activitysim_docker_vols_include_configs_mp_mount():
     assert vols[expected_local]["mode"] == "rw"
 
 
-def test_activitysim_compile_args_skip_configs_mp():
+def test_activitysim_numba_warmup_args_skip_configs_mp():
     settings = _settings()
     working_dir = "/tmp/pilates-workdir"
     vols = ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
 
-    args = ActivitysimCompileRunner.get_asim_additional_args(settings, vols, True)
+    args = ActivitysimNumbaWarmup.get_asim_additional_args(settings, vols, True)
 
     assert (
         "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp" not in args

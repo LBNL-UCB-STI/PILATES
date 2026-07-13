@@ -16,7 +16,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
-    ASIM_SHARROW_CACHE_DIR,
     BEAM_CONFIG_FILE,
     BEAM_EXPERIENCED_PLANS_XML,
     BEAM_FULL_SKIMS,
@@ -176,16 +175,6 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
             "holder_inputs": (),
             "upstream_step_inputs": (),
         },
-        "activitysim_compile": {
-            "input_keys": (ASIM_OMX_SKIMS,),
-            "optional_input_keys": (),
-            "output_keys": (ZARR_SKIMS,),
-            "optional_output_keys": (ASIM_SHARROW_CACHE_DIR,),
-            "dynamic_input_families": (),
-            "dynamic_output_families": (),
-            "holder_inputs": ("activitysim_preprocess",),
-            "upstream_step_inputs": ("activitysim_preprocess",),
-        },
         "activitysim_run": {
             "input_keys": (
                 ASIM_LAND_USE_IN,
@@ -193,8 +182,8 @@ def test_selected_catalog_step_contract_metadata_matches_current_wiring():
                 ASIM_PERSONS_IN,
                 ZARR_SKIMS,
             ),
-            "optional_input_keys": (ASIM_SHARROW_CACHE_DIR,),
-            "optional_output_keys": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            "optional_input_keys": (),
+            "optional_output_keys": (*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, ZARR_SKIMS),
             "dynamic_input_families": (),
             "output_keys": (*ActivitySimRunOutputs.required_output_keys(),),
             "dynamic_output_families": (),
@@ -345,8 +334,8 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
             ASIM_PERSONS_IN,
             ZARR_SKIMS,
         ],
-        "optional_input_keys": [ASIM_SHARROW_CACHE_DIR],
-        "optional_output_keys": list(ASIM_OPTIONAL_RUN_OUTPUT_KEYS),
+        "optional_input_keys": [],
+        "optional_output_keys": [*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, ZARR_SKIMS],
         "dynamic_input_families": [],
         "upstream_step_inputs": ["activitysim_preprocess"],
         "output_keys": [
@@ -521,7 +510,6 @@ def test_workflow_step_contract_export_is_serializable_and_aligned():
 def test_catalog_output_keys_cover_declared_step_output_contracts():
     covered_steps = {
         "activitysim_preprocess",
-        "activitysim_compile",
         "activitysim_run",
         "activitysim_postprocess",
         "beam_preprocess",

@@ -69,7 +69,6 @@ class ActivitySimConfigBuilder:
 
     def get_facet_schema_version(self, model: str) -> str:
         return {
-            "activitysim_compile": "activitysim_compile_v1",
             "activitysim_preprocess": "activitysim_preprocess_v1",
             "activitysim_run": "activitysim_run_v1",
             "activitysim_postprocess": "activitysim_postprocess_v1",

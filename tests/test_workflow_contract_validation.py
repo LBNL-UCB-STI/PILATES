@@ -178,12 +178,12 @@ def test_run_workflow_warns_for_undeclared_input_keys(caplog):
     state = SimpleNamespace(year=2020, iteration=0)
     coupler = _FakeCoupler()
 
-    @define_step(model="activitysim_compile")
+    @define_step(model="neutral_test_step")
     def _dummy_step(settings, state, workspace, **kwargs):
         return None
 
     step = StepRef(
-        name="activitysim_compile",
+        name="neutral_test_step",
         step_func=_dummy_step,
         input_keys=["undeclared_input_key"],
         inputs={"undeclared_input_key": "/tmp/input.csv"},
@@ -219,7 +219,7 @@ def test_run_workflow_uses_step_output_path_provider():
     state = SimpleNamespace(year=2020, iteration=0)
     coupler = _FakeCoupler()
 
-    @define_step(model="activitysim_compile")
+    @define_step(model="neutral_test_step")
     def _dummy_step(settings, state, workspace, **kwargs):
         return None
 
@@ -227,7 +227,7 @@ def test_run_workflow_uses_step_output_path_provider():
         return {"zarr_skims": "/tmp/workspace/activitysim/cache/skims.zarr"}
 
     step = StepRef(
-        name="activitysim_compile",
+        name="neutral_test_step",
         step_func=_dummy_step,
         output_paths_provider=_output_paths_provider,
     )
@@ -259,7 +259,7 @@ def test_run_workflow_uses_decorator_output_paths_callable():
     coupler = _FakeCoupler()
 
     @define_step(
-        model="activitysim_compile",
+        model="neutral_test_step",
         output_paths=lambda *, settings, state, workspace: {
             "zarr_skims": f"{workspace.full_path}/activitysim/cache/skims.zarr"
         },
@@ -267,7 +267,7 @@ def test_run_workflow_uses_decorator_output_paths_callable():
     def _dummy_step(settings, state, workspace, **kwargs):
         return None
 
-    step = StepRef(name="activitysim_compile", step_func=_dummy_step)
+    step = StepRef(name="neutral_test_step", step_func=_dummy_step)
 
     run_workflow(
         stage_name="unit",

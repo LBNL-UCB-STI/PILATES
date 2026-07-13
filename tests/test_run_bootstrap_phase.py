@@ -1223,7 +1223,7 @@ def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
     assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
 
 
-def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artifacts(
+def test_seed_bootstrap_artifacts_to_coupler_does_not_publish_activitysim_runtime_caches(
     tmp_path,
 ):
     class DummyCoupler:
@@ -1270,57 +1270,7 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_activitysim_compile_artif
         coupler=coupler,
     )
 
-    assert coupler.get("zarr_skims") is not None
-    assert coupler.get("asim_sharrow_cache_dir") is not None
-    assert isinstance(coupler.get("zarr_skims"), str)
-    assert isinstance(coupler.get("asim_sharrow_cache_dir"), str)
-
-
-def test_seed_bootstrap_artifacts_to_coupler_publishes_sharrow_cache_without_zarr(
-    tmp_path,
-):
-    class DummyCoupler:
-        def __init__(self):
-            self.values = {}
-
-        def get(self, key):
-            return self.values.get(key)
-
-        def set(self, key, value):
-            self.values[key] = value
-
-        def view(self, _namespace):
-            return self
-
-    workspace = DummyWorkspace(full_path=str(tmp_path))
-    sharrow_cache = tmp_path / "shared_cache" / "numba"
-    sharrow_cache.mkdir(parents=True, exist_ok=True)
-    (sharrow_cache / "cache.bin").write_text("cache", encoding="utf-8")
-
-    settings = SimpleNamespace(
-        run=SimpleNamespace(
-            region="sfbay",
-            models=SimpleNamespace(activity_demand="activitysim", travel="beam"),
-        ),
-        beam=SimpleNamespace(
-            config="beam.conf",
-            scenario_folder="urbansim",
-            router_directory="r5/network",
-        ),
-        activitysim=SimpleNamespace(file_format="parquet"),
-    )
-    state = SimpleNamespace(full_settings=settings)
-    coupler = DummyCoupler()
-
-    run_module.bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=coupler,
-    )
-
     assert coupler.get("zarr_skims") is None
-    assert coupler.get("asim_sharrow_cache_dir") == str(sharrow_cache)
 
 
 def test_bootstrap_output_invariant_accepts_valid_result():

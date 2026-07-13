@@ -3,7 +3,25 @@ import os
 import pytest
 import yaml
 
+from pilates.activitysim.outputs import (
+    ActivitySimPostprocessOutputs,
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.config import load_config
+from pilates.runtime.context import WorkflowRuntimeContext
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_POPULATION_SOURCE_H5,
+)
+from pilates.workflows.orchestration import ManifestConfig
+from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.stages import supply_demand_activity
+from pilates.workflows.stages.supply_demand_activity import (
+    ActivityDemandPhaseInputs,
+    _run_activity_demand_phase,
+)
+from tests.workflow_contract_harness import CouplerStub, build_settings
 from workflow_state import WorkflowState
 
 
@@ -120,6 +138,132 @@ def test_state_resume_after_interruption(tmp_path):
     assert resumed.current_major_stage == WorkflowState.Stage.land_use
     assert resumed.current_inner_iter == 1
     assert resumed.sub_stage_progress == "preprocess"
+
+
+def test_legacy_asim_compiled_state_does_not_control_primary_cache_hit(
+    tmp_path, monkeypatch
+):
+    """A legacy flag must not trigger work when the primary step is a cache hit."""
+
+    settings = build_settings(tmp_path)
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    with open(settings.state_file_loc, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(
+            {
+                "year": 2017,
+                "stage": "activity_demand",
+                "iteration": 0,
+                "asim_compiled": False,
+                "sub_stage_progress": None,
+                "run_info_path": None,
+                "data_initialized": True,
+            },
+            handle,
+        )
+
+    state = WorkflowState.from_settings(settings)
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    asim_data_dir = tmp_path / "activitysim-data"
+    asim_data_dir.mkdir()
+    for filename in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
+        (asim_data_dir / filename).write_text("input", encoding="utf-8")
+    asim_output_dir = tmp_path / "activitysim-output"
+    asim_output_dir.mkdir()
+
+    class _Workspace:
+        full_path = str(tmp_path)
+
+        def get_asim_mutable_data_dir(self):
+            return str(asim_data_dir)
+
+        def get_asim_runtime_cache_dir(self):
+            return str(asim_output_dir / "cache")
+
+        def get_asim_output_dir(self):
+            return str(asim_output_dir)
+
+    workspace = _Workspace()
+    coupler = CouplerStub()
+    population_source = tmp_path / "population.h5"
+    population_source.write_text("population", encoding="utf-8")
+    coupler.set(USIM_POPULATION_SOURCE_H5, str(population_source))
+    coupler.set(USIM_DATASTORE_CURRENT_H5, str(population_source))
+    outputs_holder = StepOutputsHolder()
+    recorded_steps = []
+    production_invocations = []
+    warmup_invocations = []
+
+    class _CacheHitStageRunner:
+        def __init__(self, *, outputs_holder, **_kwargs):
+            self.outputs_holder = outputs_holder
+
+        def run_step(self, *, step, **_kwargs):
+            recorded_steps.append(step.name)
+            if step.name == "activitysim_preprocess":
+                self.outputs_holder.activitysim_preprocess = (
+                    ActivitySimPreprocessOutputs(
+                        mutable_data_dir=asim_data_dir,
+                        land_use_table=asim_data_dir / "land_use.csv",
+                        households_table=asim_data_dir / "households.csv",
+                        persons_table=asim_data_dir / "persons.csv",
+                        omx_skims=asim_data_dir / "skims.omx",
+                    )
+                )
+            elif step.name == "activitysim_run":
+                # A Consist hit returns recovered outputs without invoking the callable.
+                self.outputs_holder.activitysim_run = ActivitySimRunOutputs(
+                    output_dir=asim_output_dir,
+                    raw_outputs={},
+                )
+            elif step.name == "activitysim_postprocess":
+                self.outputs_holder.activitysim_postprocess = (
+                    ActivitySimPostprocessOutputs(
+                        usim_datastore_h5=None,
+                        asim_output_dir=asim_output_dir,
+                        processed_outputs={},
+                    )
+                )
+            else:
+                warmup_invocations.append(step.name)
+
+    monkeypatch.setattr(supply_demand_activity, "StageRunner", _CacheHitStageRunner)
+
+    def _legacy_flag_must_not_be_read(_state):
+        raise AssertionError("legacy asim_compiled state controlled execution")
+
+    monkeypatch.setattr(
+        WorkflowState,
+        "asim_compiled",
+        property(_legacy_flag_must_not_be_read),
+    )
+
+    _run_activity_demand_phase(
+        scenario=object(),
+        coupler=coupler,
+        inputs=ActivityDemandPhaseInputs(
+            year=state.forecast_year,
+            iteration=0,
+            usim_inputs={USIM_POPULATION_SOURCE_H5: str(population_source)},
+        ),
+        outputs_holder=outputs_holder,
+        manifest_config=ManifestConfig(path=tmp_path / "manifest.yaml"),
+        context=WorkflowRuntimeContext.from_parts(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ),
+    )
+
+    assert recorded_steps == [
+        "activitysim_preprocess",
+        "activitysim_run",
+        "activitysim_postprocess",
+    ]
+    assert production_invocations == []
+    assert warmup_invocations == []
 
 
 def test_set_run_info_path_does_not_convert_fresh_run_into_restart(tmp_path):

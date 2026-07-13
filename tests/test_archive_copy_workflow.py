@@ -7,7 +7,6 @@ import queue
 import pytest
 
 from pilates.utils import coupler_helpers as ch
-from pilates.workflows.artifact_keys import ASIM_SHARROW_CACHE_DIR
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import StepOutputsHolder
 
@@ -398,25 +397,6 @@ def test_archive_copy_allows_beam_config_reference_snapshot_directory(
     )
     assert archived.exists()
     assert archived.read_text() == "network"
-
-
-def test_archive_copy_allows_activitysim_sharrow_cache_directory(monkeypatch, tmp_path):
-    local_root = tmp_path / "local" / "run"
-    archive_root = tmp_path / "archive" / "run"
-    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
-    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
-    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
-
-    directory = local_root / "shared_cache" / "numba"
-    _write_file(directory / "nested" / "entry.bin", "cache")
-
-    ch._enqueue_archive_copy(ASIM_SHARROW_CACHE_DIR, str(directory))
-    ch.flush_archive_queue(timeout=5)
-    ch.stop_archive_worker(timeout=5)
-
-    archived = archive_root / "shared_cache" / "numba" / "nested" / "entry.bin"
-    assert archived.exists()
-    assert archived.read_text() == "cache"
 
 
 @pytest.mark.parametrize(

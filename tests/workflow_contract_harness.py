@@ -302,7 +302,10 @@ class DummyRunner:
         workspace: Any,
         extra_inputs: Any = None,
         previous_beam_outputs: Any = None,
+        skim_mode: Any = None,
+        skip_numba_warmup: bool = False,
     ) -> Any:
+        del extra_inputs, previous_beam_outputs, skim_mode, skip_numba_warmup
         return _invoke_record_builder(
             self._record_builder,
             self.model_name,

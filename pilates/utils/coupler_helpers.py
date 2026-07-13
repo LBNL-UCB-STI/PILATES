@@ -30,9 +30,6 @@ from pilates.workflows.coupler_namespace import (
     namespaced_view_target,
     resolve_coupler_value,
 )
-from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
-)
 from pilates.runtime.archive_paths import (
     archive_roots as _archive_roots,
     resolve_archive_path as _resolve_archive_path,
@@ -53,7 +50,6 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "zarr_skims_*",
     "raw_od_skims_zarr_*",
     "asim_input_skims_zarr_archived",
-    ASIM_SHARROW_CACHE_DIR,
     "activitysim_bootstrap_data_root",
     "activitysim_bootstrap_configs_root",
     "atlas_input_year_dir",

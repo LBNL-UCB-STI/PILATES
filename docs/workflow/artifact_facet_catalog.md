@@ -74,13 +74,13 @@ ActivitySim uses a mix of staged-input keys and shared skim publications:
 | `ASIM_HOUSEHOLDS_IN` | Staged households input for ActivitySim. |
 | `ASIM_PERSONS_IN` | Staged persons input for ActivitySim. |
 | `ASIM_OMX_SKIMS` | ActivitySim OMX skims input staged for the run boundary. |
-| `ASIM_SHARROW_CACHE_DIR` | Optional persisted compile-cache directory. |
-| `ZARR_SKIMS` | Shared skims handoff used by ActivitySim and BEAM. |
+| `ZARR_SKIMS` | Shared skims handoff: produced by an OMX-mode `activitysim_run`, then consumed by a Zarr-mode `activitysim_run` or downstream model. |
 
 What to notice:
 
 - The input-table keys describe what PILATES stages into the ActivitySim run, not what ActivitySim conceptually represents.
-- `ZARR_SKIMS` is a cross-model handoff key, so its family-level meaning is larger than the ActivitySim compile step that may republish it.
+- `ZARR_SKIMS` is a cross-model handoff key. An ActivitySim run consumes it when available; otherwise the run consumes OMX skims and produces the first durable Zarr handoff.
+- Numba/Sharrow caches are node-local runtime preparation, not archived or replayed artifact families.
 
 ### BEAM families
 
