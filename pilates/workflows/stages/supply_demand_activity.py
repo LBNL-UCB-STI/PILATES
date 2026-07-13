@@ -505,6 +505,10 @@ def _run_activity_demand_phase(
     asim_run_input_keys = [key for key in asim_run_input_keys if key != ASIM_OMX_SKIMS]
     zarr_path = _resolved_existing_zarr_skims_path()
     skim_mode = "zarr" if zarr_path else "omx"
+    if zarr_path:
+        logger.info("ActivitySim skim source: reusable Zarr (%s).", zarr_path)
+    else:
+        logger.info("ActivitySim skim source: OMX conversion; Zarr will be produced.")
     if skim_mode == "zarr":
         asim_run_input_keys.append(ZARR_SKIMS)
     else:

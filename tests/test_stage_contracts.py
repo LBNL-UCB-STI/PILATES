@@ -94,7 +94,9 @@ from pilates.workflows.stages.supply_demand_beam import (
     _hydrate_completed_beam_run_outputs,
 )
 from pilates.workflows.stages.supply_demand_activity import (
+    ActivityDemandPhaseInputs,
     _activitysim_postprocess_role_binding_rules,
+    _run_activity_demand_phase,
 )
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
@@ -1317,6 +1319,83 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     ]
     assert asim_run_calls, "Expected an OMX-backed ActivitySim run step call."
     assert ZARR_SKIMS not in asim_run_calls[0]["input_keys"]
+
+
+def test_supply_demand_skim_source_logging(stage_env, tmp_path, caplog, monkeypatch):
+    """ActivitySim records whether it converts OMX or reuses Zarr skims."""
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+    state = stage_env["state"]
+    events = []
+    original_run = stage_env["scenario"].run
+
+    def _recording_run(**kwargs):
+        model = kwargs.get("model") or kwargs["fn"].__consist_step__.model
+        events.append(("scenario", model))
+        return original_run(**kwargs)
+
+    class _SkimSourceLogHandler(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("ActivitySim skim source:"):
+                events.append(("log", message))
+
+    def _run_phase(suffix):
+        state.current_major_stage = state.Stage.supply_demand_loop
+        state.current_sub_stage = state.Stage.activity_demand
+        state.current_inner_iter = 0
+        _run_activity_demand_phase(
+            scenario=stage_env["scenario"],
+            coupler=stage_env["coupler"],
+            inputs=ActivityDemandPhaseInputs(
+                year=state.forecast_year,
+                iteration=0,
+                usim_inputs=usim_inputs,
+            ),
+            outputs_holder=StepOutputsHolder(),
+            manifest_config=ManifestConfig(
+                path=tmp_path / f"manifest_skim_source_{suffix}.json"
+            ),
+            context=stage_env["context"],
+        )
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(stage_env["scenario"], "run", _recording_run)
+    stage_logger = logging.getLogger("pilates.workflows.stages.supply_demand_activity")
+    log_handler = _SkimSourceLogHandler()
+    stage_logger.addHandler(log_handler)
+    try:
+        _run_phase("omx")
+        zarr_path = (
+            Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+        )
+        stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
+        _run_phase("zarr")
+    finally:
+        stage_logger.removeHandler(log_handler)
+
+    omx_message = "ActivitySim skim source: OMX conversion; Zarr will be produced."
+    zarr_message = f"ActivitySim skim source: reusable Zarr ({zarr_path})."
+    source_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == stage_logger.name
+    ]
+    assert omx_message in source_messages
+    assert zarr_message in source_messages
+
+    activitysim_run_indices = [
+        index
+        for index, event in enumerate(events)
+        if event == ("scenario", "activitysim_run")
+    ]
+    assert len(activitysim_run_indices) == 2
+    assert events.index(("log", omx_message)) < activitysim_run_indices[0]
+    assert events.index(("log", zarr_message)) < activitysim_run_indices[1]
 
 
 def test_supply_demand_stage_temporarily_blocks_activity_demand_manifest_disablement(

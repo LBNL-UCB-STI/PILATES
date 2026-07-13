@@ -488,12 +488,18 @@ class ActivitysimRunner(GenericRunner):
                 input_path=str(input_path),
                 workspace=workspace,
             )
-        if (
-            not skip_numba_warmup
-            and persist_sharrow_cache_enabled(self.state.full_settings)
-            and self.state.full_settings.activitysim.num_processes > 1
-            and not _dir_contains_files(asim_sharrow_cache_dir(workspace))
-        ):
+        if skip_numba_warmup:
+            warmup_decision = "skipped (explicit rewind skip)"
+        elif not persist_sharrow_cache_enabled(self.state.full_settings):
+            warmup_decision = "skipped (persistent cache disabled)"
+        elif self.state.full_settings.activitysim.num_processes <= 1:
+            warmup_decision = "skipped (single-process run)"
+        elif _dir_contains_files(asim_sharrow_cache_dir(workspace)):
+            warmup_decision = "skipped (node-local cache present)"
+        else:
+            warmup_decision = "running"
+        logger.info("ActivitySim Numba warmup: %s", warmup_decision)
+        if warmup_decision == "running":
             ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
                 inputs, workspace
             )
