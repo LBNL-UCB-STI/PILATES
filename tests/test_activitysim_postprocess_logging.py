@@ -13,6 +13,7 @@ from pilates.activitysim.postprocessor import (
     ActivitysimPostprocessor,
     create_usim_input_data,
 )
+from pilates.generic.model_factory import ModelFactory
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.binding import BindingPlan
 from pilates.workflows.artifact_keys import (
@@ -362,7 +363,7 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
         )
     )
     monkeypatch.setattr(
-        steps_activitysim.ModelFactory,
+        ModelFactory,
         "get_postprocessor",
         lambda self, *args, **kwargs: fake_postprocessor,
     )
@@ -507,7 +508,7 @@ def test_activitysim_postprocess_rejects_legacy_only_run_outputs(
         postprocess=lambda raw_outputs, _workspace: raw_outputs
     )
     monkeypatch.setattr(
-        steps_activitysim.ModelFactory,
+        ModelFactory,
         "get_postprocessor",
         lambda self, *args, **kwargs: fake_postprocessor,
     )
@@ -586,7 +587,7 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(
         )
     )
     monkeypatch.setattr(
-        steps_activitysim.ModelFactory,
+        ModelFactory,
         "get_preprocessor",
         lambda self, *args, **kwargs: fake_preprocessor,
     )

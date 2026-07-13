@@ -896,15 +896,16 @@ def _execute_beam_run(
         raise RuntimeError("BEAM preprocess must complete first")
     if not isinstance(upstream, BeamPreprocessOutputs):
         raise TypeError("beam_run requires BeamPreprocessOutputs from beam_preprocess")
-    if isinstance(runner, BeamRunner):if _consist_ctx is None:
-        raise RuntimeError(
-            "beam_run requires the Consist run context for R5 validation."
+    if isinstance(runner, BeamRunner):
+        if _consist_ctx is None:
+            raise RuntimeError(
+                "beam_run requires the Consist run context for R5 validation."
+            )
+        validate_r5_execution_reference(
+            settings=runner.state.full_settings,
+            workspace=workspace,
+            run_context=_consist_ctx,
         )
-    validate_r5_execution_reference(
-        settings=runner.state.full_settings,
-        workspace=workspace,
-        run_context=_consist_ctx,
-    )
     return runner.run(
         upstream,
         workspace,
