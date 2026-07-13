@@ -21,8 +21,7 @@ summary: Meaning of major workflow artifacts and why semantic names matter even 
 | `OMX_SKIMS` / `omx_skims` | Default/bootstrap OMX skim source used by UrbanSim, ATLAS, and ActivitySim-compatible staging when no newer BEAM-produced OMX handoff is selected. |
 | `ASIM_LAND_USE_IN`, `ASIM_HOUSEHOLDS_IN`, `ASIM_PERSONS_IN` | Staged ActivitySim table inputs derived from the selected population-source datastore. |
 | `ASIM_OMX_SKIMS` | ActivitySim OMX skims input staged for the run boundary. |
-| `ASIM_SHARROW_CACHE_DIR` | Optional persisted ActivitySim compile cache directory. |
-| `ZARR_SKIMS` | Shared skims handoff used by ActivitySim and BEAM. |
+| `ZARR_SKIMS` | Shared skims handoff used by ActivitySim and BEAM. ActivitySim consumes it when available; otherwise its primary run consumes OMX skims and publishes finalized Zarr skims. |
 | `BEAM_PLANS_IN`, `BEAM_HOUSEHOLDS_IN`, `BEAM_PERSONS_IN` | Staged BEAM inputs derived from the demand-side workflow state. |
 | `LINKSTATS` | Canonical BEAM linkstats output publication. |
 | `FINAL_SKIMS_OMX` | Final BEAM OMX skims output and the preferred updated OMX handoff for later UrbanSim/ATLAS/ActivitySim preprocessing when available. |
@@ -44,6 +43,11 @@ summary: Meaning of major workflow artifacts and why semantic names matter even 
 - Do not infer scientific meaning from a key name unless the code or tests demonstrate it.
 - Do not treat every registry entry as equally prominent in the current workflow. This page only describes the keys that the current runtime and tests exercise directly.
 - If a key is only present as a compatibility alias or legacy restart artifact, say that explicitly.
+- Numba/Sharrow cache files are workspace-local ActivitySim execution
+  preparation, not workflow artifacts. They are neither archived nor
+  recovered, and they do not contribute to cache identity. Warmup happens only
+  for a primary ActivitySim execution that needs it; a primary cache hit does
+  not warm it.
 
 ## Adjacent Pages
 

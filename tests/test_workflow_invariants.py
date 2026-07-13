@@ -53,7 +53,6 @@ from pilates.workflows.orchestration import (
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    make_activitysim_compile_step,
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
@@ -102,7 +101,6 @@ def _declared_schema_steps():
         make_atlas_run_step(coupler=coupler, outputs_holder=holder),
         make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder),
-        make_activitysim_compile_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_run_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder),
         make_beam_preprocess_step(coupler=coupler, outputs_holder=holder),

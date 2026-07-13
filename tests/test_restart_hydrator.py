@@ -118,7 +118,7 @@ def test_restart_artifact_producers_applies_traffic_assignment_overrides():
         enabled_models=("activitysim", "beam"),
     )
 
-    assert producers["zarr_skims"][0].step_name == "activitysim_compile"
+    assert producers["zarr_skims"][0].step_name == "activitysim_run"
     assert producers["beam_plans_asim_out"][0].step_name == "activitysim_postprocess"
     assert producers["households_asim_out"][0].step_name == "activitysim_postprocess"
     assert producers["persons_asim_out"][0].step_name == "activitysim_postprocess"

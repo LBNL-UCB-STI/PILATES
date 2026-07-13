@@ -17,7 +17,6 @@ from pathlib import Path
 import pandas as pd
 
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -405,11 +404,6 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
                     },
                 )
         if phase == "run":
-            if model_name == "activitysim_compile":
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=sharrow_cache_dir,
-                )
             if model_name == "activitysim":
                 return ActivitySimRunOutputs(
                     output_dir=Path(workspace.get_asim_output_dir()),

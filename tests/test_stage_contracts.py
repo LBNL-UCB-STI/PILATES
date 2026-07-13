@@ -33,7 +33,6 @@ from pilates.generic.records import RecordStore
 from pilates.utils import coupler_helpers
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -55,7 +54,6 @@ from pilates.urbansim.outputs import (
     UrbanSimRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
@@ -96,7 +94,9 @@ from pilates.workflows.stages.supply_demand_beam import (
     _hydrate_completed_beam_run_outputs,
 )
 from pilates.workflows.stages.supply_demand_activity import (
+    ActivityDemandPhaseInputs,
     _activitysim_postprocess_role_binding_rules,
+    _run_activity_demand_phase,
 )
 from pilates.workflows.stages.supply_demand_resume import (
     _restore_activity_demand_outputs_for_resume,
@@ -433,7 +433,12 @@ def stage_env(tmp_path, monkeypatch):
         path.mkdir(parents=True, exist_ok=True)
 
     beam_config_path = beam_dir / settings.run.region / settings.beam.config
-    _write_file(beam_config_path)
+    r5_dir = beam_config_path.parent / "r5"
+    _write_file(r5_dir / "network.osm.pbf")
+    _write_file(
+        beam_config_path,
+        f'beam.routing.r5.directory = "{r5_dir}"\n',
+    )
 
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
@@ -544,13 +549,6 @@ def stage_env(tmp_path, monkeypatch):
                     output_dir=asim_out_dir,
                     raw_outputs={},
                 )
-            if model_name == "activitysim_compile":
-                _write_file(zarr_path)
-                _write_file(numba_cache_path / "cache.bin")
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=numba_cache_path,
-                )
             if model_name == "beam":
                 return BeamRunOutputs(
                     beam_output_dir=beam_out_dir,
@@ -605,7 +603,7 @@ def stage_env(tmp_path, monkeypatch):
         return DummyPreprocessor(model_name, record_builder)
 
     def _make_runner(self, model_name, state=None, *_args, **_kwargs):
-        return DummyRunner(model_name, record_builder)
+        return DummyRunner(model_name, record_builder, state)
 
     def _make_postprocessor(self, model_name, state=None, *_args, **_kwargs):
         return DummyPostprocessor(model_name, record_builder)
@@ -1313,13 +1311,91 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     asim_run_calls = [
         call
         for call in stage_env["scenario"].calls
-        if ZARR_SKIMS in (call.get("input_keys") or [])
+        if call.get("model") == "activitysim_run"
+        and ASIM_OMX_SKIMS in (call.get("input_keys") or [])
         and ASIM_HOUSEHOLDS_IN in (call.get("input_keys") or [])
         and ASIM_PERSONS_IN in (call.get("input_keys") or [])
         and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
     ]
-    assert asim_run_calls, "Expected an ActivitySim run step call."
-    assert ASIM_OMX_SKIMS not in asim_run_calls[0]["input_keys"]
+    assert asim_run_calls, "Expected an OMX-backed ActivitySim run step call."
+    assert ZARR_SKIMS not in asim_run_calls[0]["input_keys"]
+
+
+def test_supply_demand_skim_source_logging(stage_env, tmp_path, caplog, monkeypatch):
+    """ActivitySim records whether it converts OMX or reuses Zarr skims."""
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    usim_inputs = {
+        USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+        USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+    }
+    state = stage_env["state"]
+    events = []
+    original_run = stage_env["scenario"].run
+
+    def _recording_run(**kwargs):
+        model = kwargs.get("model") or kwargs["fn"].__consist_step__.model
+        events.append(("scenario", model))
+        return original_run(**kwargs)
+
+    class _SkimSourceLogHandler(logging.Handler):
+        def emit(self, record):
+            message = record.getMessage()
+            if message.startswith("ActivitySim skim source:"):
+                events.append(("log", message))
+
+    def _run_phase(suffix):
+        state.current_major_stage = state.Stage.supply_demand_loop
+        state.current_sub_stage = state.Stage.activity_demand
+        state.current_inner_iter = 0
+        _run_activity_demand_phase(
+            scenario=stage_env["scenario"],
+            coupler=stage_env["coupler"],
+            inputs=ActivityDemandPhaseInputs(
+                year=state.forecast_year,
+                iteration=0,
+                usim_inputs=usim_inputs,
+            ),
+            outputs_holder=StepOutputsHolder(),
+            manifest_config=ManifestConfig(
+                path=tmp_path / f"manifest_skim_source_{suffix}.json"
+            ),
+            context=stage_env["context"],
+        )
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(stage_env["scenario"], "run", _recording_run)
+    stage_logger = logging.getLogger("pilates.workflows.stages.supply_demand_activity")
+    log_handler = _SkimSourceLogHandler()
+    stage_logger.addHandler(log_handler)
+    try:
+        _run_phase("omx")
+        zarr_path = (
+            Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
+        )
+        stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
+        _run_phase("zarr")
+    finally:
+        stage_logger.removeHandler(log_handler)
+
+    omx_message = "ActivitySim skim source: OMX conversion; Zarr will be produced."
+    zarr_message = f"ActivitySim skim source: reusable Zarr ({zarr_path})."
+    source_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == stage_logger.name
+    ]
+    assert omx_message in source_messages
+    assert zarr_message in source_messages
+
+    activitysim_run_indices = [
+        index
+        for index, event in enumerate(events)
+        if event == ("scenario", "activitysim_run")
+    ]
+    assert len(activitysim_run_indices) == 2
+    assert events.index(("log", omx_message)) < activitysim_run_indices[0]
+    assert events.index(("log", zarr_message)) < activitysim_run_indices[1]
 
 
 def test_supply_demand_stage_temporarily_blocks_activity_demand_manifest_disablement(
@@ -1355,7 +1431,7 @@ def test_supply_demand_stage_temporarily_blocks_activity_demand_manifest_disable
         )
 
 
-def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
+def test_supply_demand_does_not_schedule_standalone_warmup_when_numba_cache_missing(
     stage_env, tmp_path
 ):
     beam_config_path = (
@@ -1363,7 +1439,7 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
         / stage_env["settings"].run.region
         / stage_env["settings"].beam.config
     )
-    _write_file(beam_config_path)
+    assert beam_config_path.exists()
 
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
@@ -1377,10 +1453,10 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
 
-    # Simulate restart state claiming ActivitySim is already compiled.
+    # Simulate a restart with reusable Zarr skims but no node-local Numba cache.
     state.compile_asim()
 
-    # Keep zarr skims present but delete numba cache to trigger forced compile.
+    # Numba warmup is private runner behavior, not an independently scheduled step.
     zarr_path = (
         Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
     )
@@ -1408,11 +1484,9 @@ def test_supply_demand_forces_compile_when_numba_cache_missing_for_multiprocess(
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
-    assert compile_calls, (
-        "Expected forced ActivitySim compile when numba cache is missing."
-    )
+    assert not compile_calls
 
 
 def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
@@ -1423,7 +1497,7 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
         / stage_env["settings"].run.region
         / stage_env["settings"].beam.config
     )
-    _write_file(beam_config_path)
+    assert beam_config_path.exists()
 
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
     stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
@@ -1461,7 +1535,7 @@ def test_supply_demand_republishes_existing_zarr_skims_on_compiled_restart(
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
     assert not compile_calls, (
         "Did not expect ActivitySim compile when local artifacts already exist."
@@ -1477,7 +1551,7 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
         / stage_env["settings"].run.region
         / stage_env["settings"].beam.config
     )
-    _write_file(beam_config_path)
+    assert beam_config_path.exists()
 
     stage_env["settings"].activitysim.num_processes = 25
     stage_env["settings"].activitysim.persist_sharrow_cache = True
@@ -1529,15 +1603,6 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
             archive_root=archive_root,
         ),
     )
-    stage_env["coupler"].set(
-        ASIM_SHARROW_CACHE_DIR,
-        _ArchivedCompileArtifact(
-            key=ASIM_SHARROW_CACHE_DIR,
-            local_path=numba_cache_dir,
-            local_root=local_root,
-            archive_root=archive_root,
-        ),
-    )
     monkeypatch.setattr(
         coupler_helpers.cr,
         "current_tracker",
@@ -1561,15 +1626,13 @@ def test_supply_demand_republishes_compile_artifacts_from_archive_on_compiled_re
     compile_calls = [
         call
         for call in stage_env["scenario"].calls
-        if call.get("model") == "activitysim_compile"
+        if call.get("model") == "activitysim_numba_warmup"
     ]
     assert not compile_calls, (
         "Did not expect ActivitySim compile when archive artifacts exist."
     )
     assert zarr_path.exists()
-    assert numba_cache_dir.exists()
     assert stage_env["coupler"].get(ZARR_SKIMS) is not None
-    assert stage_env["coupler"].get(ASIM_SHARROW_CACHE_DIR) is not None
 
 
 def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
@@ -1580,7 +1643,7 @@ def test_supply_demand_activitysim_preprocess_prefers_explicit_beam_omx(
         / stage_env["settings"].run.region
         / stage_env["settings"].beam.config
     )
-    _write_file(beam_config_path)
+    assert beam_config_path.exists()
 
     explicit_final_omx = (
         Path(stage_env["workspace"].get_beam_output_dir()) / "explicit-final-skims.omx"
@@ -2238,8 +2301,6 @@ def test_supply_demand_activitysim_run_keeps_numba_cache_optional(stage_env, tmp
     assert run_calls, "Expected an ActivitySim run step call."
     binding = run_calls[0].get("binding")
     assert isinstance(binding, BindingResult)
-    assert ASIM_SHARROW_CACHE_DIR not in (binding.input_keys or [])
-    assert ASIM_SHARROW_CACHE_DIR in (binding.optional_input_keys or [])
 
 
 def test_supply_demand_stage_flushes_and_enqueues_manifest(
@@ -4293,6 +4354,9 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
             )
 
     class _BeamRunnerWithSubIterationOutputs:
+        def __init__(self, state):
+            self.state = state
+
         def run(self, inputs, workspace, **_kwargs):
             beam_out = Path(workspace.get_beam_output_dir())
             skim_sub0 = beam_out / "0.skimsActivitySimOD_current.zarr"
@@ -4317,7 +4381,7 @@ def test_beam_postprocess_uses_explicit_sub_iteration_run_artifacts(
 
     def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
         if model_name == "beam":
-            return _BeamRunnerWithSubIterationOutputs()
+            return _BeamRunnerWithSubIterationOutputs(state)
         return original_get_runner(self, model_name, state)
 
     monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)

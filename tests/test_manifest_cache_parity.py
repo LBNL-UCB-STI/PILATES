@@ -17,7 +17,6 @@ from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
-    ASIM_SHARROW_CACHE_DIR,
     ASIM_PERSONS_IN,
     BEAM_CONFIG_FILE,
     USIM_DATASTORE_BASE_H5,
@@ -995,15 +994,7 @@ def test_activitysim_run_downstream_state_matches_across_fresh_cache_and_manifes
     )
 
 
-@pytest.mark.parametrize(
-    ("cache_present", "expects_optional_key"),
-    [(False, False), (True, True)],
-)
-def test_activitysim_run_binding_tracks_optional_sharrow_cache_dir(
-    tmp_path,
-    cache_present,
-    expects_optional_key,
-):
+def test_activitysim_run_binding_excludes_local_numba_cache(tmp_path):
     workspace = DummyWorkspace(tmp_path)
     asim_output_dir = Path(workspace.get_asim_output_dir())
     final_pipeline = asim_output_dir / "final_pipeline"
@@ -1042,10 +1033,6 @@ def test_activitysim_run_binding_tracks_optional_sharrow_cache_dir(
     zarr_path = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
     _write_file(zarr_path)
     binding_coupler.set(ZARR_SKIMS, str(zarr_path))
-    cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
-    if cache_present:
-        _write_file(cache_dir / "entry.bin")
-        binding_coupler.set(ASIM_SHARROW_CACHE_DIR, str(cache_dir))
 
     binding = _build_step_binding(
         step_name="activitysim_run",
@@ -1163,14 +1150,8 @@ def test_activitysim_run_binding_tracks_optional_sharrow_cache_dir(
     assert manifest_result["scenario"].calls == []
     fresh_binding = fresh_result["scenario"].calls[0]["binding"]
     cache_binding = cache_result["scenario"].calls[0]["binding"]
-    assert ASIM_SHARROW_CACHE_DIR not in (fresh_binding.input_keys or [])
-    assert ASIM_SHARROW_CACHE_DIR not in (cache_binding.input_keys or [])
-    if expects_optional_key:
-        assert ASIM_SHARROW_CACHE_DIR in (fresh_binding.optional_input_keys or [])
-        assert ASIM_SHARROW_CACHE_DIR in (cache_binding.optional_input_keys or [])
-    else:
-        assert ASIM_SHARROW_CACHE_DIR not in (fresh_binding.optional_input_keys or [])
-        assert ASIM_SHARROW_CACHE_DIR not in (cache_binding.optional_input_keys or [])
+    assert fresh_binding.input_keys == cache_binding.input_keys
+    assert fresh_binding.optional_input_keys == cache_binding.optional_input_keys
 
 
 @pytest.mark.parametrize(

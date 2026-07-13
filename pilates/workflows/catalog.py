@@ -62,7 +62,6 @@ from pilates.workflows.artifact_keys import (
     BEAM_PLANS_IN,
     FINAL_SKIMS_OMX,
     ATLAS_VEHICLES2_OUTPUT,
-    ASIM_SHARROW_CACHE_DIR,
     LINKSTATS_WARMSTART,
     OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
@@ -411,22 +410,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         provenance=_ACTIVITYSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
-        step_name="activitysim_compile",
-        phase="compile",
-        stage_name="activity_demand",
-        order=80,
-        outputs_class=None,
-        input_keys=(ASIM_OMX_SKIMS,),
-        output_keys=(ZARR_SKIMS,),
-        optional_output_keys=(ASIM_SHARROW_CACHE_DIR,),
-        tracked=False,
-        depends_on=("activitysim_preprocess",),
-        holder_inputs=("activitysim_preprocess",),
-        upstream_step_inputs=("activitysim_preprocess",),
-        enabled_flag_attr="activity_demand_enabled",
-        enabled_model_attr="activity_demand",
-    ),
-    WorkflowStepSpec(
         step_name="activitysim_run",
         phase="run",
         stage_name="activity_demand",
@@ -438,9 +421,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             ASIM_PERSONS_IN,
             ZARR_SKIMS,
         ),
-        optional_input_keys=(ASIM_SHARROW_CACHE_DIR,),
         output_keys=(*ASIM_REQUIRED_RUN_OUTPUT_KEYS,),
-        optional_output_keys=ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+        optional_output_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, ZARR_SKIMS),
         depends_on=("activitysim_preprocess",),
         holder_inputs=("activitysim_preprocess",),
         upstream_step_inputs=("activitysim_preprocess",),
@@ -759,13 +741,6 @@ def _restart_producer_candidates_by_key() -> Dict[
 
 _RESTART_PRODUCER_OVERRIDES: Tuple[RestartProducerOverride, ...] = (
     RestartProducerOverride(
-        key=ZARR_SKIMS,
-        producer_step="activitysim_compile",
-        frontier_stages=frozenset({"traffic_assignment"}),
-        required_models=frozenset({"activitysim", "beam"}),
-        priority=100,
-    ),
-    RestartProducerOverride(
         key="beam_plans_asim_out",
         producer_step="activitysim_postprocess",
         frontier_stages=frozenset({"traffic_assignment"}),
@@ -794,6 +769,7 @@ def restart_artifact_producers(
     frontier_stage: Optional[str] = None,
     enabled_models: Optional[Sequence[str]] = None,
 ) -> Dict[str, Tuple[RestartProducerCandidate, ...]]:
+    """Return static restart producer candidates for inspection tooling."""
     enabled_model_set = frozenset(
         str(model)
         for model in (enabled_models or ())
@@ -1058,9 +1034,8 @@ def runtime_step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str
     """
     Return runtime dependency specs for all declared workflow steps.
 
-    Unlike ``step_dependencies_from_catalog()``, this includes intentional
-    untracked steps such as ``activitysim_compile`` that still need startup
-    ordering checks but do not participate in typed output reconstruction.
+    Unlike ``step_dependencies_from_catalog()``, this preserves all catalog
+    dependencies used by startup ordering checks and typed output reconstruction.
     """
     dependencies: Dict[str, Dict[str, Sequence[str]]] = {}
     for spec in WORKFLOW_STEP_SPECS:

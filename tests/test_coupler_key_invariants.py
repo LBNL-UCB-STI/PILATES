@@ -160,7 +160,17 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             )
 
     class _ActivitySimRunner:
-        def run(self, input_store, workspace, *, extra_inputs=None):
+        def run(
+            self,
+            input_store,
+            workspace,
+            *,
+            extra_inputs=None,
+            skim_mode="zarr",
+            skip_numba_warmup=False,
+        ):
+            assert skim_mode == "omx"
+            assert not skip_numba_warmup
             output_dir = Path(workspace.get_asim_output_dir())
             raw_outputs = {
                 "beam_plans_asim_out": output_dir / "beam_plans.csv",
@@ -169,8 +179,12 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
             }
             for path in raw_outputs.values():
                 _write_file(path)
+            zarr_skims = Path(workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
+            if not zarr_skims.exists():
+                zarr_skims.mkdir(parents=True)
             return ActivitySimRunOutputs(
                 output_dir=output_dir,
+                zarr_skims=zarr_skims,
                 raw_outputs=raw_outputs,
             )
 
@@ -265,7 +279,7 @@ def test_activity_demand_boundary_publishes_activitysim_key_family(
     )
 
 
-def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
+def test_activity_demand_exact_rewind_skips_preprocess_runs_from_omx_and_publishes_zarr(
     stage_env, monkeypatch, tmp_path
 ):
     state = stage_env["state"]
@@ -298,9 +312,19 @@ def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
     original_get_postprocessor = ModelFactory.get_postprocessor
 
     class _ActivitySimRunner:
-        def run(self, input_store, workspace, *, extra_inputs=None):
+        def run(
+            self,
+            input_store,
+            workspace,
+            *,
+            extra_inputs=None,
+            skim_mode="zarr",
+            skip_numba_warmup=False,
+        ):
             assert input_store.omx_skims == data_dir / "skims.omx"
             assert extra_inputs == {}
+            assert skim_mode == "omx"
+            assert skip_numba_warmup
             output_dir = Path(workspace.get_asim_output_dir())
             raw_outputs = {
                 "beam_plans_asim_out": output_dir / "beam_plans.csv",
@@ -309,8 +333,12 @@ def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
             }
             for path in raw_outputs.values():
                 _write_file(path)
+            zarr_skims = Path(workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
+            if not zarr_skims.exists():
+                zarr_skims.mkdir(parents=True)
             return ActivitySimRunOutputs(
                 output_dir=output_dir,
+                zarr_skims=zarr_skims,
                 raw_outputs=raw_outputs,
             )
 
@@ -381,7 +409,7 @@ def test_activity_demand_exact_rewind_skips_preprocess_and_runs_without_zarr(
         outputs_holder.activitysim_preprocess.households_table
         == data_dir / "households.csv"
     )
-    assert ZARR_SKIMS not in _coupler_keys(stage_env["coupler"])
+    assert ZARR_SKIMS in _coupler_keys(stage_env["coupler"])
 
 
 def test_traffic_assignment_boundary_publishes_beam_key_family(

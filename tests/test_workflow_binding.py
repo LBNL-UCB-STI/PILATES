@@ -11,7 +11,6 @@ from consist import define_step
 from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
-    ASIM_SHARROW_CACHE_DIR,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -75,7 +74,7 @@ def _surface_stub(
 
 def test_binding_plan_converts_to_consist_binding_result():
     plan = BindingPlan(
-        step_name="activitysim_compile",
+        step_name="neutral_step",
         inputs={"asim_omx_skims": "/tmp/skims.omx"},
         input_keys=["asim_omx_skims"],
         optional_input_keys=["maybe_optional"],
@@ -92,13 +91,8 @@ def test_binding_plan_converts_to_consist_binding_result():
     assert plan.to_scenario_run_kwargs()["binding"] == binding
 
 
-def test_binding_spec_for_step_name_derives_from_catalog():
-    spec = binding_spec_for_step_name("activitysim_compile")
-
-    assert spec is not None
-    assert spec.step_name == "activitysim_compile"
-    assert spec.semantic_input_keys() == (ASIM_OMX_SKIMS,)
-    assert spec.semantic_output_keys() == ("zarr_skims",)
+def test_binding_spec_for_step_name_rejects_retired_compile_step():
+    assert binding_spec_for_step_name("activitysim_compile") is None
 
 
 def test_build_binding_plan_applies_beam_preprocess_preferred_key_overrides():
@@ -1200,7 +1194,6 @@ def test_build_key_only_binding_plan_preserves_optional_key_split():
         {
             "asim_land_use_in": "workspace://land_use.csv",
             "zarr_skims": "workspace://skims.zarr",
-            ASIM_SHARROW_CACHE_DIR: "workspace://numba",
         }
     )
     plan = build_key_only_binding_plan(
@@ -1208,9 +1201,8 @@ def test_build_key_only_binding_plan_preserves_optional_key_split():
         input_keys=[
             "asim_land_use_in",
             "zarr_skims",
-            ASIM_SHARROW_CACHE_DIR,
         ],
-        optional_input_keys=[ASIM_SHARROW_CACHE_DIR],
+        optional_input_keys=[],
         coupler=coupler,
     )
 
@@ -1219,8 +1211,7 @@ def test_build_key_only_binding_plan_preserves_optional_key_split():
         "asim_land_use_in",
         "zarr_skims",
     ]
-    assert plan.optional_input_keys == [ASIM_SHARROW_CACHE_DIR]
-    assert plan.source_by_key[ASIM_SHARROW_CACHE_DIR] == "coupler"
+    assert plan.optional_input_keys == []
     assert not plan.missing_required
 
 
@@ -1237,15 +1228,15 @@ def test_run_workflow_passes_binding_result_without_manual_input_split():
         update=lambda *args, **kwargs: None,
     )
 
-    @define_step(model="activitysim_compile")
+    @define_step(model="neutral_step")
     def _dummy_step(settings, state, workspace, **kwargs):
         return None
 
     step = StepRef(
-        name="activitysim_compile",
+        name="neutral_step",
         step_func=_dummy_step,
         binding=BindingPlan(
-            step_name="activitysim_compile",
+            step_name="neutral_step",
             inputs={ASIM_OMX_SKIMS: "/tmp/skims.omx"},
         ),
     )

@@ -592,7 +592,6 @@ class _PlanBuilder:
         total_iters = self._effective_supply_demand_iterations()
         activity_enabled = self._stage_enabled("activity_demand")
         traffic_enabled = self._stage_enabled("traffic_assignment")
-        compile_added = False
         schedule = _full_skim_run_schedule(self.settings)
 
         for iteration in range(total_iters):
@@ -603,14 +602,6 @@ class _PlanBuilder:
                     forecast_year=forecast_year,
                     iteration=iteration,
                 )
-                if not compile_added:
-                    self._add_step_run(
-                        "activitysim_compile",
-                        year=year,
-                        forecast_year=forecast_year,
-                        iteration=iteration,
-                    )
-                    compile_added = True
                 self._add_step_run(
                     "activitysim_run",
                     year=year,

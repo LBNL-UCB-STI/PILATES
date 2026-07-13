@@ -44,7 +44,6 @@ from pilates.workflows.outputs_base import required_outputs_for_step_outputs_cla
 from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    make_activitysim_compile_step,
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
     make_activitysim_run_step,
@@ -84,7 +83,6 @@ def _declared_schema_steps():
         make_atlas_run_step(coupler=coupler, outputs_holder=holder),
         make_atlas_postprocess_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder),
-        make_activitysim_compile_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_run_step(coupler=coupler, outputs_holder=holder),
         make_activitysim_postprocess_step(coupler=coupler, outputs_holder=holder),
         make_beam_preprocess_step(coupler=coupler, outputs_holder=holder),
@@ -285,14 +283,8 @@ def test_validate_workflow_step_contracts_detects_bad_dependency_reference(monke
         )
 
 
-def test_validate_step_ready_enforces_untracked_activitysim_compile_inputs():
-    holder = StepOutputsHolder()
-
-    with pytest.raises(
-        RuntimeError,
-        match="activitysim_compile requires activitysim_preprocess to complete first",
-    ):
-        step_shared.validate_step_ready("activitysim_compile", holder)
+def test_retired_activitysim_compile_step_is_not_a_runtime_dependency():
+    assert "activitysim_compile" not in step_shared.STEP_RUNTIME_DEPENDENCIES
 
 
 def test_validate_workflow_step_contracts_flags_untracked_declared_steps():

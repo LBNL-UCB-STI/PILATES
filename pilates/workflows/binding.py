@@ -47,8 +47,6 @@ from pilates.utils.usim_h5 import (
 )
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
-    ASIM_OMX_SKIMS,
-    ASIM_SHARROW_CACHE_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
@@ -59,7 +57,6 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS,
     LINKSTATS_WARMSTART,
     OMX_SKIMS,
-    ZARR_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_FORECAST_OUTPUT,
@@ -1039,12 +1036,6 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 required=False,
             ),
         ),
-        "activitysim_compile": (
-            ArtifactBindingRule(
-                semantic_key=ASIM_OMX_SKIMS,
-                required=True,
-            ),
-        ),
         "activitysim_postprocess": (
             ArtifactBindingRule(
                 semantic_key=USIM_DATASTORE_CURRENT_H5,
@@ -1494,42 +1485,6 @@ def build_key_only_binding_plan(
     )
 
 
-def _bootstrap_activitysim_durable_artifacts(
-    *,
-    settings: Any,
-    workspace: Any,
-    **_: Any,
-) -> Optional[Mapping[str, str]]:
-    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
-    if activity_demand_model != "activitysim":
-        return None
-
-    artifacts: Dict[str, str] = {}
-    get_asim_runtime_cache_dir = getattr(workspace, "get_asim_runtime_cache_dir", None)
-    zarr_candidate = None
-    if callable(get_asim_runtime_cache_dir):
-        zarr_candidate = os.path.join(get_asim_runtime_cache_dir(), "skims.zarr")
-    else:
-        get_asim_output_dir = getattr(workspace, "get_asim_output_dir", None)
-        if callable(get_asim_output_dir):
-            zarr_candidate = os.path.join(get_asim_output_dir(), "cache", "skims.zarr")
-    if zarr_candidate and os.path.exists(zarr_candidate):
-        artifacts[ZARR_SKIMS] = zarr_candidate
-
-    sharrow_cache_dir = os.path.join(
-        getattr(workspace, "full_path", ""),
-        "shared_cache",
-        "numba",
-    )
-    if os.path.isdir(sharrow_cache_dir):
-        for _root, _dirs, files in os.walk(sharrow_cache_dir):
-            if files:
-                artifacts[ASIM_SHARROW_CACHE_DIR] = sharrow_cache_dir
-                break
-    return artifacts or None
-
-
 def _bootstrap_beam_exchange_inputs(
     *,
     settings: Any,
@@ -1612,15 +1567,6 @@ def bootstrap_stage_boundary_durability_policy() -> tuple[
     """
 
     return (
-        StageBoundaryDurabilityRule(
-            name="activitysim_bootstrap_artifacts",
-            semantic_keys=(ZARR_SKIMS, ASIM_SHARROW_CACHE_DIR),
-            resolve=_bootstrap_activitysim_durable_artifacts,
-            notes=(
-                "ActivitySim bootstrap should publish compiled skims and the "
-                "persisted numba/sharrow cache when present."
-            ),
-        ),
         StageBoundaryDurabilityRule(
             name="beam_exchange_inputs",
             semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),

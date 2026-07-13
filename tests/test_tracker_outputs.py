@@ -38,7 +38,7 @@ def test_merge_canonical_output_mappings_prefers_later_mappings():
 
 def test_activitysim_cached_run_outputs_use_shared_tracker_helper(monkeypatch):
     tracker = _FakeTracker({"urbansim/usim_datastore_h5": "/tmp/model_data.h5"})
-    monkeypatch.setattr(activitysim_steps.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(tracker_outputs.cr, "current_tracker", lambda: tracker)
 
     assert activitysim_steps._resolve_cached_run_outputs("run-1") == {
         "usim_datastore_h5": "/tmp/model_data.h5",

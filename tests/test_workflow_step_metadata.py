@@ -39,8 +39,6 @@ from pilates.workflows.orchestration import (
 from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_class
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    activitysim_compile_output_paths,
-    make_activitysim_compile_step,
     make_activitysim_postprocess_step,
     make_atlas_postprocess_step,
     make_atlas_preprocess_step,
@@ -61,7 +59,6 @@ from pilates.urbansim.outputs import (
     UrbanSimRunOutputs,
 )
 from pilates.workflows.artifact_keys import (
-    ASIM_SHARROW_CACHE_DIR,
     FINAL_SKIMS_OMX,
     ZARR_SKIMS,
 )
@@ -111,27 +108,17 @@ def test_make_step_factories_attach_consist_metadata():
         coupler=coupler,
         outputs_holder=holder,
     )
-    compile_step = make_activitysim_compile_step(
-        coupler=coupler,
-        outputs_holder=holder,
-    )
 
     assert hasattr(preprocess_step, "__consist_step__")
-    assert hasattr(compile_step, "__consist_step__")
 
     preprocess_meta = preprocess_step.__consist_step__
-    compile_meta = compile_step.__consist_step__
 
     assert preprocess_meta.model == "activitysim_preprocess"
-    assert compile_meta.model == "activitysim_compile"
     assert preprocess_meta.outputs == [
         ASIM_LAND_USE_IN,
         ASIM_HOUSEHOLDS_IN,
         ASIM_PERSONS_IN,
     ]
-    assert compile_meta.outputs == ["zarr_skims"]
-    assert compile_meta.output_paths is activitysim_compile_output_paths
-    assert compile_meta.cache_mode == "overwrite"
     assert (
         preprocess_meta.name_template
         == "{func_name}__y{year}__i{iteration}__phase_{phase}"
@@ -140,7 +127,6 @@ def test_make_step_factories_attach_consist_metadata():
     assert callable(preprocess_meta.config)
     assert callable(preprocess_meta.identity_inputs)
     assert callable(preprocess_meta.facet)
-    assert compile_meta.cache_hydration == "metadata"
 
 
 def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
@@ -246,7 +232,6 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
         settings=settings, state=state, workspace=workspace
     )
     assert run_inputs[ZARR_SKIMS] == str(zarr_path)
-    assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(sharrow_cache_dir)
     assert run_outputs["beam_plans_asim_out"] == str(
         final_pipeline_dir / "beam_plans" / "final.parquet"
     )
@@ -361,9 +346,6 @@ def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_wo
     assert run_inputs[ZARR_SKIMS] == str(
         tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
-    assert run_inputs[ASIM_SHARROW_CACHE_DIR] == str(
-        tmp_path / "shared_cache" / "numba"
-    )
     assert postprocess_inputs[ZARR_SKIMS] == str(
         tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
@@ -381,7 +363,6 @@ def test_activitysim_step_factories_preserve_requested_staging_paths_on_fresh_wo
     assert preprocess_runtime_inputs["usim_population_source_h5"] is None
     assert preprocess_runtime_inputs[FINAL_SKIMS_OMX] is None
     assert run_runtime_inputs[ZARR_SKIMS] is None
-    assert run_runtime_inputs[ASIM_SHARROW_CACHE_DIR] is None
     assert postprocess_runtime_inputs["asim_output_dir"] is None
     assert postprocess_runtime_inputs[ZARR_SKIMS] is None
 

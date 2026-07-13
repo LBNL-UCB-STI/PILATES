@@ -175,22 +175,7 @@ ActivitySim or restart binding from treating every H5 path as the same concept.
 
 **Why the next step cares**
 
-- compile and run operate on staged ActivitySim inputs rather than re-deriving them from the datastore each time
-
-#### `activitysim_compile`
-
-**Reads**
-
-- the staged ActivitySim inputs and shared skim state available to the compile path
-
-**Publishes**
-
-- `ASIM_SHARROW_CACHE_DIR` when the compile cache is materialized
-- `ZARR_SKIMS` when the compile path republishes the shared skims handoff used by ActivitySim and BEAM
-
-**Why the next step cares**
-
-- the run boundary and later BEAM/analysis paths can reuse these published compile products
+- `activitysim_run` operates on these staged inputs rather than re-deriving them from the datastore each time
 
 #### `activitysim_run`
 
@@ -199,15 +184,17 @@ ActivitySim or restart binding from treating every H5 path as the same concept.
 - `ASIM_LAND_USE_IN`
 - `ASIM_HOUSEHOLDS_IN`
 - `ASIM_PERSONS_IN`
-- `ASIM_OMX_SKIMS`
+- `ZARR_SKIMS` when a durable shared-skims handoff already exists; otherwise `ASIM_OMX_SKIMS`
 
 **Publishes**
 
 - the standard ActivitySim run outputs for the current year and iteration
+- `ZARR_SKIMS` when the run starts from `ASIM_OMX_SKIMS`; that durable handoff is then available to later Zarr-mode ActivitySim runs and downstream consumers
 
 **Why the next step cares**
 
 - postprocess archives the actual ActivitySim-side inputs and outputs that the workflow used
+- Numba/Sharrow warming is node-local runtime preparation for a multiprocessing miss. It is not a tracked, archived, or replayed workflow artifact.
 
 #### `activitysim_postprocess`
 

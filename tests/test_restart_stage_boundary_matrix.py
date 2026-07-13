@@ -8,8 +8,8 @@ points we can cover cheaply with lightweight fakes:
    restart-time preprocess output is thinner than a fresh-run output.
 2. ``vehicle_ownership`` must be able to start from restored local ATLAS static
    files once restart recovery rebuilds the in-memory registry.
-3. ``activity_demand`` must be able to start from restored ActivitySim compile
-   artifacts without silently forcing recompilation.
+3. ``activity_demand`` must be able to start from restored Zarr skims without
+   treating node-local Numba cache state as restart provenance.
 4. ``traffic_assignment`` must be able to start directly from restored BEAM
    scenario inputs when ActivitySim is disabled/skipped.
 5. A resumed mid-loop traffic-assignment iteration must retain promoted BEAM
@@ -23,7 +23,6 @@ import pytest
 import yaml
 
 from pilates.activitysim.outputs import (
-    ActivitySimCompileOutputs,
     ActivitySimPostprocessOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -43,7 +42,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
-    ASIM_SHARROW_CACHE_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
@@ -569,7 +567,12 @@ def restart_stage_env(tmp_path, monkeypatch):
     beam_final_omx_path = _write_file(
         beam_dir / settings.run.region / settings.shared.skims.fname
     )
-    _write_file(beam_dir / settings.run.region / settings.beam.config, "beam-config")
+    r5_dir = beam_dir / settings.run.region / "r5"
+    _write_file(r5_dir / "network.osm.pbf")
+    _write_file(
+        beam_dir / settings.run.region / settings.beam.config,
+        f'beam.routing.r5.directory = "{r5_dir}"\n',
+    )
     _write_file(
         atlas_output_dir / f"vehicles2_{state.forecast_year}.csv",
         "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
@@ -610,13 +613,6 @@ def restart_stage_env(tmp_path, monkeypatch):
                 return ActivitySimRunOutputs(
                     output_dir=asim_output_dir,
                     raw_outputs={},
-                )
-            if model_name == "activitysim_compile":
-                _write_file(zarr_path)
-                _write_file(numba_cache_path)
-                return ActivitySimCompileOutputs(
-                    zarr_skims=zarr_path,
-                    sharrow_cache_dir=numba_cache_path.parent,
                 )
             if model_name == "beam":
                 return BeamRunOutputs(
@@ -674,7 +670,7 @@ def restart_stage_env(tmp_path, monkeypatch):
         ModelFactory,
         "get_runner",
         lambda self, model_name, state=None, *_args, **_kwargs: DummyRunner(
-            model_name, record_builder
+            model_name, record_builder, state
         ),
     )
     monkeypatch.setattr(
@@ -855,7 +851,7 @@ def test_restart_vehicle_ownership_boundary_uses_local_atlas_static_inputs(
     assert atlas_run_inputs["psid_names"] == str(atlas_static_path)
 
 
-def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
+def test_restart_activity_demand_boundary_reuses_restored_zarr_skims(
     restart_stage_env, tmp_path
 ):
     settings = restart_stage_env["settings"]
@@ -867,7 +863,6 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
     coupler.set(USIM_DATASTORE_CURRENT_H5, restart_stage_env["usim_input_path"])
     coupler.set(USIM_DATASTORE_BASE_H5, restart_stage_env["usim_input_path"])
     coupler.set(ZARR_SKIMS, restart_stage_env["zarr_path"])
-    coupler.set(ASIM_SHARROW_CACHE_DIR, restart_stage_env["numba_cache_dir"])
     settings.run.models.land_use = None
     settings.land_use_enabled = False
     state._settings["land_use_enabled"] = False
@@ -875,7 +870,6 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
-    state.compile_asim()
 
     usim_inputs = {
         USIM_DATASTORE_CURRENT_H5: restart_stage_env["usim_input_path"],
@@ -906,13 +900,8 @@ def test_restart_activity_demand_boundary_reuses_restored_compile_artifacts(
         and ASIM_PERSONS_IN in (call.get("input_keys") or [])
         and ASIM_LAND_USE_IN in (call.get("input_keys") or [])
     ]
-    assert asim_run_calls, (
-        "Expected ActivitySim run to start from restored compile outputs."
-    )
-    assert ASIM_SHARROW_CACHE_DIR not in (asim_run_calls[0].get("input_keys") or [])
-    assert ASIM_SHARROW_CACHE_DIR in (
-        asim_run_calls[0].get("optional_input_keys") or []
-    )
+    assert asim_run_calls, "Expected ActivitySim run to start from restored Zarr skims."
+    assert asim_run_calls[0].get("optional_input_keys") == []
 
 
 def test_restart_traffic_assignment_boundary_uses_restored_default_beam_inputs(

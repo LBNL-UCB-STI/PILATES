@@ -85,8 +85,10 @@ class StepRef:
     output_paths_provider: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None
     output_replayer: Optional[Callable[..., None]] = None
     output_recoverer: Optional[Callable[..., Optional[Any]]] = None
+    declared_outputs: Optional[Sequence[str]] = None
     cache_hydration: Optional[str] = None
     cache_mode: Optional[str] = None
+    validate_cached_outputs: Optional[str] = None
     load_inputs: Optional[bool] = None
     input_binding: Optional[str] = None
     input_paths: Optional[Mapping[str, Any]] = None
@@ -562,15 +564,27 @@ def _build_step_run_kwargs(
             workspace=workspace,
             runtime_kwargs=runtime_kwargs,
         )
+    resolved_validate_cached_outputs = step.validate_cached_outputs
+    if resolved_validate_cached_outputs is None:
+        resolved_validate_cached_outputs = _resolve_step_metadata_value(
+            getattr(step_meta, "validate_cached_outputs", None),
+            step=step,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            runtime_kwargs=runtime_kwargs,
+        )
     if (
         resolved_cache_hydration is not None
         or resolved_cache_mode is not None
+        or resolved_validate_cached_outputs is not None
         or code_identity is not None
     ):
         run_kwargs["cache_options"] = CacheOptions(
             cache_hydration=resolved_cache_hydration,
             cache_mode=resolved_cache_mode,
             code_identity=code_identity,
+            validate_cached_outputs=resolved_validate_cached_outputs,
         )
 
     def _normalize_output_keys(values: Any) -> Optional[list[str]]:
@@ -579,19 +593,21 @@ def _build_step_run_kwargs(
         return [output for output in values if isinstance(output, str)]
 
     outputs_class = STEP_OUTPUTS_CLASSES.get(step.name)
-    required_outputs: list[str] = []
-    if outputs_class is not None:
-        required_outputs = list(
-            required_outputs_for_step_outputs_class(outputs_class, state=state)
-        )
-
     resolved_required_outputs: Optional[Sequence[str]] = None
     optional_declared_outputs: list[str] = []
-    if outputs_class is not None:
+    if step.declared_outputs is not None:
+        # A stage may specialize a tracked step's output contract for one
+        # immutable execution mode.  These explicitly requested outputs are
+        # strict: a cache candidate missing one must not be accepted.
+        resolved_required_outputs = list(step.declared_outputs)
+    elif outputs_class is not None:
         # Tracked steps use StepOutputs required_outputs as the strict runtime
-        # output contract. declared_outputs remains available for schema/catalog
-        # publication without forcing every optional artifact to materialize.
-        resolved_required_outputs = required_outputs or None
+        # output contract. Optional artifacts remain absent unless a stage
+        # explicitly specializes the contract above.
+        required_outputs = required_outputs_for_step_outputs_class(
+            outputs_class, state=state
+        )
+        resolved_required_outputs = list(required_outputs) or None
         optional_declared_outputs = list(
             getattr(outputs_class, "optional_output_keys", lambda: ())()
         )

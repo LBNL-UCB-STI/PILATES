@@ -4,7 +4,7 @@ import re
 import shutil
 import inspect
 from pathlib import Path
-from typing import Tuple, Optional, Dict, Any, Mapping
+from typing import Tuple, Optional, Dict, Any, Literal, Mapping
 
 import xarray as xr
 import zarr
@@ -16,7 +16,6 @@ from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-    ActivitySimCompileOutputs,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     write_asim_run_marker,
@@ -27,11 +26,12 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
-    ASIM_SHARROW_CACHE_DIR,
     ZARR_SKIMS,
 )
 
 logger = logging.getLogger(__name__)
+
+ActivitysimSkimMode = Literal["omx", "zarr"]
 
 
 def _log_activitysim_launch_context(
@@ -177,22 +177,6 @@ def _remove_path_if_present(path: str) -> None:
         os.remove(path)
 
 
-def _cleanup_activitysim_compile_artifacts(workspace: Workspace) -> None:
-    stale_paths = [
-        asim_runtime_zarr_path(workspace),
-        os.path.join(workspace.get_asim_output_dir(), "cache", "numba"),
-        asim_sharrow_cache_dir(workspace),
-    ]
-    for stale_path in stale_paths:
-        if not os.path.lexists(stale_path):
-            continue
-        logger.warning(
-            "Removing stale ActivitySim compile artifact before direct fallback: %s",
-            stale_path,
-        )
-        _remove_path_if_present(stale_path)
-
-
 def _stage_runtime_input_path(
     *,
     key: str,
@@ -201,8 +185,6 @@ def _stage_runtime_input_path(
 ) -> str:
     if key == "zarr_skims":
         runtime_path = asim_runtime_zarr_path(workspace)
-    elif key == ASIM_SHARROW_CACHE_DIR:
-        runtime_path = asim_sharrow_cache_dir(workspace)
     else:
         return input_path
     if os.path.abspath(input_path) == os.path.abspath(runtime_path):
@@ -219,9 +201,38 @@ def _stage_runtime_input_path(
     return runtime_path
 
 
-class ActivitysimCompileRunner(GenericRunner):
+def finalize_activitysim_zarr_skims(
+    path: str | Path,
+    settings: PilatesConfig,
+    workspace: Workspace,
+) -> Path:
+    """Validate and normalize a generated local Zarr skim store.
+
+    This is deliberately local execution preparation.  Publication belongs to
+    the OMX-mode primary ActivitySim step after its production invocation.
     """
-    Runner that performs the one-time ActivitySim compile step.
+    zarr_path = Path(path)
+    if not zarr_path.exists():
+        raise RuntimeError(
+            f"ActivitySim did not create the expected Zarr skims at {zarr_path}."
+        )
+    try:
+        ensure_0_based_and_flag_zarr_skims(str(zarr_path), settings, workspace)
+    except Exception as error:
+        raise RuntimeError(
+            f"Failed to finalize generated ActivitySim Zarr skims at {zarr_path}."
+        ) from error
+    return zarr_path
+
+
+class ActivitysimNumbaWarmup(GenericRunner):
+    """
+    Private compile-mode execution used to warm node-local Numba caches.
+
+    It intentionally has no workflow identity, typed outputs, state mutation,
+    or provenance publication.  Its return value only reports the local Zarr
+    side effect so the caller can finalize it before production might discover
+    it.
     """
 
     @staticmethod
@@ -253,42 +264,6 @@ class ActivitysimCompileRunner(GenericRunner):
             workspace=workspace,
         )
 
-    @staticmethod
-    def expected_inputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the input paths/artifacts this runner expects from the workflow.
-        """
-        return {}
-
-    @staticmethod
-    def expected_outputs(
-        settings: PilatesConfig, state: "WorkflowState", workspace: Workspace
-    ) -> Dict[str, Any]:
-        """
-        Declare the output paths/artifacts this runner produces.
-
-        Notes
-        -----
-        Output keys
-            - ``zarr_skims``: Compiled skims in Zarr format written under the
-              ActivitySim output cache directory.
-            - ``asim_sharrow_cache_dir``: Persisted ActivitySim numba/sharrow
-              compile cache directory when ``persist_sharrow_cache`` is enabled.
-        Related docs
-            - See `pilates/activitysim/inputs.py` for the corresponding input
-              descriptions used by ActivitySim and downstream models.
-        """
-        outputs: Dict[str, Any] = {
-            ZARR_SKIMS: os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
-            )
-        }
-        if persist_sharrow_cache_enabled(settings):
-            outputs[ASIM_SHARROW_CACHE_DIR] = asim_sharrow_cache_dir(workspace)
-        return outputs
-
     def __init__(
         self,
         model_name: str,
@@ -307,19 +282,18 @@ class ActivitysimCompileRunner(GenericRunner):
         self,
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> ActivitySimCompileOutputs:
+    ) -> Optional[Path]:
         if not isinstance(inputs, ActivitySimPreprocessOutputs):
             raise TypeError(
-                "ActivitysimCompileRunner.run expects ActivitySimPreprocessOutputs"
+                "ActivitysimNumbaWarmup.run expects ActivitySimPreprocessOutputs"
             )
-        self.state.set_sub_stage_progress("runner")
         return self._run(inputs, workspace)
 
     def _run(
         self,
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> ActivitySimCompileOutputs:
+    ) -> Optional[Path]:
         del inputs
         settings = self.state.full_settings
         region = settings.run.region
@@ -378,7 +352,7 @@ class ActivitysimCompileRunner(GenericRunner):
             image=activity_demand_image,
             volumes=asim_docker_vols,
             command=asim_cmd,
-            model_name="activitysim_compile",
+            model_name="activitysim_numba_warmup",
             working_dir=asim_workdir,
             args=additional_args,
             environment=container_environment,
@@ -387,59 +361,30 @@ class ActivitysimCompileRunner(GenericRunner):
         )
 
         if not success:
-            raise RuntimeError("ASim Compilation failed")
+            raise RuntimeError("ActivitySim Numba warmup failed")
 
         zarr_skims_path = None
         if os.path.exists(all_skims_path):
             try:
-                ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
+                finalize_activitysim_zarr_skims(all_skims_path, settings, workspace)
             except Exception as e:
                 logger.error(
-                    f"Failed to correct and flag initial Zarr skims after compilation: {e}",
+                    "Failed to finalize warmup-created Zarr skims: %s",
+                    e,
                     exc_info=True,
                 )
                 raise RuntimeError(
-                    "Failed to correct initial Zarr skims, cannot proceed."
+                    "Failed to finalize warmup-created Zarr skims, cannot proceed."
                 ) from e
 
             zarr_skims_path = all_skims_path
-            logger.info(f"Using zarr skims from ASIM compilation: {all_skims_path}")
+            logger.info("Warmup created Zarr skims: %s", all_skims_path)
         else:
-            logger.warning("ASIM compilation succeeded but skims.zarr was not found.")
+            logger.warning(
+                "ActivitySim Numba warmup succeeded but created no Zarr skims."
+            )
 
-        sharrow_cache_dir = None
-        if persist_sharrow_cache_enabled(settings):
-            cache_dir = asim_sharrow_cache_dir(workspace)
-            if _dir_contains_files(cache_dir):
-                sharrow_cache_dir = cache_dir
-                logger.info(
-                    "ActivitySim compile cache directory is available: %s", cache_dir
-                )
-            elif os.path.exists(cache_dir) and not os.path.isdir(cache_dir):
-                logger.warning(
-                    "ActivitySim compile cache path exists but is not a directory: %s",
-                    cache_dir,
-                )
-            elif os.path.isdir(cache_dir):
-                logger.info(
-                    "ActivitySim compile cache persistence is enabled, but cache "
-                    "directory is empty: %s",
-                    cache_dir,
-                )
-            else:
-                logger.warning(
-                    "ActivitySim compile cache persistence is enabled, but cache "
-                    "directory was not found: %s",
-                    cache_dir,
-                )
-
-        self.state.compile_asim()
-        return ActivitySimCompileOutputs(
-            zarr_skims=Path(zarr_skims_path) if zarr_skims_path is not None else None,
-            sharrow_cache_dir=(
-                Path(sharrow_cache_dir) if sharrow_cache_dir is not None else None
-            ),
-        )
+        return Path(zarr_skims_path) if zarr_skims_path is not None else None
 
 
 class ActivitysimRunner(GenericRunner):
@@ -457,10 +402,6 @@ class ActivitysimRunner(GenericRunner):
         del state
         inputs: Dict[str, Any] = dict(asim_staged_input_paths(workspace))
         inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
-        cache_dir = asim_sharrow_cache_dir(workspace)
-        inputs[ASIM_SHARROW_CACHE_DIR] = (
-            cache_dir if persist_sharrow_cache_enabled(settings) else None
-        )
         return inputs
 
     @staticmethod
@@ -475,10 +416,6 @@ class ActivitysimRunner(GenericRunner):
             inputs[ZARR_SKIMS]
             if inputs.get(ZARR_SKIMS) and os.path.exists(inputs[ZARR_SKIMS])
             else None
-        )
-        cache_dir = inputs.get(ASIM_SHARROW_CACHE_DIR)
-        inputs[ASIM_SHARROW_CACHE_DIR] = (
-            cache_dir if cache_dir and _dir_contains_files(cache_dir) else None
         )
         return inputs
 
@@ -522,7 +459,6 @@ class ActivitysimRunner(GenericRunner):
             ASIM_LAND_USE_IN,
             ASIM_OMX_SKIMS,
             "zarr_skims",
-            ASIM_SHARROW_CACHE_DIR,
             "asim_geoms",
         ]
 
@@ -531,7 +467,9 @@ class ActivitysimRunner(GenericRunner):
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
         *,
+        skim_mode: ActivitysimSkimMode = "zarr",
         extra_inputs: Optional[Mapping[str, Any]] = None,
+        skip_numba_warmup: bool = False,
     ) -> ActivitySimRunOutputs:
         if not isinstance(inputs, ActivitySimPreprocessOutputs):
             raise TypeError(
@@ -550,11 +488,36 @@ class ActivitysimRunner(GenericRunner):
                 input_path=str(input_path),
                 workspace=workspace,
             )
-        return self._run(
+        if skip_numba_warmup:
+            warmup_decision = "skipped (explicit rewind skip)"
+        elif not persist_sharrow_cache_enabled(self.state.full_settings):
+            warmup_decision = "skipped (persistent cache disabled)"
+        elif self.state.full_settings.activitysim.num_processes <= 1:
+            warmup_decision = "skipped (single-process run)"
+        elif _dir_contains_files(asim_sharrow_cache_dir(workspace)):
+            warmup_decision = "skipped (node-local cache present)"
+        else:
+            warmup_decision = "running"
+        logger.info("ActivitySim Numba warmup: %s", warmup_decision)
+        if warmup_decision == "running":
+            ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
+                inputs, workspace
+            )
+            if not _dir_contains_files(asim_sharrow_cache_dir(workspace)):
+                raise RuntimeError(
+                    "ActivitySim Numba warmup completed without a nonempty local cache."
+                )
+        outputs = self._run(
             inputs,
             workspace,
+            skim_mode=skim_mode,
             extra_inputs=staged_extra_inputs,
         )
+        if skim_mode == "omx":
+            outputs.zarr_skims = finalize_activitysim_zarr_skims(
+                asim_runtime_zarr_path(workspace), self.state.full_settings, workspace
+            )
+        return outputs
 
     @staticmethod
     def get_base_asim_cmd(
@@ -755,6 +718,7 @@ class ActivitysimRunner(GenericRunner):
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
         *,
+        skim_mode: ActivitysimSkimMode,
         extra_inputs: Optional[Mapping[str, Any]] = None,
     ) -> ActivitySimRunOutputs:
         """
@@ -813,17 +777,15 @@ class ActivitysimRunner(GenericRunner):
         )
 
         zarr_input_path = None
-        for key, value in (extra_inputs or {}).items():
-            input_path = (
-                value if isinstance(value, str) else getattr(value, "path", value)
+        if skim_mode == "zarr":
+            zarr_value = (extra_inputs or {}).get(ZARR_SKIMS)
+            zarr_input_path = (
+                str(zarr_value) if zarr_value is not None else all_skims_path
             )
-            if input_path is None or key != "zarr_skims":
-                continue
-            zarr_input_path = str(input_path)
-            break
-
-        if zarr_input_path is None and os.path.exists(all_skims_path):
-            zarr_input_path = all_skims_path
+            if not os.path.exists(zarr_input_path):
+                raise RuntimeError(
+                    "ActivitySim Zarr mode requires a staged, existing Zarr skim input."
+                )
 
         if zarr_input_path is None:
             logger.warning(

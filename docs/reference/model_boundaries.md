@@ -146,7 +146,7 @@ ActivitySim converts the current regional state into staged demand-model inputs 
 
 - Major stage: `supply_demand_loop`
 - Substage: `activity_demand`
-- Step family: `activitysim_preprocess`, `activitysim_compile`, `activitysim_run`, `activitysim_postprocess`
+- Step family: `activitysim_preprocess`, `activitysim_run`, `activitysim_postprocess`
 
 ### Required inputs
 
@@ -155,8 +155,8 @@ ActivitySim converts the current regional state into staged demand-model inputs 
 ### Optional inputs
 
 - `USIM_DATASTORE_CURRENT_H5` for postprocess/writeback-sensitive flows
-- `ASIM_OMX_SKIMS` when compile uses OMX skims
-- `ZARR_SKIMS` when compiled skims already exist
+- `ZARR_SKIMS` when a valid shared skim handoff already exists
+- `ASIM_OMX_SKIMS` when no shared Zarr skims handoff exists
 
 ### Main published outputs
 
@@ -165,9 +165,7 @@ ActivitySim converts the current regional state into staged demand-model inputs 
   - `ASIM_HOUSEHOLDS_IN`
   - `ASIM_PERSONS_IN`
   - `ASIM_OMX_SKIMS`
-- shared compile/runtime artifacts:
-  - `ASIM_SHARROW_CACHE_DIR`
-  - `ZARR_SKIMS`
+- `ZARR_SKIMS` when the primary run started from OMX skims
 - BEAM-facing demand outputs:
   - `beam_plans_asim_out`
   - `households_asim_out`
@@ -195,13 +193,20 @@ ActivitySim converts the current regional state into staged demand-model inputs 
 - If land use is disabled, ActivitySim can still run from staged datastore inputs, but it should not assume a fresh UrbanSim update happened earlier in the year.
 - If BEAM is disabled, ActivitySim still produces the standard demand-side outputs, but the plans/households/persons boundary is not consumed by traffic assignment in that run shape.
 
-### Operational step variant: `activitysim_compile`
+### Local Numba/Sharrow preparation
 
-- Purpose: publish reusable compile products before the main run boundary
-- Main outputs:
-  - `ZARR_SKIMS`
-  - `ASIM_SHARROW_CACHE_DIR`
-- Why it matters operationally: compile artifacts affect restart, replay, and whether later ActivitySim/BEAM steps can reuse shared skim products instead of rebuilding them
+Numba/Sharrow cache files are workspace-local execution preparation, not a
+workflow step or a shared artifact. They are not archived, recovered, or used
+in cache identity. If a primary `activitysim_run` must execute in
+multiprocessing mode and its local cache is empty, PILATES warms it privately
+first. A cache hit executes neither production ActivitySim nor this warmup.
+
+`activitysim_run` is the sole ActivitySim runtime boundary: it consumes
+`ZARR_SKIMS` when available, or consumes OMX skims and publishes finalized
+`ZARR_SKIMS` when it is not. The historical root `workflow_state.py` remains
+temporarily for persistence compatibility; its `asim_compiled` value no longer
+controls this boundary, and relocating the module is deferred to a separate
+import-only change.
 
 ### Boundary owners
 

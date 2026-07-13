@@ -30,9 +30,8 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
 
     assert plan.metadata["years"] == [{"year": 2018, "forecast_year": 2018}]
-    assert [step.step_name for step in plan.step_runs[:7]] == [
+    assert [step.step_name for step in plan.step_runs[:6]] == [
         "activitysim_preprocess",
-        "activitysim_compile",
         "activitysim_run",
         "activitysim_postprocess",
         "beam_preprocess",
@@ -41,16 +40,12 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     ]
     assert plan.step_runs[-1].step_name == "postprocessing"
 
-    compile_artifacts = [
+    run_artifacts = [
         artifact
         for artifact in plan.artifacts
         if artifact.producer_step_run_id == plan.step_runs[1].id
     ]
-    assert any(artifact.artifact_key == "zarr_skims" for artifact in compile_artifacts)
-    assert any(
-        artifact.instance_key == "activitysim_compile:y2018:i0:zarr_skims"
-        for artifact in compile_artifacts
-    )
+    assert any(artifact.artifact_key == "zarr_skims" for artifact in run_artifacts)
 
     json_payload = render_plan_json(plan)
     assert '"step_name": "activitysim_run"' in json_payload
@@ -387,7 +382,7 @@ def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_key
         if artifact.canonical_key == "zarr_skims"
     }
 
-    assert "activitysim_compile:y2018:i0:zarr_skims" in zarr_instances
+    assert "activitysim_run:y2018:i0:zarr_skims" in zarr_instances
     assert "beam_postprocess:y2018:i0:zarr_skims" in zarr_instances
 
 

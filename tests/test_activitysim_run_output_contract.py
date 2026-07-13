@@ -11,6 +11,7 @@ from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.runtime.scenario_runtime import SchemaCoupler
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import ValidationContext
@@ -86,6 +87,41 @@ def test_activitysim_run_stepref_uses_required_outputs_for_runtime_contract():
     assert tuple(run_kwargs["outputs"]) == ASIM_REQUIRED_RUN_OUTPUT_KEYS
     assert "school_shadow_prices_asim_out" not in run_kwargs["outputs"]
     assert "workplace_shadow_prices_asim_out" not in run_kwargs["outputs"]
+
+
+def test_activitysim_omx_stepref_requires_zarr_output_for_cache_recovery():
+    step_func = make_activitysim_run_step(
+        coupler=SchemaCoupler(),
+        outputs_holder=StepOutputsHolder(),
+        skim_mode="omx",
+    )
+    step = StepRef(
+        name="activitysim_run",
+        step_func=step_func,
+        declared_outputs=[*ASIM_REQUIRED_RUN_OUTPUT_KEYS, ZARR_SKIMS],
+        cache_hydration="outputs-requested",
+        validate_cached_outputs="eager",
+        year=2023,
+        iteration=0,
+    )
+
+    run_kwargs = _build_step_run_kwargs(
+        step=step,
+        settings=SimpleNamespace(run=None),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(
+            full_path="/tmp/workspace",
+            get_asim_output_dir=lambda: "/tmp/activitysim/output",
+            get_asim_mutable_data_dir=lambda: "/tmp/activitysim/data",
+        ),
+        runtime_kwargs={},
+        stage_name="activity_demand_run",
+        default_iteration=0,
+    )
+
+    assert tuple(run_kwargs["outputs"]) == (*ASIM_REQUIRED_RUN_OUTPUT_KEYS, ZARR_SKIMS)
+    assert run_kwargs["cache_options"].cache_hydration == "outputs-requested"
+    assert run_kwargs["cache_options"].validate_cached_outputs == "eager"
 
 
 def test_activitysim_postprocess_outputs_require_processed_asim_tables_but_not_usim_next():

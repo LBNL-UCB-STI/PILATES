@@ -13,10 +13,10 @@ PILATES treats the model families as workflow roles, not as generic simulation n
 | --- | --- |
 | UrbanSim | PILATES reads the base datastore, stages mutable land-use inputs, runs the land-use model, and publishes the forecast datastore and postprocess datastore handles for later stages. |
 | ATLAS | PILATES reads the current or base UrbanSim datastore plus optional skims, runs the vehicle-ownership stage, and publishes year-specific ownership outputs plus the datastore handle that later stages consume. |
-| ActivitySim | PILATES reads the population-source datastore and optional skims, runs the travel-demand stage, and publishes the standard ActivitySim outputs plus the archive-friendly handoff artifacts. |
+| ActivitySim | PILATES reads the population-source datastore and either a durable Zarr skims handoff or staged OMX skims, runs the travel-demand stage, and publishes the standard outputs plus Zarr skims when it starts from OMX. |
 | BEAM | PILATES reads plans, households, persons, config, and optional warm-start artifacts, runs traffic assignment, and publishes linkstats, plans, warm-start XML outputs, and final skims where enabled. |
 
-PILATES also keeps a few registry-level step variants separate from the broad model families. For example, `activitysim_compile` is a tracked step variant inside the ActivitySim family, and `beam_full_skim` is a separate tracked step that publishes full-skim outputs.
+PILATES also keeps a few registry-level step variants separate from the broad model families. For example, `beam_full_skim` is a separate tracked step that publishes full-skim outputs. Numba/Sharrow warming for ActivitySim is private node-local runtime preparation, not a tracked workflow step or shared artifact.
 
 If you need the real workflow-facing inputs, outputs, downstream consumers, and restart-relevant artifacts for each model family, use [Model Boundaries](model_boundaries.md). This page stays intentionally short.
 

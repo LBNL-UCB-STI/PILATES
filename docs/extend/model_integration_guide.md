@@ -85,13 +85,17 @@ decisions, binding plans, typed outputs, and stage-local sequencing only.
 `ModelFactory` maps lowercased model names to concrete component classes. The current registry includes:
 
 - `activitysim`
-- `activitysim_compile`
 - `beam`
 - `beam_full_skim`
 - `atlas`
 - `urbansim`
 
 `get_preprocessor()`, `get_runner()`, and `get_postprocessor()` instantiate the corresponding component class for the model name. `get_components()` returns the three instances together.
+
+ActivitySim Numba/Sharrow warming is private runner behavior for a primary
+multiprocessing execution when the node-local cache is empty. It is not a
+`ModelFactory` model, a tracked workflow step, or an archived/replayed
+artifact contract.
 
 ### Step factories
 

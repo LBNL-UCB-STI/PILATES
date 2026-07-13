@@ -138,8 +138,55 @@ class FakeScenario:
                 if key in allowed:
                     fn_kwargs.setdefault(key, self.coupler.get(key))
 
+        inject_context = getattr(execution_options, "inject_context", None)
+        if inject_context:
+            context_name = (
+                inject_context if isinstance(inject_context, str) else "_consist_ctx"
+            )
+            if context_name not in fn_kwargs:
+                if context_name in sig.parameters or accepts_kwargs:
+                    fn_kwargs[context_name] = _test_run_context(
+                        model=model,
+                        fn_kwargs=fn_kwargs,
+                    )
+                else:
+                    raise TypeError(
+                        f"inject_context requested {context_name!r}, but fn does not accept it."
+                    )
+
         fn(**fn_kwargs)
         return {"status": "ok"}
+
+
+def _test_run_context(*, model: Any, fn_kwargs: dict[str, Any]) -> SimpleNamespace:
+    """Build the minimal Consist context required by a contract-test step."""
+
+    if model != "beam_run":
+        return SimpleNamespace(canonicalization=None)
+
+    state = fn_kwargs["state"]
+    workspace = fn_kwargs["workspace"]
+    from pilates.beam.launch_paths import resolve_r5_network_reference
+
+    execution_reference = resolve_r5_network_reference(
+        settings=state.full_settings,
+        workspace=workspace,
+    )
+    artifact_key = (
+        f"test:r5_osm_source:{execution_reference.selected_osm_physical_target_path}"
+    )
+    r5_reference = SimpleNamespace(
+        reference=SimpleNamespace(config_key="beam.routing.r5.directory"),
+        artifact_keys=(artifact_key,),
+        artifact_members=(
+            SimpleNamespace(
+                role="r5_osm_source",
+                resolved_path=execution_reference.selected_osm_physical_target_path,
+                artifact_key=artifact_key,
+            ),
+        ),
+    )
+    return SimpleNamespace(canonicalization=SimpleNamespace(references=(r5_reference,)))
 
 
 def build_runtime_context(
@@ -266,7 +313,7 @@ class DummyPreprocessor:
     ) -> None:
         self.model_name = model_name
         self._record_builder = record_builder
-        self._state = state
+        self.state = state
 
     def preprocess(
         self,
@@ -281,7 +328,7 @@ class DummyPreprocessor:
             self._record_builder,
             self.model_name,
             "preprocess",
-            state=self._state,
+            state=self.state,
             workspace=workspace,
         )
 
@@ -294,7 +341,7 @@ class DummyRunner:
     ) -> None:
         self.model_name = model_name
         self._record_builder = record_builder
-        self._state = state
+        self.state = state
 
     def run(
         self,
@@ -302,12 +349,15 @@ class DummyRunner:
         workspace: Any,
         extra_inputs: Any = None,
         previous_beam_outputs: Any = None,
+        skim_mode: Any = None,
+        skip_numba_warmup: bool = False,
     ) -> Any:
+        del extra_inputs, previous_beam_outputs, skim_mode, skip_numba_warmup
         return _invoke_record_builder(
             self._record_builder,
             self.model_name,
             "run",
-            state=self._state,
+            state=self.state,
             workspace=workspace,
             input_store=input_store,
         )
