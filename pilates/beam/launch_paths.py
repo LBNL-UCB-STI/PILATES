@@ -72,11 +72,12 @@ def configure_staged_linkstats_reference(
     )
     if not staged_path.is_file():
         raise BeamLaunchPathError(
-            "Staged BEAM warm-start linkstats must be one regular file: "
-            f"{staged_path}"
+            f"Staged BEAM warm-start linkstats must be one regular file: {staged_path}"
         )
 
-    config_root = beam_primary_config_path(settings, workspace=workspace).parent.resolve()
+    config_root = beam_primary_config_path(
+        settings, workspace=workspace
+    ).parent.resolve()
     try:
         relative_path = staged_path.resolve().relative_to(config_root)
     except ValueError as exc:
@@ -119,7 +120,9 @@ def configure_staged_linkstats_reference(
     )
 
 
-def resolve_r5_network_reference(*, settings: Any, workspace: Any) -> R5NetworkLaunchReference:
+def resolve_r5_network_reference(
+    *, settings: Any, workspace: Any
+) -> R5NetworkLaunchReference:
     """Resolve R5's raw-directory selection from final staged HOCON.
 
     PILATES invalidates ``network.dat`` before using this reference, so the
@@ -169,21 +172,42 @@ def validate_r5_execution_reference(
 
     snapshot = run_context.canonicalization
     if snapshot is None:
-        raise BeamLaunchPathError("beam_run requires a Consist canonicalization snapshot.")
+        raise BeamLaunchPathError(
+            "beam_run requires a Consist canonicalization snapshot."
+        )
     r5_snapshot = next(
-        (item for item in snapshot.references if item.reference.config_key == "beam.routing.r5.directory"),
+        (
+            item
+            for item in snapshot.references
+            if item.reference.config_key == "beam.routing.r5.directory"
+        ),
         None,
     )
     if r5_snapshot is None:
-        raise BeamLaunchPathError("Consist canonicalization did not observe beam.routing.r5.directory.")
-    members = tuple(member for member in r5_snapshot.artifact_members if member.role == "r5_osm_source")
+        raise BeamLaunchPathError(
+            "Consist canonicalization did not observe beam.routing.r5.directory."
+        )
+    members = tuple(
+        member
+        for member in r5_snapshot.artifact_members
+        if member.role == "r5_osm_source"
+    )
     if len(members) != 1:
-        raise BeamLaunchPathError(f"Consist canonicalization must expose exactly one r5_osm_source member; observed {len(members)}.")
+        raise BeamLaunchPathError(
+            f"Consist canonicalization must expose exactly one r5_osm_source member; observed {len(members)}."
+        )
     member = members[0]
     if member.artifact_key not in r5_snapshot.artifact_keys:
-        raise BeamLaunchPathError("Consist r5_osm_source member key is absent from its R5 directory reference.")
-    execution_reference = resolve_r5_network_reference(settings=settings, workspace=workspace)
-    if member.resolved_path.resolve() != execution_reference.selected_osm_physical_target_path:
+        raise BeamLaunchPathError(
+            "Consist r5_osm_source member key is absent from its R5 directory reference."
+        )
+    execution_reference = resolve_r5_network_reference(
+        settings=settings, workspace=workspace
+    )
+    if (
+        member.resolved_path.resolve()
+        != execution_reference.selected_osm_physical_target_path
+    ):
         raise BeamLaunchPathError(
             "Consist selected R5 OSM member differs from the file BEAM will read: "
             f"{member.resolved_path} != {execution_reference.selected_osm_physical_target_path}"
@@ -191,7 +215,9 @@ def validate_r5_execution_reference(
     return execution_reference
 
 
-def prepare_r5_raw_rebuild(*, settings: Any, workspace: Any) -> R5NetworkLaunchReference:
+def prepare_r5_raw_rebuild(
+    *, settings: Any, workspace: Any
+) -> R5NetworkLaunchReference:
     """Remove derived R5 and PhysSim caches from the mutable launch tree.
 
     BEAM uses an existing ``network.dat`` in preference to raw R5 source
@@ -263,8 +289,7 @@ def _remove_r5_derived_caches(
         )
         if not cache_path.is_file() and not cache_path.is_symlink():
             raise BeamLaunchPathError(
-                "Expected derived R5 cache to be a file, not a directory: "
-                f"{cache_path}"
+                f"Expected derived R5 cache to be a file, not a directory: {cache_path}"
             )
         cache_path.unlink()
 
@@ -325,7 +350,9 @@ def _select_r5_osm(
 ) -> tuple[Path, tuple[Path, ...]]:
     candidates = tuple(
         path
-        for path in sorted(directory.execution_path.iterdir(), key=lambda item: item.name)
+        for path in sorted(
+            directory.execution_path.iterdir(), key=lambda item: item.name
+        )
         if path.is_file() and path.suffix.lower() in {".pbf", ".vex"}
     )
     if not candidates:

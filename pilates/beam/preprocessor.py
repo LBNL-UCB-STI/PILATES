@@ -11,7 +11,10 @@ if TYPE_CHECKING:
 
 from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
-from pilates.beam.launch_paths import configure_staged_linkstats_reference, prepare_r5_raw_rebuild
+from pilates.beam.launch_paths import (
+    configure_staged_linkstats_reference,
+    prepare_r5_raw_rebuild,
+)
 from pilates.beam.config_hocon import (
     BeamConfigHoconError,
     beam_config_env_overrides,
