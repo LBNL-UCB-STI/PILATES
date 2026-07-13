@@ -58,6 +58,16 @@ def _make_workspace(tmp_path: Path):
     return workspace
 
 
+@pytest.fixture(autouse=True)
+def _skip_r5_rebuild_in_exchange_input_tests(monkeypatch):
+    """Keep exchange-input unit tests independent of the R5 launch contract."""
+
+    monkeypatch.setattr(
+        "pilates.beam.preprocessor.prepare_r5_raw_rebuild",
+        lambda **_kwargs: None,
+    )
+
+
 def test_resolve_beam_exchange_scenario_folder_reads_config_folder(tmp_path):
     preprocessor = _make_preprocessor()
     workspace = _make_workspace(tmp_path)
