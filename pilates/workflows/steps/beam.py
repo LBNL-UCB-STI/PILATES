@@ -925,7 +925,10 @@ def _execute_beam_run(
                 raise RuntimeError(
                     "BEAM preprocess staged linkstats but final HOCON does not select it."
                 )
-            if linkstats_reference.execution_path.resolve() != staged_linkstats.resolve():
+            if (
+                linkstats_reference.execution_path.resolve()
+                != staged_linkstats.resolve()
+            ):
                 raise RuntimeError(
                     "BEAM final HOCON linkstats path differs from the staged warm-start "
                     f"input: {linkstats_reference.execution_path} != {staged_linkstats}"

@@ -41,7 +41,17 @@ def _settings(mode: str | None) -> SimpleNamespace:
             expected_bytes_path=None,
         )
     )
-    return SimpleNamespace(beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats)))
+    return SimpleNamespace(
+        beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats))
+    )
+
+
+def test_linkstats_admission_config_returns_the_configured_entry() -> None:
+    from pilates.beam.admission import _linkstats_admission_config
+
+    settings = _settings("strict")
+
+    assert _linkstats_admission_config(settings) is settings.beam.admission.linkstats
 
 
 def test_strict_linkstats_admission_writes_report_before_rejecting(
@@ -90,7 +100,9 @@ def test_strict_linkstats_admission_writes_report_before_rejecting(
     }
 
 
-def test_warn_linkstats_admission_records_and_continues(monkeypatch, tmp_path: Path) -> None:
+def test_warn_linkstats_admission_records_and_continues(
+    monkeypatch, tmp_path: Path
+) -> None:
     from pilates.beam import admission
 
     staged = tmp_path / "warmstart.csv.gz"

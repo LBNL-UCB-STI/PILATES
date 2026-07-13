@@ -5,11 +5,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
 import consist
 
 from pilates.beam.launch_paths import BeamLaunchPathReference
+from pilates.config import PilatesConfig
+from pilates.config.models import BeamLinkstatsAdmissionConfig
 
 
 logger = logging.getLogger(__name__)
@@ -20,10 +22,26 @@ class BeamInputAdmissionError(RuntimeError):
     """Raised when configured BEAM input-admission policy rejects a file."""
 
 
+class AdmissionMetadataTracker(Protocol):
+    """Minimal tracker capability used to retain a preflight report."""
+
+    def log_meta(self, **metadata: object) -> None: ...
+
+
+def _linkstats_admission_config(
+    settings: PilatesConfig,
+) -> BeamLinkstatsAdmissionConfig | None:
+    """Return the optional typed admission policy for staged linkstats."""
+    beam_config = settings.beam
+    if beam_config is None or beam_config.admission is None:
+        return None
+    return beam_config.admission.linkstats
+
+
 def preflight_staged_linkstats_admission(
     *,
-    tracker: Any,
-    settings: Any,
+    tracker: consist.Tracker,
+    settings: PilatesConfig,
     launch_reference: BeamLaunchPathReference,
     report_dir: Path,
 ) -> consist.AdmissionReport | None:
@@ -32,9 +50,7 @@ def preflight_staged_linkstats_admission(
     An absent expectation is deliberately a no-op: it preserves ordinary BEAM
     warm-start behavior and does not invent an inbound-admission target.
     """
-    beam_config = getattr(settings, "beam", None)
-    admission_config = getattr(beam_config, "admission", None)
-    linkstats_config = getattr(admission_config, "linkstats", None)
+    linkstats_config = _linkstats_admission_config(settings)
     if linkstats_config is None:
         return None
 
@@ -61,8 +77,7 @@ def preflight_staged_linkstats_admission(
         return report
     if linkstats_config.mode == "strict":
         raise BeamInputAdmissionError(
-            "BEAM linkstats admission rejected before execution: "
-            f"{report.outcome}"
+            f"BEAM linkstats admission rejected before execution: {report.outcome}"
         )
     logger.warning(
         "BEAM linkstats admission recorded %s and will continue because mode=warn",
@@ -71,11 +86,9 @@ def preflight_staged_linkstats_admission(
     return report
 
 
-def reject_or_warn_for_missing_staged_linkstats(*, settings: Any) -> None:
+def reject_or_warn_for_missing_staged_linkstats(*, settings: PilatesConfig) -> None:
     """Apply configured policy when preprocessing did not stage a warm-start file."""
-    beam_config = getattr(settings, "beam", None)
-    admission_config = getattr(beam_config, "admission", None)
-    linkstats_config = getattr(admission_config, "linkstats", None)
+    linkstats_config = _linkstats_admission_config(settings)
     if linkstats_config is None:
         return
 
@@ -89,7 +102,10 @@ def reject_or_warn_for_missing_staged_linkstats(*, settings: Any) -> None:
 
 
 def _persist_admission_report(
-    *, report_dir: Path, tracker: Any, report: consist.AdmissionReport
+    *,
+    report_dir: Path,
+    tracker: AdmissionMetadataTracker,
+    report: consist.AdmissionReport,
 ) -> None:
     """Write deterministic sidecar and run metadata before policy can reject."""
     payload = json.loads(report.canonical_json())

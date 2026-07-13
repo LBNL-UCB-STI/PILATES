@@ -286,7 +286,9 @@ def test_beam_run_rejects_linkstats_before_starting_beam(monkeypatch, tmp_path):
     assert calls == ["r5", "linkstats", "admission"]
 
 
-def test_beam_run_strict_linkstats_admission_requires_staged_input(monkeypatch, tmp_path):
+def test_beam_run_strict_linkstats_admission_requires_staged_input(
+    monkeypatch, tmp_path
+):
     settings = SimpleNamespace(
         beam=SimpleNamespace(
             admission=SimpleNamespace(
@@ -305,12 +307,16 @@ def test_beam_run_strict_linkstats_admission_requires_staged_input(monkeypatch, 
             beam_mutable_data_dir=tmp_path / "beam" / "input",
         )
     )
-    monkeypatch.setattr(steps_beam, "validate_r5_execution_reference", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        steps_beam, "validate_r5_execution_reference", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         runner,
         "run",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("BEAM must not start when strict admission has no staged input")
+            AssertionError(
+                "BEAM must not start when strict admission has no staged input"
+            )
         ),
     )
 

@@ -331,9 +331,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         return {}
     admission_config = cfg.admission
     linkstats_admission = (
-        admission_config.linkstats
-        if admission_config is not None
-        else None
+        admission_config.linkstats if admission_config is not None else None
     )
     return {
         "config": cfg.config,
@@ -395,9 +393,7 @@ def build_beam_identity_inputs(
 
     admission_config = cfg.admission
     linkstats_admission = (
-        admission_config.linkstats
-        if admission_config is not None
-        else None
+        admission_config.linkstats if admission_config is not None else None
     )
     expected_bytes_path = (
         linkstats_admission.expected_bytes_path

@@ -12,12 +12,16 @@ from pathlib import Path
 from typing import Any, Optional
 from zipfile import BadZipFile, ZipFile
 
+from consist import RunContext
+
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
     beam_primary_config_path,
     resolve_beam_config_value,
     update_staged_beam_config_value,
 )
+from pilates.config import PilatesConfig
+from pilates.workspace import Workspace
 
 
 class BeamLaunchPathError(RuntimeError):
@@ -52,8 +56,8 @@ class R5NetworkLaunchReference:
 
 def configure_staged_linkstats_reference(
     *,
-    settings: Any,
-    workspace: Any,
+    settings: PilatesConfig,
+    workspace: Workspace,
     staged_path: Path,
 ) -> BeamLaunchPathReference:
     """Point final BEAM HOCON at a staged warm-start file.
@@ -121,7 +125,7 @@ def configure_staged_linkstats_reference(
 
 
 def resolve_staged_linkstats_reference(
-    *, settings: Any, workspace: Any
+    *, settings: PilatesConfig, workspace: Workspace
 ) -> BeamLaunchPathReference | None:
     """Resolve the final staged-HOCON warm-start path used by BEAM at launch."""
     config_key = "beam.warmStart.initialLinkstatsFilePath"
@@ -163,7 +167,10 @@ def resolve_staged_linkstats_reference(
 
 
 def validate_staged_linkstats_reference(
-    *, settings: Any, workspace: Any, run_context: Any
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    run_context: RunContext,
 ) -> BeamLaunchPathReference | None:
     """Prove canonicalization and final staged HOCON select the same linkstats."""
     execution_reference = resolve_staged_linkstats_reference(
@@ -181,8 +188,7 @@ def validate_staged_linkstats_reference(
         (
             item
             for item in snapshot.references
-            if item.reference.config_key
-            == "beam.warmStart.initialLinkstatsFilePath"
+            if item.reference.config_key == "beam.warmStart.initialLinkstatsFilePath"
         ),
         None,
     )
@@ -190,12 +196,18 @@ def validate_staged_linkstats_reference(
         raise BeamLaunchPathError(
             "Consist canonicalization did not observe the BEAM linkstats reference."
         )
-    if "linkstats_warmstart" not in snapshot_reference.reference.delegated_artifact_keys:
+    if (
+        "linkstats_warmstart"
+        not in snapshot_reference.reference.delegated_artifact_keys
+    ):
         raise BeamLaunchPathError(
             "Consist linkstats reference does not delegate to linkstats_warmstart."
         )
     observed_path = snapshot_reference.resolved_path
-    if observed_path is None or observed_path.resolve() != execution_reference.physical_target_path:
+    if (
+        observed_path is None
+        or observed_path.resolve() != execution_reference.physical_target_path
+    ):
         raise BeamLaunchPathError(
             "Consist canonicalized linkstats differs from the staged file BEAM will read: "
             f"{observed_path} != {execution_reference.physical_target_path}"
