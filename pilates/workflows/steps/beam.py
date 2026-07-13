@@ -27,9 +27,17 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     load_resolved_beam_config_tree,
 )
-from pilates.beam.launch_paths import validate_r5_execution_reference
+from pilates.beam.admission import (
+    preflight_staged_linkstats_admission,
+    reject_or_warn_for_missing_staged_linkstats,
+)
+from pilates.beam.launch_paths import (
+    validate_r5_execution_reference,
+    validate_staged_linkstats_reference,
+)
 from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
+from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     enqueue_archive_copy,
@@ -906,6 +914,35 @@ def _execute_beam_run(
             workspace=workspace,
             run_context=_consist_ctx,
         )
+        staged_linkstats = upstream.prepared_inputs.get(LINKSTATS_WARMSTART)
+        if staged_linkstats is not None:
+            linkstats_reference = validate_staged_linkstats_reference(
+                settings=runner.state.full_settings,
+                workspace=workspace,
+                run_context=_consist_ctx,
+            )
+            if linkstats_reference is None:
+                raise RuntimeError(
+                    "BEAM preprocess staged linkstats but final HOCON does not select it."
+                )
+            if linkstats_reference.execution_path.resolve() != staged_linkstats.resolve():
+                raise RuntimeError(
+                    "BEAM final HOCON linkstats path differs from the staged warm-start "
+                    f"input: {linkstats_reference.execution_path} != {staged_linkstats}"
+                )
+            tracker = cr.current_tracker()
+            if tracker is None:
+                raise RuntimeError("beam_run requires an active Consist tracker.")
+            preflight_staged_linkstats_admission(
+                tracker=tracker,
+                settings=runner.state.full_settings,
+                launch_reference=linkstats_reference,
+                report_dir=_consist_ctx.run_dir,
+            )
+        else:
+            reject_or_warn_for_missing_staged_linkstats(
+                settings=runner.state.full_settings
+            )
     return runner.run(
         upstream,
         workspace,

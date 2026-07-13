@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("openmatrix")
 
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
+from pilates.beam.admission import BeamInputAdmissionError
 from pilates.beam.runner import BeamRunner
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.steps import beam as steps_beam
@@ -230,6 +231,98 @@ def test_beam_run_requires_r5_context_for_production_beam_runner(tmp_path):
             BeamRunner("beam", SimpleNamespace()),
             workspace=SimpleNamespace(),
             outputs_holder=holder,
+        )
+
+
+def test_beam_run_rejects_linkstats_before_starting_beam(monkeypatch, tmp_path):
+    staged_linkstats = tmp_path / "beam" / "input" / "seattle" / "warmstart.csv.gz"
+    staged_linkstats.parent.mkdir(parents=True)
+    staged_linkstats.write_bytes(b"linkstats")
+    runner = BeamRunner("beam", SimpleNamespace(full_settings=SimpleNamespace()))
+    holder = SimpleNamespace(
+        beam_preprocess=BeamPreprocessOutputs(
+            beam_mutable_data_dir=tmp_path / "beam" / "input",
+            prepared_inputs={"linkstats_warmstart": staged_linkstats},
+        )
+    )
+    launch_reference = SimpleNamespace(execution_path=staged_linkstats)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        steps_beam,
+        "validate_r5_execution_reference",
+        lambda **_kwargs: calls.append("r5"),
+    )
+    monkeypatch.setattr(
+        steps_beam,
+        "validate_staged_linkstats_reference",
+        lambda **_kwargs: (calls.append("linkstats"), launch_reference)[1],
+    )
+    monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: object())
+
+    run_dir = tmp_path / "outputs" / "beam-run"
+
+    def _reject(**_kwargs):
+        calls.append("admission")
+        assert _kwargs["report_dir"] == run_dir
+        raise RuntimeError("linkstats rejected")
+
+    monkeypatch.setattr(steps_beam, "preflight_staged_linkstats_admission", _reject)
+    monkeypatch.setattr(
+        runner,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("BEAM must not start after rejected admission")
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="linkstats rejected"):
+        steps_beam._execute_beam_run(
+            runner,
+            workspace=SimpleNamespace(),
+            outputs_holder=holder,
+            _consist_ctx=SimpleNamespace(run_dir=run_dir),
+        )
+
+    assert calls == ["r5", "linkstats", "admission"]
+
+
+def test_beam_run_strict_linkstats_admission_requires_staged_input(monkeypatch, tmp_path):
+    settings = SimpleNamespace(
+        beam=SimpleNamespace(
+            admission=SimpleNamespace(
+                linkstats=SimpleNamespace(
+                    mode="strict",
+                    expected_run_id="baseline-run",
+                    artifact_key="linkstats_warmstart",
+                    expected_bytes_path=None,
+                )
+            )
+        )
+    )
+    runner = BeamRunner("beam", SimpleNamespace(full_settings=settings))
+    holder = SimpleNamespace(
+        beam_preprocess=BeamPreprocessOutputs(
+            beam_mutable_data_dir=tmp_path / "beam" / "input",
+        )
+    )
+    monkeypatch.setattr(steps_beam, "validate_r5_execution_reference", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        runner,
+        "run",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("BEAM must not start when strict admission has no staged input")
+        ),
+    )
+
+    with pytest.raises(
+        BeamInputAdmissionError,
+        match="requires a staged warm-start linkstats file",
+    ):
+        steps_beam._execute_beam_run(
+            runner,
+            workspace=SimpleNamespace(),
+            outputs_holder=holder,
+            _consist_ctx=SimpleNamespace(run_dir=tmp_path / "outputs" / "beam-run"),
         )
 
 

@@ -1,6 +1,7 @@
 """Tests for Consist config builder registry and step kwargs."""
 
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,6 +43,7 @@ def _make_settings():
     beam.router_directory = "r5"
     beam.scenario_folder = "scenario"
     beam.local_mutable_data_folder = "beam/input"
+    beam.admission = None
     beam.to_consist_facet.return_value = {"sample": 1.0}
     settings.beam = beam
 
@@ -162,6 +164,40 @@ def test_facet_schema_version_routing(tmp_path):
 
     result = build_step_consist_kwargs("urbansim_run", settings)
     assert result["facet_schema_version"] == "urbansim_run_v1"
+
+
+def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_path):
+    settings = _make_settings()
+    expected_bytes = tmp_path / "archive" / "baseline-linkstats.csv.gz"
+    expected_bytes.parent.mkdir()
+    expected_bytes.write_bytes(b"baseline")
+    settings.beam.admission = SimpleNamespace(
+        linkstats=SimpleNamespace(
+            mode="strict",
+            expected_run_id="baseline-run",
+            artifact_key="linkstats_warmstart",
+            expected_bytes_path=str(expected_bytes),
+        )
+    )
+    beam_root = tmp_path / "beam" / "input"
+    beam_root.mkdir(parents=True)
+    (beam_root / "main.conf").write_text("x=1")
+
+    result = build_step_consist_kwargs(
+        "beam_run",
+        settings,
+        workspace_path=str(tmp_path),
+    )
+
+    assert result["config"]["linkstats_admission"] == {
+        "mode": "strict",
+        "expected_run_id": "baseline-run",
+        "artifact_key": "linkstats_warmstart",
+        "expected_bytes_path": str(expected_bytes),
+    }
+    assert ("beam_admission_linkstats_expected_bytes", expected_bytes) in result[
+        "identity_inputs"
+    ]
 
 
 def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):

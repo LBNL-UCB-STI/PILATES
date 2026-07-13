@@ -120,6 +120,89 @@ def configure_staged_linkstats_reference(
     )
 
 
+def resolve_staged_linkstats_reference(
+    *, settings: Any, workspace: Any
+) -> BeamLaunchPathReference | None:
+    """Resolve the final staged-HOCON warm-start path used by BEAM at launch."""
+    config_key = "beam.warmStart.initialLinkstatsFilePath"
+    config_path = beam_primary_config_path(settings, workspace=workspace)
+    resolved_value = resolve_beam_config_value(
+        config_path,
+        key=config_key,
+        env_overrides=beam_config_env_overrides(settings, workspace=workspace),
+    )
+    if resolved_value is None or not str(resolved_value).strip():
+        return None
+
+    configured_path = Path(str(resolved_value))
+    if not configured_path.is_absolute():
+        raise BeamLaunchPathError(
+            f"Final BEAM HOCON key '{config_key}' did not resolve to an absolute host path: "
+            f"{resolved_value!r}"
+        )
+    mutable_root = _mutable_input_root(workspace)
+    physical_target_path = _physical_target(
+        configured_path,
+        mutable_root=mutable_root,
+        config_key=config_key,
+    )
+    if not configured_path.is_file():
+        raise BeamLaunchPathError(
+            f"Final BEAM HOCON key '{config_key}' must resolve to one regular file: "
+            f"{configured_path}"
+        )
+    return BeamLaunchPathReference(
+        config_key=config_key,
+        raw_value=str(resolved_value),
+        canonical_value=str(physical_target_path),
+        configured_path=configured_path,
+        execution_path=configured_path,
+        physical_target_path=physical_target_path,
+        container_path=_container_path(configured_path, mutable_root=mutable_root),
+    )
+
+
+def validate_staged_linkstats_reference(
+    *, settings: Any, workspace: Any, run_context: Any
+) -> BeamLaunchPathReference | None:
+    """Prove canonicalization and final staged HOCON select the same linkstats."""
+    execution_reference = resolve_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+    )
+    if execution_reference is None:
+        return None
+    snapshot = run_context.canonicalization
+    if snapshot is None:
+        raise BeamLaunchPathError(
+            "beam_run requires a Consist canonicalization snapshot for linkstats admission."
+        )
+    snapshot_reference = next(
+        (
+            item
+            for item in snapshot.references
+            if item.reference.config_key
+            == "beam.warmStart.initialLinkstatsFilePath"
+        ),
+        None,
+    )
+    if snapshot_reference is None:
+        raise BeamLaunchPathError(
+            "Consist canonicalization did not observe the BEAM linkstats reference."
+        )
+    if "linkstats_warmstart" not in snapshot_reference.reference.delegated_artifact_keys:
+        raise BeamLaunchPathError(
+            "Consist linkstats reference does not delegate to linkstats_warmstart."
+        )
+    observed_path = snapshot_reference.resolved_path
+    if observed_path is None or observed_path.resolve() != execution_reference.physical_target_path:
+        raise BeamLaunchPathError(
+            "Consist canonicalized linkstats differs from the staged file BEAM will read: "
+            f"{observed_path} != {execution_reference.physical_target_path}"
+        )
+    return execution_reference
+
+
 def resolve_r5_network_reference(
     *, settings: Any, workspace: Any
 ) -> R5NetworkLaunchReference:

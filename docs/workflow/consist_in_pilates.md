@@ -73,6 +73,33 @@ The key ownership boundary is:
 - the enabled workflow surface decides which stages, step contracts, and restart requirements are active
 - Consist executes those declared boundaries, records lineage, and provides replay / cache behavior for them
 
+## Optional BEAM Linkstats Admission
+
+PILATES can verify one staged BEAM warm-start linkstats file against an exact
+input from a completed Consist run before the BEAM container starts. It is
+disabled unless `beam.admission.linkstats` is configured. The preflight hashes
+the staged host file only after the final staged HOCON and Consist
+canonicalization both identify that same file; the report also records the
+container path BEAM receives.
+
+```yaml
+beam:
+  admission:
+    linkstats:
+      mode: strict # use warn to record and continue
+      expected_run_id: completed-beam-baseline
+      artifact_key: linkstats_warmstart
+      # expected_bytes_path: /archive/baseline/warmstart.csv.gz
+```
+
+`strict` stops before BEAM execution for any outcome other than `verified`, and
+also rejects a configured policy when BEAM preprocess did not stage a warm-start
+file. `warn` records a warning and continues in either case. The report is
+stored in the active Consist run metadata and at
+`admission/beam-linkstats-warmstart.json` below that run's managed output
+directory. Omitting the block leaves ordinary optional warm-start behavior
+unchanged.
+
 ## Public Artifact Surface
 
 Consist records the tracked workflow publications, but the semantic public surface still comes from PILATES workflow keys and families. The most important current examples are:
