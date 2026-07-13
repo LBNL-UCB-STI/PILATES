@@ -28,6 +28,7 @@ from pilates.beam.config_hocon import (
     load_resolved_beam_config_tree,
 )
 from pilates.beam.launch_paths import validate_r5_execution_reference
+from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -895,7 +896,7 @@ def _execute_beam_run(
         raise RuntimeError("BEAM preprocess must complete first")
     if not isinstance(upstream, BeamPreprocessOutputs):
         raise TypeError("beam_run requires BeamPreprocessOutputs from beam_preprocess")
-    if _consist_ctx is None:
+    if isinstance(runner, BeamRunner):if _consist_ctx is None:
         raise RuntimeError(
             "beam_run requires the Consist run context for R5 validation."
         )

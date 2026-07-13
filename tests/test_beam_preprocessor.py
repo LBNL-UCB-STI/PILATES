@@ -505,6 +505,10 @@ def test_preprocess_ignores_workspace_beam_output_cache(
         "_handle_linkstats",
         lambda _workspace, _previous_beam_records, _store: None,
     )
+    monkeypatch.setattr(
+        "pilates.beam.preprocessor.prepare_r5_raw_rebuild",
+        lambda **_kwargs: None,
+    )
     monkeypatch.setattr(preprocessor, "_activity_demand_enabled", lambda: True)
 
     def _capture_input_records(input_records, _workspace):

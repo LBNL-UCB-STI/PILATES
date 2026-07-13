@@ -5,6 +5,7 @@ import pytest
 pytest.importorskip("openmatrix")
 
 from pilates.beam.outputs import BeamPreprocessOutputs, BeamRunOutputs
+from pilates.beam.runner import BeamRunner
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.steps import beam as steps_beam
 
@@ -151,8 +152,6 @@ def test_beam_run_logs_config_file_input(monkeypatch, tmp_path):
             (key, path, description)
         ),
     )
-    monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
-
     beam_root = tmp_path / "beam" / "input" / "seattle"
     beam_root.mkdir(parents=True)
     config_path = beam_root / "seattle-pilates.conf"
@@ -190,6 +189,48 @@ def test_beam_run_snapshot_dir_uses_forecast_year(tmp_path):
     assert steps_beam._beam_run_snapshot_dir(workspace=workspace, state=state) == (
         tmp_path / "beam" / "output" / "inputs-year-2021-iteration-0"
     )
+
+
+def test_beam_run_skips_r5_preflight_for_non_beam_runner(monkeypatch, tmp_path):
+    """Workflow test doubles must not need a production R5 launch contract."""
+
+    expected = BeamRunOutputs(beam_output_dir=tmp_path / "beam" / "output")
+    runner = SimpleNamespace(run=lambda *_args, **_kwargs: expected)
+    holder = SimpleNamespace(
+        beam_preprocess=BeamPreprocessOutputs(
+            beam_mutable_data_dir=tmp_path / "beam" / "input",
+        )
+    )
+    monkeypatch.setattr(
+        steps_beam,
+        "validate_r5_execution_reference",
+        lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("non-BEAM runner must not validate an R5 launch path")
+        ),
+    )
+
+    actual = steps_beam._execute_beam_run(
+        runner,
+        workspace=SimpleNamespace(),
+        outputs_holder=holder,
+    )
+
+    assert actual is expected
+
+
+def test_beam_run_requires_r5_context_for_production_beam_runner(tmp_path):
+    holder = SimpleNamespace(
+        beam_preprocess=BeamPreprocessOutputs(
+            beam_mutable_data_dir=tmp_path / "beam" / "input",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="requires the Consist run context"):
+        steps_beam._execute_beam_run(
+            BeamRunner("beam", SimpleNamespace()),
+            workspace=SimpleNamespace(),
+            outputs_holder=holder,
+        )
 
 
 def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
@@ -235,7 +276,6 @@ def test_beam_run_prefers_coupler_published_plan_outputs_over_disk_scan(
             (key, path, description)
         ),
     )
-    monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
     monkeypatch.setattr(
         steps_beam,
         "find_last_run_output_plans",
@@ -297,8 +337,6 @@ def test_beam_run_fails_clearly_when_config_file_missing(monkeypatch, tmp_path):
     )
 
     input_logger = captured["input_logger"]
-    monkeypatch.setattr(steps_beam.cr, "current_tracker", lambda: None)
-
     upstream = SimpleNamespace(_iter_record_items=lambda: [])
     try:
         input_logger(
