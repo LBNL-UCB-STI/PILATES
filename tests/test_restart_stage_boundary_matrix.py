@@ -567,7 +567,12 @@ def restart_stage_env(tmp_path, monkeypatch):
     beam_final_omx_path = _write_file(
         beam_dir / settings.run.region / settings.shared.skims.fname
     )
-    _write_file(beam_dir / settings.run.region / settings.beam.config, "beam-config")
+    r5_dir = beam_dir / settings.run.region / "r5"
+    _write_file(r5_dir / "network.osm.pbf")
+    _write_file(
+        beam_dir / settings.run.region / settings.beam.config,
+        f'beam.routing.r5.directory = "{r5_dir}"\n',
+    )
     _write_file(
         atlas_output_dir / f"vehicles2_{state.forecast_year}.csv",
         "vehicleId,householdId,vehicleTypeId\n1,10,sedan\n",
@@ -665,7 +670,7 @@ def restart_stage_env(tmp_path, monkeypatch):
         ModelFactory,
         "get_runner",
         lambda self, model_name, state=None, *_args, **_kwargs: DummyRunner(
-            model_name, record_builder
+            model_name, record_builder, state
         ),
     )
     monkeypatch.setattr(
