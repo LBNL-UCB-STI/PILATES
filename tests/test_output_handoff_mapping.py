@@ -310,7 +310,9 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5]
         is current_artifact
     )
-    urbansim_run_step = next(step for step in stage_steps if step.name == "urbansim_run")
+    urbansim_run_step = next(
+        step for step in stage_steps if step.name == "urbansim_run"
+    )
     assert urbansim_run_step.output_paths_provider is None
 
 

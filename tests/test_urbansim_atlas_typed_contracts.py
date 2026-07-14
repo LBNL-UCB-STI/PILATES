@@ -103,9 +103,7 @@ def test_urbansim_runner_leaves_h5_output_logging_to_workflow_callback(
         usim_mutable_data_dir=mutable_data_dir,
         prepared_inputs={"input_h5": mutable_data_dir / "input.h5"},
     )
-    workspace = SimpleNamespace(
-        get_usim_mutable_data_dir=lambda: str(mutable_data_dir)
-    )
+    workspace = SimpleNamespace(get_usim_mutable_data_dir=lambda: str(mutable_data_dir))
     calls = []
 
     monkeypatch.setattr(

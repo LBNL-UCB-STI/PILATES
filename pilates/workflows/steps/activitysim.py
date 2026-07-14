@@ -114,9 +114,7 @@ def activitysim_run_output_paths(
     iteration = getattr(state, "iteration", None)
     if forecast_year is None or iteration is None:
         return {
-            key: path
-            for key, path in expected_outputs.items()
-            if key in output_keys
+            key: path for key, path in expected_outputs.items() if key in output_keys
         }
 
     return {
@@ -1797,6 +1795,7 @@ def make_activitysim_postprocess_step(
             output_recoverer=_recover_activitysim_postprocess_outputs,
             input_paths=ActivitysimPostprocessor.declared_expected_inputs,
             output_paths=activitysim_postprocess_output_paths,
+            manual_output_keys=[USIM_DATASTORE_H5],
             cache_hydration="metadata",
             input_binding="paths",
             input_materialization="requested",

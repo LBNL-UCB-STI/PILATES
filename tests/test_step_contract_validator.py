@@ -24,7 +24,7 @@ import pytest
 from consist import define_step
 
 from pilates.activitysim.runner import ActivitysimRunner
-from pilates.atlas.postprocessor import AtlasPostprocessor
+from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.runtime import scenario_runtime
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -141,6 +141,20 @@ def test_validate_workflow_step_contracts_passes_for_current_setup():
     )
 
 
+def test_validate_workflow_step_contracts_allows_explicit_manual_h5_outputs(
+    tmp_path: Path,
+):
+    """H5 container callbacks may own catalog outputs omitted from output_paths."""
+    settings, state, workspace = _validation_runtime_context(tmp_path)
+
+    step_shared.validate_workflow_step_contracts(
+        declared_steps=_declared_schema_steps(),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+
 def test_filter_schema_steps_for_enabled_models_supports_surface_subset():
     settings = SimpleNamespace(
         runtime=SimpleNamespace(
@@ -179,20 +193,19 @@ def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(
     settings, state, workspace = _validation_runtime_context(tmp_path)
 
     monkeypatch.setattr(
-        AtlasPostprocessor,
+        ActivitysimPostprocessor,
         "expected_outputs",
         staticmethod(
             lambda *_args, **_kwargs: {
-                "atlas_output_dir": str(tmp_path / "atlas" / "output"),
-                "atlas_vehicles2_output": str(
-                    tmp_path / "atlas" / "output" / "vehicles2_2025.csv"
-                ),
+                "asim_output_dir": str(tmp_path / "activitysim" / "output"),
+                "usim_datastore_h5": str(tmp_path / "urbansim" / "data" / "usim.h5"),
             }
         ),
     )
 
     with pytest.raises(
-        RuntimeError, match="atlas_postprocess.*missing required catalog output keys"
+        RuntimeError,
+        match="activitysim_postprocess.*missing required catalog output keys",
     ):
         step_shared.validate_workflow_step_contracts(
             declared_steps=_declared_schema_steps(),

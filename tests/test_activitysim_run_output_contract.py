@@ -192,9 +192,10 @@ def test_activitysim_run_output_contract_logs_once_and_updates_coupler(tmp_path)
         )
 
         assert tuple(result.outputs) == tuple(output_paths)
-        assert scenario.coupler.get("households_asim_out") == result.outputs[
-            "households_asim_out"
-        ]
+        assert (
+            scenario.coupler.get("households_asim_out")
+            == result.outputs["households_asim_out"]
+        )
         run_id = result.run.id
 
     with Session(tracker.engine) as session:

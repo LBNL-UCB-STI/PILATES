@@ -73,9 +73,7 @@ def _urbansim_preprocess_output_paths(
     """Keep H5 container logging under the callback's specialized owner."""
     expected_outputs = UrbansimPreprocessor.expected_outputs(settings, state, workspace)
     return {
-        key: path
-        for key, path in expected_outputs.items()
-        if key != USIM_DATASTORE_H5
+        key: path for key, path in expected_outputs.items() if key != USIM_DATASTORE_H5
     }
 
 
@@ -84,9 +82,11 @@ def _atlas_postprocess_output_paths(
 ) -> Dict[str, Any]:
     """Declare only the coarse directory; callbacks own H5 and handoff files."""
     expected_outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
-    return {
-        ATLAS_OUTPUT_DIR: expected_outputs[ATLAS_OUTPUT_DIR]
-    } if ATLAS_OUTPUT_DIR in expected_outputs else {}
+    return (
+        {ATLAS_OUTPUT_DIR: expected_outputs[ATLAS_OUTPUT_DIR]}
+        if ATLAS_OUTPUT_DIR in expected_outputs
+        else {}
+    )
 
 
 def _root_h5_table_keys(
@@ -1224,6 +1224,10 @@ def make_atlas_postprocess_step(
             output_logger=_log_outputs,
             output_recoverer=_recover_atlas_postprocess_outputs,
             output_paths=_atlas_postprocess_output_paths,
+            manual_output_keys=[
+                USIM_POPULATION_SOURCE_H5,
+                ATLAS_VEHICLES2_OUTPUT,
+            ],
             input_binding="none",
             cache_mode="overwrite",
             cache_hydration="metadata",

@@ -1500,7 +1500,11 @@ def make_beam_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            if short_name == ZARR_SKIMS or short_name in outputs.split_events or short_name in outputs.split_event_links:
+            if (
+                short_name == ZARR_SKIMS
+                or short_name in outputs.split_events
+                or short_name in outputs.split_event_links
+            ):
                 continue
             log_and_set_output(
                 key=short_name,

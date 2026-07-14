@@ -627,6 +627,7 @@ class StandardStepSpec:
     output_recoverer: Optional[OutputRecoverer] = None
     declared_outputs: Optional[list[str]] = None
     schema_outputs: Optional[list[str]] = None
+    manual_output_keys: Optional[list[str]] = None
     inputs: Any = None
     output_paths: Any = None
     load_inputs: Optional[bool] = None
@@ -1206,15 +1207,31 @@ def validate_workflow_step_contracts(
                     )
                 if step_name in STRICT_OUTPUT_PATH_CONTRACT_STEPS:
                     output_paths_provider = _step_meta_value(step_meta, "output_paths")
+                    manual_output_keys = {
+                        workflow_step_key_match(
+                            step_name,
+                            key,
+                            direction="output",
+                        ).canonical_key
+                        for key in _normalize_output_keys(
+                            getattr(step_func, "pilates_manual_output_keys", None)
+                        )
+                    }
                     _validate_contract_provider_keys(
                         errors=errors,
                         step_name=step_name,
                         direction="output",
                         provider_name="output_paths",
                         provider=output_paths_provider,
-                        required_keys=tuple(spec.output_keys)
-                        if spec is not None
-                        else (),
+                        required_keys=(
+                            tuple(
+                                key
+                                for key in spec.output_keys
+                                if key not in manual_output_keys
+                            )
+                            if spec is not None
+                            else ()
+                        ),
                         optional_keys=tuple(spec.optional_output_keys)
                         if spec is not None
                         else (),
@@ -1265,6 +1282,7 @@ def _make_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    manual_output_keys: Optional[list[str]] = None,
     inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
@@ -1387,7 +1405,7 @@ def _make_typed_step_function(
     if output_recoverer is not None:
         setattr(_step_func, "pilates_output_recoverer", output_recoverer)
 
-    return _decorate_step_with_consist(
+    decorated_step = _decorate_step_with_consist(
         step_func=_step_func,
         step_model=step_name,
         description=description,
@@ -1411,6 +1429,13 @@ def _make_typed_step_function(
         input_materialization=input_materialization,
         tags=step_tags,
     )
+    if manual_output_keys:
+        setattr(
+            decorated_step,
+            "pilates_manual_output_keys",
+            tuple(manual_output_keys),
+        )
+    return decorated_step
 
 
 def _make_logged_typed_step_function(
@@ -1430,6 +1455,7 @@ def _make_logged_typed_step_function(
     output_recoverer: Optional[Callable[..., Optional[StepOutputsT]]] = None,
     declared_outputs: Optional[list[str]] = None,
     schema_outputs: Optional[list[str]] = None,
+    manual_output_keys: Optional[list[str]] = None,
     inputs: Any = None,
     output_paths: Any = None,
     load_inputs: Optional[bool] = None,
@@ -1462,6 +1488,7 @@ def _make_logged_typed_step_function(
         output_recoverer=output_recoverer,
         declared_outputs=declared_outputs,
         schema_outputs=schema_outputs,
+        manual_output_keys=manual_output_keys,
         inputs=inputs,
         output_paths=output_paths,
         load_inputs=load_inputs,
@@ -1524,6 +1551,7 @@ def build_standard_step(
         output_recoverer=spec.output_recoverer,
         declared_outputs=spec.declared_outputs,
         schema_outputs=spec.schema_outputs,
+        manual_output_keys=spec.manual_output_keys,
         inputs=spec.inputs,
         output_paths=spec.output_paths,
         load_inputs=spec.load_inputs,
