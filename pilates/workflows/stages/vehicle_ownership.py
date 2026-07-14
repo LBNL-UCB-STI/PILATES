@@ -15,6 +15,7 @@ from pilates.utils.coupler_helpers import (
     archive_copy_destination,
     archive_copy_now,
     flush_archive_queue,
+    set_coupler_from_artifact,
 )
 from pilates.atlas.inputs import (
     build_atlas_inputs,
@@ -24,6 +25,7 @@ from pilates.utils.input_logging import log_inputs
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.atlas_state import AtlasSubState
+from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StageRunner,
@@ -125,12 +127,25 @@ def _publish_current_h5_alias(
     fallback_path: Union[str, os.PathLike],
 ) -> Any:
     """Alias the current H5 role to ATLAS's published population artifact."""
-    population_source = coupler.get(USIM_POPULATION_SOURCE_H5)
+    population_source = resolve_coupler_value(
+        coupler,
+        USIM_POPULATION_SOURCE_H5,
+    ).value
     if population_source is None:
         # Keep a path fallback for runtimes without an active output logger.
         population_source = os.fspath(fallback_path)
-        coupler.set(USIM_POPULATION_SOURCE_H5, population_source)
-    coupler.set(USIM_DATASTORE_CURRENT_H5, population_source)
+        set_coupler_from_artifact(
+            coupler,
+            USIM_POPULATION_SOURCE_H5,
+            None,
+            fallback=population_source,
+        )
+    set_coupler_from_artifact(
+        coupler,
+        USIM_DATASTORE_CURRENT_H5,
+        population_source,
+        fallback=os.fspath(fallback_path),
+    )
     return population_source
 
 
