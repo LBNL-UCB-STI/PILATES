@@ -173,6 +173,7 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
     preprocess_path.write_text("preprocess", encoding="utf-8")
     upstream = _TrackingOutputs(preprocess_path, "run_input")
     resolution_calls = []
+    stage_steps = []
     workflow_call_count = {"count": 0}
     artifact = SimpleNamespace(
         key="run_input",
@@ -209,6 +210,7 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         if workflow_call_count["count"] == 1:
             outputs_holder.urbansim_preprocess = upstream
         else:
+            stage_steps.extend(kwargs["steps"])
             outputs_holder.urbansim_run = SimpleNamespace(usim_datastore_h5=None)
             outputs_holder.urbansim_postprocess = SimpleNamespace(
                 usim_datastore_h5=None
@@ -308,6 +310,8 @@ def test_land_use_stage_prefers_coupler_artifacts_for_runtime_handoffs(
         run_binding_call["explicit_inputs"][USIM_DATASTORE_CURRENT_H5]
         is current_artifact
     )
+    urbansim_run_step = next(step for step in stage_steps if step.name == "urbansim_run")
+    assert urbansim_run_step.output_paths_provider is None
 
 
 def test_land_use_stage_ignores_noop_datastore_placeholders_for_runtime_handoffs(

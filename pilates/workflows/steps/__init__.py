@@ -44,7 +44,6 @@ from .urbansim_atlas import (
     make_urbansim_postprocess_step as make_urbansim_postprocess_step,
     make_urbansim_preprocess_step as make_urbansim_preprocess_step,
     make_urbansim_run_step as make_urbansim_run_step,
-    urbansim_run_output_paths as urbansim_run_output_paths,
 )
 
 # Re-export modules for callers/tests that monkeypatch module-level symbols.

@@ -20,7 +20,6 @@ from pilates.workflows.steps import (
     make_urbansim_postprocess_step,
     make_urbansim_preprocess_step,
     make_urbansim_run_step,
-    urbansim_run_output_paths,
 )
 from pilates.workflows.orchestration import (
     StageRunner,
@@ -221,7 +220,6 @@ def run_land_use_stage(
                 outputs_holder=outputs_holder_year,
             ),
             binding=run_binding,
-            output_paths_provider=urbansim_run_output_paths,
         ),
         StepRef(
             name="urbansim_postprocess",

@@ -286,7 +286,9 @@ def test_beam_postprocess_output_logger_publishes_promoted_run_keys_without_reco
         key: (path, description, meta)
         for key, path, description, meta in log_and_set_calls
     }
-    assert by_key["zarr_skims"][0] == str(zarr_skims)
+    assert "zarr_skims" not in by_key
+    assert "events_parquet_2018_0_type_PathTraversal" not in by_key
+    assert "path_traversal_links_2018_0" not in by_key
     assert by_key[LINKSTATS][0] == str(linkstats_iter)
     assert by_key[LINKSTATS_WARMSTART][0] == str(linkstats_iter)
     assert by_key[BEAM_PLANS_OUT][0] == str(plans_iter)
@@ -367,7 +369,12 @@ def _stub_atlas_output_publication(monkeypatch):
 
     for module in (steps_activitysim, steps_urbansim_atlas):
         monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
-        monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            module,
+            "log_output_only",
+            lambda **_kwargs: None,
+            raising=False,
+        )
 
 
 def _prepare_activitysim_preprocess_manifest(

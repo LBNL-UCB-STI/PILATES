@@ -119,6 +119,21 @@ def _build_atlas_postprocess_binding(
     )
 
 
+def _publish_current_h5_alias(
+    *,
+    coupler: CouplerProtocol,
+    fallback_path: Union[str, os.PathLike],
+) -> Any:
+    """Alias the current H5 role to ATLAS's published population artifact."""
+    population_source = coupler.get(USIM_POPULATION_SOURCE_H5)
+    if population_source is None:
+        # Keep a path fallback for runtimes without an active output logger.
+        population_source = os.fspath(fallback_path)
+        coupler.set(USIM_POPULATION_SOURCE_H5, population_source)
+    coupler.set(USIM_DATASTORE_CURRENT_H5, population_source)
+    return population_source
+
+
 def _atlas_sub_years(state: WorkflowState) -> list[int]:
     """
     Return ATLAS sub-years within the current workflow interval.
@@ -412,8 +427,6 @@ def run_vehicle_ownership_stage(
             surface=surface,
         )
         log_inputs(step_inputs, cast(Dict[str, Optional[str]], step_input_descriptions))
-        step_inputs[USIM_DATASTORE_CURRENT_H5] = atlas_usim_datastore_h5_path
-        step_inputs[USIM_DATASTORE_BASE_H5] = atlas_usim_datastore_h5_path
         # Keep ATLAS pre/postprocess H5 selection artifact-driven until the
         # model code actually needs a concrete existing path.
         atlas_state.atlas_usim_datastore_h5 = step_inputs.get(USIM_DATASTORE_CURRENT_H5)
@@ -555,16 +568,10 @@ def run_vehicle_ownership_stage(
                 atlas_postprocess_outputs is not None
                 and atlas_postprocess_outputs.usim_datastore_h5 is not None
             ):
-                set_value = getattr(coupler, "set", None)
-                if callable(set_value):
-                    set_value(
-                        USIM_POPULATION_SOURCE_H5,
-                        str(atlas_postprocess_outputs.usim_datastore_h5),
-                    )
-                    set_value(
-                        USIM_DATASTORE_CURRENT_H5,
-                        str(atlas_postprocess_outputs.usim_datastore_h5),
-                    )
+                _publish_current_h5_alias(
+                    coupler=coupler,
+                    fallback_path=atlas_postprocess_outputs.usim_datastore_h5,
+                )
                 if not atlas_state.is_start_year():
                     _validate_population_h5_for_activitysim_year(
                         path=atlas_postprocess_outputs.usim_datastore_h5,

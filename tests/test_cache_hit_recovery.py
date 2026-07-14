@@ -118,7 +118,12 @@ def _stub_recovered_output_publication(monkeypatch):
 
     for module in (steps_activitysim, steps_beam, steps_urbansim_atlas):
         monkeypatch.setattr(module, "log_and_set_output", _set_on_coupler)
-        monkeypatch.setattr(module, "log_output_only", lambda **_kwargs: None)
+        monkeypatch.setattr(
+            module,
+            "log_output_only",
+            lambda **_kwargs: None,
+            raising=False,
+        )
 
 
 def _write_file(path: Path) -> None:

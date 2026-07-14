@@ -18,11 +18,8 @@ from pilates.workflows.coupler_namespace import (
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.steps import (
     StepOutputsHolder,
-    urbansim_run_output_paths,
 )
 from pilates.workflows import catalog
-from pilates.workflows.steps.urbansim_atlas import make_urbansim_run_step
-from pilates.urbansim.runner import UrbansimRunner
 
 
 class _FakeScenario:
@@ -284,54 +281,6 @@ def test_run_workflow_uses_decorator_output_paths_callable():
     assert scenario.calls[0]["output_paths"] == {
         "zarr_skims": "/tmp/workspace/activitysim/cache/skims.zarr"
     }
-
-
-def test_run_workflow_uses_urbansim_run_output_path_provider():
-    scenario = _FakeScenario()
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.urbansim_preprocess = SimpleNamespace()
-    workspace = _FakeWorkspace("/tmp/workspace")
-    settings = SimpleNamespace(
-        run=SimpleNamespace(region="test"),
-        urbansim=SimpleNamespace(
-            local_mutable_data_folder="urbansim/data",
-            region_mappings={"region_to_region_id": {"test": "001"}},
-            input_file_template="input_{region_id}.h5",
-            output_file_template="usim_{year}.h5",
-        ),
-    )
-    state = SimpleNamespace(
-        year=2020,
-        forecast_year=2020,
-        iteration=0,
-        is_start_year=lambda: False,
-    )
-    coupler = _FakeCoupler()
-
-    run_step = make_urbansim_run_step(coupler=coupler, outputs_holder=outputs_holder)
-    step = StepRef(
-        name="urbansim_run",
-        step_func=run_step,
-        output_paths_provider=urbansim_run_output_paths,
-    )
-
-    run_workflow(
-        stage_name="unit",
-        steps=[step],
-        scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix="unit",
-    )
-
-    assert scenario.calls[0]["output_paths"] == UrbansimRunner.expected_outputs(
-        settings,
-        state,
-        workspace,
-    )
 
 
 def test_run_workflow_does_not_warn_for_component_local_expected_inputs(caplog):

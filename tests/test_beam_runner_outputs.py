@@ -70,6 +70,25 @@ def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
     assert facet.get("beam_sub_iteration") == 1
 
 
+def test_gather_outputs_discovers_activitysim_omx_basename(tmp_path):
+    beam_output_dir = tmp_path / "beam-output"
+    skim_path = (
+        beam_output_dir
+        / "seattle"
+        / "run"
+        / "ITERS"
+        / "it.2"
+        / "2.activitySimODSkims_current.omx"
+    )
+    _touch(skim_path)
+
+    runner = BeamRunner("beam_runner", _StubState())
+    outputs = runner.gather_outputs(str(beam_output_dir))
+
+    by_name = {record.short_name: record for record in outputs}
+    assert by_name["raw_od_skims_2030_2"].file_path == str(skim_path)
+
+
 def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     state = _StubState()
     runner = BeamRunner("beam_runner", state)

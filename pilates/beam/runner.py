@@ -294,10 +294,12 @@ class BeamRunner(GenericRunner):
     ) -> List[FileRecord]:
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
-            # Zarr OD skims naming differs across BEAM builds/configs:
+            # BEAM OD skims naming differs across builds/configs:
+            # - `{it}.skimsActivitySimOD_current.omx` (legacy/observed)
+            # - `{it}.activitySimODSkims_current.omx` (observed in production)
             # - `{it}.skimsActivitySimOD_current.zarr` (observed in production)
             # - `{it}.activitySimODSkims_current.zarr` (observed in some builds)
-            # We handle both below.
+            # We handle both basenames below.
             "raw_od_skims_zarr": (None, ".zarr"),
             "raw_origin_skims": ("skimsRidehail", ".csv.gz"),
             "linkstats": ("linkstats", ".csv.gz"),
@@ -363,7 +365,13 @@ class BeamRunner(GenericRunner):
         paths, last_iter = find_beam_iterations(beam_local_output_folder)
         for it, path in paths.items():
             for short_name, (file_name, extension) in files_to_get.items():
-                if short_name == "raw_od_skims_zarr":
+                if short_name == "raw_od_skims":
+                    full_path = find_iteration_file(
+                        path, it, "skimsActivitySimOD_current", ".omx"
+                    ) or find_iteration_file(
+                        path, it, "activitySimODSkims_current", ".omx"
+                    )
+                elif short_name == "raw_od_skims_zarr":
                     full_path = find_iteration_file(
                         path, it, "skimsActivitySimOD_current", ".zarr"
                     ) or find_iteration_file(

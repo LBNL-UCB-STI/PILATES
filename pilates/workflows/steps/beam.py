@@ -41,6 +41,7 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
     enqueue_archive_copy,
+    set_coupler_from_artifact,
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -1499,12 +1500,21 @@ def make_beam_postprocess_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
+            if short_name == ZARR_SKIMS or short_name in outputs.split_events or short_name in outputs.split_event_links:
+                continue
             log_and_set_output(
                 key=short_name,
                 path=str(path),
                 description=description,
                 coupler=coupler,
                 step_name="beam_postprocess",
+            )
+        if outputs.zarr_skims is not None:
+            set_coupler_from_artifact(
+                coupler,
+                ZARR_SKIMS,
+                None,
+                fallback=str(outputs.zarr_skims),
             )
         for short_name, path in outputs.split_events.items():
             facet_meta = _beam_postprocess_split_facet_meta(short_name)
@@ -1584,13 +1594,7 @@ def make_beam_full_skim_step(
         holder: StepOutputsHolder,
     ) -> None:
         for short_name, path, description in outputs._iter_record_items():
-            log_and_set_output(
-                key=short_name,
-                path=str(path),
-                description=description,
-                coupler=coupler,
-                step_name="beam_full_skim",
-            )
+            set_coupler_from_artifact(coupler, short_name, None, fallback=str(path))
 
     step = build_standard_step(
         coupler=coupler,

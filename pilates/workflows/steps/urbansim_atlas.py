@@ -15,12 +15,11 @@ from pilates.atlas.preprocessor import (
 from pilates.atlas.preprocessor import AtlasPreprocessor
 from pilates.atlas.runner import AtlasRunner
 from pilates.config.models import PilatesConfig
-from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
-from pilates.urbansim.runner import UrbansimRunner
 from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
 from pilates.workflows.artifact_keys import (
+    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
@@ -66,6 +65,28 @@ def _strip_component_runtime_kwargs(kwargs: Dict[str, Any]) -> Dict[str, Any]:
     if "omx_skims" in filtered and "final_skims_omx" not in filtered:
         filtered["final_skims_omx"] = filtered.pop("omx_skims")
     return filtered
+
+
+def _urbansim_preprocess_output_paths(
+    settings: PilatesConfig, state: WorkflowState, workspace: Workspace
+) -> Dict[str, Any]:
+    """Keep H5 container logging under the callback's specialized owner."""
+    expected_outputs = UrbansimPreprocessor.expected_outputs(settings, state, workspace)
+    return {
+        key: path
+        for key, path in expected_outputs.items()
+        if key != USIM_DATASTORE_H5
+    }
+
+
+def _atlas_postprocess_output_paths(
+    settings: PilatesConfig, state: WorkflowState, workspace: Workspace
+) -> Dict[str, Any]:
+    """Declare only the coarse directory; callbacks own H5 and handoff files."""
+    expected_outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
+    return {
+        ATLAS_OUTPUT_DIR: expected_outputs[ATLAS_OUTPUT_DIR]
+    } if ATLAS_OUTPUT_DIR in expected_outputs else {}
 
 
 def _root_h5_table_keys(
@@ -329,33 +350,6 @@ def _execute_urbansim_run_typed(
     return runner.run(upstream, workspace)
 
 
-def urbansim_run_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, Any]:
-    return UrbansimRunner.expected_outputs(settings, state, workspace)
-
-
-def urbansim_preprocess_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, Any]:
-    return UrbansimPreprocessor.expected_outputs(settings, state, workspace)
-
-
-def urbansim_postprocess_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, Any]:
-    return UrbansimPostprocessor.expected_outputs(settings, state, workspace)
-
-
 def atlas_preprocess_output_paths(
     *,
     settings: PilatesConfig,
@@ -372,15 +366,6 @@ def atlas_run_output_paths(
     workspace: Workspace,
 ) -> Dict[str, Any]:
     return AtlasRunner.expected_outputs(settings, state, workspace)
-
-
-def atlas_postprocess_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> Dict[str, Any]:
-    return AtlasPostprocessor.expected_outputs(settings, state, workspace)
 
 
 def _execute_urbansim_postprocess_typed(
@@ -605,7 +590,7 @@ def make_urbansim_preprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_preprocess_outputs,
-            output_paths=UrbansimPreprocessor.expected_outputs,
+            output_paths=_urbansim_preprocess_output_paths,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -700,7 +685,7 @@ def make_urbansim_run_step(
             component_executor=_execute_urbansim_run_typed,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_run_outputs,
-            output_paths=UrbansimRunner.expected_outputs,
+            output_paths=None,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -856,7 +841,7 @@ def make_urbansim_postprocess_step(
             component_executor=_execute_urbansim_postprocess_typed,
             output_logger=_log_outputs,
             output_recoverer=_recover_urbansim_postprocess_outputs,
-            output_paths=UrbansimPostprocessor.expected_outputs,
+            output_paths=None,
             input_binding="none",
             cache_hydration="metadata",
             step_logger=logger,
@@ -1238,7 +1223,7 @@ def make_atlas_postprocess_step(
             input_logger=_log_inputs,
             output_logger=_log_outputs,
             output_recoverer=_recover_atlas_postprocess_outputs,
-            output_paths=AtlasPostprocessor.expected_outputs,
+            output_paths=_atlas_postprocess_output_paths,
             input_binding="none",
             cache_mode="overwrite",
             cache_hydration="metadata",

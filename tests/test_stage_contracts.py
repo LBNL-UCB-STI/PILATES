@@ -964,6 +964,67 @@ def test_vehicle_ownership_stage_contract(stage_env):
     ].get(USIM_POPULATION_SOURCE_H5)
 
 
+def test_vehicle_ownership_preserves_selected_and_published_h5_artifacts(
+    stage_env, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ATLAS bindings and handoffs keep the callback-published H5 artifacts."""
+    from pilates.workflows.stages import vehicle_ownership as vo_stage
+
+    state = stage_env["state"]
+    state.forecast_year = state.year
+    selected_artifact = SimpleNamespace(
+        key=USIM_DATASTORE_CURRENT_H5,
+        path=stage_env["usim_input_path"],
+    )
+    published_artifact = SimpleNamespace(
+        key=USIM_POPULATION_SOURCE_H5,
+        path=stage_env["usim_input_path"],
+        h5_tables_used=["/households"],
+    )
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, selected_artifact)
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, selected_artifact)
+    captured = {}
+
+    class _FakeAtlasStageRunner:
+        def __init__(self, *, coupler, outputs_holder, **_kwargs):
+            self.coupler = coupler
+            self.outputs_holder = outputs_holder
+
+        def run(self, *, steps):
+            preprocess = next(step for step in steps if step.name == "atlas_preprocess")
+            captured["atlas_preprocess_binding"] = preprocess.binding
+            self.outputs_holder.atlas_run = SimpleNamespace(raw_outputs={})
+
+        def run_step(self, *, step):
+            assert step.name == "atlas_postprocess"
+            self.coupler.set(USIM_POPULATION_SOURCE_H5, published_artifact)
+            self.outputs_holder.atlas_postprocess = SimpleNamespace(
+                usim_datastore_h5=Path(published_artifact.path)
+            )
+
+    monkeypatch.setattr(vo_stage, "StageRunner", _FakeAtlasStageRunner)
+    monkeypatch.setattr(vo_stage, "log_inputs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(vo_stage, "archive_copy_now", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        vo_stage,
+        "flush_archive_queue",
+        lambda *_args, **_kwargs: None,
+    )
+
+    vo_stage.run_vehicle_ownership_stage(
+        scenario=stage_env["scenario"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=stage_env["context"],
+    )
+
+    atlas_inputs = captured["atlas_preprocess_binding"].inputs
+    assert atlas_inputs[USIM_DATASTORE_CURRENT_H5] is selected_artifact
+    assert stage_env["coupler"].get(USIM_POPULATION_SOURCE_H5) is published_artifact
+    assert stage_env["coupler"].get(USIM_DATASTORE_CURRENT_H5) is published_artifact
+
+
 def test_vehicle_ownership_stage_prefers_explicit_beam_skims_artifact(stage_env):
     explicit_final_omx = (
         Path(stage_env["workspace"].get_beam_output_dir()) / "atlas-final-skims.omx"

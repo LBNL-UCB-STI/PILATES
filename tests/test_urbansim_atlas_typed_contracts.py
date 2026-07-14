@@ -22,6 +22,8 @@ from pilates.workflows.steps.urbansim_atlas import (
     _execute_atlas_run_typed,
     _execute_urbansim_postprocess_typed,
     _execute_urbansim_run_typed,
+    _atlas_postprocess_output_paths,
+    _urbansim_preprocess_output_paths,
     make_atlas_postprocess_step,
     make_atlas_preprocess_step,
     make_atlas_run_step,
@@ -73,6 +75,58 @@ def test_urbansim_run_outputs_publish_only_canonical_datastore_key(
     assert step_output_mapping(outputs, warn_lossy=False) == {
         USIM_DATASTORE_H5: str(forecast_h5),
     }
+
+
+def test_urbansim_runner_leaves_h5_output_logging_to_workflow_callback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    mutable_data_dir = tmp_path / "urbansim"
+    mutable_data_dir.mkdir()
+    forecast_h5 = mutable_data_dir / "forecast_2030.h5"
+    state = SimpleNamespace(
+        current_year=2030,
+        forecast_year=2030,
+        full_settings=SimpleNamespace(
+            run=SimpleNamespace(
+                region="test",
+                land_use_freq=1,
+                models=SimpleNamespace(travel="beam"),
+            ),
+            urbansim=SimpleNamespace(
+                output_file_template="forecast_{year}.h5",
+                client_base_folder="/workspace",
+            ),
+        ),
+    )
+    runner = UrbansimRunner("urbansim", state)
+    inputs = UrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=mutable_data_dir,
+        prepared_inputs={"input_h5": mutable_data_dir / "input.h5"},
+    )
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(mutable_data_dir)
+    )
+    calls = []
+
+    monkeypatch.setattr(
+        UrbansimRunner,
+        "get_model_and_image",
+        staticmethod(lambda *_args: ("urbansim", "urbansim-image")),
+    )
+    monkeypatch.setattr(runner, "get_usim_docker_vols", lambda *_args: {})
+    monkeypatch.setattr(runner, "get_usim_cmd", lambda: "urbansim-command")
+
+    def _run_container(**kwargs):
+        calls.append(kwargs)
+        forecast_h5.write_text("forecast", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(runner, "run_container", _run_container)
+
+    outputs = runner._run(inputs, workspace)
+
+    assert outputs.usim_datastore_h5 == forecast_h5
+    assert calls[0]["output_paths"] is None
 
 
 def test_urbansim_postprocess_executor_rejects_wrong_upstream_typed_output(
@@ -242,19 +296,19 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
 
 
 @pytest.mark.parametrize(
-    ("factory", "expected_outputs_fn"),
+    ("factory", "expected_output_paths_fn"),
     [
         (
             make_urbansim_preprocess_step,
-            UrbansimPreprocessor.expected_outputs,
+            _urbansim_preprocess_output_paths,
         ),
         (
             make_urbansim_run_step,
-            UrbansimRunner.expected_outputs,
+            None,
         ),
         (
             make_urbansim_postprocess_step,
-            UrbansimPostprocessor.expected_outputs,
+            None,
         ),
         (
             make_atlas_preprocess_step,
@@ -266,12 +320,12 @@ def test_atlas_preprocess_accepts_previous_records_compatibility(
         ),
         (
             make_atlas_postprocess_step,
-            AtlasPostprocessor.expected_outputs,
+            _atlas_postprocess_output_paths,
         ),
     ],
 )
 def test_urbansim_atlas_steps_publish_replay_metadata(
-    factory, expected_outputs_fn, tmp_path: Path
+    factory, expected_output_paths_fn, tmp_path: Path
 ) -> None:
     coupler = object()
     holder = StepOutputsHolder()
@@ -301,12 +355,39 @@ def test_urbansim_atlas_steps_publish_replay_metadata(
     assert meta.load_inputs is None
     assert meta.input_binding == "none"
     assert meta.cache_hydration == "metadata"
-    assert meta.output_paths is expected_outputs_fn
+    assert meta.output_paths is expected_output_paths_fn
+    if expected_output_paths_fn is None:
+        return
     assert meta.output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
-    ) == expected_outputs_fn(settings, state, workspace)
+    ) == expected_output_paths_fn(settings, state, workspace)
+
+
+def test_urbansim_atlas_output_paths_do_not_duplicate_specialized_h5_logging(
+    tmp_path: Path,
+) -> None:
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        urbansim=SimpleNamespace(
+            input_file_template="usim_{region_id}.h5",
+            output_file_template="usim_{year}.h5",
+            region_mappings={"region_to_region_id": {"test": "123"}},
+        ),
+        atlas=SimpleNamespace(),
+    )
+    state = SimpleNamespace(year=2023, forecast_year=2023)
+    workspace = SimpleNamespace(
+        get_usim_mutable_data_dir=lambda: str(tmp_path / "urbansim" / "data"),
+        get_atlas_output_dir=lambda: str(tmp_path / "atlas" / "output"),
+    )
+
+    urbansim_paths = _urbansim_preprocess_output_paths(settings, state, workspace)
+    atlas_paths = _atlas_postprocess_output_paths(settings, state, workspace)
+
+    assert USIM_DATASTORE_H5 not in urbansim_paths
+    assert atlas_paths == {"atlas_output_dir": str(tmp_path / "atlas" / "output")}
 
 
 def test_atlas_runner_expected_outputs_only_include_runner_artifacts(
