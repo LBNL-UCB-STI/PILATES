@@ -997,7 +997,7 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     )
     assert (
         Path(coupler_current_h5).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_CURRENT_H5]).resolve()
     )
 
     # Phase 2: vehicle ownership stage consumes datastore handles and

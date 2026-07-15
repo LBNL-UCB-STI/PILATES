@@ -459,3 +459,45 @@ def test_failed_snapshot_does_not_publish_a_beam_checkpoint(tmp_path):
         )
 
     assert read_beam_run_checkpoint(tmp_path) is None
+
+
+def test_real_consist_snapshot_reopens_pinned_completed_beam_run(tmp_path):
+    import consist
+
+    archive_run_dir = tmp_path / "archive"
+    db_path = archive_run_dir / ".consist" / "provenance.duckdb"
+    output_path = archive_run_dir / "beam" / "0.linkstats.csv.gz"
+    db_path.parent.mkdir(parents=True)
+    output_path.parent.mkdir(parents=True)
+    output_path.write_bytes(b"linkstats")
+    tracker = consist.Tracker(run_dir=archive_run_dir, db_path=db_path)
+    with tracker.start_run(
+        "beam-run-1", "beam_run", year=2019, iteration=0
+    ):
+        tracker.log_output(output_path, key="linkstats")
+
+    def _open_snapshot(snapshot_path: Path):
+        return consist.Tracker(
+            run_dir=archive_run_dir,
+            db_path=snapshot_path,
+            allow_external_paths=True,
+            access_mode="read_only",
+        )
+
+    checkpoint = snapshot_and_publish_beam_run_checkpoint(
+        tracker=tracker,
+        open_snapshot=_open_snapshot,
+        archive_run_dir=archive_run_dir,
+        producer_run_id="beam-run-1",
+        scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+        skim_variant="disabled",
+        output_requests=(
+            HistoricalOutputRequest(
+                "linkstats", tmp_path / "workspace" / "0.linkstats.csv.gz", True
+            ),
+        ),
+    )
+
+    snapshot = _open_snapshot(archive_run_dir / checkpoint.snapshot_ref)
+    assert snapshot.get_run("beam-run-1").status == "completed"
+    assert set(snapshot.get_run_outputs("beam-run-1")) == {"linkstats"}

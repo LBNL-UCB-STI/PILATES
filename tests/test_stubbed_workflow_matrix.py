@@ -463,11 +463,6 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     steps = _steps_by_model(env)
     assert "activitysim_postprocess" in steps
     assert "beam_run" in steps
-    postprocess_outputs = set(
-        (steps["activitysim_postprocess"].get("outputs") or {}).values()
-    )
-    assert "asim_input_skims_zarr_archived" in postprocess_outputs
-    assert "asim_input_skims_omx_archived" not in postprocess_outputs
 
 
 def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outputs(

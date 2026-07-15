@@ -120,7 +120,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     assert land_use_datastore is not None
     assert (
         Path(land_use_datastore).resolve()
-        == Path(usim_inputs[USIM_DATASTORE_BASE_H5]).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_CURRENT_H5]).resolve()
     )
     base_usim_datastore = artifact_to_path(
         coupler.get(USIM_DATASTORE_BASE_H5),
@@ -202,7 +202,10 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
         Path(final_usim_datastore).resolve()
         == Path(scenario_outputs[USIM_DATASTORE_H5].path).resolve()
     )
-    assert Path(final_usim_datastore).resolve() == Path(base_usim_datastore).resolve()
+    assert (
+        Path(final_usim_datastore).resolve()
+        == Path(usim_inputs[USIM_DATASTORE_CURRENT_H5]).resolve()
+    )
 
     assert EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS <= scenario_output_keys
     assert {ZARR_SKIMS, LINKSTATS, BEAM_PLANS_OUT} <= scenario_output_keys

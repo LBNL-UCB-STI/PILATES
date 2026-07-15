@@ -7,7 +7,12 @@ import pandas as pd
 import pytest
 from consist import define_step
 from consist.types import BindingResult
-from consist.types import CacheOptions, ExecutionOptions, OutputPolicyOptions
+from consist.types import (
+    CacheOptions,
+    ExecutionOptions,
+    OutputArtifactSpec,
+    OutputPolicyOptions,
+)
 
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.activitysim.preprocessor import ActivitysimPreprocessor
@@ -98,6 +103,10 @@ def _step_meta_input_materialization(meta):
         return input_materialization
     extra = getattr(meta, "extra", None) or {}
     return extra.get("input_materialization")
+
+
+def _declared_output_path(value):
+    return value.path if isinstance(value, OutputArtifactSpec) else value
 
 
 def test_make_step_factories_attach_consist_metadata():
@@ -207,11 +216,14 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     preprocess_outputs = preprocess_meta.output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    assert preprocess_outputs == ActivitysimPreprocessor.expected_outputs(
+    expected_preprocess_outputs = ActivitysimPreprocessor.expected_outputs(
         settings=settings, state=state, workspace=workspace
     )
+    assert {
+        key: _declared_output_path(value) for key, value in preprocess_outputs.items()
+    } == expected_preprocess_outputs
     assert preprocess_inputs[FINAL_SKIMS_OMX] == str(beam_skims)
-    assert preprocess_outputs[ASIM_HOUSEHOLDS_IN] == str(
+    assert _declared_output_path(preprocess_outputs[ASIM_HOUSEHOLDS_IN]) == str(
         asim_data_dir / "households.csv"
     )
     assert preprocess_outputs["omx_skims"] == str(asim_data_dir / "skims.omx")
@@ -228,14 +240,18 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     run_outputs = run_meta.output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    assert run_outputs == ActivitysimRunner.expected_outputs(
+    expected_run_outputs = ActivitysimRunner.expected_outputs(
         settings=settings, state=state, workspace=workspace
     )
+    expected_run_outputs.pop("asim_output_dir")
+    assert {
+        key: _declared_output_path(value) for key, value in run_outputs.items()
+    } == expected_run_outputs
     assert run_inputs[ZARR_SKIMS] == str(zarr_path)
-    assert run_outputs["beam_plans_asim_out"] == str(
+    assert _declared_output_path(run_outputs["beam_plans_asim_out"]) == str(
         final_pipeline_dir / "beam_plans" / "final.parquet"
     )
-    assert run_outputs["persons_asim_out"] == str(
+    assert _declared_output_path(run_outputs["persons_asim_out"]) == str(
         final_pipeline_dir / "persons" / "final.parquet"
     )
 
@@ -251,21 +267,25 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     post_outputs = postprocess_meta.output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    assert post_outputs == ActivitysimPostprocessor.expected_outputs(
+    expected_postprocess_outputs = ActivitysimPostprocessor.expected_outputs(
         settings=settings, state=state, workspace=workspace
     )
+    expected_postprocess_outputs.pop(USIM_DATASTORE_H5)
+    assert {
+        key: _declared_output_path(value) for key, value in post_outputs.items()
+    } == expected_postprocess_outputs
     assert post_inputs["beam_plans_asim_out"] == str(
         final_pipeline_dir / "beam_plans" / "final.parquet"
     )
-    assert post_outputs[USIM_DATASTORE_H5] == str(usim_input)
-    assert post_outputs["beam_plans_asim_out"] == str(
+    assert USIM_DATASTORE_H5 not in post_outputs
+    assert _declared_output_path(post_outputs["beam_plans_asim_out"]) == str(
         tmp_path
         / "activitysim"
         / "output"
         / "year-2025-iteration-1"
         / "beam_plans.parquet"
     )
-    assert post_outputs["asim_input_skims_zarr_archived"] == str(
+    assert _declared_output_path(post_outputs["asim_input_skims_zarr_archived"]) == str(
         tmp_path
         / "activitysim"
         / "output"
@@ -1114,9 +1134,7 @@ def test_activitysim_postprocess_ignores_missing_optional_declared_output_paths(
     )
 
     call = scenario.calls[0]
-    assert call["output_paths"][USIM_DATASTORE_H5] == str(
-        tmp_path / "urbansim" / "data" / "custom_53199100.h5"
-    )
+    assert USIM_DATASTORE_H5 not in call["output_paths"]
     assert "asim_input_skims_omx_archived" in call["output_paths"]
     assert "asim_input_skims_zarr_archived" in call["output_paths"]
     assert call["output_policy"] == OutputPolicyOptions(

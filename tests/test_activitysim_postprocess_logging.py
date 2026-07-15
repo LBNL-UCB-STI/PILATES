@@ -275,18 +275,15 @@ def test_create_usim_input_data_rejects_clobbered_year_file(tmp_path) -> None:
         )
 
 
-def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> None:
+def test_activitysim_postprocess_publishes_processed_outputs_to_coupler(tmp_path) -> None:
+    published = {}
     step_fn = steps.make_activitysim_postprocess_step(
-        coupler=_dummy_coupler(),
+        coupler=SimpleNamespace(
+            set=lambda key, value: published.__setitem__(key, value),
+        ),
         outputs_holder=SimpleNamespace(),
     )
     output_logger = step_fn.pilates_output_replayer
-    calls = []
-
-    def _log_output_only(*, key, path, description, **meta):
-        calls.append((key, meta))
-
-    monkeypatch.setattr(steps_activitysim, "log_output_only", _log_output_only)
 
     outputs = ActivitySimPostprocessOutputs(
         usim_datastore_h5=None,
@@ -303,14 +300,9 @@ def test_activitysim_postprocess_logs_content_hash(monkeypatch, tmp_path) -> Non
         holder=SimpleNamespace(),
     )
 
-    assert len(calls) == 1
-    assert calls[0][0] == "asim_input_skims_zarr_archived"
-    assert calls[0][1]["content_hash"] == "abc123"
-    assert calls[0][1]["facet"]["artifact_family"] == "asim_input_archived"
-    assert calls[0][1]["facet"]["source_role"] == "zarr_skims"
-    assert calls[0][1]["facet"]["snapshot_role"] == "asim_input_skims_zarr"
-    assert calls[0][1]["facet"]["snapshot_reason"] == "exact_rewind"
-    assert calls[0][1]["facet"]["storage_event"] == "snapshot_copy"
+    assert published == {
+        "asim_input_skims_zarr_archived": str(tmp_path / "skims.zarr")
+    }
 
 
 def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(
@@ -367,8 +359,6 @@ def test_activitysim_postprocess_logs_source_input_files(monkeypatch, tmp_path) 
         "get_postprocessor",
         lambda self, *args, **kwargs: fake_postprocessor,
     )
-    monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
-    monkeypatch.setattr(steps_activitysim, "log_and_set_output", lambda **_kwargs: None)
     calls = []
 
     def _log_input_only(*, key, path, description, **meta):
@@ -612,7 +602,6 @@ def test_activitysim_preprocess_logs_selected_usim_h5_tables(
         "log_and_set_input",
         lambda **kwargs: input_calls.append(kwargs),
     )
-    monkeypatch.setattr(steps_activitysim, "_log_step_records", lambda **_kwargs: None)
 
     h5_path = tmp_path / "model_data.h5"
     with pd.HDFStore(h5_path, mode="w") as store:
@@ -828,7 +817,6 @@ def test_activitysim_postprocess_logs_updated_usim_h5_tables(
     output_logger = step_fn.pilates_output_replayer
     publish_calls = []
 
-    monkeypatch.setattr(steps_activitysim, "log_output_only", lambda **_kwargs: None)
     monkeypatch.setattr(
         steps_activitysim,
         "log_and_set_output",
@@ -872,18 +860,11 @@ def test_activitysim_postprocess_publishes_beam_handoff_outputs_to_coupler(
         outputs_holder=SimpleNamespace(),
     )
     output_logger = step_fn.pilates_output_replayer
-    output_only_calls = []
-    publish_calls = []
-
+    published = []
     monkeypatch.setattr(
         steps_activitysim,
-        "log_output_only",
-        lambda **kwargs: output_only_calls.append(kwargs["key"]),
-    )
-    monkeypatch.setattr(
-        steps_activitysim,
-        "log_and_set_output",
-        lambda **kwargs: publish_calls.append(kwargs["key"]),
+        "set_coupler_from_artifact",
+        lambda _coupler, key, _artifact, fallback: published.append((key, fallback)),
     )
 
     outputs = ActivitySimPostprocessOutputs(
@@ -905,9 +886,9 @@ def test_activitysim_postprocess_publishes_beam_handoff_outputs_to_coupler(
         holder=SimpleNamespace(),
     )
 
-    assert set(publish_calls) == {
+    assert {key for key, _path in published} == {
         "beam_plans_asim_out",
         "households_asim_out",
         "persons_asim_out",
+        "trips_asim_out",
     }
-    assert output_only_calls == ["trips_asim_out"]
