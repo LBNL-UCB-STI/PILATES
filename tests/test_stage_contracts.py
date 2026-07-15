@@ -2721,7 +2721,8 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     assert tracker.hydrate_calls[0]["destinations_by_key"] == {
         LINKSTATS: beam_out / "0.linkstats.csv.gz",
         f"events_parquet_{state.forecast_year}_0": beam_out / "0.events.parquet",
-        f"raw_od_skims_zarr_{state.forecast_year}_0": beam_out / "0.skimsActivitySimOD.zarr",
+        f"raw_od_skims_zarr_{state.forecast_year}_0": beam_out
+        / "0.skimsActivitySimOD.zarr",
         f"beam_plans_out_{state.forecast_year}_0": beam_out / "plans.csv.gz",
     }
     assert tracker.hydrate_calls[0]["preserve_existing"] is False
@@ -2740,9 +2741,7 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         }
     ]
     assert coupler.get(LINKSTATS) == str(beam_out / "0.linkstats.csv.gz")
-    assert coupler.get(LINKSTATS_WARMSTART) == str(
-        beam_out / "0.linkstats.csv.gz"
-    )
+    assert coupler.get(LINKSTATS_WARMSTART) == str(beam_out / "0.linkstats.csv.gz")
 
 
 def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
@@ -2825,7 +2824,11 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
             return SimpleNamespace(
                 source_run_id=run_id,
                 get=hydrated.get,
-                items=lambda: ((key, value) for key, value in hydrated.items() if key != "source_run_id"),
+                items=lambda: (
+                    (key, value)
+                    for key, value in hydrated.items()
+                    if key != "source_run_id"
+                ),
             )
 
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())

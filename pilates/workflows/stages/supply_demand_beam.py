@@ -473,12 +473,15 @@ def _beam_restart_output_requests(
 ) -> tuple[HistoricalOutputRequest, ...]:
     """Map selected BEAM output keys to their exact current destinations."""
 
-    selected = _build_beam_postprocess_input_keys(
-        upstream_keys=linked_output_keys,
-        year=year,
-        iteration=iteration,
-        include_zarr_skims=False,
-    ) or []
+    selected = (
+        _build_beam_postprocess_input_keys(
+            upstream_keys=linked_output_keys,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=False,
+        )
+        or []
+    )
     selected.extend(
         key
         for key in linked_output_keys
@@ -528,7 +531,9 @@ def _project_hydrated_beam_run_outputs(
                 f"BEAM output key={key} is not a file destination.",
             )
         raw_outputs[str(key)] = item.path
-        set_coupler_from_artifact(coupler, str(key), item.artifact, fallback=str(item.path))
+        set_coupler_from_artifact(
+            coupler, str(key), item.artifact, fallback=str(item.path)
+        )
         published_keys.append(str(key))
         if key == LINKSTATS:
             set_coupler_from_artifact(
@@ -618,7 +623,9 @@ def _try_restore_completed_beam_run_for_restart(
         execution=execution,
         iteration=iteration,
     )
-    if not execution.succeeded or not isinstance(execution.projected_outputs, BeamRunOutputs):
+    if not execution.succeeded or not isinstance(
+        execution.projected_outputs, BeamRunOutputs
+    ):
         raise RuntimeError(
             "BEAM restart found a completed same-run beam_run but could not "
             "hydrate the required outputs for postprocess. Refusing to rerun "
@@ -677,9 +684,7 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
         if isinstance(execution.projected_outputs, BeamRunOutputs)
         else []
     )
-    readiness_classification = (
-        "complete" if execution.succeeded else "restore_failed"
-    )
+    readiness_classification = "complete" if execution.succeeded else "restore_failed"
     logger.info(
         "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
         "missing_required=%s required_keys=%s output_keys=%s",

@@ -58,7 +58,9 @@ class _Hydration(dict):
         self.source_run_id = source_run_id
 
 
-def _policy(*, requests=(HistoricalOutputRequest("linkstats", Path("/tmp/linkstats"), True),)):
+def _policy(
+    *, requests=(HistoricalOutputRequest("linkstats", Path("/tmp/linkstats"), True),)
+):
     return ResumeBoundaryPolicy(
         step_name="beam_run",
         rerun_forbidden=True,
@@ -126,9 +128,12 @@ def test_build_resume_plan_returns_run_when_no_completed_match(monkeypatch):
         (_target(), [_Run("run-1", status="running")], "malformed_completed_match"),
     ],
 )
-def test_build_resume_plan_rejects_unsafe_candidates(monkeypatch, target, candidates, match):
+def test_build_resume_plan_rejects_unsafe_candidates(
+    monkeypatch, target, candidates, match
+):
     monkeypatch.setattr(
-        "pilates.workflows.resume.restart_target_for_step", lambda *_args, **_kwargs: target
+        "pilates.workflows.resume.restart_target_for_step",
+        lambda *_args, **_kwargs: target,
     )
 
     with pytest.raises(ResumePlanningError, match=match):
@@ -212,7 +217,9 @@ def test_execute_restore_decision_uses_exact_destinations_and_projects(tmp_path)
         decision=decision,
         tracker=tracker,
         source_root=tmp_path / "archive",
-        projection_adapter=lambda hydration: projected.append(hydration) or ("outputs", ("linkstats",)),
+        projection_adapter=lambda hydration: (
+            projected.append(hydration) or ("outputs", ("linkstats",))
+        ),
     )
 
     assert result.succeeded is True
@@ -236,12 +243,35 @@ def test_execute_restore_decision_uses_exact_destinations_and_projects(tmp_path)
 @pytest.mark.parametrize(
     ("item", "expected_category"),
     [
-        (SimpleNamespace(path=Path("/wrong"), status="materialized_from_filesystem", resolvable=True, artifact=object()), "missing_required_output"),
-        (SimpleNamespace(path=None, status="missing_source", resolvable=False, artifact=object()), "missing_required_output"),
-        (SimpleNamespace(path=Path("/tmp/linkstats"), status="materialized_from_db", resolvable=True, artifact=object()), "missing_required_output"),
+        (
+            SimpleNamespace(
+                path=Path("/wrong"),
+                status="materialized_from_filesystem",
+                resolvable=True,
+                artifact=object(),
+            ),
+            "missing_required_output",
+        ),
+        (
+            SimpleNamespace(
+                path=None, status="missing_source", resolvable=False, artifact=object()
+            ),
+            "missing_required_output",
+        ),
+        (
+            SimpleNamespace(
+                path=Path("/tmp/linkstats"),
+                status="materialized_from_db",
+                resolvable=True,
+                artifact=object(),
+            ),
+            "missing_required_output",
+        ),
     ],
 )
-def test_execute_restore_decision_rejects_non_strict_required_results(tmp_path, item, expected_category):
+def test_execute_restore_decision_rejects_non_strict_required_results(
+    tmp_path, item, expected_category
+):
     destination = tmp_path / "linkstats"
     if item.path == Path("/tmp/linkstats"):
         item.path = destination
@@ -270,7 +300,9 @@ def test_execute_restore_decision_rejects_non_strict_required_results(tmp_path, 
     assert projected == []
 
 
-def test_execute_restore_decision_rejects_preexisting_destination_before_hydration(tmp_path):
+def test_execute_restore_decision_rejects_preexisting_destination_before_hydration(
+    tmp_path,
+):
     destination = tmp_path / "linkstats"
     destination.write_text("stale", encoding="utf-8")
     decision = ResumeDecision(

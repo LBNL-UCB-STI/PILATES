@@ -174,7 +174,9 @@ def build_resume_plan(
             reason="outside_enabled_surface",
             target={},
         )
-        return ResumePlan(workflow_instance_scope="", decisions={policy.step_name: decision})
+        return ResumePlan(
+            workflow_instance_scope="", decisions={policy.step_name: decision}
+        )
 
     if not policy.allows_restore(state, surface):
         decision = _decision(
@@ -183,7 +185,9 @@ def build_resume_plan(
             reason="not_eligible_for_restore",
             target={},
         )
-        return ResumePlan(workflow_instance_scope="", decisions={policy.step_name: decision})
+        return ResumePlan(
+            workflow_instance_scope="", decisions={policy.step_name: decision}
+        )
 
     target = restart_target_for_step(
         settings=settings,
@@ -287,7 +291,9 @@ def execute_restore_decision(
     if decision.source_run_id is None:
         raise ValueError("RESTORE decision requires source_run_id.")
 
-    required_requests = tuple(request for request in decision.outputs if request.required)
+    required_requests = tuple(
+        request for request in decision.outputs if request.required
+    )
     if not required_requests:
         return _restore_failure(
             decision=decision,
