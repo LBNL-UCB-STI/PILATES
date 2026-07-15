@@ -2548,6 +2548,18 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
             assert queried_run_id == run_id
             return dict(outputs)
 
+        def get_run(self, queried_run_id):
+            assert queried_run_id == run_id
+            return SimpleNamespace(
+                status="completed", year=state.year, iteration=0
+            )
+
+        def snapshot_db(self, destination, *, checkpoint):
+            assert checkpoint is True
+            destination = Path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("snapshot", encoding="utf-8")
+
         def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
             destinations = kwargs["destinations_by_key"]
             return _Hydrated(
@@ -2673,6 +2685,18 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
             assert queried_run_id == run_id
             return dict(outputs)
 
+        def get_run(self, queried_run_id):
+            assert queried_run_id == run_id
+            return SimpleNamespace(
+                status="completed", year=state.year, iteration=0
+            )
+
+        def snapshot_db(self, destination, *, checkpoint):
+            assert checkpoint is True
+            destination = Path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("snapshot", encoding="utf-8")
+
         def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
             self.hydrate_calls.append(kwargs)
             destinations = kwargs["destinations_by_key"]
@@ -2692,6 +2716,9 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
 
     tracker = _Tracker()
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: tracker
+    )
 
     activity_outputs = {
         "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
@@ -2742,6 +2769,200 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     ]
     assert coupler.get(LINKSTATS) == str(beam_out / "0.linkstats.csv.gz")
     assert coupler.get(LINKSTATS_WARMSTART) == str(beam_out / "0.linkstats.csv.gz")
+
+
+def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
+    stage_env, monkeypatch, tmp_path
+):
+    from pilates.workflows.beam_checkpoint import publish_beam_run_checkpoint
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+    restored = []
+    scenario.remember_restored_run_id = lambda **kwargs: restored.append(kwargs)
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    run_id = "pinned-beam-run"
+    output_keys = {
+        LINKSTATS: object(),
+        f"events_parquet_{state.forecast_year}_0": object(),
+        f"beam_plans_out_{state.forecast_year}_0": object(),
+    }
+    requests = beam_stage._beam_restart_output_requests(
+        output_keys, workspace, state.forecast_year, 0
+    )
+    snapshot_ref = ".consist/restart/checkpoints/pinned/tracker.duckdb"
+    snapshot_path = archive_run_dir / snapshot_ref
+    snapshot_path.parent.mkdir(parents=True)
+    snapshot_path.write_text("snapshot", encoding="utf-8")
+    publish_beam_run_checkpoint(
+        archive_run_dir=archive_run_dir,
+        producer_run_id=run_id,
+        scope=beam_stage._beam_checkpoint_scope(
+            state=state, year=state.forecast_year, iteration=0
+        ),
+        snapshot_ref=snapshot_ref,
+        skim_variant=beam_stage._beam_checkpoint_skim_variant(settings),
+        output_requests=requests,
+    )
+
+    class _Hydrated(dict):
+        source_run_id = run_id
+
+    class _PinnedTracker:
+        def get_run(self, queried_run_id):
+            assert queried_run_id == run_id
+            return SimpleNamespace(
+                status="completed", year=state.year, iteration=0
+            )
+
+        def get_run_outputs(self, queried_run_id):
+            assert queried_run_id == run_id
+            return output_keys
+
+        def hydrate_run_outputs_to_destinations(self, queried_run_id, **kwargs):
+            assert queried_run_id == run_id
+            assert kwargs["db_fallback"] == "never"
+            destinations = kwargs["destinations_by_key"]
+            for destination in destinations.values():
+                _write_file(destination)
+            return _Hydrated({
+                key: SimpleNamespace(
+                    path=destination,
+                    status="materialized_from_filesystem",
+                    resolvable=True,
+                    artifact=object(),
+                )
+                for key, destination in destinations.items()
+            })
+
+    monkeypatch.setattr(
+        beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: _PinnedTracker()
+    )
+    monkeypatch.setattr(
+        beam_stage.cr, "current_tracker", lambda: SimpleNamespace(
+            find_matching_runs=lambda **_kwargs: pytest.fail("must not rediscover")
+        )
+    )
+
+    restored_outputs = beam_stage._try_restore_completed_beam_run_for_restart(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=StepOutputsHolder(),
+        surface=stage_env["context"].surface,
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert restored_outputs is not None
+    assert restored == [
+        {"model_name": "beam_run", "year": state.forecast_year, "iteration": 0, "run_id": run_id}
+    ]
+
+
+def test_beam_checkpoint_publication_preserves_traffic_assignment_schedule(
+    stage_env, monkeypatch, tmp_path
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    settings = stage_env["settings"]
+    scenario = stage_env["scenario"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+    scenario._beam_run_ids = {(state.forecast_year, 0): "beam-run-1"}
+    published = []
+    monkeypatch.setattr(beam_stage, "verify_archive_visible_recovery_bytes", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        beam_stage,
+        "snapshot_and_publish_beam_run_checkpoint",
+        lambda **kwargs: published.append(kwargs),
+    )
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: object())
+
+    beam_stage._publish_completed_beam_run_checkpoint(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        outputs=BeamRunOutputs(
+            beam_output_dir=Path(workspace.get_beam_output_dir()),
+            raw_outputs={LINKSTATS: Path(workspace.get_beam_output_dir()) / "0.linkstats.csv.gz"},
+        ),
+        year=state.forecast_year,
+        iteration=0,
+    )
+
+    assert published and published[0]["producer_run_id"] == "beam-run-1"
+    assert state.current_major_stage is state.Stage.supply_demand_loop
+    assert state.current_sub_stage is state.Stage.traffic_assignment
+    assert state.current_inner_iter == 0
+
+
+def test_beam_postprocess_marker_refuses_to_reuse_checkpoint(stage_env, tmp_path):
+    from pilates.workflows.beam_checkpoint import (
+        mark_beam_postprocess_in_progress,
+        publish_beam_run_checkpoint,
+        read_beam_run_checkpoint,
+    )
+    from pilates.workflows.resume import HistoricalOutputRequest
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    settings = stage_env["settings"]
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+    checkpoint = publish_beam_run_checkpoint(
+        archive_run_dir=archive_run_dir,
+        producer_run_id="beam-run-1",
+        scope=beam_stage._beam_checkpoint_scope(
+            state=state, year=state.forecast_year, iteration=0
+        ),
+        snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
+        skim_variant=beam_stage._beam_checkpoint_skim_variant(settings),
+        output_requests=(
+            HistoricalOutputRequest(
+                LINKSTATS,
+                Path(workspace.get_beam_output_dir()) / "0.linkstats.csv.gz",
+                True,
+            ),
+        ),
+    )
+    mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
+
+    with pytest.raises(RuntimeError, match="non-restartable"):
+        beam_stage._try_restore_committed_beam_run_for_restart(
+            scenario=stage_env["scenario"],
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=stage_env["coupler"],
+            outputs_holder=StepOutputsHolder(),
+            year=state.forecast_year,
+            iteration=0,
+        )
+    assert read_beam_run_checkpoint(archive_run_dir) is None
 
 
 def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
@@ -2807,6 +3028,18 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
             assert queried_run_id == run_id
             return dict(outputs)
 
+        def get_run(self, queried_run_id):
+            assert queried_run_id == run_id
+            return SimpleNamespace(
+                status="completed", year=state.year, iteration=0
+            )
+
+        def snapshot_db(self, destination, *, checkpoint):
+            assert checkpoint is True
+            destination = Path(destination)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text("snapshot", encoding="utf-8")
+
         def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
             destinations = kwargs["destinations_by_key"]
             for destination in destinations.values():
@@ -2831,7 +3064,11 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
                 ),
             )
 
-    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())
+    tracker = _Tracker()
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: tracker
+    )
 
     activity_outputs = {
         "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),

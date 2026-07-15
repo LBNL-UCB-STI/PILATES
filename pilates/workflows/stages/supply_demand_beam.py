@@ -35,6 +35,16 @@ from pilates.workflows.resume import (
     build_resume_plan,
     execute_restore_decision,
 )
+from pilates.workflows.beam_checkpoint import (
+    assert_committed_beam_run,
+    beam_checkpoint_record_present,
+    beam_postprocess_is_in_progress,
+    checkpoint_fingerprint_matches,
+    mark_beam_postprocess_in_progress,
+    read_beam_run_checkpoint,
+    snapshot_and_publish_beam_run_checkpoint,
+    verify_archive_visible_recovery_bytes,
+)
 from pilates.workflows.binding import (
     BindingPlan,
     beam_preprocess_binding_plan,
@@ -567,6 +577,114 @@ def _restored_beam_parent_years(
     return years
 
 
+def _beam_checkpoint_scope(
+    *, state: WorkflowState, year: int, iteration: int
+) -> dict[str, int]:
+    return {
+        "year": int(state.year),
+        "forecast_year": int(year),
+        "iteration": int(iteration),
+    }
+
+
+def _beam_checkpoint_skim_variant(settings: PilatesConfig) -> str:
+    full_skim = settings.beam.full_skim
+    return str(full_skim.run_schedule) if full_skim is not None else "disabled"
+
+
+def _open_beam_checkpoint_tracker(snapshot_path: Path, archive_run_dir: Path) -> Any:
+    """Open only the pinned archive-local DB for committed BEAM restoration."""
+
+    return cr.consist.Tracker(
+        run_dir=archive_run_dir,
+        db_path=snapshot_path,
+        allow_external_paths=True,
+        access_mode="read_only",
+    )
+
+
+def _checkpoint_restore_decision(
+    *, run_id: str, requests: tuple[HistoricalOutputRequest, ...]
+) -> ResumeDecision:
+    return ResumeDecision(
+        step_name="beam_run",
+        disposition=ResumeDisposition.RESTORE,
+        reason="committed_beam_run_checkpoint",
+        semantic_target={},
+        source_run_id=run_id,
+        outputs=requests,
+        rerun_forbidden=True,
+    )
+
+
+def _try_restore_committed_beam_run_for_restart(
+    *,
+    scenario: ScenarioRestorationLike,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+    outputs_holder: StepOutputsHolder,
+    year: int,
+    iteration: int,
+) -> Optional[BeamRunOutputs]:
+    """Restore only the direct producer pinned in an archive BEAM checkpoint."""
+
+    if not state.is_restart_run or outputs_holder.beam_run is not None:
+        return None
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is None:
+        return None
+    if beam_postprocess_is_in_progress(archive_run_dir):
+        raise RuntimeError(
+            "BEAM checkpoint is non-restartable: beam_postprocess_in_progress."
+        )
+    checkpoint = read_beam_run_checkpoint(archive_run_dir)
+    if checkpoint is None:
+        if beam_checkpoint_record_present(archive_run_dir):
+            raise RuntimeError("Committed BEAM checkpoint is invalid or incomplete.")
+        return None
+    snapshot_path = (archive_run_dir / checkpoint.snapshot_ref).resolve()
+    if not snapshot_path.is_relative_to(archive_run_dir.resolve()) or not snapshot_path.is_file():
+        raise RuntimeError("Committed BEAM checkpoint snapshot is missing or outside archive.")
+    snapshot_tracker = _open_beam_checkpoint_tracker(snapshot_path, archive_run_dir)
+    linked_outputs = snapshot_tracker.get_run_outputs(checkpoint.producer_run_id)
+    requests = _beam_restart_output_requests(linked_outputs.keys(), workspace, year, iteration)
+    if not checkpoint_fingerprint_matches(
+        checkpoint,
+        scope=_beam_checkpoint_scope(state=state, year=year, iteration=iteration),
+        skim_variant=_beam_checkpoint_skim_variant(settings),
+        output_requests=requests,
+    ):
+        raise RuntimeError("Committed BEAM checkpoint recovery fingerprint does not match.")
+    assert_committed_beam_run(
+        tracker=snapshot_tracker, checkpoint=checkpoint, output_requests=requests
+    )
+    execution = execute_restore_decision(
+        decision=_checkpoint_restore_decision(
+            run_id=checkpoint.producer_run_id, requests=requests
+        ),
+        tracker=snapshot_tracker,
+        source_root=archive_run_dir,
+        projection_adapter=lambda hydration: _project_hydrated_beam_run_outputs(
+            hydration_result=hydration, workspace=workspace, coupler=coupler
+        ),
+    )
+    if not execution.succeeded or not isinstance(execution.projected_outputs, BeamRunOutputs):
+        raise RuntimeError(
+            "Committed BEAM checkpoint could not hydrate required outputs for postprocess. "
+            f"run_id={checkpoint.producer_run_id} category={execution.failure_category}"
+        )
+    outputs = execution.projected_outputs
+    outputs_holder.beam_run = outputs
+    for parent_year in _restored_beam_parent_years(state=state, run_year=year):
+        scenario.remember_restored_run_id(
+            model_name="beam_run", year=parent_year, iteration=iteration,
+            run_id=checkpoint.producer_run_id,
+        )
+    return outputs
+
+
 def _try_restore_completed_beam_run_for_restart(
     *,
     scenario: ScenarioRestorationLike,
@@ -583,6 +701,19 @@ def _try_restore_completed_beam_run_for_restart(
         return None
     if outputs_holder.beam_run is not None:
         return outputs_holder.beam_run
+
+    committed = _try_restore_committed_beam_run_for_restart(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+        outputs_holder=outputs_holder,
+        year=year,
+        iteration=iteration,
+    )
+    if committed is not None:
+        return committed
 
     tracker = cr.current_tracker()
     if tracker is None:
@@ -666,7 +797,65 @@ def _try_restore_completed_beam_run_for_restart(
         hydrated_output_keys=restored_keys,
         drift_classification="completed_beam_run_recovered",
     )
+    _publish_completed_beam_run_checkpoint(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        outputs=outputs,
+        year=year,
+        iteration=iteration,
+        producer_run_id=decision.source_run_id,
+    )
     return outputs
+
+
+def _publish_completed_beam_run_checkpoint(
+    *,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    outputs: BeamRunOutputs,
+    year: int,
+    iteration: int,
+    producer_run_id: Optional[str] = None,
+) -> None:
+    """Commit a BEAM-only overlay without advancing traffic-assignment state."""
+
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is None:
+        return
+    tracker = cr.current_tracker()
+    if tracker is None:
+        raise RuntimeError("Cannot commit completed BEAM run without an active tracker.")
+    if producer_run_id is None:
+        try:
+            run_id = scenario._beam_run_ids[(year, iteration)]  # type: ignore[attr-defined]
+        except (AttributeError, KeyError) as error:
+            raise RuntimeError("Cannot commit completed BEAM run without its direct run ID.") from error
+    else:
+        run_id = producer_run_id
+    requests = _beam_restart_output_requests(
+        outputs.raw_outputs.keys(), workspace, year, iteration
+    )
+    verify_archive_visible_recovery_bytes(
+        tracker=tracker,
+        archive_run_dir=archive_run_dir,
+        producer_run_id=run_id,
+        output_requests=requests,
+    )
+    snapshot_and_publish_beam_run_checkpoint(
+        tracker=tracker,
+        open_snapshot=lambda snapshot_path: _open_beam_checkpoint_tracker(
+            snapshot_path, archive_run_dir
+        ),
+        archive_run_dir=archive_run_dir,
+        producer_run_id=run_id,
+        scope=_beam_checkpoint_scope(state=state, year=year, iteration=iteration),
+        skim_variant=_beam_checkpoint_skim_variant(settings),
+        output_requests=requests,
+    )
 
 
 def _emit_beam_restart_recovery_readiness_diagnostic(
@@ -966,6 +1155,15 @@ def _run_beam_steps(
     if upstream_run is None:
         raise RuntimeError("BEAM run must complete first")
     if recovered_run is None:
+        _publish_completed_beam_run_checkpoint(
+            scenario=scenario,
+            settings=context.settings,
+            state=context.state,
+            workspace=context.workspace,
+            outputs=upstream_run,
+            year=year,
+            iteration=iteration,
+        )
         _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
         upstream_keys=[
@@ -995,6 +1193,15 @@ def _run_beam_steps(
             year=year,
             surface=surface,
         )
+
+    archive_run_dir = _archive_run_dir_for_restart(context.state)
+    checkpoint = (
+        read_beam_run_checkpoint(archive_run_dir)
+        if archive_run_dir is not None
+        else None
+    )
+    if checkpoint is not None:
+        mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
 
     stage_runner.run_step(
         step=StepRef(

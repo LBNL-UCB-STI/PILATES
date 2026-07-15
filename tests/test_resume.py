@@ -16,6 +16,13 @@ from pilates.workflows.resume import (
     build_resume_plan,
     execute_restore_decision,
 )
+from pilates.workflows.beam_checkpoint import (
+    assert_committed_beam_run,
+    mark_beam_postprocess_in_progress,
+    publish_beam_run_checkpoint,
+    read_beam_run_checkpoint,
+    snapshot_and_publish_beam_run_checkpoint,
+)
 
 
 @dataclass
@@ -356,3 +363,99 @@ def test_execute_restore_decision_preserves_projection_error_category(tmp_path):
     )
 
     assert result.failure_category == "unsupported_output_representation"
+
+
+def test_beam_checkpoint_is_atomic_and_becomes_nonrestartable(tmp_path):
+    checkpoint = publish_beam_run_checkpoint(
+        archive_run_dir=tmp_path,
+        producer_run_id="beam-run-1",
+        scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+        snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
+        skim_variant="full",
+        output_requests=(
+            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+        ),
+    )
+
+    assert checkpoint.producer_run_id == "beam-run-1"
+    assert read_beam_run_checkpoint(tmp_path) == checkpoint
+
+    mark_beam_postprocess_in_progress(tmp_path, checkpoint)
+    assert read_beam_run_checkpoint(tmp_path) is None
+
+
+def test_committed_beam_run_requires_completed_direct_run_and_selected_links(tmp_path):
+    run = SimpleNamespace(status="completed", year=2019, iteration=0)
+    tracker = SimpleNamespace(
+        get_run=lambda run_id: run if run_id == "beam-run-1" else None,
+        get_run_outputs=lambda _run_id: {"linkstats": object()},
+    )
+    checkpoint = publish_beam_run_checkpoint(
+        archive_run_dir=tmp_path,
+        producer_run_id="beam-run-1",
+        scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+        snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
+        skim_variant="full",
+        output_requests=(
+            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+        ),
+    )
+
+    assert assert_committed_beam_run(
+        tracker=tracker,
+        checkpoint=checkpoint,
+        output_requests=(
+            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+        ),
+    ) is run
+
+
+def test_snapshot_publication_validates_the_pinned_snapshot_not_a_matching_query(tmp_path):
+    run = SimpleNamespace(status="completed", year=2019, iteration=0)
+    calls = []
+
+    class _LiveTracker:
+        def snapshot_db(self, destination, *, checkpoint):
+            calls.append((Path(destination), checkpoint))
+            Path(destination).parent.mkdir(parents=True, exist_ok=True)
+            Path(destination).write_text("snapshot", encoding="utf-8")
+
+    snapshot_tracker = SimpleNamespace(
+        get_run=lambda run_id: run if run_id == "beam-run-1" else None,
+        get_run_outputs=lambda _run_id: {"linkstats": object()},
+    )
+    checkpoint = snapshot_and_publish_beam_run_checkpoint(
+        tracker=_LiveTracker(),
+        open_snapshot=lambda path: snapshot_tracker,
+        archive_run_dir=tmp_path,
+        producer_run_id="beam-run-1",
+        scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+        skim_variant="full",
+        output_requests=(
+            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+        ),
+    )
+
+    assert calls and calls[0][1] is True
+    assert (tmp_path / checkpoint.snapshot_ref).is_file()
+
+
+def test_failed_snapshot_does_not_publish_a_beam_checkpoint(tmp_path):
+    class _Tracker:
+        def snapshot_db(self, *_args, **_kwargs):
+            raise RuntimeError("snapshot failure")
+
+    with pytest.raises(RuntimeError, match="snapshot failure"):
+        snapshot_and_publish_beam_run_checkpoint(
+            tracker=_Tracker(),
+            open_snapshot=lambda _path: pytest.fail("must not open snapshot"),
+            archive_run_dir=tmp_path,
+            producer_run_id="beam-run-1",
+            scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+            skim_variant="full",
+            output_requests=(
+                HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+            ),
+        )
+
+    assert read_beam_run_checkpoint(tmp_path) is None
