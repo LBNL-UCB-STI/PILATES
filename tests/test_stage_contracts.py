@@ -18,7 +18,6 @@ contract expectations explicit without running heavy model containers.
 
 import shutil
 import logging
-import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -90,8 +89,6 @@ from pilates.workflows.stages.supply_demand import (
 )
 from pilates.workflows.stages.supply_demand_beam import (
     _build_beam_postprocess_input_keys,
-    _find_completed_beam_run_for_restart,
-    _hydrate_completed_beam_run_outputs,
 )
 from pilates.workflows.stages.supply_demand_activity import (
     ActivityDemandPhaseInputs,
@@ -2496,223 +2493,6 @@ def test_supply_demand_stage_beam_only_uses_default_scenario_inputs(
     assert BEAM_PERSONS_IN in run_input_keys
 
 
-def test_find_completed_beam_run_for_restart_uses_matching_target_with_run_scope(
-    stage_env,
-    tmp_path,
-):
-    settings = stage_env["settings"]
-    state = stage_env["state"]
-    workspace = stage_env["workspace"]
-    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
-    archive_run_dir.mkdir(parents=True)
-    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
-    cache_epoch = getattr(settings.run, "cache_epoch", 2)
-    run_id = (
-        f"{Path(workspace.full_path).name}"
-        f"__step_func__y{state.forecast_year}__i0__phase_run_y"
-    )
-
-    class _Tracker:
-        def __init__(self):
-            self.calls = []
-
-        def find_matching_run(self, **kwargs):
-            self.calls.append(kwargs)
-            return SimpleNamespace(id=run_id)
-
-    tracker = _Tracker()
-    run = _find_completed_beam_run_for_restart(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=state.forecast_year,
-        iteration=0,
-    )
-
-    assert run is not None
-    assert run.id == run_id
-    assert tracker.calls[0]["model"] == "beam_run"
-    assert tracker.calls[0]["stage"] == "beam"
-    assert tracker.calls[0]["phase"] == "run"
-    assert tracker.calls[0]["status"] == "completed"
-    assert tracker.calls[0]["iteration"] == 0
-    assert tracker.calls[0]["year"] == state.forecast_year
-    assert tracker.calls[0]["cache_epoch"] == cache_epoch
-    assert tracker.calls[0]["run_scope"] == Path(workspace.full_path).name
-
-
-def test_find_completed_beam_run_for_restart_returns_none_when_no_match(
-    stage_env,
-    tmp_path,
-):
-    settings = stage_env["settings"]
-    state = stage_env["state"]
-    workspace = stage_env["workspace"]
-    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
-    archive_run_dir.mkdir(parents=True)
-    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
-
-    class _Tracker:
-        def find_matching_run(self, **_kwargs):
-            return None
-
-    run = _find_completed_beam_run_for_restart(
-        tracker=_Tracker(),
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=state.forecast_year,
-        iteration=0,
-    )
-
-    assert run is None
-
-
-def test_completed_beam_run_hydration_requires_postprocess_critical_keys(
-    stage_env,
-    tmp_path,
-):
-    workspace = stage_env["workspace"]
-    state = stage_env["state"]
-    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
-    archive_run_dir.mkdir(parents=True)
-    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
-
-    linkstats = tmp_path / "0.linkstats.csv.gz"
-    _write_file(linkstats)
-    run_id = f"{Path(workspace.full_path).name}__step_func__y2018__i0__phase_run_x"
-    outputs = {
-        LINKSTATS: str(linkstats),
-        f"events_parquet_{state.forecast_year}_0": str(
-            tmp_path / "missing.events.parquet"
-        ),
-        f"raw_od_skims_zarr_{state.forecast_year}_0": str(
-            tmp_path / "missing.skims.zarr"
-        ),
-    }
-
-    class _Hydrated(dict):
-        @property
-        def complete(self):
-            return False
-
-        @property
-        def summary(self):
-            return "materialized_fs=1 missing_source=2"
-
-    class _Tracker:
-        def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return dict(outputs)
-
-        def hydrate_run_outputs(self, **_kwargs):
-            return _Hydrated(
-                {
-                    LINKSTATS: SimpleNamespace(
-                        path=linkstats,
-                        status="materialized_from_filesystem",
-                        resolvable=True,
-                    ),
-                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
-                        path=tmp_path / "missing.events.parquet",
-                        status="missing_source",
-                        resolvable=False,
-                    ),
-                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
-                        path=tmp_path / "missing.skims.zarr",
-                        status="missing_source",
-                        resolvable=False,
-                    ),
-                }
-            )
-
-    recovered = _hydrate_completed_beam_run_outputs(
-        tracker=_Tracker(),
-        run_id=run_id,
-        workspace=workspace,
-        state=state,
-        year=state.forecast_year,
-        iteration=0,
-    )
-
-    assert recovered is None
-
-
-def test_completed_beam_run_hydration_requires_linked_publication_keys(
-    stage_env,
-    tmp_path,
-):
-    workspace = stage_env["workspace"]
-    state = stage_env["state"]
-    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
-    archive_run_dir.mkdir(parents=True)
-    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
-
-    events = tmp_path / "0.events.parquet"
-    skims = tmp_path / "0.skimsActivitySimOD.zarr"
-    for path in (events, skims):
-        _write_file(path)
-    run_id = f"{Path(workspace.full_path).name}__step_func__y2018__i0__phase_run_x"
-    outputs = {
-        f"events_parquet_{state.forecast_year}_0": str(events),
-        f"raw_od_skims_zarr_{state.forecast_year}_0": str(skims),
-        LINKSTATS: str(tmp_path / "missing.linkstats.csv.gz"),
-        "beam_plans_out": str(tmp_path / "missing.plans.csv.gz"),
-    }
-
-    class _Hydrated(dict):
-        @property
-        def complete(self):
-            return False
-
-        @property
-        def summary(self):
-            return "materialized_fs=2 missing_source=2"
-
-    class _Tracker:
-        def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return dict(outputs)
-
-        def hydrate_run_outputs(self, **_kwargs):
-            return _Hydrated(
-                {
-                    f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
-                        path=events,
-                        status="materialized_from_filesystem",
-                        resolvable=True,
-                    ),
-                    f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
-                        path=skims,
-                        status="materialized_from_filesystem",
-                        resolvable=True,
-                    ),
-                    LINKSTATS: SimpleNamespace(
-                        path=tmp_path / "missing.linkstats.csv.gz",
-                        status="missing_source",
-                        resolvable=False,
-                    ),
-                    "beam_plans_out": SimpleNamespace(
-                        path=tmp_path / "missing.plans.csv.gz",
-                        status="missing_source",
-                        resolvable=False,
-                    ),
-                }
-            )
-
-    recovered = _hydrate_completed_beam_run_outputs(
-        tracker=_Tracker(),
-        run_id=run_id,
-        workspace=workspace,
-        state=state,
-        year=state.forecast_year,
-        iteration=0,
-    )
-
-    assert recovered is None
-
-
 def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
     stage_env,
     monkeypatch,
@@ -2750,6 +2530,8 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
     }
 
     class _Hydrated(dict):
+        source_run_id = run_id
+
         @property
         def complete(self):
             return False
@@ -2759,30 +2541,34 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
             return "materialized_fs=2 missing_source=1"
 
     class _Tracker:
-        def find_matching_run(self, **_kwargs):
-            return SimpleNamespace(id=run_id)
+        def find_matching_runs(self, **_kwargs):
+            return [SimpleNamespace(id=run_id, status="completed")]
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
             return dict(outputs)
 
-        def hydrate_run_outputs(self, **_kwargs):
+        def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
+            destinations = kwargs["destinations_by_key"]
             return _Hydrated(
                 {
                     f"events_parquet_{state.forecast_year}_0": SimpleNamespace(
-                        path=events,
+                        path=destinations[f"events_parquet_{state.forecast_year}_0"],
                         status="materialized_from_filesystem",
                         resolvable=True,
+                        artifact=object(),
                     ),
                     f"raw_od_skims_zarr_{state.forecast_year}_0": SimpleNamespace(
-                        path=missing_skims,
+                        path=destinations[f"raw_od_skims_zarr_{state.forecast_year}_0"],
                         status="missing_source",
                         resolvable=False,
+                        artifact=object(),
                     ),
                     LINKSTATS: SimpleNamespace(
-                        path=linkstats,
+                        path=destinations[LINKSTATS],
                         status="materialized_from_filesystem",
                         resolvable=True,
+                        artifact=object(),
                     ),
                 }
             )
@@ -2853,10 +2639,11 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     beam_config_path.unlink()
 
     beam_out = Path(workspace.get_beam_output_dir())
-    linkstats = beam_out / "0.linkstats.csv.gz"
-    events = beam_out / "0.events.parquet"
-    skims = beam_out / "0.skimsActivitySimOD.zarr"
-    plans = beam_out / "plans.csv.gz"
+    source_dir = tmp_path / "source"
+    linkstats = source_dir / "0.linkstats.csv.gz"
+    events = source_dir / "0.events.parquet"
+    skims = source_dir / "0.skimsActivitySimOD.zarr"
+    plans = source_dir / "plans.csv.gz"
     for path in (linkstats, events, skims, plans):
         _write_file(path)
 
@@ -2869,28 +2656,37 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         f"events_parquet_{state.forecast_year}_0": str(events),
         f"raw_od_skims_zarr_{state.forecast_year}_0": str(skims),
         f"beam_plans_out_{state.forecast_year}_0": str(plans),
+        ZARR_SKIMS: str(source_dir / "legacy-zarr-skims.zarr"),
     }
 
     class _Hydrated(dict):
-        pass
+        source_run_id = run_id
 
     class _Tracker:
         def __init__(self):
             self.hydrate_calls = []
 
-        def find_matching_run(self, **_kwargs):
-            return SimpleNamespace(id=run_id)
+        def find_matching_runs(self, **_kwargs):
+            return [SimpleNamespace(id=run_id, status="completed")]
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
             return dict(outputs)
 
-        def hydrate_run_outputs(self, **kwargs):
+        def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
             self.hydrate_calls.append(kwargs)
+            destinations = kwargs["destinations_by_key"]
+            for destination in destinations.values():
+                _write_file(destination)
             return _Hydrated(
                 {
-                    key: SimpleNamespace(path=Path(path), resolvable=True)
-                    for key, path in outputs.items()
+                    key: SimpleNamespace(
+                        path=destinations[key],
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                        artifact=object(),
+                    )
+                    for key in destinations
                 }
             )
 
@@ -2922,10 +2718,14 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
 
     assert result.previous_beam_outputs is not None
     assert tracker.hydrate_calls
-    assert tracker.hydrate_calls[0]["run_id"] == run_id
-    assert tracker.hydrate_calls[0]["target_root"] == os.path.realpath(
-        workspace.full_path
-    )
+    assert tracker.hydrate_calls[0]["destinations_by_key"] == {
+        LINKSTATS: beam_out / "0.linkstats.csv.gz",
+        f"events_parquet_{state.forecast_year}_0": beam_out / "0.events.parquet",
+        f"raw_od_skims_zarr_{state.forecast_year}_0": beam_out / "0.skimsActivitySimOD.zarr",
+        f"beam_plans_out_{state.forecast_year}_0": beam_out / "plans.csv.gz",
+    }
+    assert tracker.hydrate_calls[0]["preserve_existing"] is False
+    assert tracker.hydrate_calls[0]["db_fallback"] == "never"
     assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
     assert not [
         call for call in scenario.calls if call.get("model") == "beam_preprocess"
@@ -2939,8 +2739,10 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
             "run_id": run_id,
         }
     ]
-    assert coupler.get(LINKSTATS) == str(linkstats)
-    assert coupler.get(LINKSTATS_WARMSTART) == str(linkstats)
+    assert coupler.get(LINKSTATS) == str(beam_out / "0.linkstats.csv.gz")
+    assert coupler.get(LINKSTATS_WARMSTART) == str(
+        beam_out / "0.linkstats.csv.gz"
+    )
 
 
 def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
@@ -2982,10 +2784,11 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     )
 
     beam_out = Path(workspace.get_beam_output_dir())
-    linkstats = beam_out / "0.linkstats.csv.gz"
-    events = beam_out / "0.events.parquet"
-    skims = beam_out / "0.skimsActivitySimOD.zarr"
-    plans = beam_out / "plans.csv.gz"
+    source_dir = tmp_path / "source"
+    linkstats = source_dir / "0.linkstats.csv.gz"
+    events = source_dir / "0.events.parquet"
+    skims = source_dir / "0.skimsActivitySimOD.zarr"
+    plans = source_dir / "plans.csv.gz"
     for path in (linkstats, events, skims, plans):
         _write_file(path)
 
@@ -2998,18 +2801,32 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     }
 
     class _Tracker:
-        def find_matching_run(self, **_kwargs):
-            return SimpleNamespace(id=run_id)
+        def find_matching_runs(self, **_kwargs):
+            return [SimpleNamespace(id=run_id, status="completed")]
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
             return dict(outputs)
 
-        def hydrate_run_outputs(self, **_kwargs):
-            return {
-                key: SimpleNamespace(path=Path(path), resolvable=True)
-                for key, path in outputs.items()
+        def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
+            destinations = kwargs["destinations_by_key"]
+            for destination in destinations.values():
+                _write_file(destination)
+            hydrated = {
+                key: SimpleNamespace(
+                    path=destination,
+                    status="materialized_from_filesystem",
+                    resolvable=True,
+                    artifact=object(),
+                )
+                for key, destination in destinations.items()
             }
+            hydrated["source_run_id"] = run_id
+            return SimpleNamespace(
+                source_run_id=run_id,
+                get=hydrated.get,
+                items=lambda: ((key, value) for key, value in hydrated.items() if key != "source_run_id"),
+            )
 
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: _Tracker())
 

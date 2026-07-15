@@ -12,6 +12,7 @@ from pilates.workflows.resume import (
     ResumeDecision,
     ResumeDisposition,
     ResumePlanningError,
+    ResumeProjectionError,
     build_resume_plan,
     execute_restore_decision,
 )
@@ -292,3 +293,34 @@ def test_execute_restore_decision_rejects_preexisting_destination_before_hydrati
 
     assert result.failure_category == "preexisting_restore_destination"
     assert tracker.hydrate_calls == []
+
+
+def test_execute_restore_decision_preserves_projection_error_category(tmp_path):
+    destination = tmp_path / "linkstats"
+    decision = ResumeDecision(
+        step_name="beam_run",
+        disposition=ResumeDisposition.RESTORE,
+        reason="completed_match",
+        semantic_target=_target(),
+        source_run_id="run-1",
+        outputs=(HistoricalOutputRequest("linkstats", destination, True),),
+        rerun_forbidden=True,
+    )
+    item = SimpleNamespace(
+        path=destination,
+        status="materialized_from_filesystem",
+        resolvable=True,
+        artifact=object(),
+    )
+    tracker = _Tracker(hydration=_Hydration("run-1", {"linkstats": item}))
+
+    result = execute_restore_decision(
+        decision=decision,
+        tracker=tracker,
+        source_root=None,
+        projection_adapter=lambda _hydration: (_ for _ in ()).throw(
+            ResumeProjectionError("unsupported_output_representation", "directory")
+        ),
+    )
+
+    assert result.failure_category == "unsupported_output_representation"

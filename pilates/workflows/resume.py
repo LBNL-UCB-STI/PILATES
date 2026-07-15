@@ -64,6 +64,14 @@ class ResumePlanningError(RuntimeError):
         self.category = category
 
 
+class ResumeProjectionError(RuntimeError):
+    """A stage projection failure with an operable recovery category."""
+
+    def __init__(self, category: str, message: str) -> None:
+        super().__init__(f"{category}: {message}")
+        self.category = category
+
+
 class HistoricalRun(Protocol):
     """The selected Consist run fields used by the planner."""
 
@@ -341,6 +349,13 @@ def execute_restore_decision(
 
     try:
         projected_outputs, published_role_keys = projection_adapter(result)
+    except ResumeProjectionError as error:
+        return _restore_failure(
+            decision=decision,
+            hydration_result=result,
+            category=error.category,
+            message=str(error),
+        )
     except Exception as error:
         return _restore_failure(
             decision=decision,

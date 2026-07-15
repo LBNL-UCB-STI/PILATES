@@ -58,6 +58,12 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.binding import BindingPlan
 from pilates.workflows.outputs_base import serialize_step_outputs
+from pilates.workflows.resume import (
+    HistoricalOutputRequest,
+    RestoreExecutionResult,
+    ResumeDecision,
+    ResumeDisposition,
+)
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import (
     run_supply_demand_stage as _run_supply_demand_stage,
@@ -150,56 +156,39 @@ def test_beam_restart_canary_failpoint_requires_explicit_env(monkeypatch):
         _maybe_fail_after_beam_run_for_canary(year=2021, iteration=0)
 
 
-def test_beam_restart_recovery_readiness_diagnostic_reports_matchable_run(
-    monkeypatch,
-    tmp_path,
+def test_beam_restart_recovery_readiness_diagnostic_uses_existing_restore_result(
+    monkeypatch, tmp_path
 ):
     from pilates.workflows.stages import supply_demand_beam as beam_stage
 
     run_id = "current-run__beam_run"
-    workspace = SimpleNamespace(full_path=str(tmp_path / "current-run"))
-    settings = SimpleNamespace(run=SimpleNamespace(cache_epoch=3))
     state = SimpleNamespace(
-        is_restart_run=False,
+        is_restart_run=True,
         year=2019,
         forecast_year=2021,
         current_year=2019,
     )
-    events = tmp_path / "events.parquet"
-    skims = tmp_path / "skims.zarr"
-    linkstats = tmp_path / "linkstats.csv.gz"
-    plans = tmp_path / "plans.csv.gz"
-    for path in (events, skims, linkstats, plans):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("ok", encoding="utf-8")
-    outputs = BeamRunOutputs(
-        beam_output_dir=tmp_path,
-        raw_outputs={
-            "events_parquet_2021_0": events,
-            "raw_od_skims_zarr_2021_0": skims,
-            LINKSTATS: linkstats,
-            BEAM_PLANS_OUT: plans,
-        },
+    decision = ResumeDecision(
+        step_name="beam_run",
+        disposition=ResumeDisposition.RESTORE,
+        reason="completed_match",
+        semantic_target={"run_scope": "current-run", "status": "completed"},
+        source_run_id=run_id,
+        outputs=(
+            HistoricalOutputRequest("events_parquet_2021_0", tmp_path / "events", True),
+            HistoricalOutputRequest(LINKSTATS, tmp_path / "linkstats", True),
+        ),
+        rerun_forbidden=True,
     )
-
-    class _Tracker:
-        def __init__(self):
-            self.find_matching_run_kwargs = None
-
-        def find_matching_run(self, **kwargs):
-            self.find_matching_run_kwargs = kwargs
-            return SimpleNamespace(id=run_id)
-
-        def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return dict(outputs.raw_outputs)
-
-        def hydrate_run_outputs(self, **_kwargs):
-            raise AssertionError("readiness diagnostic should not hydrate outputs")
-
-    tracker = _Tracker()
+    execution = RestoreExecutionResult(
+        decision=decision,
+        hydration_result=None,
+        projected_outputs=object(),
+        published_role_keys=(LINKSTATS,),
+        failure_category=None,
+        failed_keys=(),
+    )
     events_emitted = []
-    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(
         beam_stage,
         "_emit_artifact_lifecycle_event",
@@ -207,111 +196,23 @@ def test_beam_restart_recovery_readiness_diagnostic_reports_matchable_run(
     )
 
     _emit_beam_restart_recovery_readiness_diagnostic(
-        settings=settings,
         state=state,
-        workspace=workspace,
-        outputs=outputs,
-        year=2021,
+        decision=decision,
+        execution=execution,
         iteration=0,
-        include_zarr_skims=False,
     )
 
-    assert tracker.find_matching_run_kwargs["status"] == "completed"
-    assert tracker.find_matching_run_kwargs["run_scope"] == "current-run"
-    assert tracker.find_matching_run_kwargs["model"] == "beam_run"
     assert events_emitted
     event_type, fields = events_emitted[0]
     assert event_type == "beam_restart_recovery_readiness"
     assert fields["matchable"] is True
     assert fields["matched_completed_run_id"] == run_id
     assert fields["matched_run_id"] == run_id
-    assert fields["required_restored_inputs"] == [
-        "events_parquet_2021_0",
-        "raw_od_skims_zarr_2021_0",
-        "linkstats",
-        "beam_plans_out",
-    ]
+    assert fields["required_restored_inputs"] == ["events_parquet_2021_0", LINKSTATS]
     assert fields["missing_restored_inputs"] == []
     assert fields["missing_required_keys"] == []
     assert fields["hydration_api_available"] is True
     assert fields["drift_classification"] == "complete"
-
-
-def test_beam_restart_recovery_readiness_diagnostic_classifies_cache_drift(
-    monkeypatch,
-    tmp_path,
-):
-    from pilates.workflows.stages import supply_demand_beam as beam_stage
-
-    run_id = "current-run__beam_run"
-    workspace = SimpleNamespace(full_path=str(tmp_path / "current-run"))
-    settings = SimpleNamespace(run=SimpleNamespace(cache_epoch=3))
-    state = SimpleNamespace(
-        is_restart_run=False,
-        year=2019,
-        forecast_year=2021,
-        current_year=2019,
-        cache_miss_explanation={
-            "reason": "cache identity drift",
-            "mismatched_components": ["beam.conf"],
-        },
-    )
-    events = tmp_path / "events.parquet"
-    skims = tmp_path / "skims.zarr"
-    linkstats = tmp_path / "linkstats.csv.gz"
-    plans = tmp_path / "plans.csv.gz"
-    for path in (events, skims, linkstats, plans):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("ok", encoding="utf-8")
-    outputs = BeamRunOutputs(
-        beam_output_dir=tmp_path,
-        raw_outputs={
-            "events_parquet_2021_0": events,
-            "raw_od_skims_zarr_2021_0": skims,
-            LINKSTATS: linkstats,
-            BEAM_PLANS_OUT: plans,
-        },
-    )
-
-    class _Tracker:
-        def find_matching_run(self, **kwargs):
-            return SimpleNamespace(id=run_id)
-
-        def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return dict(outputs.raw_outputs)
-
-        def hydrate_run_outputs(self, **_kwargs):
-            raise AssertionError("readiness diagnostic should not hydrate outputs")
-
-    tracker = _Tracker()
-    events_emitted = []
-    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        beam_stage,
-        "_emit_artifact_lifecycle_event",
-        lambda event_type, **fields: events_emitted.append((event_type, fields)),
-    )
-
-    _emit_beam_restart_recovery_readiness_diagnostic(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        outputs=outputs,
-        year=2021,
-        iteration=0,
-        include_zarr_skims=False,
-    )
-
-    assert events_emitted
-    event_type, fields = events_emitted[0]
-    assert event_type == "beam_restart_recovery_readiness"
-    assert fields["drift_classification"] == "cache_identity_drift"
-    assert fields["matched_completed_run_id"] == run_id
-    assert fields["missing_restored_inputs"] == []
-    assert fields["identity_drift_components"] == {
-        "mismatched_components": ["beam.conf"],
-    }
 
 
 def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):

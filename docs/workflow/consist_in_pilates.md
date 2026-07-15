@@ -147,6 +147,20 @@ equals the scope or starts with `f"{run_scope}__"`. Restartable PILATES run
 names must preserve that prefix convention so same-scenario recovery cannot
 accidentally select a completed step from another archive.
 
+For adopted recovery boundaries, PILATES first plans one of `restore`, `run`,
+or `skip` from workflow state, the enabled surface, and this scoped semantic
+query. Consist supplies the selected completed run and materializes its linked
+outputs to the exact model-owned destinations that PILATES requested. The
+model-boundary adapter then validates those bytes and publishes current coupler
+roles. Historical artifact paths, YAML manifests, and coupler values may not
+select or complete a restore.
+
+The exact-destination recovery API is developed against the designated editable
+Consist checkout. Before treating an integration test as evidence, record the
+importing interpreter's `consist` source path, Git commit, and whether the
+checkout is clean. Missing typed APIs are an environment error, not permission
+to fall back to a legacy recovery source.
+
 ## Analysis Surface
 
 PILATES keeps the archive-side Consist database and run outputs available for post-run analysis. The analysis helpers read the archived run metadata, run outputs, and artifact facets rather than rebuilding workflow state from scratch.

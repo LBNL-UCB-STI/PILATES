@@ -55,6 +55,19 @@ For most users, the practical meaning is simple: restart is no longer “rebuild
 - If local workspace state is lost, the runtime can materialize archived outputs back into place when the archive contains what the restart needs.
 - If the archive does not contain the required declared outputs, restart hydration fails rather than inventing missing inputs.
 
+### Completed BEAM Runs
+
+When a restart reaches the BEAM boundary, PILATES selects at most one completed
+`beam_run` using the run's scoped Consist identity. It restores only declared
+BEAM outputs to deterministic destinations in a clean workspace; it does not
+reuse a leftover file, a manifest path, or a coupler value as evidence.
+
+An ambiguous match, a missing workflow scope, a pre-existing required output,
+or a missing required recovered byte stops the restart before BEAM executes.
+This is intentional: a completed BEAM run is authoritative, so PILATES does
+not rerun it as a convenience. Older archives that do not satisfy this scoped,
+explicit-destination contract can therefore be non-restartable.
+
 ## Practical Rule
 
 If you are deciding whether a restart is safe, check these in order:
