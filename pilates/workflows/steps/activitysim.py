@@ -1438,7 +1438,7 @@ def make_activitysim_preprocess_step(
             output_recoverer=_recover_activitysim_preprocess_outputs,
             input_paths=ActivitysimPreprocessor.declared_expected_inputs,
             output_paths=activitysim_preprocess_output_paths,
-            cache_hydration="metadata",
+            cache_hydration="outputs-requested",
             input_binding="paths",
             input_materialization="requested",
             step_logger=logger,

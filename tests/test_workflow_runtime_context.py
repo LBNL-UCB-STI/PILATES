@@ -77,6 +77,7 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         current_major_stage = _FakeStage.supply_demand_loop
         year = 2018
         forecast_year = 2018
+        is_restart_run = False
 
         def __iter__(self):
             return iter([2018])

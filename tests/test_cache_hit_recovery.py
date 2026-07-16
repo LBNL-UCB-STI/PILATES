@@ -557,6 +557,54 @@ def test_run_manifested_steps_recovers_cache_hit(tmp_path):
     assert manifest["activitysim_preprocess"]["cache_hit"]
 
 
+def test_run_manifested_steps_hydrates_activitysim_preprocess_cache_hit_to_fresh_workspace(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    class CacheHitScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            if kwargs["cache_options"].cache_hydration == "outputs-requested":
+                for filename in ("households.csv", "persons.csv", "land_use.csv"):
+                    _write_file(asim_dir / filename)
+            return SimpleNamespace(cache_hit=True)
+
+    scenario = CacheHitScenario()
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
+
+    run_manifested_steps(
+        stage_name="activity_demand_preprocess",
+        steps=[
+            StepRef(
+                name="activitysim_preprocess",
+                step_func=step_func,
+                input_keys=None,
+                inputs=None,
+            )
+        ],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=tmp_path / "manifest.json"),
+        scenario=scenario,
+        state=SimpleNamespace(year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert holder.activitysim_preprocess is not None
+    assert coupler.get(ASIM_HOUSEHOLDS_IN) == str(asim_dir / "households.csv")
+    assert scenario.calls[0]["cache_options"].cache_hydration == "outputs-requested"
+
+
 def test_recover_activitysim_postprocess_outputs_preserves_hashes(
     tmp_path, monkeypatch
 ):

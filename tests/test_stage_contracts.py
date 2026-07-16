@@ -74,7 +74,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workspace import Workspace
 from pilates.workflows.orchestration import ManifestConfig, StageRunner, StepRef
-from pilates.workflows.binding import build_binding_plan
+from pilates.workflows.binding import BindingPlan, build_binding_plan
 from pilates.workflows.outputs_base import serialize_step_outputs
 from pilates.workflows.steps import StepOutputsHolder
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
@@ -2661,16 +2661,40 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         f"{Path(workspace.full_path).name}"
         f"__step_func__y{state.forecast_year}__i0__phase_run_x"
     )
+    activitysim_run_id = "activitysim-run-1"
+    scenario._activitysim_run_ids = {(state.forecast_year, 0): activitysim_run_id}
+
+    def _artifact(key, identity, driver, *, directory=False):
+        return SimpleNamespace(
+            key=key,
+            hash=identity,
+            driver=driver,
+            meta={"directory_artifact": directory},
+        )
+
     outputs = {
-        "linkstats": str(linkstats),
-        f"events_parquet_{state.forecast_year}_0": str(events),
-        f"raw_od_skims_zarr_{state.forecast_year}_0": str(skims),
-        f"beam_plans_out_{state.forecast_year}_0": str(plans),
-        ZARR_SKIMS: str(source_dir / "legacy-zarr-skims.zarr"),
+        "linkstats": _artifact("linkstats", "linkstats-hash", "csv"),
+        f"events_parquet_{state.forecast_year}_0": _artifact(
+            f"events_parquet_{state.forecast_year}_0", "events-hash", "parquet"
+        ),
+        f"raw_od_skims_zarr_{state.forecast_year}_0": _artifact(
+            f"raw_od_skims_zarr_{state.forecast_year}_0",
+            "raw-zarr-hash",
+            "zarr",
+            directory=True,
+        ),
+        f"beam_plans_out_{state.forecast_year}_0": _artifact(
+            f"beam_plans_out_{state.forecast_year}_0", "plans-hash", "csv"
+        ),
+    }
+    activitysim_outputs = {
+        ZARR_SKIMS: _artifact(ZARR_SKIMS, "shared-zarr-hash", "zarr", directory=True)
     }
 
     class _Hydrated(dict):
-        source_run_id = run_id
+        def __init__(self, source_run_id, items):
+            super().__init__(items)
+            self.source_run_id = source_run_id
 
     class _Tracker:
         def __init__(self):
@@ -2680,12 +2704,16 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
             return [SimpleNamespace(id=run_id, status="completed")]
 
         def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return dict(outputs)
+            if queried_run_id == run_id:
+                return dict(outputs)
+            assert queried_run_id == activitysim_run_id
+            return dict(activitysim_outputs)
 
         def get_run(self, queried_run_id):
-            assert queried_run_id == run_id
-            return SimpleNamespace(status="completed", year=state.year, iteration=0)
+            assert queried_run_id in {run_id, activitysim_run_id}
+            return SimpleNamespace(
+                status="completed", year=state.forecast_year, iteration=0
+            )
 
         def snapshot_db(self, destination, *, checkpoint):
             assert checkpoint is True
@@ -2693,12 +2721,14 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_text("snapshot", encoding="utf-8")
 
-        def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
+        def hydrate_run_outputs_to_destinations(self, hydrated_run_id, **kwargs):
             self.hydrate_calls.append(kwargs)
             destinations = kwargs["destinations_by_key"]
+            run_outputs = outputs if hydrated_run_id == run_id else activitysim_outputs
             hydrated = {}
             for key, destination in destinations.items():
-                if key.startswith("raw_od_skims_zarr_"):
+                artifact = run_outputs[key]
+                if artifact.meta["directory_artifact"]:
                     destination.mkdir(parents=True)
                     (destination / ".zgroup").write_text("{}\n", encoding="utf-8")
                     hydrated[key] = SimpleNamespace(
@@ -2706,7 +2736,7 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
                         status="materialized_directory_from_filesystem",
                         artifact_kind="directory",
                         resolvable=True,
-                        artifact=SimpleNamespace(driver="zarr"),
+                        artifact=artifact,
                     )
                     continue
                 _write_file(destination)
@@ -2715,16 +2745,15 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
                     status="materialized_from_filesystem",
                     artifact_kind="file",
                     resolvable=True,
-                    artifact=object(),
+                    artifact=artifact,
                 )
-            return _Hydrated(hydrated)
+            return _Hydrated(hydrated_run_id, hydrated)
 
     tracker = _Tracker()
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(
         beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: tracker
     )
-
     activity_outputs = {
         "beam_plans_asim_out": str(tmp_path / "beam_plans.parquet"),
         "households_asim_out": str(tmp_path / "households.parquet"),
@@ -2802,19 +2831,13 @@ def test_restored_beam_projection_rejects_file_hydration_to_directory(
         )
 
 
-def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
-    stage_env, monkeypatch, tmp_path
-):
+def test_empty_v2_beam_checkpoint_fails_closed(stage_env, tmp_path):
     from pilates.workflows.beam_checkpoint import publish_beam_run_checkpoint
     from pilates.workflows.stages import supply_demand_beam as beam_stage
 
     settings = stage_env["settings"]
     state = stage_env["state"]
     workspace = stage_env["workspace"]
-    coupler = stage_env["coupler"]
-    scenario = stage_env["scenario"]
-    restored = []
-    scenario.remember_restored_run_id = lambda **kwargs: restored.append(kwargs)
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.traffic_assignment
     state.current_inner_iter = 0
@@ -2823,14 +2846,155 @@ def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
     archive_run_dir.mkdir(parents=True)
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
 
-    run_id = "pinned-beam-run"
-    output_keys = {
-        LINKSTATS: object(),
-        f"events_parquet_{state.forecast_year}_0": object(),
-        f"beam_plans_out_{state.forecast_year}_0": object(),
+    publish_beam_run_checkpoint(
+        archive_run_dir=archive_run_dir,
+        producer_run_id="pinned-beam-run",
+        scope=beam_stage._beam_checkpoint_scope(
+            state=state, year=state.forecast_year, iteration=0
+        ),
+        snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
+        skim_variant=beam_stage._beam_checkpoint_skim_variant(settings),
+        output_requests=(),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid or incomplete"):
+        beam_stage._try_resume_committed_beam_postprocess(
+            scenario=stage_env["scenario"],
+            coupler=stage_env["coupler"],
+            outputs_holder=StepOutputsHolder(),
+            year=state.forecast_year,
+            iteration=0,
+            runtime_kwargs_extra={},
+            context=stage_env["context"],
+            surface=stage_env["context"].surface,
+        )
+
+    assert beam_stage.beam_checkpoint_resume_requested(state=state)
+
+
+def test_beam_checkpoint_rebind_rejects_wrong_logical_destination(stage_env, tmp_path):
+    from pilates.workflows.beam_checkpoint import PinnedClosureMember
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    workspace = stage_env["workspace"]
+    run_name = Path(workspace.full_path).name
+    member = PinnedClosureMember(
+        "activitysim-zarr",
+        ZARR_SKIMS,
+        "activitysim-run",
+        ZARR_SKIMS,
+        "zarr-hash",
+        "directory",
+        "zarr",
+        tmp_path / "old-local" / run_name / "activitysim" / "wrong.zarr",
+        True,
+    )
+
+    with pytest.raises(RuntimeError, match="wrong logical destination"):
+        beam_stage._rebind_beam_postprocess_closure_destinations(
+            members=(member,),
+            workspace=workspace,
+            archive_run_dir=tmp_path / "archive" / run_name,
+            year=stage_env["state"].forecast_year,
+            iteration=0,
+        )
+
+
+def test_supply_demand_restart_dispatches_committed_closure_before_activitysim_recovery(
+    stage_env, monkeypatch, tmp_path
+):
+    from pilates.workflows.beam_checkpoint import (
+        PinnedClosureMember,
+        publish_beam_run_checkpoint,
+    )
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    settings = stage_env["settings"]
+    state = stage_env["state"]
+    workspace = stage_env["workspace"]
+    coupler = stage_env["coupler"]
+    scenario = stage_env["scenario"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.traffic_assignment
+    state.current_inner_iter = 0
+    state.is_restart_run = True
+    archive_run_dir = tmp_path / "archive" / Path(workspace.full_path).name
+    archive_run_dir.mkdir(parents=True)
+    state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
+
+    beam_run_id = "pinned-beam-run"
+    activitysim_run_id = "pinned-activitysim-run"
+    events_key = f"events_parquet_{state.forecast_year}_0"
+    raw_skims_key = f"raw_od_skims_{state.forecast_year}_0"
+    events_destination = Path(workspace.get_beam_output_dir()) / "0.events.parquet"
+    raw_skims_destination = (
+        Path(workspace.get_beam_output_dir()) / "0.skimsActivitySimOD_current.omx"
+    )
+    zarr_destination = Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    prior_workspace = tmp_path / "old-local" / Path(workspace.full_path).name
+    prior_events_destination = prior_workspace / events_destination.relative_to(
+        workspace.full_path
+    )
+    prior_raw_skims_destination = prior_workspace / raw_skims_destination.relative_to(
+        workspace.full_path
+    )
+    prior_zarr_destination = prior_workspace / zarr_destination.relative_to(
+        workspace.full_path
+    )
+    if zarr_destination.exists():
+        zarr_destination.unlink()
+
+    def _artifact(key, identity, driver, *, directory=False):
+        return SimpleNamespace(
+            key=key,
+            hash=identity,
+            driver=driver,
+            meta={"directory_artifact": directory},
+        )
+
+    artifacts_by_run = {
+        beam_run_id: {
+            events_key: _artifact(events_key, "events-hash", "parquet"),
+            raw_skims_key: _artifact(raw_skims_key, "skims-hash", "omx"),
+        },
+        activitysim_run_id: {
+            ZARR_SKIMS: _artifact(ZARR_SKIMS, "zarr-hash", "zarr", directory=True),
+        },
     }
-    requests = beam_stage._beam_restart_output_requests(
-        output_keys, workspace, state.forecast_year, 0
+    closure = (
+        PinnedClosureMember(
+            "beam-events",
+            events_key,
+            beam_run_id,
+            events_key,
+            "events-hash",
+            "file",
+            "parquet",
+            prior_events_destination,
+            True,
+        ),
+        PinnedClosureMember(
+            "beam-raw-skims",
+            raw_skims_key,
+            beam_run_id,
+            raw_skims_key,
+            "skims-hash",
+            "file",
+            "omx",
+            prior_raw_skims_destination,
+            True,
+        ),
+        PinnedClosureMember(
+            "activitysim-zarr",
+            ZARR_SKIMS,
+            activitysim_run_id,
+            ZARR_SKIMS,
+            "zarr-hash",
+            "directory",
+            "zarr",
+            prior_zarr_destination,
+            True,
+        ),
     )
     snapshot_ref = ".consist/restart/checkpoints/pinned/tracker.duckdb"
     snapshot_path = archive_run_dir / snapshot_ref
@@ -2838,77 +3002,95 @@ def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
     snapshot_path.write_text("snapshot", encoding="utf-8")
     publish_beam_run_checkpoint(
         archive_run_dir=archive_run_dir,
-        producer_run_id=run_id,
+        producer_run_id=beam_run_id,
         scope=beam_stage._beam_checkpoint_scope(
             state=state, year=state.forecast_year, iteration=0
         ),
         snapshot_ref=snapshot_ref,
         skim_variant=beam_stage._beam_checkpoint_skim_variant(settings),
-        output_requests=requests,
+        output_requests=(),
+        closure_members=closure,
     )
-
-    class _Hydrated(dict):
-        source_run_id = run_id
 
     class _PinnedTracker:
-        def get_run(self, queried_run_id):
-            assert queried_run_id == run_id
-            return SimpleNamespace(status="completed", year=state.year, iteration=0)
-
-        def get_run_outputs(self, queried_run_id):
-            assert queried_run_id == run_id
-            return output_keys
-
-        def hydrate_run_outputs_to_destinations(self, queried_run_id, **kwargs):
-            assert queried_run_id == run_id
-            assert kwargs["db_fallback"] == "never"
-            destinations = kwargs["destinations_by_key"]
-            for destination in destinations.values():
-                _write_file(destination)
-            return _Hydrated(
-                {
-                    key: SimpleNamespace(
-                        path=destination,
-                        status="materialized_from_filesystem",
-                        resolvable=True,
-                        artifact=object(),
-                    )
-                    for key, destination in destinations.items()
-                }
+        def get_run(self, run_id):
+            return SimpleNamespace(
+                id=run_id,
+                status="completed",
+                year=state.forecast_year,
+                iteration=0,
             )
 
+        def get_run_outputs(self, run_id):
+            return artifacts_by_run[run_id]
+
+        def hydrate_run_outputs_to_destinations(self, run_id, **kwargs):
+            hydrated = {}
+            for key, destination in kwargs["destinations_by_key"].items():
+                artifact = artifacts_by_run[run_id][key]
+                if artifact.meta["directory_artifact"]:
+                    destination.mkdir(parents=True)
+                    (destination / ".zgroup").write_text("{}\n", encoding="utf-8")
+                    status = "materialized_directory_from_filesystem"
+                    artifact_kind = "directory"
+                else:
+                    _write_file(destination)
+                    status = "materialized_from_filesystem"
+                    artifact_kind = "file"
+                hydrated[key] = SimpleNamespace(
+                    path=destination,
+                    status=status,
+                    artifact_kind=artifact_kind,
+                    resolvable=True,
+                    artifact=artifact,
+                )
+            return SimpleNamespace(
+                source_run_id=run_id,
+                get=hydrated.get,
+            )
+
+    tracker = _PinnedTracker()
+    scenario.remember_restored_run_id = lambda **_kwargs: None
     monkeypatch.setattr(
-        beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: _PinnedTracker()
+        beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: tracker
     )
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(
-        beam_stage.cr,
-        "current_tracker",
-        lambda: SimpleNamespace(
-            find_matching_runs=lambda **_kwargs: pytest.fail("must not rediscover")
-        ),
+        supply_demand_stage,
+        "_restore_activity_demand_outputs_for_resume",
+        lambda **_kwargs: pytest.fail("generic ActivitySim recovery must be skipped"),
     )
 
-    restored_outputs = beam_stage._try_restore_completed_beam_run_for_restart(
+    run_supply_demand_stage(
         scenario=scenario,
-        settings=settings,
         state=state,
+        settings=settings,
         workspace=workspace,
         coupler=coupler,
-        outputs_holder=StepOutputsHolder(),
-        surface=stage_env["context"].surface,
         year=state.forecast_year,
-        iteration=0,
+        usim_inputs={
+            USIM_POPULATION_SOURCE_H5: stage_env["usim_output_path"],
+            USIM_DATASTORE_CURRENT_H5: stage_env["usim_output_path"],
+        },
+        build_manifest_path=lambda *_args: tmp_path / "missing-manifest.yaml",
     )
 
-    assert restored_outputs is not None
-    assert restored == [
-        {
-            "model_name": "beam_run",
-            "year": state.forecast_year,
-            "iteration": 0,
-            "run_id": run_id,
-        }
+    assert not [call for call in scenario.calls if call.get("model") == "activitysim"]
+    assert not [
+        call for call in scenario.calls if call.get("model") == "beam_preprocess"
     ]
+    assert not [call for call in scenario.calls if call.get("model") == "beam_run"]
+    postprocess_calls = [
+        call for call in scenario.calls if call.get("model") == "beam_postprocess"
+    ]
+    assert len(postprocess_calls) == 1
+    assert ZARR_SKIMS in postprocess_calls[0]["optional_input_keys"]
+    assert events_destination.is_file()
+    assert raw_skims_destination.is_file()
+    assert zarr_destination.is_dir()
+    assert not prior_events_destination.exists()
+    assert not prior_raw_skims_destination.exists()
+    assert not prior_zarr_destination.exists()
 
 
 def test_beam_checkpoint_publication_preserves_traffic_assignment_schedule(
@@ -2927,33 +3109,65 @@ def test_beam_checkpoint_publication_preserves_traffic_assignment_schedule(
     archive_run_dir.mkdir(parents=True)
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
     scenario._beam_run_ids = {(state.forecast_year, 0): "beam-run-1"}
+    scenario._activitysim_run_ids = {(state.forecast_year, 0): "activitysim-run-1"}
+    events_key = f"events_parquet_{state.forecast_year}_0"
     published = []
     monkeypatch.setattr(
-        beam_stage, "verify_archive_visible_recovery_bytes", lambda **_kwargs: None
+        beam_stage,
+        "verify_archive_visible_pinned_closure_bytes",
+        lambda **_kwargs: None,
     )
     monkeypatch.setattr(
         beam_stage,
         "snapshot_and_publish_beam_run_checkpoint",
         lambda **kwargs: published.append(kwargs),
     )
-    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: object())
+    artifacts = {
+        "beam-run-1": {
+            events_key: SimpleNamespace(
+                key=events_key,
+                hash="events-hash",
+                driver="parquet",
+                meta={},
+            )
+        },
+        "activitysim-run-1": {
+            ZARR_SKIMS: SimpleNamespace(
+                key=ZARR_SKIMS,
+                hash="zarr-hash",
+                driver="zarr",
+                meta={"directory_artifact": True},
+            )
+        },
+    }
+    tracker = SimpleNamespace(get_run_outputs=lambda run_id: artifacts[run_id])
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
 
     beam_stage._publish_completed_beam_run_checkpoint(
         scenario=scenario,
         settings=settings,
         state=state,
         workspace=workspace,
-        outputs=BeamRunOutputs(
-            beam_output_dir=Path(workspace.get_beam_output_dir()),
-            raw_outputs={
-                LINKSTATS: Path(workspace.get_beam_output_dir()) / "0.linkstats.csv.gz"
+        postprocess_binding=BindingPlan(
+            step_name="beam_postprocess",
+            inputs={
+                events_key: str(
+                    Path(workspace.get_beam_output_dir()) / "0.events.parquet"
+                )
             },
+            optional_input_keys=[ZARR_SKIMS],
+            source_by_key={events_key: "explicit", ZARR_SKIMS: "coupler"},
+            coupler_key_by_key={events_key: events_key, ZARR_SKIMS: ZARR_SKIMS},
         ),
         year=state.forecast_year,
         iteration=0,
     )
 
     assert published and published[0]["producer_run_id"] == "beam-run-1"
+    assert {member.role for member in published[0]["closure_members"]} == {
+        events_key,
+        ZARR_SKIMS,
+    }
     assert state.current_major_stage is state.Stage.supply_demand_loop
     assert state.current_sub_stage is state.Stage.traffic_assignment
     assert state.current_inner_iter == 0
@@ -2994,15 +3208,15 @@ def test_beam_postprocess_marker_refuses_to_reuse_checkpoint(stage_env, tmp_path
     mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
 
     with pytest.raises(RuntimeError, match="non-restartable"):
-        beam_stage._try_restore_committed_beam_run_for_restart(
+        beam_stage._try_resume_committed_beam_postprocess(
             scenario=stage_env["scenario"],
-            settings=settings,
-            state=state,
-            workspace=workspace,
             coupler=stage_env["coupler"],
             outputs_holder=StepOutputsHolder(),
             year=state.forecast_year,
             iteration=0,
+            runtime_kwargs_extra={},
+            context=stage_env["context"],
+            surface=stage_env["context"].surface,
         )
     assert read_beam_run_checkpoint(archive_run_dir) is None
 
@@ -3108,6 +3322,11 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
     monkeypatch.setattr(
         beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: tracker
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "_publish_completed_beam_run_checkpoint",
+        lambda **_kwargs: None,
     )
 
     activity_outputs = {

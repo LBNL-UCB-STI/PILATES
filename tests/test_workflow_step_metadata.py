@@ -205,7 +205,7 @@ def test_activitysim_step_factories_attach_replay_metadata(tmp_path: Path):
     postprocess_meta = postprocess_step.__consist_step__
 
     assert preprocess_meta.input_binding == "paths"
-    assert preprocess_meta.cache_hydration == "metadata"
+    assert preprocess_meta.cache_hydration == "outputs-requested"
     assert _step_meta_input_materialization(preprocess_meta) == "requested"
     preprocess_inputs = _step_meta_input_paths(preprocess_meta)(
         settings=settings, state=state, workspace=workspace
