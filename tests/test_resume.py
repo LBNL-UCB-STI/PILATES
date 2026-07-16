@@ -22,6 +22,7 @@ from pilates.workflows.beam_checkpoint import (
     publish_beam_run_checkpoint,
     read_beam_run_checkpoint,
     snapshot_and_publish_beam_run_checkpoint,
+    verify_archive_visible_recovery_bytes,
 )
 
 
@@ -373,7 +374,9 @@ def test_beam_checkpoint_is_atomic_and_becomes_nonrestartable(tmp_path):
         snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
         skim_variant="full",
         output_requests=(
-            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+            HistoricalOutputRequest(
+                "linkstats", tmp_path / "beam" / "0.linkstats", True
+            ),
         ),
     )
 
@@ -397,20 +400,29 @@ def test_committed_beam_run_requires_completed_direct_run_and_selected_links(tmp
         snapshot_ref=".consist/restart/checkpoints/pinned/tracker.duckdb",
         skim_variant="full",
         output_requests=(
-            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+            HistoricalOutputRequest(
+                "linkstats", tmp_path / "beam" / "0.linkstats", True
+            ),
         ),
     )
 
-    assert assert_committed_beam_run(
-        tracker=tracker,
-        checkpoint=checkpoint,
-        output_requests=(
-            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
-        ),
-    ) is run
+    assert (
+        assert_committed_beam_run(
+            tracker=tracker,
+            checkpoint=checkpoint,
+            output_requests=(
+                HistoricalOutputRequest(
+                    "linkstats", tmp_path / "beam" / "0.linkstats", True
+                ),
+            ),
+        )
+        is run
+    )
 
 
-def test_snapshot_publication_validates_the_pinned_snapshot_not_a_matching_query(tmp_path):
+def test_snapshot_publication_validates_the_pinned_snapshot_not_a_matching_query(
+    tmp_path,
+):
     run = SimpleNamespace(status="completed", year=2019, iteration=0)
     calls = []
 
@@ -432,7 +444,9 @@ def test_snapshot_publication_validates_the_pinned_snapshot_not_a_matching_query
         scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
         skim_variant="full",
         output_requests=(
-            HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+            HistoricalOutputRequest(
+                "linkstats", tmp_path / "beam" / "0.linkstats", True
+            ),
         ),
     )
 
@@ -454,11 +468,71 @@ def test_failed_snapshot_does_not_publish_a_beam_checkpoint(tmp_path):
             scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
             skim_variant="full",
             output_requests=(
-                HistoricalOutputRequest("linkstats", tmp_path / "beam" / "0.linkstats", True),
+                HistoricalOutputRequest(
+                    "linkstats", tmp_path / "beam" / "0.linkstats", True
+                ),
             ),
         )
 
     assert read_beam_run_checkpoint(tmp_path) is None
+
+
+def test_checkpoint_archive_verification_accepts_immutable_zarr_directory(tmp_path):
+    key = "raw_od_skims_zarr_2018_0"
+
+    class _Tracker:
+        def hydrate_run_outputs_to_destinations(self, run_id, **kwargs):
+            destination = kwargs["destinations_by_key"][key]
+            destination.mkdir(parents=True)
+            (destination / ".zgroup").write_text("{}\n", encoding="utf-8")
+            return _Hydration(
+                run_id,
+                {
+                    key: SimpleNamespace(
+                        path=destination,
+                        status="materialized_directory_from_filesystem",
+                        artifact_kind="directory",
+                        resolvable=True,
+                        artifact=SimpleNamespace(driver="zarr"),
+                    )
+                },
+            )
+
+    verify_archive_visible_recovery_bytes(
+        tracker=_Tracker(),
+        archive_run_dir=tmp_path,
+        producer_run_id="beam-run-1",
+        output_requests=(HistoricalOutputRequest(key, Path("/unused"), True),),
+    )
+
+
+def test_checkpoint_archive_verification_rejects_generic_directory(tmp_path):
+    key = "unexpected_directory"
+
+    class _Tracker:
+        def hydrate_run_outputs_to_destinations(self, run_id, **kwargs):
+            destination = kwargs["destinations_by_key"][key]
+            destination.mkdir(parents=True)
+            return _Hydration(
+                run_id,
+                {
+                    key: SimpleNamespace(
+                        path=destination,
+                        status="materialized_directory_from_filesystem",
+                        artifact_kind="directory",
+                        resolvable=True,
+                        artifact=SimpleNamespace(driver="parquet"),
+                    )
+                },
+            )
+
+    with pytest.raises(RuntimeError, match=key):
+        verify_archive_visible_recovery_bytes(
+            tracker=_Tracker(),
+            archive_run_dir=tmp_path,
+            producer_run_id="beam-run-1",
+            output_requests=(HistoricalOutputRequest(key, Path("/unused"), True),),
+        )
 
 
 def test_real_consist_snapshot_reopens_pinned_completed_beam_run(tmp_path):
@@ -471,9 +545,7 @@ def test_real_consist_snapshot_reopens_pinned_completed_beam_run(tmp_path):
     output_path.parent.mkdir(parents=True)
     output_path.write_bytes(b"linkstats")
     tracker = consist.Tracker(run_dir=archive_run_dir, db_path=db_path)
-    with tracker.start_run(
-        "beam-run-1", "beam_run", year=2019, iteration=0
-    ):
+    with tracker.start_run("beam-run-1", "beam_run", year=2019, iteration=0):
         tracker.log_output(output_path, key="linkstats")
 
     def _open_snapshot(snapshot_path: Path):

@@ -213,6 +213,13 @@ def _write_file(path: Path, content: str = "x") -> None:
     path.write_text(content)
 
 
+def _write_zarr_store(path: Path) -> None:
+    """Create the smallest directory-backed Zarr store for workflow contracts."""
+
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+
 def _write_csv(path: Path, df: pd.DataFrame) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_csv(path, index=False)
@@ -504,7 +511,7 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     zarr_path = asim_out_dir / "cache" / "skims.zarr"
     sharrow_cache_dir = Path(workspace.full_path) / "shared_cache" / "numba"
-    _write_file(zarr_path)
+    _write_zarr_store(zarr_path)
     _write_file(sharrow_cache_dir / "compile-cache.bin")
     asim_households_out_path = (
         asim_out_dir / "final_pipeline" / "households" / "final.parquet"

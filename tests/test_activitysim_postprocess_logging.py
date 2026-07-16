@@ -275,7 +275,9 @@ def test_create_usim_input_data_rejects_clobbered_year_file(tmp_path) -> None:
         )
 
 
-def test_activitysim_postprocess_publishes_processed_outputs_to_coupler(tmp_path) -> None:
+def test_activitysim_postprocess_publishes_processed_outputs_to_coupler(
+    tmp_path,
+) -> None:
     published = {}
     step_fn = steps.make_activitysim_postprocess_step(
         coupler=SimpleNamespace(
@@ -300,9 +302,7 @@ def test_activitysim_postprocess_publishes_processed_outputs_to_coupler(tmp_path
         holder=SimpleNamespace(),
     )
 
-    assert published == {
-        "asim_input_skims_zarr_archived": str(tmp_path / "skims.zarr")
-    }
+    assert published == {"asim_input_skims_zarr_archived": str(tmp_path / "skims.zarr")}
 
 
 def test_activitysim_preprocess_step_forwards_surface_to_runtime_resolution(

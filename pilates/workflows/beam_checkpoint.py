@@ -8,9 +8,10 @@ import json
 import os
 from pathlib import Path
 import tempfile
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Sequence
 from uuid import uuid4
 
+import consist
 import yaml
 
 from pilates.workflows.resume import HistoricalOutputRequest
@@ -214,11 +215,15 @@ def assert_committed_beam_run(
     if expected_year is not None and getattr(run, "year", None) != expected_year:
         raise RuntimeError("Committed BEAM checkpoint run scope does not match year.")
     if getattr(run, "iteration", None) != checkpoint.scope.get("iteration"):
-        raise RuntimeError("Committed BEAM checkpoint run scope does not match iteration.")
+        raise RuntimeError(
+            "Committed BEAM checkpoint run scope does not match iteration."
+        )
     outputs = get_run_outputs(checkpoint.producer_run_id)
     required_keys = {request.key for request in output_requests if request.required}
     if not required_keys or not required_keys.issubset(outputs):
-        raise RuntimeError("Committed BEAM checkpoint is missing selected output links.")
+        raise RuntimeError(
+            "Committed BEAM checkpoint is missing selected output links."
+        )
     return run
 
 
@@ -237,7 +242,9 @@ def snapshot_and_publish_beam_run_checkpoint(
     snapshot_db = getattr(tracker, "snapshot_db", None)
     if not callable(snapshot_db) or not callable(open_snapshot):
         raise RuntimeError("Committed BEAM checkpoint requires tracker snapshot APIs.")
-    snapshot_ref = Path(".consist") / "restart" / "checkpoints" / str(uuid4()) / "tracker.duckdb"
+    snapshot_ref = (
+        Path(".consist") / "restart" / "checkpoints" / str(uuid4()) / "tracker.duckdb"
+    )
     snapshot_path = archive_run_dir / snapshot_ref
     snapshot_path.parent.mkdir(parents=True, exist_ok=True)
     snapshot_db(snapshot_path, checkpoint=True)
@@ -275,12 +282,14 @@ def verify_archive_visible_recovery_bytes(
     producer_run_id: str,
     output_requests: Sequence[HistoricalOutputRequest],
 ) -> None:
-    """Prove each declared file can hydrate from the original archive namespace."""
+    """Prove each declared output can hydrate from the original archive namespace."""
 
     hydrate = getattr(tracker, "hydrate_run_outputs_to_destinations", None)
     if not callable(hydrate):
         raise RuntimeError("Committed BEAM checkpoint requires exact hydration APIs.")
-    verification_root = archive_run_dir / ".consist" / "restart" / "verification" / str(uuid4())
+    verification_root = (
+        archive_run_dir / ".consist" / "restart" / "verification" / str(uuid4())
+    )
     destinations = {
         request.key: verification_root / str(index)
         for index, request in enumerate(output_requests)
@@ -298,12 +307,8 @@ def verify_archive_visible_recovery_bytes(
             raise RuntimeError("Archive verification hydrated a different BEAM run.")
         for request in output_requests:
             item = result.get(request.key)
-            if (
-                item is None
-                or item.status != "materialized_from_filesystem"
-                or not item.resolvable
-                or item.path != destinations[request.key]
-                or not item.path.is_file()
+            if item is None or not is_verified_hydrated_recovery_output(
+                item, destination=destinations[request.key]
             ):
                 raise RuntimeError(
                     f"Committed BEAM checkpoint has no archive-visible bytes for {request.key}."
@@ -313,3 +318,31 @@ def verify_archive_visible_recovery_bytes(
             import shutil
 
             shutil.rmtree(verification_root)
+
+
+def is_verified_hydrated_zarr_directory(item: Any, *, destination: Path) -> bool:
+    """Return whether Consist exactly restored a native immutable Zarr directory."""
+
+    path = item.path
+    return (
+        item.status == "materialized_directory_from_filesystem"
+        and item.artifact_kind == "directory"
+        and item.resolvable
+        and path == destination
+        and path is not None
+        and path.is_dir()
+        and consist.is_zarr_artifact(item.artifact)
+    )
+
+
+def is_verified_hydrated_recovery_output(item: Any, *, destination: Path) -> bool:
+    """Accept regular files or Consist's strict immutable Zarr directories only."""
+
+    path = item.path
+    return (
+        item.status == "materialized_from_filesystem"
+        and item.resolvable
+        and path == destination
+        and path is not None
+        and path.is_file()
+    ) or is_verified_hydrated_zarr_directory(item, destination=destination)

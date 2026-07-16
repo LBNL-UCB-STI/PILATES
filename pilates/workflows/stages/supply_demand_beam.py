@@ -40,6 +40,8 @@ from pilates.workflows.beam_checkpoint import (
     beam_checkpoint_record_present,
     beam_postprocess_is_in_progress,
     checkpoint_fingerprint_matches,
+    is_verified_hydrated_recovery_output,
+    is_verified_hydrated_zarr_directory,
     mark_beam_postprocess_in_progress,
     read_beam_run_checkpoint,
     snapshot_and_publish_beam_run_checkpoint,
@@ -533,13 +535,32 @@ def _project_hydrated_beam_run_outputs(
     raw_outputs: Dict[str, Path] = {}
     published_keys: list[str] = []
     for key, item in hydration_result.items():
-        if item.status != "materialized_from_filesystem" or not item.resolvable:
+        if item.path is None:
+            if item.resolvable:
+                raise ResumeProjectionError(
+                    "unsupported_output_representation",
+                    f"BEAM output key={key} has no hydrated destination.",
+                )
             continue
-        if item.path is None or item.path.is_dir():
+        if (
+            item.status == "materialized_from_filesystem"
+            and item.resolvable
+            and item.path.is_dir()
+        ):
             raise ResumeProjectionError(
                 "unsupported_output_representation",
                 f"BEAM output key={key} is not a file destination.",
             )
+        is_file = (
+            item.status == "materialized_from_filesystem"
+            and item.resolvable
+            and item.path.is_file()
+        )
+        is_zarr_directory = is_verified_hydrated_zarr_directory(
+            item, destination=item.path
+        )
+        if not is_file and not is_zarr_directory:
+            continue
         raw_outputs[str(key)] = item.path
         set_coupler_from_artifact(
             coupler, str(key), item.artifact, fallback=str(item.path)
@@ -645,18 +666,27 @@ def _try_restore_committed_beam_run_for_restart(
             raise RuntimeError("Committed BEAM checkpoint is invalid or incomplete.")
         return None
     snapshot_path = (archive_run_dir / checkpoint.snapshot_ref).resolve()
-    if not snapshot_path.is_relative_to(archive_run_dir.resolve()) or not snapshot_path.is_file():
-        raise RuntimeError("Committed BEAM checkpoint snapshot is missing or outside archive.")
+    if (
+        not snapshot_path.is_relative_to(archive_run_dir.resolve())
+        or not snapshot_path.is_file()
+    ):
+        raise RuntimeError(
+            "Committed BEAM checkpoint snapshot is missing or outside archive."
+        )
     snapshot_tracker = _open_beam_checkpoint_tracker(snapshot_path, archive_run_dir)
     linked_outputs = snapshot_tracker.get_run_outputs(checkpoint.producer_run_id)
-    requests = _beam_restart_output_requests(linked_outputs.keys(), workspace, year, iteration)
+    requests = _beam_restart_output_requests(
+        linked_outputs.keys(), workspace, year, iteration
+    )
     if not checkpoint_fingerprint_matches(
         checkpoint,
         scope=_beam_checkpoint_scope(state=state, year=year, iteration=iteration),
         skim_variant=_beam_checkpoint_skim_variant(settings),
         output_requests=requests,
     ):
-        raise RuntimeError("Committed BEAM checkpoint recovery fingerprint does not match.")
+        raise RuntimeError(
+            "Committed BEAM checkpoint recovery fingerprint does not match."
+        )
     assert_committed_beam_run(
         tracker=snapshot_tracker, checkpoint=checkpoint, output_requests=requests
     )
@@ -670,7 +700,9 @@ def _try_restore_committed_beam_run_for_restart(
             hydration_result=hydration, workspace=workspace, coupler=coupler
         ),
     )
-    if not execution.succeeded or not isinstance(execution.projected_outputs, BeamRunOutputs):
+    if not execution.succeeded or not isinstance(
+        execution.projected_outputs, BeamRunOutputs
+    ):
         raise RuntimeError(
             "Committed BEAM checkpoint could not hydrate required outputs for postprocess. "
             f"run_id={checkpoint.producer_run_id} category={execution.failure_category}"
@@ -679,7 +711,9 @@ def _try_restore_committed_beam_run_for_restart(
     outputs_holder.beam_run = outputs
     for parent_year in _restored_beam_parent_years(state=state, run_year=year):
         scenario.remember_restored_run_id(
-            model_name="beam_run", year=parent_year, iteration=iteration,
+            model_name="beam_run",
+            year=parent_year,
+            iteration=iteration,
             run_id=checkpoint.producer_run_id,
         )
     return outputs
@@ -746,6 +780,9 @@ def _try_restore_completed_beam_run_for_restart(
             hydration_result=hydration,
             workspace=workspace,
             coupler=coupler,
+        ),
+        required_output_validator=lambda request, item: (
+            is_verified_hydrated_recovery_output(item, destination=request.destination)
         ),
     )
     _emit_beam_restart_recovery_readiness_diagnostic(
@@ -828,12 +865,16 @@ def _publish_completed_beam_run_checkpoint(
         return
     tracker = cr.current_tracker()
     if tracker is None:
-        raise RuntimeError("Cannot commit completed BEAM run without an active tracker.")
+        raise RuntimeError(
+            "Cannot commit completed BEAM run without an active tracker."
+        )
     if producer_run_id is None:
         try:
             run_id = scenario._beam_run_ids[(year, iteration)]  # type: ignore[attr-defined]
         except (AttributeError, KeyError) as error:
-            raise RuntimeError("Cannot commit completed BEAM run without its direct run ID.") from error
+            raise RuntimeError(
+                "Cannot commit completed BEAM run without its direct run ID."
+            ) from error
     else:
         run_id = producer_run_id
     requests = _beam_restart_output_requests(

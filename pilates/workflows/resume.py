@@ -98,11 +98,20 @@ class ResumeTracker(Protocol):
     ) -> HydratedRunOutputsResult: ...
 
 
+class HydratedOutput(Protocol):
+    """The hydration fields required to admit one restored output."""
+
+    path: Path | None
+    status: str
+    resolvable: bool
+
+
 OutputRequestBuilder = Callable[
     [Collection[str], Workspace, int, int], tuple[HistoricalOutputRequest, ...]
 ]
 RestoreEligibility = Callable[[WorkflowState, EnabledWorkflowSurface], bool]
 ProjectionAdapter = Callable[[HydratedRunOutputsResult], tuple[object, tuple[str, ...]]]
+RequiredOutputValidator = Callable[[HistoricalOutputRequest, HydratedOutput], bool]
 
 
 @dataclass(frozen=True)
@@ -281,6 +290,7 @@ def execute_restore_decision(
     tracker: ResumeTracker,
     source_root: Path | None,
     projection_adapter: ProjectionAdapter,
+    required_output_validator: RequiredOutputValidator | None = None,
 ) -> RestoreExecutionResult:
     """Materialize one already-selected run only to exact stage destinations."""
 
@@ -334,15 +344,11 @@ def execute_restore_decision(
             ),
         )
 
+    validator = required_output_validator or _is_exact_file_hydration
     failed_keys = tuple(
         request.key
         for request in required_requests
-        if (
-            (item := result.get(request.key)) is None
-            or not item.resolvable
-            or item.path != request.destination
-            or item.status != "materialized_from_filesystem"
-        )
+        if ((item := result.get(request.key)) is None or not validator(request, item))
     )
     if failed_keys:
         return _restore_failure(
@@ -376,4 +382,16 @@ def execute_restore_decision(
         published_role_keys=published_role_keys,
         failure_category=None,
         failed_keys=(),
+    )
+
+
+def _is_exact_file_hydration(
+    request: HistoricalOutputRequest, item: HydratedOutput
+) -> bool:
+    """Accept the default Consist file-hydration representation."""
+
+    return (
+        item.resolvable
+        and item.path == request.destination
+        and item.status == "materialized_from_filesystem"
     )

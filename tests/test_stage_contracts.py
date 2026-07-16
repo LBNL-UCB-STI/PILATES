@@ -2550,9 +2550,7 @@ def test_traffic_assignment_restart_fails_when_completed_beam_missing_raw_skims(
 
         def get_run(self, queried_run_id):
             assert queried_run_id == run_id
-            return SimpleNamespace(
-                status="completed", year=state.year, iteration=0
-            )
+            return SimpleNamespace(status="completed", year=state.year, iteration=0)
 
         def snapshot_db(self, destination, *, checkpoint):
             assert checkpoint is True
@@ -2687,9 +2685,7 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
 
         def get_run(self, queried_run_id):
             assert queried_run_id == run_id
-            return SimpleNamespace(
-                status="completed", year=state.year, iteration=0
-            )
+            return SimpleNamespace(status="completed", year=state.year, iteration=0)
 
         def snapshot_db(self, destination, *, checkpoint):
             assert checkpoint is True
@@ -2700,19 +2696,28 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
         def hydrate_run_outputs_to_destinations(self, _run_id, **kwargs):
             self.hydrate_calls.append(kwargs)
             destinations = kwargs["destinations_by_key"]
-            for destination in destinations.values():
-                _write_file(destination)
-            return _Hydrated(
-                {
-                    key: SimpleNamespace(
-                        path=destinations[key],
-                        status="materialized_from_filesystem",
+            hydrated = {}
+            for key, destination in destinations.items():
+                if key.startswith("raw_od_skims_zarr_"):
+                    destination.mkdir(parents=True)
+                    (destination / ".zgroup").write_text("{}\n", encoding="utf-8")
+                    hydrated[key] = SimpleNamespace(
+                        path=destination,
+                        status="materialized_directory_from_filesystem",
+                        artifact_kind="directory",
                         resolvable=True,
-                        artifact=object(),
+                        artifact=SimpleNamespace(driver="zarr"),
                     )
-                    for key in destinations
-                }
-            )
+                    continue
+                _write_file(destination)
+                hydrated[key] = SimpleNamespace(
+                    path=destination,
+                    status="materialized_from_filesystem",
+                    artifact_kind="file",
+                    resolvable=True,
+                    artifact=object(),
+                )
+            return _Hydrated(hydrated)
 
     tracker = _Tracker()
     monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
@@ -2744,6 +2749,8 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     )
 
     assert result.previous_beam_outputs is not None
+    assert coupler.get(f"raw_od_skims_zarr_{state.forecast_year}_0").driver == "zarr"
+    assert (beam_out / "0.skimsActivitySimOD.zarr").is_dir()
     assert tracker.hydrate_calls
     assert tracker.hydrate_calls[0]["destinations_by_key"] == {
         LINKSTATS: beam_out / "0.linkstats.csv.gz",
@@ -2769,6 +2776,30 @@ def test_traffic_assignment_restart_hydrates_completed_beam_run_from_consist(
     ]
     assert coupler.get(LINKSTATS) == str(beam_out / "0.linkstats.csv.gz")
     assert coupler.get(LINKSTATS_WARMSTART) == str(beam_out / "0.linkstats.csv.gz")
+
+
+def test_restored_beam_projection_rejects_file_hydration_to_directory(
+    stage_env, tmp_path
+):
+    from pilates.workflows.resume import ResumeProjectionError
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    destination = tmp_path / "0.skimsActivitySimOD.zarr"
+    destination.mkdir()
+
+    with pytest.raises(ResumeProjectionError, match="not a file destination"):
+        beam_stage._project_hydrated_beam_run_outputs(
+            hydration_result={
+                "raw_od_skims_zarr_2018_0": SimpleNamespace(
+                    path=destination,
+                    status="materialized_from_filesystem",
+                    resolvable=True,
+                    artifact=object(),
+                )
+            },
+            workspace=stage_env["workspace"],
+            coupler=stage_env["coupler"],
+        )
 
 
 def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
@@ -2822,9 +2853,7 @@ def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
     class _PinnedTracker:
         def get_run(self, queried_run_id):
             assert queried_run_id == run_id
-            return SimpleNamespace(
-                status="completed", year=state.year, iteration=0
-            )
+            return SimpleNamespace(status="completed", year=state.year, iteration=0)
 
         def get_run_outputs(self, queried_run_id):
             assert queried_run_id == run_id
@@ -2836,23 +2865,27 @@ def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
             destinations = kwargs["destinations_by_key"]
             for destination in destinations.values():
                 _write_file(destination)
-            return _Hydrated({
-                key: SimpleNamespace(
-                    path=destination,
-                    status="materialized_from_filesystem",
-                    resolvable=True,
-                    artifact=object(),
-                )
-                for key, destination in destinations.items()
-            })
+            return _Hydrated(
+                {
+                    key: SimpleNamespace(
+                        path=destination,
+                        status="materialized_from_filesystem",
+                        resolvable=True,
+                        artifact=object(),
+                    )
+                    for key, destination in destinations.items()
+                }
+            )
 
     monkeypatch.setattr(
         beam_stage, "_open_beam_checkpoint_tracker", lambda *_args: _PinnedTracker()
     )
     monkeypatch.setattr(
-        beam_stage.cr, "current_tracker", lambda: SimpleNamespace(
+        beam_stage.cr,
+        "current_tracker",
+        lambda: SimpleNamespace(
             find_matching_runs=lambda **_kwargs: pytest.fail("must not rediscover")
-        )
+        ),
     )
 
     restored_outputs = beam_stage._try_restore_completed_beam_run_for_restart(
@@ -2869,7 +2902,12 @@ def test_committed_beam_checkpoint_restores_pinned_run_without_matching_query(
 
     assert restored_outputs is not None
     assert restored == [
-        {"model_name": "beam_run", "year": state.forecast_year, "iteration": 0, "run_id": run_id}
+        {
+            "model_name": "beam_run",
+            "year": state.forecast_year,
+            "iteration": 0,
+            "run_id": run_id,
+        }
     ]
 
 
@@ -2890,7 +2928,9 @@ def test_beam_checkpoint_publication_preserves_traffic_assignment_schedule(
     state.set_run_info_path(str(archive_run_dir / "run_state.yaml"))
     scenario._beam_run_ids = {(state.forecast_year, 0): "beam-run-1"}
     published = []
-    monkeypatch.setattr(beam_stage, "verify_archive_visible_recovery_bytes", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        beam_stage, "verify_archive_visible_recovery_bytes", lambda **_kwargs: None
+    )
     monkeypatch.setattr(
         beam_stage,
         "snapshot_and_publish_beam_run_checkpoint",
@@ -2905,7 +2945,9 @@ def test_beam_checkpoint_publication_preserves_traffic_assignment_schedule(
         workspace=workspace,
         outputs=BeamRunOutputs(
             beam_output_dir=Path(workspace.get_beam_output_dir()),
-            raw_outputs={LINKSTATS: Path(workspace.get_beam_output_dir()) / "0.linkstats.csv.gz"},
+            raw_outputs={
+                LINKSTATS: Path(workspace.get_beam_output_dir()) / "0.linkstats.csv.gz"
+            },
         ),
         year=state.forecast_year,
         iteration=0,
@@ -3030,9 +3072,7 @@ def test_traffic_assignment_restart_registers_restored_beam_under_forecast_year(
 
         def get_run(self, queried_run_id):
             assert queried_run_id == run_id
-            return SimpleNamespace(
-                status="completed", year=state.year, iteration=0
-            )
+            return SimpleNamespace(status="completed", year=state.year, iteration=0)
 
         def snapshot_db(self, destination, *, checkpoint):
             assert checkpoint is True
