@@ -22,13 +22,17 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
+from pilates.workflows.boundary_audit import emit_recovery_boundary_audit
 from pilates.workflows.orchestration import (
     ManifestConfig,
     StageRunner,
     StepRef,
     run_workflow,
 )
-from pilates.workflows.outputs_base import step_output_handoff_mapping
+from pilates.workflows.outputs_base import (
+    iter_step_output_items,
+    step_output_handoff_mapping,
+)
 from pilates.workflows.steps import (
     StepOutputsHolder,
     make_activitysim_postprocess_step,
@@ -462,6 +466,16 @@ def _run_activity_demand_phase(
                 "(population_source, forecast output, current, or base), but none were available."
             )
 
+        if profile.vehicle_ownership_model_enabled:
+            emit_recovery_boundary_audit(
+                boundary="atlas_postprocess_completed",
+                successor_step="activitysim_preprocess",
+                binding=preprocess_binding,
+                state=state,
+                workspace=workspace,
+                surface=runtime_surface,
+            )
+
         stage_runner.run_step(
             stage_name="activity_demand_preprocess",
             step=StepRef(
@@ -618,6 +632,21 @@ def _run_activity_demand_phase(
             f"coupler_current={coupler_current!r}; "
             f"coupler_population={coupler_population!r}"
         )
+
+    emit_recovery_boundary_audit(
+        boundary="activitysim_run_completed",
+        successor_step="activitysim_postprocess",
+        binding=activitysim_postprocess_binding,
+        predecessor_outputs={
+            key: path
+            for key, path, _description in iter_step_output_items(
+                outputs_holder.activitysim_run
+            )
+        },
+        state=state,
+        workspace=workspace,
+        surface=runtime_surface,
+    )
 
     stage_runner.run_step(
         stage_name="activity_demand_postprocess",

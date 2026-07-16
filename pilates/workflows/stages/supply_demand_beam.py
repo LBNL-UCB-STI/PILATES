@@ -55,6 +55,7 @@ from pilates.workflows.binding import (
     build_binding_plan,
     build_key_only_binding_plan,
 )
+from pilates.workflows.boundary_audit import emit_recovery_boundary_audit
 from pilates.workflows.orchestration import StepRef, run_workflow
 from pilates.workflows.orchestration import StageRunner
 from pilates.workflows.outputs_base import step_output_handoff_mapping
@@ -1680,6 +1681,15 @@ def _run_traffic_assignment_phase(
         previous_beam_outputs=previous_beam_outputs,
         surface=surface,
     )
+    if surface.profile.activity_demand_enabled:
+        emit_recovery_boundary_audit(
+            boundary="activitysim_postprocess_completed",
+            successor_step="beam_preprocess",
+            binding=beam_preprocess_binding,
+            state=state,
+            workspace=workspace,
+            surface=surface,
+        )
     _emit_beam_preprocess_binding_diagnostic(
         binding=beam_preprocess_binding,
         state=state,

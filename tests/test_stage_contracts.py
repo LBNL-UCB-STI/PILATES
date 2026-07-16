@@ -1379,6 +1379,83 @@ def test_supply_demand_stage_contract(stage_env, tmp_path):
     assert ZARR_SKIMS not in asim_run_calls[0]["input_keys"]
 
 
+def test_supply_demand_emits_remaining_recovery_boundary_audits(
+    stage_env, tmp_path, monkeypatch
+):
+    from pilates.workflows.stages import supply_demand_activity
+    from pilates.workflows.stages import supply_demand_beam
+
+    observations = []
+
+    def _record_observation(**kwargs):
+        observations.append(
+            (
+                kwargs["boundary"],
+                kwargs["successor_step"],
+                kwargs["binding"].step_name,
+                "predecessor_outputs" in kwargs,
+                tuple(sorted(kwargs.get("predecessor_outputs", {}))),
+            )
+        )
+
+    monkeypatch.setattr(
+        supply_demand_activity,
+        "emit_recovery_boundary_audit",
+        _record_observation,
+    )
+    monkeypatch.setattr(
+        supply_demand_beam,
+        "emit_recovery_boundary_audit",
+        _record_observation,
+    )
+    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
+    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+    state = stage_env["state"]
+    state.current_major_stage = state.Stage.supply_demand_loop
+    state.current_sub_stage = state.Stage.activity_demand
+    state.current_inner_iter = 0
+
+    run_supply_demand_stage(
+        scenario=stage_env["scenario"],
+        state=state,
+        settings=stage_env["settings"],
+        workspace=stage_env["workspace"],
+        coupler=stage_env["coupler"],
+        year=state.forecast_year,
+        usim_inputs={
+            USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
+            USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
+        },
+        build_manifest_path=lambda workspace, year, iteration: (
+            tmp_path / f"boundary_manifest_{year}_{iteration}.json"
+        ),
+    )
+
+    assert observations == [
+        (
+            "atlas_postprocess_completed",
+            "activitysim_preprocess",
+            "activitysim_preprocess",
+            False,
+            (),
+        ),
+        (
+            "activitysim_run_completed",
+            "activitysim_postprocess",
+            "activitysim_postprocess",
+            True,
+            (),
+        ),
+        (
+            "activitysim_postprocess_completed",
+            "beam_preprocess",
+            "beam_preprocess",
+            False,
+            (),
+        ),
+    ]
+
+
 def test_supply_demand_skim_source_logging(stage_env, tmp_path, caplog, monkeypatch):
     """ActivitySim records whether it converts OMX or reuses Zarr skims."""
     stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
