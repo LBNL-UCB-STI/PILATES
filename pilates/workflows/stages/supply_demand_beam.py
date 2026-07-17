@@ -736,6 +736,7 @@ def _resolve_beam_postprocess_closure(
 
     outputs_by_run: dict[str, Mapping[str, Any]] = {}
     members: list[PinnedClosureMember] = []
+    destinations_seen: set[Path] = set()
     for role, source in binding.source_by_key.items():
         if source == "missing":
             continue
@@ -746,6 +747,16 @@ def _resolve_beam_postprocess_closure(
                 "ActivitySim run ID."
             )
         output_key = binding.coupler_key_by_key.get(role, role)
+        destination = _beam_postprocess_destination(
+            role=role,
+            output_key=output_key,
+            workspace=workspace,
+            year=year,
+            iteration=iteration,
+        )
+        if destination in destinations_seen:
+            continue
+        destinations_seen.add(destination)
         outputs = outputs_by_run.get(producer_run_id)
         if outputs is None:
             outputs = tracker.get_run_outputs(producer_run_id)
@@ -768,13 +779,7 @@ def _resolve_beam_postprocess_closure(
                 artifact_identity=str(artifact.hash),
                 artifact_kind=_closure_artifact_kind(artifact),
                 driver=(str(artifact.driver) if artifact.driver is not None else None),
-                destination=_beam_postprocess_destination(
-                    role=role,
-                    output_key=output_key,
-                    workspace=workspace,
-                    year=year,
-                    iteration=iteration,
-                ),
+                destination=destination,
                 required=True,
             )
         )
