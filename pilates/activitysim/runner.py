@@ -815,6 +815,14 @@ class ActivitysimRunner(GenericRunner):
             self.state.current_inner_iter,
         )
 
+        run_output_paths = [workspace.get_asim_output_dir()]
+        if skim_mode == "omx":
+            # In OMX mode ActivitySim compiles skims.zarr as a side effect of
+            # this run. It must be declared here so Consist archives the
+            # bytes; declaring it only on ActivitySimRunOutputs.zarr_skims
+            # afterward records the logical output but never queues the copy.
+            run_output_paths.append(all_skims_path)
+
         success = self.run_container(
             client=client,
             settings=settings,
@@ -825,7 +833,7 @@ class ActivitysimRunner(GenericRunner):
             working_dir=asim_workdir,
             args=additional_args,
             environment=container_environment,
-            output_paths=[workspace.get_asim_output_dir()],
+            output_paths=run_output_paths,
             lineage_mode="none",
         )
 
