@@ -316,7 +316,7 @@ def test_archive_copy_allows_zarr_directories(monkeypatch, tmp_path):
     directory = local_root / "activitysim" / "cache" / "skims.zarr"
     _write_file(directory / "0" / "values", "zarr")
 
-    ch._enqueue_archive_copy("asim_input_skims_zarr_archived", str(directory))
+    ch._enqueue_archive_copy("zarr_skims", str(directory))
     ch.flush_archive_queue(timeout=5)
     ch.stop_archive_worker(timeout=5)
 

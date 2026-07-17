@@ -11,6 +11,7 @@ import zarr
 
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
+from pilates.utils.coupler_helpers import enqueue_archive_copy
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
@@ -517,6 +518,7 @@ class ActivitysimRunner(GenericRunner):
             outputs.zarr_skims = finalize_activitysim_zarr_skims(
                 asim_runtime_zarr_path(workspace), self.state.full_settings, workspace
             )
+            enqueue_archive_copy(key=ZARR_SKIMS, path=outputs.zarr_skims)
         return outputs
 
     @staticmethod
@@ -815,14 +817,6 @@ class ActivitysimRunner(GenericRunner):
             self.state.current_inner_iter,
         )
 
-        run_output_paths = [workspace.get_asim_output_dir()]
-        if skim_mode == "omx":
-            # In OMX mode ActivitySim compiles skims.zarr as a side effect of
-            # this run. It must be declared here so Consist archives the
-            # bytes; declaring it only on ActivitySimRunOutputs.zarr_skims
-            # afterward records the logical output but never queues the copy.
-            run_output_paths.append(all_skims_path)
-
         success = self.run_container(
             client=client,
             settings=settings,
@@ -833,7 +827,7 @@ class ActivitysimRunner(GenericRunner):
             working_dir=asim_workdir,
             args=additional_args,
             environment=container_environment,
-            output_paths=run_output_paths,
+            output_paths=[workspace.get_asim_output_dir()],
             lineage_mode="none",
         )
 
