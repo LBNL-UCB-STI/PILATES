@@ -5,7 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.activitysim.runner import (
     ActivitysimRunner,
     asim_runtime_zarr_path,
@@ -88,7 +91,9 @@ def test_omx_mode_enqueues_finalized_zarr_skims_for_archiving(monkeypatch, tmp_p
     assert archived == [("zarr_skims", zarr_path)]
 
 
-def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(monkeypatch, tmp_path):
+def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
+    monkeypatch, tmp_path
+):
     workspace = _workspace(tmp_path)
     settings = _settings()
     state = SimpleNamespace(
