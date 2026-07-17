@@ -605,6 +605,102 @@ def test_run_manifested_steps_hydrates_activitysim_preprocess_cache_hit_to_fresh
     assert scenario.calls[0]["cache_options"].cache_hydration == "outputs-requested"
 
 
+def test_activitysim_preprocess_output_replayer_archives_staged_file_outputs(
+    tmp_path, monkeypatch
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    for filename in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
+        _write_file(asim_dir / filename)
+    outputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=asim_dir,
+        land_use_table=asim_dir / "land_use.csv",
+        households_table=asim_dir / "households.csv",
+        persons_table=asim_dir / "persons.csv",
+        omx_skims=asim_dir / "skims.omx",
+    )
+    archived = []
+    monkeypatch.setattr(
+        steps_activitysim,
+        "archive_copy_now",
+        lambda *, key, path, workspace: archived.append((key, Path(path), workspace)),
+        raising=False,
+    )
+    step_func = make_activitysim_preprocess_step(
+        coupler=DummyCoupler(), outputs_holder=StepOutputsHolder()
+    )
+
+    step_func.pilates_output_replayer(
+        outputs,
+        SimpleNamespace(),
+        SimpleNamespace(),
+        workspace,
+        StepOutputsHolder(),
+    )
+
+    assert archived == [
+        (ASIM_LAND_USE_IN, asim_dir / "land_use.csv", workspace),
+        (ASIM_HOUSEHOLDS_IN, asim_dir / "households.csv", workspace),
+        (ASIM_PERSONS_IN, asim_dir / "persons.csv", workspace),
+        (ASIM_OMX_SKIMS, asim_dir / "skims.omx", workspace),
+    ]
+
+
+def test_run_manifested_steps_reexecutes_unmaterializable_activitysim_cache_hit(
+    tmp_path,
+):
+    workspace = DummyWorkspace(tmp_path)
+    asim_dir = Path(workspace.get_asim_mutable_data_dir())
+    coupler = DummyCoupler()
+    holder = StepOutputsHolder()
+
+    class CacheHitThenExecuteScenario:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def run(self, **kwargs):
+            self.calls.append(kwargs)
+            cache_options = kwargs["cache_options"]
+            if len(self.calls) == 1:
+                assert cache_options.cache_mode is None
+                return SimpleNamespace(cache_hit=True)
+
+            assert cache_options.cache_mode == "overwrite"
+            assert cache_options.cache_hydration == "outputs-requested"
+            for filename in ("households.csv", "persons.csv", "land_use.csv"):
+                _write_file(asim_dir / filename)
+            holder.activitysim_preprocess = ActivitySimPreprocessOutputs(
+                mutable_data_dir=asim_dir,
+                land_use_table=asim_dir / "land_use.csv",
+                households_table=asim_dir / "households.csv",
+                persons_table=asim_dir / "persons.csv",
+            )
+            return SimpleNamespace(cache_hit=False)
+
+    scenario = CacheHitThenExecuteScenario()
+    step_func = make_activitysim_preprocess_step(coupler=coupler, outputs_holder=holder)
+    manifest_path = tmp_path / "manifest.json"
+
+    run_manifested_steps(
+        stage_name="activity_demand_preprocess",
+        steps=[StepRef(name="activitysim_preprocess", step_func=step_func)],
+        outputs_holder=holder,
+        manifest_config=ManifestConfig(path=manifest_path),
+        scenario=scenario,
+        state=SimpleNamespace(year=2018, iteration=0),
+        settings=SimpleNamespace(),
+        workspace=workspace,
+        coupler=coupler,
+        name_suffix="2018_iter0",
+        iteration=0,
+    )
+
+    assert len(scenario.calls) == 2
+    assert holder.activitysim_preprocess is not None
+    manifest = yaml.safe_load(manifest_path.read_text())
+    assert manifest["activitysim_preprocess"]["cache_hit"] is False
+
+
 def test_recover_activitysim_postprocess_outputs_preserves_hashes(
     tmp_path, monkeypatch
 ):

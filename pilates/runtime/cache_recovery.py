@@ -136,9 +136,15 @@ def run_with_cache_recovery(
     run_step: Callable[[Optional[CacheOptions]], Any],
     read_outputs: Callable[[], Optional[Any]],
     recover_outputs: Callable[[Any], Optional[Any]],
+    rerun_on_unusable_cache_hit: Optional[Callable[[], Any]] = None,
 ) -> tuple[Any, Optional[Any], dict[str, Any]]:
     """
     Run a step once and, on cache hit, attempt one explicit output recovery pass.
+
+    A cache hit is usable only when its outputs can populate the consumer's
+    typed outputs.  Callers that can safely re-execute may provide a one-shot
+    cache-bypassing rerun callback for hits whose requested output hydration is
+    incomplete.
     """
     result = run_step(None)
     metadata = {
@@ -160,5 +166,27 @@ def run_with_cache_recovery(
     if outputs is None and getattr(result, "cache_hit", False):
         metadata["recovery_attempts"] += 1
         outputs = recover_outputs(result)
+        if outputs is None and rerun_on_unusable_cache_hit is not None:
+            metadata["rejected_cache_hit"] = True
+            metadata["rerun_after_rejected_cache_hit"] = True
+            logger.warning(
+                "[%s] Rejecting cache hit for %s because requested outputs "
+                "could not be materialized; re-executing with cache bypassed.",
+                stage_name,
+                step_name,
+            )
+            result = rerun_on_unusable_cache_hit()
+            outputs = read_outputs()
+            if not getattr(result, "cache_hit", False):
+                cache_miss_explanation = log_cache_miss_explanation(
+                    logger=logger,
+                    result=result,
+                    info_message="[%s] Cache miss for %s. reason=%s candidate_run_id=%s",
+                    info_args=(stage_name, step_name),
+                    debug_message="[%s] Cache miss details for %s: %s",
+                    debug_args=(stage_name, step_name),
+                )
+                if cache_miss_explanation is not None:
+                    metadata["rerun_cache_miss_explanation"] = cache_miss_explanation
     metadata["final_cache_hit"] = bool(getattr(result, "cache_hit", False))
     return result, outputs, metadata

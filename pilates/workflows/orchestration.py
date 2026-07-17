@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -1329,6 +1329,26 @@ def _run_workflow_with_recovery_store(
                 audit_meta=recovery_meta,
             )
 
+        def _rerun_after_unusable_cache_hit() -> Any:
+            configured_cache_options = run_kwargs.get("cache_options")
+            if configured_cache_options is None:
+                cache_options = CacheOptions(cache_mode="overwrite")
+            else:
+                cache_options = replace(
+                    configured_cache_options, cache_mode="overwrite"
+                )
+            return _run_step(cache_options)
+
+        configured_cache_options = run_kwargs.get("cache_options")
+        configured_cache_mode = (
+            None
+            if configured_cache_options is None
+            else configured_cache_options.cache_mode
+        )
+        can_rerun_after_unusable_cache_hit = expects_outputs and (
+            configured_cache_mode in (None, "reuse")
+        )
+
         use_output_recovery = expects_outputs or not uses_persisted_entries
         if use_output_recovery:
             result, outputs, cache_meta = run_with_cache_recovery(
@@ -1337,6 +1357,11 @@ def _run_workflow_with_recovery_store(
                 run_step=_run_step,
                 read_outputs=lambda: outputs_holder.get_attribute(spec.name),
                 recover_outputs=_recover_outputs,
+                rerun_on_unusable_cache_hit=(
+                    _rerun_after_unusable_cache_hit
+                    if can_rerun_after_unusable_cache_hit
+                    else None
+                ),
             )
             recovery_meta.update(cache_meta)
             if expects_outputs and outputs is None and uses_persisted_entries:

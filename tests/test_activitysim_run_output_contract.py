@@ -13,7 +13,13 @@ from pilates.activitysim.outputs import ASIM_OUTPUT_KEY_MAP
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.runtime.scenario_runtime import SchemaCoupler
-from pilates.workflows.artifact_keys import ZARR_SKIMS
+from pilates.workflows.artifact_keys import (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ASIM_PERSONS_IN,
+    ZARR_SKIMS,
+)
 from pilates.workflows.orchestration import StepRef
 from pilates.workflows.orchestration import _build_step_run_kwargs
 from pilates.workflows.outputs_base import ValidationContext
@@ -246,6 +252,40 @@ def test_activitysim_preprocess_and_postprocess_output_paths_leave_h5_to_manual_
     )
     assert isinstance(postprocess_paths["households_asim_out"], OutputArtifactSpec)
     assert "usim_datastore_h5" not in postprocess_paths
+
+
+def test_activitysim_preprocess_output_paths_declare_file_outputs_not_directories(
+    monkeypatch,
+):
+    expected_outputs = {
+        "asim_mutable_data_dir": "/tmp/asim/data",
+        "asim_mutable_configs_dir": "/tmp/asim/configs",
+        ASIM_LAND_USE_IN: "/tmp/asim/data/land_use.csv",
+        ASIM_HOUSEHOLDS_IN: "/tmp/asim/data/households.csv",
+        ASIM_PERSONS_IN: "/tmp/asim/data/persons.csv",
+        ASIM_OMX_SKIMS: "/tmp/asim/data/skims.omx",
+    }
+    monkeypatch.setattr(
+        activitysim_steps.ActivitysimPreprocessor,
+        "expected_outputs",
+        staticmethod(lambda *_args: expected_outputs),
+    )
+
+    output_paths = activitysim_steps.activitysim_preprocess_output_paths(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+    )
+
+    assert tuple(output_paths) == (
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_OMX_SKIMS,
+    )
+    assert all(
+        isinstance(output, OutputArtifactSpec) for output in output_paths.values()
+    )
 
 
 def test_activitysim_postprocess_outputs_require_processed_asim_tables_but_not_usim_next():

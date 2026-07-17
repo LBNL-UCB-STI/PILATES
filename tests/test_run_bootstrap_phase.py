@@ -598,6 +598,41 @@ def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
     assert "input_keys_added" in caplog.text
 
 
+def test_run_with_cache_recovery_reexecutes_unusable_cache_hit() -> None:
+    outputs = None
+    calls = []
+
+    def _run_step(cache_options):
+        nonlocal outputs
+        calls.append(cache_options)
+        if cache_options is None:
+            return SimpleNamespace(cache_hit=True)
+
+        assert cache_options.cache_mode == "overwrite"
+        outputs = object()
+        return SimpleNamespace(cache_hit=False)
+
+    result, recovered_outputs, metadata = cache_recovery_module.run_with_cache_recovery(
+        stage_name="activity_demand_preprocess",
+        step_name="activitysim_preprocess",
+        run_step=_run_step,
+        read_outputs=lambda: outputs,
+        recover_outputs=lambda _result: None,
+        rerun_on_unusable_cache_hit=lambda: _run_step(
+            cache_recovery_module.CacheOptions(cache_mode="overwrite")
+        ),
+    )
+
+    assert result.cache_hit is False
+    assert recovered_outputs is outputs
+    assert calls[0] is None
+    assert calls[1].cache_mode == "overwrite"
+    assert metadata["initial_cache_hit"] is True
+    assert metadata["rejected_cache_hit"] is True
+    assert metadata["rerun_after_rejected_cache_hit"] is True
+    assert metadata["final_cache_hit"] is False
+
+
 def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_path):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})

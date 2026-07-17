@@ -24,6 +24,7 @@ from pilates.activitysim.outputs import has_asim_run_marker, normalize_asim_outp
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.utils.coupler_helpers import (
+    archive_copy_now,
     artifact_to_existing_path,
     enqueue_archive_copy,
     resolve_existing_path,
@@ -137,18 +138,22 @@ def activitysim_preprocess_output_paths(
     state: WorkflowState,
     workspace: Workspace,
 ) -> Dict[str, Any]:
-    """Declare staged ActivitySim files without duplicating callback logging."""
+    """Declare cache-recoverable file outputs from ActivitySim preprocessing."""
     expected_outputs = ActivitysimPreprocessor.expected_outputs(
         settings, state, workspace
     )
     profiled_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
     return {
-        key: (
-            OutputArtifactSpec(path=path, profile_file_schema=True)
-            if key in profiled_keys and path is not None
-            else path
+        key: OutputArtifactSpec(
+            path=expected_outputs[key], profile_file_schema=key in profiled_keys
         )
-        for key, path in expected_outputs.items()
+        for key in (
+            ASIM_LAND_USE_IN,
+            ASIM_HOUSEHOLDS_IN,
+            ASIM_PERSONS_IN,
+            ASIM_OMX_SKIMS,
+        )
+        if expected_outputs.get(key) is not None
     }
 
 
@@ -1419,6 +1424,7 @@ def make_activitysim_preprocess_step(
             Outputs holder (unused for this helper).
         """
         for key, path, _description in outputs._iter_record_items():
+            archive_copy_now(key=key, path=path, workspace=workspace)
             set_coupler_from_artifact(coupler, key, None, fallback=str(path))
 
     step_func = build_standard_step(
