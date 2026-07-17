@@ -736,7 +736,7 @@ def _resolve_beam_postprocess_closure(
 
     outputs_by_run: dict[str, Mapping[str, Any]] = {}
     members: list[PinnedClosureMember] = []
-    destinations_seen: set[Path] = set()
+    destinations_seen: dict[Path, tuple[str, str]] = {}
     for role, source in binding.source_by_key.items():
         if source == "missing":
             continue
@@ -754,9 +754,17 @@ def _resolve_beam_postprocess_closure(
             year=year,
             iteration=iteration,
         )
-        if destination in destinations_seen:
-            continue
-        destinations_seen.add(destination)
+        producer_output = (producer_run_id, output_key)
+        prior_producer_output = destinations_seen.get(destination)
+        if prior_producer_output is not None:
+            if prior_producer_output == producer_output:
+                continue
+            raise RuntimeError(
+                "BEAM postprocess closure has conflicting artifacts for "
+                f"destination {destination}: {prior_producer_output!r} and "
+                f"{producer_output!r}."
+            )
+        destinations_seen[destination] = producer_output
         outputs = outputs_by_run.get(producer_run_id)
         if outputs is None:
             outputs = tracker.get_run_outputs(producer_run_id)

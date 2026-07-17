@@ -2977,6 +2977,45 @@ def test_beam_checkpoint_rebind_rejects_wrong_logical_destination(stage_env, tmp
         )
 
 
+def test_beam_checkpoint_rejects_distinct_outputs_with_one_destination(
+    stage_env, monkeypatch, tmp_path
+):
+    from pilates.workflows.stages import supply_demand_beam as beam_stage
+
+    destination = tmp_path / "beam" / "0.events.parquet"
+    monkeypatch.setattr(
+        beam_stage, "_beam_postprocess_destination", lambda **_kwargs: destination
+    )
+    tracker = SimpleNamespace(
+        get_run_outputs=lambda _run_id: {
+            "first_output": SimpleNamespace(
+                key="first_output", hash="first-hash", driver="parquet", meta={}
+            ),
+            "second_output": SimpleNamespace(
+                key="second_output", hash="second-hash", driver="parquet", meta={}
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="conflicting artifacts"):
+        beam_stage._resolve_beam_postprocess_closure(
+            scenario=SimpleNamespace(),
+            tracker=tracker,
+            binding=BindingPlan(
+                source_by_key={"first_role": "coupler", "second_role": "coupler"},
+                coupler_key_by_key={
+                    "first_role": "first_output",
+                    "second_role": "second_output",
+                },
+            ),
+            workspace=stage_env["workspace"],
+            year=stage_env["state"].forecast_year,
+            activitysim_year=stage_env["state"].forecast_year,
+            iteration=0,
+            beam_run_id="beam-run",
+        )
+
+
 def test_supply_demand_restart_dispatches_committed_closure_before_activitysim_recovery(
     stage_env, monkeypatch, tmp_path
 ):
