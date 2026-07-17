@@ -4932,6 +4932,7 @@ def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
         "raw_od_skims_2018_0",
         "raw_od_skims_2018_0_sub0",
         "raw_od_skims_zarr_2018_0",
+        "raw_od_skims_zarr_2018_0_sub0",
         "events_parquet_2018_0",
         "events_parquet_2018_0_sub0",
     ]
@@ -4945,6 +4946,9 @@ def test_build_beam_postprocess_input_keys_filters_to_used_artifacts():
     assert "raw_od_skims_2018_0" in selected
     assert "raw_od_skims_zarr_2018_0" in selected
     assert "events_parquet_2018_0" in selected
+    assert "raw_od_skims_2018_0_sub0" not in selected
+    assert "raw_od_skims_zarr_2018_0_sub0" not in selected
+    assert "events_parquet_2018_0_sub0" not in selected
     assert ZARR_SKIMS in selected
     assert "beam_output_counts_xml_2018_0" not in selected
     assert "linkstats_parquet_2018_0" not in selected

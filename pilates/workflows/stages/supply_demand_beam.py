@@ -443,6 +443,14 @@ def _build_beam_postprocess_input_keys(
         selected.append(ZARR_SKIMS)
 
     deduped = list(dict.fromkeys(selected))
+    for prefix in ("events_parquet", "raw_od_skims", "raw_od_skims_zarr"):
+        final_key = f"{prefix}_{year}_{iteration}"
+        if final_key in deduped:
+            deduped = [
+                key
+                for key in deduped
+                if not key.startswith(f"{final_key}_sub")
+            ]
     return deduped or None
 
 
