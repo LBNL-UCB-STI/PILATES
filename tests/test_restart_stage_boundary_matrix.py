@@ -16,6 +16,7 @@ points we can cover cheaply with lightweight fakes:
    warmstart artifacts instead of silently dropping them.
 """
 
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -298,6 +299,10 @@ def _write_file(path: Path, content: str = "x") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def _content_identity(path: str | Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
 def _build_settings(tmp_path: Path):
@@ -933,9 +938,17 @@ def test_restart_traffic_assignment_boundary_restores_activitysim_outputs(
         "Expected BEAM preprocess to start from restored ActivitySim outputs."
     )
     beam_preprocess_inputs = beam_preprocess_calls[0]["inputs"]
-    assert beam_preprocess_inputs["plans_beam_in"] == str(restored_plans)
-    assert beam_preprocess_inputs["households_beam_in"] == str(restored_households)
-    assert beam_preprocess_inputs["persons_beam_in"] == str(restored_persons)
+    assert {
+        "plans_beam_in": _content_identity(beam_preprocess_inputs["plans_beam_in"]),
+        "households_beam_in": _content_identity(
+            beam_preprocess_inputs["households_beam_in"]
+        ),
+        "persons_beam_in": _content_identity(beam_preprocess_inputs["persons_beam_in"]),
+    } == {
+        "plans_beam_in": _content_identity(restored_plans),
+        "households_beam_in": _content_identity(restored_households),
+        "persons_beam_in": _content_identity(restored_persons),
+    }
 
 
 def test_restart_traffic_assignment_boundary_restores_activitysim_outputs_from_manifest(

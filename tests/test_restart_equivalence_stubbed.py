@@ -16,6 +16,7 @@ import pandas as pd
 import pytest
 
 from consist import Tracker
+from consist.core.directory_artifacts import build_directory_manifest
 
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import launcher as launcher_runtime
@@ -30,16 +31,26 @@ from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
 from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
     BEAM_PLANS_OUT,
+    BEAM_PLANS_IN,
+    BEAM_PERSONS_IN,
     LINKSTATS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
 from pilates.workflows import orchestration as workflow_orchestration
+from pilates.workflows.beam_checkpoint import (
+    beam_checkpoint_record_present,
+    beam_postprocess_is_in_progress,
+    read_beam_run_checkpoint,
+)
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from pilates.workflows.stages.supply_demand import (
     run_supply_demand_stage as _run_supply_demand_stage,
 )
+from pilates.workflows.stages import supply_demand_beam as beam_stage
+from pilates.workflows.stages.supply_demand_beam import _FAIL_AFTER_BEAM_RUN_ENV
 from pilates.workflows.stages.supply_demand_resume import (
     seed_supply_demand_parent_run_ids_for_resume,
 )
@@ -47,6 +58,7 @@ from pilates.workflows.stages.vehicle_ownership import (
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
 from pilates.workflows.steps import StepOutputsHolder
+from pilates.utils.coupler_helpers import log_and_set_output
 from tests.workflow_contract_harness import (
     DummyPostprocessor,
     DummyPreprocessor,
@@ -135,6 +147,14 @@ _RESTART_HANDOFF_KEYS = (
     "zarr_skims",
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
+)
+
+_FIXTURE_TERMINAL_OUTPUT_KEYS = (
+    BEAM_PLANS_OUT,
+    BEAM_HOUSEHOLDS_IN,
+    LINKSTATS,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
 )
 
 
@@ -254,7 +274,7 @@ def _build_workspace_inputs(
     _write_file(
         Path(workspace.full_path) / "shared_cache" / "numba" / "compile-cache.bin"
     )
-    _write_file(asim_out_dir / "cache" / "skims.zarr")
+    _write_zarr_directory(asim_out_dir / "cache" / "skims.zarr")
     state.data_initialized = True
     state.write_state()
 
@@ -608,7 +628,7 @@ def _install_model_factory_stubs(monkeypatch, settings: Any) -> None:
                     / settings.run.region
                     / get_beam_omx_skims_name(settings)
                 )
-                _write_file(zarr)
+                _write_zarr_directory(zarr)
                 _write_file(final_skims)
                 return BeamPostprocessOutputs(
                     zarr_skims=zarr, final_skims_omx=final_skims
@@ -683,6 +703,7 @@ def _make_runtime(
     *,
     name: str,
     disabled_manifest_stages: tuple[str, ...] = (),
+    end_year: Optional[int] = None,
 ) -> _StubRuntime:
     root = tmp_path / name
     settings = _build_test_settings(
@@ -690,6 +711,10 @@ def _make_runtime(
         name,
         disabled_manifest_stages=disabled_manifest_stages,
     )
+    if end_year is not None:
+        settings.run.end_year = end_year
+        settings.run.travel_model_freq = 1
+        settings.run.supply_demand_iters = 1
     workspace = Workspace(settings, output_path=str(root), folder_name="run")
     state = WorkflowState.from_settings(settings)
     _build_workspace_inputs(settings, workspace, state)
@@ -725,6 +750,45 @@ def _query_facet(runtime: _StubRuntime) -> dict[str, Any]:
 def _debug(message: str) -> None:
     if os.environ.get("RUN_SLOW_RESTART_EQUIVALENCE") == "1":
         print(f"[restart-equivalence] {message}", flush=True)
+
+
+def _publish_missing_fixture_terminal_outputs(
+    *,
+    scenario: ScenarioParentLinkProxy,
+    coupler: Any,
+    workspace: Workspace,
+    state: WorkflowState,
+) -> None:
+    """Publish only terminal declarations omitted by a resumed fake BEAM run."""
+
+    missing_keys = tuple(
+        key for key in _FIXTURE_TERMINAL_OUTPUT_KEYS if coupler.get(key) is None
+    )
+    if not missing_keys:
+        return
+
+    terminal_dir = Path(workspace.get_beam_output_dir()) / "fixture_terminal_outputs"
+    terminal_paths = {key: terminal_dir / key for key in missing_keys}
+
+    def _publish() -> None:
+        for key, path in terminal_paths.items():
+            if coupler.get(key) is not None:
+                continue
+            _write_file(path, f"fixture terminal output for {key}\n")
+            log_and_set_output(
+                key=key,
+                path=str(path),
+                description=f"Restart-equivalence fixture terminal output ({key})",
+                coupler=coupler,
+            )
+
+    scenario.run(
+        fn=_publish,
+        name="fixture_terminal_outputs",
+        model="fixture_terminal_outputs",
+        year=state.current_year,
+        iteration=state.current_inner_iter,
+    )
 
 
 def _stage_runner(
@@ -880,6 +944,12 @@ def _stage_runner(
                             context=context,
                         )
                     _maybe_interrupt("after_year_complete", runtime.state)
+                _publish_missing_fixture_terminal_outputs(
+                    scenario=tagged,
+                    coupler=coupler,
+                    workspace=runtime.workspace,
+                    state=runtime.state,
+                )
                 _debug(
                     f"stage_runner:complete name={runtime.settings.run.output_run_name}"
                 )
@@ -924,6 +994,64 @@ def _resume_runtime(
 
 def _hash_file(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _write_zarr_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    _write_file(path / ".zgroup", "{}\n")
+
+
+def _content_identity(path: Path) -> str:
+    if path.is_file():
+        return _hash_file(path)
+    if path.is_dir():
+        return build_directory_manifest(path)["tree_hash"]
+    raise AssertionError(f"Consist input has no consumable bytes: {path}")
+
+
+def _normalized_step_role_content_identities(
+    tracker: Tracker,
+) -> dict[str, dict[str, str]]:
+    latest_by_step: dict[str, tuple[str, dict[str, str]]] = {}
+    for run in tracker.run_set(label="equivalence", limit=200000):
+        if str(getattr(run, "status", "")).lower() != "completed":
+            continue
+        step_name = str(getattr(run, "model_name", ""))
+        if not step_name:
+            continue
+        artifacts = tracker.get_artifacts_for_run(run.id)
+        role_identities = {}
+        for artifact in sorted(
+            artifacts.inputs.values(), key=lambda artifact: artifact.key
+        ):
+            content_identity = _content_identity(artifact.as_path(tracker=tracker))
+            assert content_identity == artifact.hash, (
+                f"{step_name}.{artifact.key} bytes do not match "
+                "Consist-selected artifact identity"
+            )
+            role_identities[artifact.key] = content_identity
+        if not role_identities:
+            continue
+        created_at = str(getattr(run, "created_at", ""))
+        previous = latest_by_step.get(step_name)
+        if previous is None or created_at >= previous[0]:
+            latest_by_step[step_name] = (created_at, role_identities)
+    return {
+        step_name: role_identities
+        for step_name, (_, role_identities) in sorted(latest_by_step.items())
+    }
+
+
+def _completed_step_runs(tracker: Tracker, step_name: str) -> list[Any]:
+    return sorted(
+        (
+            run
+            for run in tracker.run_set(label="equivalence", limit=200000)
+            if str(getattr(run, "model_name", "")) == step_name
+            and str(getattr(run, "status", "")).lower() == "completed"
+        ),
+        key=lambda run: str(getattr(run, "created_at", "")),
+    )
 
 
 def _hash_dataframe(frame: pd.DataFrame) -> str:
@@ -1283,6 +1411,9 @@ def _snapshot(
         "mode": mode,
         "elapsed_seconds": elapsed_seconds,
         "artifact_digests": _digest_bundle(runtime.workspace),
+        "semantic_role_content_identities": _normalized_step_role_content_identities(
+            runtime.tracker
+        ),
         "manifest_snapshot": _manifest_snapshot(runtime.workspace, state=runtime.state),
         "supply_demand_manifest_snapshot": _supply_demand_manifest_snapshot(
             runtime.workspace,
@@ -1345,6 +1476,14 @@ def _assert_equivalent(baseline: dict[str, Any], resumed: dict[str, Any]) -> Non
             baseline["artifact_digests"],
             resumed["artifact_digests"],
         )
+    )
+    assert (
+        resumed["semantic_role_content_identities"]
+        == baseline["semantic_role_content_identities"]
+    ), _describe_difference(
+        "semantic_role_content_identities",
+        baseline["semantic_role_content_identities"],
+        resumed["semantic_role_content_identities"],
     )
     assert resumed["manifest_snapshot"] == baseline["manifest_snapshot"], (
         _describe_difference(
@@ -1527,3 +1666,119 @@ def test_stubbed_restart_resume_matches_uninterrupted_baseline(
     assert resumed["mode"] == "replay"
     assert resumed["elapsed_seconds"] is not None
     _assert_equivalent(baseline_snapshot, resumed)
+
+
+def test_stubbed_canary_resumes_committed_beam_postprocess_from_run_state(
+    tmp_path,
+    monkeypatch,
+    disabled_manifest_stages,
+):
+    archive_runtime = _make_runtime(
+        tmp_path,
+        monkeypatch,
+        name="beam_run_completed_canary_archive",
+        disabled_manifest_stages=disabled_manifest_stages,
+        end_year=2017,
+    )
+    archive_state_path = Path(archive_runtime.workspace.full_path) / "run_state.yaml"
+    archive_runtime.state.file_loc = str(archive_state_path)
+    archive_runtime.state.set_run_info_path(str(archive_state_path))
+    monkeypatch.setenv(_FAIL_AFTER_BEAM_RUN_ENV, "1")
+
+    with pytest.raises(RuntimeError, match="Injected failure after completed beam_run"):
+        _stage_runner(archive_runtime)
+
+    archive_run_dir = Path(archive_runtime.workspace.full_path)
+    assert beam_checkpoint_record_present(archive_run_dir)
+    assert not beam_postprocess_is_in_progress(archive_run_dir)
+    checkpoint = read_beam_run_checkpoint(archive_run_dir)
+    assert checkpoint is not None
+    expected_postprocess_input_identities = {
+        member.role: member.artifact_identity for member in checkpoint.closure_members
+    }
+    assert expected_postprocess_input_identities
+    assert set(_FIXTURE_TERMINAL_OUTPUT_KEYS).isdisjoint(
+        {
+            key
+            for member in checkpoint.closure_members
+            for key in (member.role, member.output_key)
+        }
+    )
+
+    resumed_runtime = _make_runtime(
+        tmp_path,
+        monkeypatch,
+        name="beam_run_completed_canary_resume",
+        disabled_manifest_stages=disabled_manifest_stages,
+        end_year=2017,
+    )
+    _resume_runtime(archive_runtime, resumed_runtime)
+    monkeypatch.delenv(_FAIL_AFTER_BEAM_RUN_ENV)
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", resumed_runtime.workspace.full_path)
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", archive_runtime.workspace.full_path)
+    shutil.rmtree(
+        Path(resumed_runtime.workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    )
+    Path(resumed_runtime.workspace.get_beam_output_dir()).mkdir(
+        parents=True, exist_ok=True
+    )
+    beam_run_ids_before_resume = {
+        run.id for run in _completed_step_runs(resumed_runtime.tracker, "beam_run")
+    }
+
+    original_try_resume = beam_stage._try_resume_committed_beam_postprocess
+    resume_helper_calls = 0
+
+    def _wrapped_try_resume_committed_beam_postprocess(*args, **kwargs):
+        nonlocal resume_helper_calls
+        result = original_try_resume(*args, **kwargs)
+        resume_helper_calls += 1
+        assert beam_postprocess_is_in_progress(archive_run_dir)
+        return result
+
+    monkeypatch.setattr(
+        beam_stage,
+        "_try_resume_committed_beam_postprocess",
+        _wrapped_try_resume_committed_beam_postprocess,
+    )
+    _stage_runner(resumed_runtime)
+
+    assert resume_helper_calls == 1
+    assert {
+        run.id for run in _completed_step_runs(resumed_runtime.tracker, "beam_run")
+    } == beam_run_ids_before_resume
+    resumed_postprocess_runs = _completed_step_runs(
+        resumed_runtime.tracker, "beam_postprocess"
+    )
+    assert resumed_postprocess_runs
+    resumed_postprocess_run = resumed_postprocess_runs[-1]
+    resumed_postprocess_artifacts = resumed_runtime.tracker.get_artifacts_for_run(
+        resumed_postprocess_run.id
+    ).inputs
+    resumed_postprocess_inputs = {
+        role: _content_identity(artifact.as_path(tracker=resumed_runtime.tracker))
+        for role, artifact in resumed_postprocess_artifacts.items()
+    }
+    closure_roles = set(expected_postprocess_input_identities)
+    assert "beam_output_dir" not in closure_roles
+    assert set(resumed_postprocess_inputs) == closure_roles | {"beam_output_dir"}
+    assert {
+        role: resumed_postprocess_inputs[role] for role in closure_roles
+    } == expected_postprocess_input_identities
+    assert all(
+        expected_postprocess_input_identities[role]
+        == resumed_postprocess_artifacts[role].hash
+        for role in closure_roles
+    )
+    assert (
+        resumed_postprocess_artifacts["beam_output_dir"]
+        .as_path(tracker=resumed_runtime.tracker)
+        .resolve()
+        == Path(resumed_runtime.workspace.get_beam_output_dir()).resolve()
+    )
+    assert (
+        resumed_runtime.tracker.get_run(
+            resumed_runtime.settings.run.output_run_name
+        ).status
+        == "completed"
+    )
