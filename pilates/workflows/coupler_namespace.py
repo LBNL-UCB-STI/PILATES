@@ -332,6 +332,14 @@ def resolve_coupler_value(
     )
 
 
+def coupler_storage_keys(coupler: Optional[CouplerProtocol]) -> tuple[str, ...]:
+    """Snapshot the coupler's raw storage keys without applying role semantics."""
+
+    if coupler is None:
+        return ()
+    return tuple(coupler.keys())
+
+
 def namespaced_view_target(key: str) -> Optional[Tuple[str, str]]:
     """
     Return ``(namespace, local_key)`` for publishing through a namespace view.

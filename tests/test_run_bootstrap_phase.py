@@ -2371,7 +2371,6 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
 
 
 def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypatch):
-
     class SnapshotStub:
         def final_snapshot(self):
             return True

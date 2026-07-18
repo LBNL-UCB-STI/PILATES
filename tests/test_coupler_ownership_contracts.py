@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
+from pilates.workflows.coupler_namespace import coupler_storage_keys
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PILATES_ROOT = REPO_ROOT / "pilates"
@@ -41,6 +43,7 @@ COUPLER_METHODS = {
 ALLOWED_DIRECT_CALL_FILES = {
     Path("pilates/runtime/bootstrap.py"),
     Path("pilates/workflows/input_resolution.py"),
+    Path("pilates/workflows/coupler_namespace.py"),
     Path("pilates/utils/coupler_helpers.py"),
     Path("pilates/workflows/orchestration.py"),
 }
@@ -49,6 +52,7 @@ ALLOWED_DIRECT_CALL_FILES = {
 ALLOWED_DIRECT_CALLS_BY_FILE = {
     Path("pilates/runtime/bootstrap.py"): {"set"},
     Path("pilates/workflows/input_resolution.py"): {"get", "view"},
+    Path("pilates/workflows/coupler_namespace.py"): {"get", "keys", "view"},
     Path("pilates/utils/coupler_helpers.py"): {"set", "set_from_artifact", "view"},
     Path("pilates/workflows/orchestration.py"): {"keys"},
 }
@@ -169,4 +173,20 @@ def test_step_modules_do_not_call_coupler_methods_directly():
     assert not violations, (
         "Step modules must not call coupler methods directly.\n"
         + _format_calls(violations)
+    )
+
+
+def test_coupler_storage_keys_preserves_raw_storage_order() -> None:
+    class Coupler:
+        def keys(self) -> tuple[str, ...]:
+            return (
+                "beam/events_parquet_2030_1",
+                "events_parquet_2030_1",
+                "raw_od_skims_2030_1",
+            )
+
+    assert coupler_storage_keys(Coupler()) == (
+        "beam/events_parquet_2030_1",
+        "events_parquet_2030_1",
+        "raw_od_skims_2030_1",
     )

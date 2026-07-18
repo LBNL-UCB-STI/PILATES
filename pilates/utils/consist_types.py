@@ -4,6 +4,7 @@ from typing import (
     Any,
     ContextManager,
     Dict,
+    Iterable,
     Mapping,
     Optional,
     Protocol,
@@ -96,6 +97,8 @@ class CouplerProtocol(Protocol):
     def set(self, key: str, value: Any) -> None: ...
 
     def get(self, key: str, default: Optional[Any] = None) -> Any: ...
+
+    def keys(self) -> Iterable[str]: ...
 
     def update(self, mapping: Mapping[str, Any]) -> None: ...
 

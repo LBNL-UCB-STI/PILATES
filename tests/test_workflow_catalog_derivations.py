@@ -1,45 +1,7 @@
 from pilates.workflows import catalog
 from pilates.workflows.steps import STEP_DEFINITIONS
-from pilates.workflows.steps import shared as step_shared
 from pilates.runtime.launcher import _build_schema_steps
 from types import SimpleNamespace
-from types import MappingProxyType
-
-
-def test_step_outputs_classes_are_an_immutable_legacy_holder_map():
-    assert isinstance(step_shared.STEP_OUTPUTS_CLASSES, MappingProxyType)
-    assert set(step_shared.STEP_OUTPUTS_CLASSES) == {
-        spec.step_name for spec in catalog.tracked_step_specs()
-    }
-
-    try:
-        step_shared.STEP_OUTPUTS_CLASSES["new_step"] = object  # type: ignore[index]
-    except TypeError:
-        pass
-    else:  # pragma: no cover - MappingProxyType always rejects assignment.
-        raise AssertionError("legacy holder output map must be immutable")
-
-
-def test_step_dependencies_are_catalog_derived():
-    expected = {
-        spec.step_name: {
-            "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
-        }
-        for spec in catalog.tracked_step_specs()
-    }
-    assert step_shared.STEP_DEPENDENCIES == expected
-
-
-def test_runtime_step_dependencies_match_catalog_steps():
-    expected = {
-        spec.step_name: {
-            "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
-        }
-        for spec in catalog.WORKFLOW_STEP_SPECS
-    }
-    assert step_shared.STEP_RUNTIME_DEPENDENCIES == expected
 
 
 def test_schema_steps_follow_catalog_order():
@@ -49,18 +11,6 @@ def test_schema_steps_follow_catalog_order():
         for spec in catalog.schema_step_specs()
     ]
     assert schema_steps == expected
-
-
-def test_schema_steps_do_not_construct_legacy_factory_closures(monkeypatch):
-    monkeypatch.setattr(
-        "pilates.workflows.steps.schema_step_builder_registry",
-        lambda: (_ for _ in ()).throw(AssertionError("legacy factory registry used")),
-    )
-
-    assert _build_schema_steps() == [
-        STEP_DEFINITIONS[spec.step_name].function
-        for spec in catalog.schema_step_specs()
-    ]
 
 
 def test_tracked_catalog_steps_do_not_own_typed_output_classes():

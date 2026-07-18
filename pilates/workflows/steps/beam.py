@@ -30,6 +30,10 @@ from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
 )
+from pilates.workflows.coupler_namespace import (
+    coupler_storage_keys,
+    resolve_coupler_value,
+)
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
@@ -589,7 +593,7 @@ def _resolved_beam_inputs(
     for key in (*required_roles, *optional_roles):
         if key in inputs:
             continue
-        value = coupler.get(key)
+        value = resolve_coupler_value(coupler, key).value
         if value is None:
             source_by_role[key] = "missing"
             continue
@@ -725,9 +729,9 @@ def _resolve_beam_run_inputs(
 
 
 def _postprocess_dynamic_keys(
-    *, coupler: Any, year: int, iteration: int
+    *, storage_keys: Iterable[str], year: int, iteration: int
 ) -> tuple[str, ...]:
-    keys = tuple(coupler.keys())
+    keys = tuple(storage_keys)
     selected = [
         key
         for key in keys
@@ -871,8 +875,9 @@ def _resolve_beam_postprocess_inputs(
     if year is None:
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")
     iteration = state.iteration
+    storage_keys = coupler_storage_keys(coupler)
     dynamic_keys = _postprocess_dynamic_keys(
-        coupler=coupler,
+        storage_keys=storage_keys,
         year=int(year),
         iteration=int(iteration),
     )
@@ -882,7 +887,10 @@ def _resolve_beam_postprocess_inputs(
         )
         for key in dynamic_keys
     }
-    if settings.activitysim is not None and coupler.get(ZARR_SKIMS) is not None:
+    if (
+        settings.activitysim is not None
+        and resolve_coupler_value(coupler, ZARR_SKIMS).value is not None
+    ):
         destinations[ZARR_SKIMS] = (
             Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
         )

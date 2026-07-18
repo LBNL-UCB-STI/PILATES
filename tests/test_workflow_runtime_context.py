@@ -7,6 +7,7 @@ from pilates.runtime.context import (
     WorkflowRuntimeContext,
     ensure_workflow_runtime_context,
 )
+from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.postprocessing import run_postprocessing_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.supply_demand_activity import (
@@ -126,26 +127,18 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
         lambda **kwargs: (
             seen.setdefault("beam_context", kwargs["context"]),
-            TrafficAssignmentPhaseOutputs(previous_beam_outputs={"linkstats": "ok"}),
+            TrafficAssignmentPhaseOutputs(),
         )[1],
     )
     monkeypatch.setattr(
         "pilates.workflows.stages.supply_demand.flush_archive_queue",
         lambda *args, **kwargs: None,
     )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand.archive_copy_now",
-        lambda *args, **kwargs: None,
-    )
-
     run_supply_demand_stage(
         scenario=SimpleNamespace(),
         coupler=SimpleNamespace(),
         year=2018,
-        usim_inputs={},
-        build_manifest_path=lambda _workspace, _year, iteration: (
-            tmp_path / f"iter-{iteration}.yaml"
-        ),
+        handoff=LandUseToSupplyDemandHandoff(),
         context=context,
     )
 
@@ -169,12 +162,11 @@ def test_run_postprocessing_stage_uses_runtime_context(
     captured = {}
 
     monkeypatch.setattr(
-        "pilates.workflows.stages.postprocessing.make_postprocessing_step",
-        lambda: "postprocess-step",
-    )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.postprocessing.run_workflow",
-        lambda **kwargs: captured.update(kwargs),
+        "pilates.workflows.stages.postprocessing.execute_step",
+        lambda **kwargs: (
+            captured.update(kwargs),
+            (SimpleNamespace(), SimpleNamespace()),
+        )[1],
     )
     monkeypatch.setattr(
         "pilates.workflows.stages.postprocessing.flush_archive_queue",

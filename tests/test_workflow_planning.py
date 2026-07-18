@@ -55,11 +55,15 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
         and edge.kind == "consumes"
         for edge in plan.edges
     )
-    assert all(
-        artifact.artifact_key != "zarr_skims"
+    produced_zarr = [
+        artifact
         for artifact in plan.artifacts
         if artifact.producer_step_run_id == activitysim_run.id
-    )
+        and artifact.artifact_key == "zarr_skims"
+    ]
+    assert [artifact.instance_key for artifact in produced_zarr] == [
+        "activitysim_run:y2018:i0:zarr_skims"
+    ]
 
     json_payload = render_plan_json(plan)
     assert '"step_name": "activitysim_run"' in json_payload
