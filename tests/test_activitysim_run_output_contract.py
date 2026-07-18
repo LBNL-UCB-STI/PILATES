@@ -215,7 +215,7 @@ def test_activitysim_run_output_contract_logs_once_and_updates_coupler(tmp_path)
     assert len(links) == len(output_paths)
 
 
-def test_activitysim_preprocess_and_postprocess_output_paths_leave_h5_to_manual_logging(
+def test_activitysim_preprocess_and_postprocess_output_paths_declare_persisted_h5(
     monkeypatch,
 ):
     workspace = SimpleNamespace()
@@ -251,7 +251,7 @@ def test_activitysim_preprocess_and_postprocess_output_paths_leave_h5_to_manual_
         preprocess_paths[activitysim_steps.ASIM_HOUSEHOLDS_IN], OutputArtifactSpec
     )
     assert isinstance(postprocess_paths["households_asim_out"], OutputArtifactSpec)
-    assert "usim_datastore_h5" not in postprocess_paths
+    assert isinstance(postprocess_paths["usim_datastore_h5"], OutputArtifactSpec)
 
 
 def test_activitysim_preprocess_output_paths_declare_file_outputs_not_directories(

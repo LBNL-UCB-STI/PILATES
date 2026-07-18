@@ -46,6 +46,7 @@ from pilates.utils.usim_h5 import (
     resolve_usim_population_table_paths,
 )
 from pilates.workflows.state_helpers import resolve_forecast_year
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
@@ -1277,6 +1278,87 @@ def _resolve_rule_binding(
                 candidate_paths_by_semantic_key,
             )
     return "missing", None, None, None, candidate_paths_by_semantic_key
+
+
+def resolve_artifact_roles(
+    *,
+    step_name: str,
+    required_roles: Iterable[str],
+    optional_roles: Iterable[str],
+    artifact_rules: Iterable[ArtifactBindingRule],
+    logical_destinations: Mapping[str, Path],
+    coupler: Optional[CouplerProtocol],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    explicit_inputs: Optional[Mapping[str, Any]] = None,
+    fallback_inputs: Optional[Mapping[str, Any]] = None,
+    year: Optional[int] = None,
+) -> ResolvedStepInputs:
+    """Select semantic roles directly into one native Consist binding envelope."""
+
+    required = tuple(required_roles)
+    optional = tuple(optional_roles)
+    rule_by_role = {rule.semantic_key: rule for rule in artifact_rules}
+    inputs: Dict[str, Any] = {}
+    input_keys: list[str] = []
+    optional_input_keys: list[str] = []
+    source_by_role: Dict[str, str] = {}
+    selected_key_by_role: Dict[str, str] = {}
+    candidate_paths_by_role: Dict[str, list[str]] = {}
+    resolved_values_by_role: Dict[str, Any] = {}
+
+    for role, is_required in [
+        *((role, True) for role in required),
+        *((role, False) for role in optional),
+    ]:
+        rule = rule_by_role.get(role) or ArtifactBindingRule(
+            semantic_key=role, required=is_required
+        )
+        source, selected_key, value, matched_candidate, candidate_paths = (
+            _resolve_rule_binding(
+                rule=rule,
+                coupler=coupler,
+                explicit_inputs=explicit_inputs,
+                fallback_inputs=fallback_inputs,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                year=year,
+                surface=None,
+            )
+        )
+        source_by_role[role] = source
+        candidate_paths_by_role.update(candidate_paths)
+        if selected_key is not None:
+            selected_key_by_role[role] = matched_candidate or selected_key
+        if source != "missing" and rule.pass_mode == "metadata_only":
+            resolved_values_by_role[role] = value
+        elif source == "coupler" and selected_key is not None:
+            (input_keys if is_required else optional_input_keys).append(selected_key)
+        elif source in {"explicit", "fallback"}:
+            inputs[role] = value
+
+    metadata: Dict[str, Any] = {}
+    if candidate_paths_by_role:
+        metadata[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths_by_role
+    if resolved_values_by_role:
+        metadata[_RESOLVED_VALUES_METADATA_KEY] = resolved_values_by_role
+    return ResolvedStepInputs(
+        step_name=step_name,
+        binding=BindingResult(
+            inputs=inputs or None,
+            input_keys=tuple(dict.fromkeys(input_keys)) or None,
+            optional_input_keys=tuple(dict.fromkeys(optional_input_keys)) or None,
+            metadata=metadata or None,
+        ),
+        required_roles=required,
+        optional_roles=optional,
+        source_by_role=source_by_role,
+        selected_key_by_role=selected_key_by_role,
+        logical_destinations=logical_destinations,
+        metadata=metadata,
+    )
 
 
 def build_binding_plan(

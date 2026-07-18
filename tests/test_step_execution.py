@@ -23,8 +23,8 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         calls.append(("resolve", kwargs["coupler"]))
         return resolved
 
-    def project(outputs, *, settings, state, workspace):
-        calls.append(("project", outputs))
+    def project(outputs, *, settings, state, workspace, resolved_inputs):
+        calls.append(("project", outputs, resolved_inputs))
         return outputs["result"]
 
     definition = StepDefinition(
@@ -111,6 +111,44 @@ def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
     assert projected == "persisted"
 
 
+def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
+    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: supplied,
+        project_outputs=lambda outputs, **_: outputs["result"],
+        output_paths=lambda *, resolved_inputs, **_: {
+            "result": f"/outputs/{resolved_inputs.step_name}"
+        },
+    )
+    scenario = SimpleNamespace(coupler="coupler")
+    seen: dict[str, object] = {}
+    scenario.run = lambda **kwargs: (
+        seen.update(kwargs) or SimpleNamespace(outputs={"result": "persisted"})
+    )
+
+    execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings="settings",
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+        resolved_inputs=supplied,
+    )
+
+    assert seen["output_paths"] == {"result": "/outputs/example"}
+
+
 def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() -> None:
     binding = BindingResult(inputs={})
     supplied = ResolvedStepInputs(step_name="example", binding=binding)
@@ -124,8 +162,10 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
         name="example",
         function=example,
         resolve_inputs=lambda **_: supplied,
-        project_outputs=lambda outputs, **_: projector_inputs.append(outputs)
-        or require_output(outputs, step_name="example", key="result"),
+        project_outputs=lambda outputs, **_: (
+            projector_inputs.append(outputs)
+            or require_output(outputs, step_name="example", key="result")
+        ),
     )
     scenario = SimpleNamespace(coupler="coupler")
     scenario.run = lambda **_: SimpleNamespace(

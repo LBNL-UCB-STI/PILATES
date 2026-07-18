@@ -6,6 +6,8 @@ from typing import Any, Generic, Mapping, Protocol, TypeVar
 
 from consist.models.artifact import Artifact
 
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
+
 OutputT = TypeVar("OutputT")
 
 
@@ -19,6 +21,7 @@ class TypedOutputProjector(Protocol, Generic[OutputT]):
         settings: Any,
         state: Any,
         workspace: Any,
+        resolved_inputs: ResolvedStepInputs,
     ) -> OutputT: ...
 
 

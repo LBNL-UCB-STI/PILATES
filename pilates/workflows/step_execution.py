@@ -70,7 +70,12 @@ def execute_step(
         phase=phase,
         stage=stage,
         output_paths=(
-            definition.output_paths(settings=settings, state=state, workspace=workspace)
+            definition.output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                resolved_inputs=resolved,
+            )
             if definition.output_paths is not None
             else None
         ),
@@ -88,4 +93,5 @@ def execute_step(
         settings=settings,
         state=state,
         workspace=workspace,
+        resolved_inputs=resolved,
     )

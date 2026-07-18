@@ -8,6 +8,7 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional, cast
 
+from consist import CacheOptions, ExecutionOptions, define_step, require_runtime_kwargs
 from consist.types import H5ChildSpec, OutputArtifactSpec
 
 from pilates.activitysim.preprocessor import (
@@ -35,15 +36,26 @@ from pilates.utils.usim_h5 import reconcile_usim_population_table_paths
 from pilates.config.models import PilatesConfig
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_PERSONS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.binding import ArtifactBindingRule, build_binding_plan
+from pilates.workflows.binding import (
+    ArtifactBindingRule,
+    build_binding_plan,
+    resolve_artifact_roles,
+)
+from pilates.workflows.output_projection import require_output
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.state_helpers import resolve_forecast_year
+from pilates.workflows.step_consist_meta import consist_step_meta
+from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
+from pilates.generic.model_factory import ModelFactory
 
 # Model-specific step factories for ActivitySim.
 # Shared helpers/infrastructure are imported from shared.py.
@@ -103,6 +115,7 @@ def activitysim_run_output_paths(
     state: WorkflowState,
     workspace: Workspace,
     produces_zarr: bool,
+    resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
     """Return cache-recoverable ActivitySim outputs and their logging metadata."""
     expected_outputs = ActivitysimRunner.expected_outputs(settings, state, workspace)
@@ -137,6 +150,7 @@ def activitysim_preprocess_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
     """Declare cache-recoverable file outputs from ActivitySim preprocessing."""
     expected_outputs = ActivitysimPreprocessor.expected_outputs(
@@ -162,6 +176,7 @@ def activitysim_postprocess_output_paths(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
     """Declare non-H5 ActivitySim postprocess outputs for one-link logging."""
     expected_outputs = ActivitysimPostprocessor.expected_outputs(
@@ -195,7 +210,7 @@ def activitysim_postprocess_output_paths(
             else path
         )
         for key, path in expected_outputs.items()
-        if key != USIM_DATASTORE_H5
+        if key != "asim_output_dir" and path is not None
     }
 
 
@@ -1809,3 +1824,601 @@ def make_activitysim_postprocess_step(
         ),
     )
     return step_func
+
+
+# Native Consist definitions -------------------------------------------------
+#
+# The factories above remain only until the coordinated stage cutover deletes the
+# legacy holder path.  These definitions intentionally do not use a holder: the
+# resolver decides one BindingResult, Consist materializes those paths, and the
+# callable constructs the model's existing typed boundary values from them.
+
+_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES = (USIM_POPULATION_SOURCE_H5,)
+_ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES = (FINAL_SKIMS_OMX,)
+_ACTIVITYSIM_RUN_REQUIRED_ROLES = (
+    ASIM_LAND_USE_IN,
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_PERSONS_IN,
+    ZARR_SKIMS,
+)
+_ACTIVITYSIM_POSTPROCESS_REQUIRED_ROLES = (
+    ASIM_HOUSEHOLDS_IN,
+    ASIM_PERSONS_IN,
+    ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
+    ZARR_SKIMS,
+    *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+)
+_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES = (
+    USIM_POPULATION_SOURCE_H5,
+    USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_BASE_H5,
+)
+
+
+def _native_activitysim_resolved_inputs(
+    *,
+    step_name: str,
+    required_roles: tuple[str, ...],
+    optional_roles: tuple[str, ...],
+    logical_destinations: Mapping[str, Any],
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> ResolvedStepInputs:
+    """Freeze the one ActivitySim semantic selection for a native invocation."""
+
+    workspace_root = Path(getattr(workspace, "full_path", "."))
+    destinations = {
+        key: Path(path)
+        if path is not None
+        else workspace_root / "activitysim" / "native-inputs" / key
+        for key, path in logical_destinations.items()
+        if key in (*required_roles, *optional_roles)
+    }
+    for key in (*required_roles, *optional_roles):
+        destinations.setdefault(
+            key, workspace_root / "activitysim" / "native-inputs" / key
+        )
+
+    rules = {
+        role: ArtifactBindingRule(semantic_key=role, required=True)
+        for role in required_roles
+    }
+    rules.update(
+        {
+            role: ArtifactBindingRule(semantic_key=role, required=False)
+            for role in optional_roles
+        }
+    )
+    if step_name == "activitysim_preprocess":
+        rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_SOURCE_H5,
+            required=True,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+            fallback_provider="activitysim_population_source",
+        )
+    elif step_name == "activitysim_postprocess":
+        rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_CURRENT_H5,
+            required=False,
+            preferred_keys=(USIM_DATASTORE_CURRENT_H5,),
+        )
+        rules[USIM_DATASTORE_BASE_H5] = ArtifactBindingRule(
+            semantic_key=USIM_DATASTORE_BASE_H5,
+            required=False,
+            allow_fallback=True,
+            fallback_provider="activitysim_input_datastore",
+        )
+        rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
+            semantic_key=USIM_POPULATION_SOURCE_H5,
+            required=False,
+            allow_fallback=True,
+            preferred_keys=(USIM_POPULATION_SOURCE_H5,),
+            fallback_provider="activitysim_population_source",
+        )
+
+    return resolve_artifact_roles(
+        step_name=step_name,
+        required_roles=required_roles,
+        optional_roles=optional_roles,
+        artifact_rules=tuple(rules.values()),
+        logical_destinations=destinations,
+        coupler=coupler,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        year=getattr(state, "year", None),
+    )
+
+
+def _activitysim_preprocess_resolver(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> ResolvedStepInputs:
+    return _native_activitysim_resolved_inputs(
+        step_name="activitysim_preprocess",
+        required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
+        optional_roles=_ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES,
+        logical_destinations=ActivitysimPreprocessor.declared_expected_inputs(
+            settings, state, workspace
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+
+def _activitysim_run_resolver(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> ResolvedStepInputs:
+    return _native_activitysim_resolved_inputs(
+        step_name="activitysim_run",
+        required_roles=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        optional_roles=(),
+        logical_destinations=ActivitysimRunner.declared_expected_inputs(
+            settings, state, workspace
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+
+def _activitysim_postprocess_resolver(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    coupler: CouplerProtocol,
+) -> ResolvedStepInputs:
+    return _native_activitysim_resolved_inputs(
+        step_name="activitysim_postprocess",
+        required_roles=_ACTIVITYSIM_POSTPROCESS_REQUIRED_ROLES,
+        optional_roles=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
+        logical_destinations=ActivitysimPostprocessor.declared_expected_inputs(
+            settings, state, workspace
+        ),
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+
+def _activitysim_execution_options(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> ExecutionOptions:
+    """Request Consist materialization at the one deterministic path per role."""
+
+    del settings, state, workspace
+    selected_roles = set(resolved_inputs.selected_roles())
+    return ExecutionOptions(
+        input_binding="paths",
+        input_paths={
+            key: destination
+            for key, destination in resolved_inputs.logical_destinations.items()
+            if key in selected_roles
+        },
+        input_materialization="requested",
+        input_materialization_mode="copy",
+    )
+
+
+def _activitysim_cache_options(
+    *, settings: PilatesConfig, state: WorkflowState, workspace: Workspace
+) -> CacheOptions:
+    """Admit a cache candidate only after all requested ActivitySim outputs land."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-requested",
+        cache_hydration_failure="miss",
+    )
+
+
+def _persisted_output_path(
+    outputs: Mapping[str, Any],
+    *,
+    step_name: str,
+    key: str,
+    declared_outputs: Mapping[str, Any],
+    workspace: Workspace,
+) -> Path:
+    """Return one output only when it exists at its declared current destination.
+
+    A projected result represents the current step execution.  It must not fall
+    back to an artifact's mounted source, archive location, or historical
+    workspace when the declared destination is absent.
+    """
+
+    require_output(outputs, step_name=step_name, key=key)
+    try:
+        output_spec = declared_outputs[key]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"{step_name} output {key!r} has no declared destination"
+        ) from exc
+
+    declared_path = getattr(output_spec, "path", output_spec)
+    if isinstance(declared_path, os.PathLike):
+        path = Path(declared_path)
+    elif isinstance(declared_path, str):
+        if declared_path.startswith("workspace://"):
+            workspace_root = getattr(workspace, "full_path", None)
+            if workspace_root is None:
+                raise RuntimeError(
+                    f"{step_name} output {key!r} cannot resolve its workspace destination"
+                )
+            path = Path(workspace_root) / declared_path[len("workspace://") :].lstrip(
+                "/"
+            )
+        elif "://" in declared_path:
+            raise RuntimeError(
+                f"{step_name} output {key!r} has a non-local declared destination"
+            )
+        else:
+            path = Path(declared_path)
+            if not path.is_absolute():
+                workspace_root = getattr(workspace, "full_path", None)
+                if workspace_root is None:
+                    raise RuntimeError(
+                        f"{step_name} output {key!r} cannot resolve its relative destination"
+                    )
+                path = Path(workspace_root) / path
+    else:
+        raise RuntimeError(
+            f"{step_name} output {key!r} has an invalid declared destination"
+        )
+
+    if not path.exists():
+        raise RuntimeError(
+            f"{step_name} output {key!r} is missing at declared destination {path}"
+        )
+    return path
+
+
+def _project_activitysim_preprocess_outputs(
+    outputs: Mapping[str, Any],
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> ActivitySimPreprocessOutputs:
+    declared_outputs = activitysim_preprocess_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    projected = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=_persisted_output_path(
+            outputs,
+            step_name="activitysim_preprocess",
+            key=ASIM_LAND_USE_IN,
+            declared_outputs=declared_outputs,
+            workspace=workspace,
+        ),
+        households_table=_persisted_output_path(
+            outputs,
+            step_name="activitysim_preprocess",
+            key=ASIM_HOUSEHOLDS_IN,
+            declared_outputs=declared_outputs,
+            workspace=workspace,
+        ),
+        persons_table=_persisted_output_path(
+            outputs,
+            step_name="activitysim_preprocess",
+            key=ASIM_PERSONS_IN,
+            declared_outputs=declared_outputs,
+            workspace=workspace,
+        ),
+        omx_skims=(
+            _persisted_output_path(
+                outputs,
+                step_name="activitysim_preprocess",
+                key=ASIM_OMX_SKIMS,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            if ASIM_OMX_SKIMS in outputs
+            else None
+        ),
+    )
+    projected.validate(
+        ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_preprocess",
+        )
+    )
+    return projected
+
+
+def _project_activitysim_run_outputs(
+    outputs: Mapping[str, Any],
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> ActivitySimRunOutputs:
+    declared_outputs = activitysim_run_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        produces_zarr=ZARR_SKIMS in outputs,
+    )
+    projected = ActivitySimRunOutputs(
+        output_dir=Path(workspace.get_asim_output_dir()),
+        raw_outputs={
+            key: _persisted_output_path(
+                outputs,
+                step_name="activitysim_run",
+                key=key,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+        },
+        zarr_skims=(
+            _persisted_output_path(
+                outputs,
+                step_name="activitysim_run",
+                key=ZARR_SKIMS,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            if ZARR_SKIMS in outputs
+            else None
+        ),
+    )
+    projected.validate(
+        ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_run",
+        )
+    )
+    return projected
+
+
+def _project_activitysim_postprocess_outputs(
+    outputs: Mapping[str, Any],
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> ActivitySimPostprocessOutputs:
+    declared_outputs = activitysim_postprocess_output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
+    for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS:
+        require_output(outputs, step_name="activitysim_postprocess", key=key)
+    projected = ActivitySimPostprocessOutputs(
+        usim_datastore_h5=(
+            _persisted_output_path(
+                outputs,
+                step_name="activitysim_postprocess",
+                key=USIM_DATASTORE_H5,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            if USIM_DATASTORE_H5 in outputs
+            else None
+        ),
+        asim_output_dir=Path(workspace.get_asim_output_dir()),
+        processed_outputs={
+            key: _persisted_output_path(
+                outputs,
+                step_name="activitysim_postprocess",
+                key=key,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            for key in outputs
+            if key != USIM_DATASTORE_H5
+        },
+        usim_datastore_key=(
+            USIM_DATASTORE_H5 if USIM_DATASTORE_H5 in outputs else None
+        ),
+    )
+    projected.validate(
+        ValidationContext(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            step_name="activitysim_postprocess",
+        )
+    )
+    return projected
+
+
+@define_step(
+    model="activitysim",
+    name_template="activitysim_preprocess__y{year}__i{iteration}__phase_{phase}",
+    outputs=[ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN],
+    schema_outputs=[ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN],
+    input_binding="paths",
+    tags=["activitysim", "preprocess"],
+    **consist_step_meta("activitysim_preprocess"),
+)
+@require_runtime_kwargs("settings", "state", "workspace")
+def _activitysim_preprocess_callable(
+    usim_population_source_h5: Path,
+    final_skims_omx: Path | None = None,
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> None:
+    """Run ActivitySim preprocessing from the resolved semantic input paths."""
+
+    del settings
+    ModelFactory().get_preprocessor("activitysim", state).preprocess(
+        workspace,
+        final_skims_omx=final_skims_omx,
+        population_source_h5_path=str(usim_population_source_h5),
+    )
+
+
+@define_step(
+    model="activitysim",
+    name_template="activitysim_run__y{year}__i{iteration}__phase_{phase}",
+    outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+    schema_outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
+    input_binding="paths",
+    tags=["activitysim", "run"],
+    **consist_step_meta("activitysim_run"),
+)
+@require_runtime_kwargs("settings", "state", "workspace")
+def _activitysim_run_callable(
+    land_use_asim_in: Path,
+    households_asim_in: Path,
+    persons_asim_in: Path,
+    zarr_skims: Path,
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> None:
+    """Run ActivitySim using the materialized preprocess/output role paths."""
+
+    del settings
+    inputs = ActivitySimPreprocessOutputs(
+        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        land_use_table=Path(land_use_asim_in),
+        households_table=Path(households_asim_in),
+        persons_table=Path(persons_asim_in),
+    )
+    ModelFactory().get_runner("activitysim", state).run(
+        inputs,
+        workspace,
+        skim_mode="zarr",
+        extra_inputs={ZARR_SKIMS: Path(zarr_skims)},
+    )
+
+
+@define_step(
+    model="activitysim",
+    name_template="activitysim_postprocess__y{year}__i{iteration}__phase_{phase}",
+    outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
+    schema_outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
+    input_binding="paths",
+    tags=["activitysim", "postprocess"],
+    **consist_step_meta("activitysim_postprocess"),
+)
+@require_runtime_kwargs("settings", "state", "workspace")
+def _activitysim_postprocess_callable(
+    households_asim_in: Path,
+    persons_asim_in: Path,
+    land_use_asim_in: Path,
+    omx_skims: Path,
+    zarr_skims: Path,
+    accessibility_asim_out: Path,
+    beam_plans_asim_out: Path,
+    disaggregate_accessibility_asim_out: Path,
+    households_asim_out: Path,
+    joint_tour_participants_asim_out: Path,
+    land_use_asim_out: Path,
+    non_mandatory_tour_destination_accessibility_asim_out: Path,
+    persons_asim_out: Path,
+    tours_asim_out: Path,
+    trips_asim_out: Path,
+    usim_population_source_h5: Path | None = None,
+    usim_datastore_current_h5: Path | None = None,
+    usim_datastore_base_h5: Path | None = None,
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> None:
+    """Postprocess persisted ActivitySim raw outputs without a holder lookup."""
+
+    del households_asim_in, persons_asim_in, land_use_asim_in, omx_skims, zarr_skims
+    del settings
+    raw_outputs = ActivitySimRunOutputs(
+        output_dir=Path(workspace.get_asim_output_dir()),
+        raw_outputs={
+            "accessibility_asim_out": Path(accessibility_asim_out),
+            "beam_plans_asim_out": Path(beam_plans_asim_out),
+            "disaggregate_accessibility_asim_out": Path(
+                disaggregate_accessibility_asim_out
+            ),
+            "households_asim_out": Path(households_asim_out),
+            "joint_tour_participants_asim_out": Path(joint_tour_participants_asim_out),
+            "land_use_asim_out": Path(land_use_asim_out),
+            "non_mandatory_tour_destination_accessibility_asim_out": Path(
+                non_mandatory_tour_destination_accessibility_asim_out
+            ),
+            "persons_asim_out": Path(persons_asim_out),
+            "tours_asim_out": Path(tours_asim_out),
+            "trips_asim_out": Path(trips_asim_out),
+        },
+    )
+    ModelFactory().get_postprocessor("activitysim", state).postprocess(
+        raw_outputs,
+        workspace,
+        population_source_h5_path=(
+            str(usim_population_source_h5)
+            if usim_population_source_h5 is not None
+            else None
+        ),
+        current_input_h5_path=str(usim_datastore_current_h5 or usim_datastore_base_h5)
+        if usim_datastore_current_h5 is not None or usim_datastore_base_h5 is not None
+        else None,
+    )
+
+
+activitysim_preprocess = StepDefinition(
+    name="activitysim_preprocess",
+    function=_activitysim_preprocess_callable,
+    resolve_inputs=_activitysim_preprocess_resolver,
+    project_outputs=_project_activitysim_preprocess_outputs,
+    output_paths=activitysim_preprocess_output_paths,
+    execution_options=_activitysim_execution_options,
+    cache_options=_activitysim_cache_options,
+)
+activitysim_run = StepDefinition(
+    name="activitysim_run",
+    function=_activitysim_run_callable,
+    resolve_inputs=_activitysim_run_resolver,
+    project_outputs=_project_activitysim_run_outputs,
+    output_paths=lambda *, settings, state, workspace, resolved_inputs: (
+        activitysim_run_output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            produces_zarr=False,
+            resolved_inputs=resolved_inputs,
+        )
+    ),
+    execution_options=_activitysim_execution_options,
+    cache_options=_activitysim_cache_options,
+)
+activitysim_postprocess = StepDefinition(
+    name="activitysim_postprocess",
+    function=_activitysim_postprocess_callable,
+    resolve_inputs=_activitysim_postprocess_resolver,
+    project_outputs=_project_activitysim_postprocess_outputs,
+    output_paths=activitysim_postprocess_output_paths,
+    execution_options=_activitysim_execution_options,
+    cache_options=_activitysim_cache_options,
+)

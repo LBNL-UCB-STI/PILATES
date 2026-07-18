@@ -35,6 +35,7 @@ from pilates.workflows.binding import (
     binding_spec_for_step_name,
     build_binding_plan,
     build_key_only_binding_plan,
+    resolve_artifact_roles,
     urbansim_datastore_selection_rules,
 )
 from pilates.workflows.orchestration import StepRef, run_workflow
@@ -89,6 +90,49 @@ def test_binding_plan_converts_to_consist_binding_result():
     assert binding.optional_input_keys == ["maybe_optional"]
     assert binding.metadata == {"source": "unit-test"}
     assert plan.to_scenario_run_kwargs()["binding"] == binding
+
+
+def test_resolve_artifact_roles_builds_native_binding_without_binding_plan():
+    resolved = resolve_artifact_roles(
+        step_name="native_step",
+        required_roles=("required",),
+        optional_roles=("optional",),
+        artifact_rules=(
+            ArtifactBindingRule(semantic_key="required"),
+            ArtifactBindingRule(semantic_key="optional", required=False),
+        ),
+        logical_destinations={
+            "required": Path("/tmp/required"),
+            "optional": Path("/tmp/optional"),
+        },
+        coupler=_CouplerStub({"optional": "/tmp/optional-source"}),
+        explicit_inputs={"required": "/tmp/required-source"},
+        settings=None,
+        state=None,
+        workspace=None,
+    )
+
+    assert resolved.binding.inputs == {"required": "/tmp/required-source"}
+    assert resolved.binding.optional_input_keys == ("optional",)
+    assert resolved.source_by_role == {"required": "explicit", "optional": "coupler"}
+
+
+def test_resolve_artifact_roles_fails_closed_for_missing_required_role():
+    resolved = resolve_artifact_roles(
+        step_name="native_step",
+        required_roles=("required",),
+        optional_roles=("optional",),
+        artifact_rules=(ArtifactBindingRule(semantic_key="required"),),
+        logical_destinations={"required": Path("/tmp/required")},
+        coupler=_CouplerStub({}),
+        settings=None,
+        state=None,
+        workspace=None,
+    )
+
+    assert resolved.source_by_role["required"] == "missing"
+    with pytest.raises(RuntimeError, match="native_step.*required"):
+        resolved.require_complete()
 
 
 def test_binding_spec_for_step_name_rejects_retired_compile_step():

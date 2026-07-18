@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict
 
+from pilates.workflows.step_definition import StepDefinition
+
 from pilates.generic.model_factory import ModelFactory as ModelFactory
 
 from .shared import (
@@ -24,20 +26,34 @@ from .shared import (
     _urbansim_output_facet_meta as _urbansim_output_facet_meta,
 )
 from .activitysim import (
+    activitysim_postprocess as activitysim_postprocess,
+    activitysim_preprocess as activitysim_preprocess,
+    activitysim_run as activitysim_run,
     make_activitysim_postprocess_step as make_activitysim_postprocess_step,
     make_activitysim_preprocess_step as make_activitysim_preprocess_step,
     make_activitysim_run_step as make_activitysim_run_step,
 )
 from .beam import (
+    beam_full_skim as beam_full_skim,
+    beam_postprocess as beam_postprocess,
+    beam_preprocess as beam_preprocess,
+    beam_run as beam_run,
     make_beam_full_skim_step as make_beam_full_skim_step,
     make_beam_postprocess_step as make_beam_postprocess_step,
     make_beam_preprocess_step as make_beam_preprocess_step,
     make_beam_run_step as make_beam_run_step,
 )
 from .postprocessing import (
+    postprocessing as postprocessing_definition,
     make_postprocessing_step as make_postprocessing_step,
 )
 from .urbansim_atlas import (
+    atlas_postprocess as atlas_postprocess,
+    atlas_preprocess as atlas_preprocess,
+    atlas_run as atlas_run,
+    urbansim_postprocess as urbansim_postprocess,
+    urbansim_preprocess as urbansim_preprocess,
+    urbansim_run as urbansim_run,
     make_atlas_postprocess_step as make_atlas_postprocess_step,
     make_atlas_preprocess_step as make_atlas_preprocess_step,
     make_atlas_run_step as make_atlas_run_step,
@@ -70,6 +86,27 @@ SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
     "beam_run": make_beam_run_step,
     "beam_postprocess": make_beam_postprocess_step,
     "beam_full_skim": make_beam_full_skim_step,
+}
+
+
+STEP_DEFINITIONS: dict[str, StepDefinition[Any]] = {
+    definition.name: definition
+    for definition in (
+        urbansim_preprocess,
+        urbansim_run,
+        urbansim_postprocess,
+        atlas_preprocess,
+        atlas_run,
+        atlas_postprocess,
+        activitysim_preprocess,
+        activitysim_run,
+        activitysim_postprocess,
+        beam_preprocess,
+        beam_run,
+        beam_postprocess,
+        beam_full_skim,
+        postprocessing_definition,
+    )
 }
 
 
