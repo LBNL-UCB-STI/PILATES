@@ -1,13 +1,11 @@
-"""BEAM workflow steps demonstrating the PILATES-Consist integration pattern.
+"""Native Consist definitions and resolvers for the BEAM workflow steps.
 
-The binding rules in `pilates.workflows.binding` declare BEAM's required
-inputs, including exact-rewind snapshot artifacts for ActivitySim outputs,
-vehicles, warm starts, and configuration references. The step factories in this
-module convert those bindings into model execution, publish current-role
-outputs through the Consist coupler, and log output-only diagnostic families
-without expanding the handoff surface. Recovery roots remain storage metadata:
-snapshot artifacts describe semantic model boundaries, while archive promotion
-and future Consist recovery policy decide where the bytes can be restored from.
+Each BEAM step resolves the semantic roles it needs once, executes through
+Consist, and projects ``RunResult.outputs`` into typed outputs.  The module
+publishes current-role outputs and output-only diagnostics without expanding
+the cross-model handoff surface.  The sole mid-stage restart boundary is
+``beam_run_completed -> beam_postprocess``; archive roots remain storage
+metadata, not a second execution path.
 """
 
 from __future__ import annotations
@@ -32,7 +30,7 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.workflows.coupler_namespace import (
     coupler_storage_keys,
-    resolve_coupler_value,
+    coupler_storage_value,
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -52,7 +50,7 @@ from pilates.workflows.step_definition import StepDefinition
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 
-# Model-specific step factories for BEAM.
+# Model-specific native step definitions for BEAM.
 # Shared helpers/infrastructure are imported from shared.py.
 from .shared import (
     BEAM_PLANS_OUT,
@@ -593,7 +591,7 @@ def _resolved_beam_inputs(
     for key in (*required_roles, *optional_roles):
         if key in inputs:
             continue
-        value = resolve_coupler_value(coupler, key).value
+        value = coupler_storage_value(coupler, key)
         if value is None:
             source_by_role[key] = "missing"
             continue
@@ -889,7 +887,7 @@ def _resolve_beam_postprocess_inputs(
     }
     if (
         settings.activitysim is not None
-        and resolve_coupler_value(coupler, ZARR_SKIMS).value is not None
+        and coupler_storage_value(coupler, ZARR_SKIMS) is not None
     ):
         destinations[ZARR_SKIMS] = (
             Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"

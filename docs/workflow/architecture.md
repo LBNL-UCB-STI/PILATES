@@ -47,7 +47,7 @@ postprocess once. A path existing upstream does not make the in-progress
 postprocess region restartable.
 
 All other restart behavior is stage/year-frontier policy. In particular,
-ActivitySim is not generically replayed from an interrupted mid-stage state.
+ActivitySim is not resumed from an interrupted mid-stage state.
 
 ## Reading path
 

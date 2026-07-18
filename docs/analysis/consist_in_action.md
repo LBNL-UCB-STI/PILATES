@@ -1,6 +1,6 @@
 ---
 title: Consist in Action
-summary: Small, read-only walkthroughs for cache-hit inspection, faceted outcome comparison, and replay-aware archive inspection.
+summary: Small, read-only walkthroughs for cache-hit inspection, faceted outcome comparison, and archive inspection.
 ---
 
 # Consist in Action
@@ -12,9 +12,9 @@ without reading the runtime code first:
 
 - cache-aware rerun inspection
 - faceted output comparison
-- replay/restart inspection against archived outputs
+- restart and archive inspection
 
-All three scripts are read-only. They operate on archive run directories and
+All examples are read-only. They operate on archive run directories and
 the attached Consist database under `.consist/`.
 
 ## 1. Cache-Hit Inspection For A Rerun
@@ -61,35 +61,17 @@ This is the quickest script-level entrypoint before moving into notebooks. It
 works for two scenarios and for larger parameter sweeps because both are just
 facet comparisons.
 
-## 3. Replay / Restart Archive Inspection
+## 3. Restart Archive Inspection
 
-Inspect one archived run's output keys, hashes, and recovery roots:
+Use the tracker-backed archive views to inspect an archived run's output keys,
+hashes, and recovery roots before investigating a resume. The durable facts are
+the Consist output links and the pinned BEAM successor closure, not a workspace
+file selected by an inspection script.
 
-```bash
-python examples/consist/restart_replay_inspection.py \
-  /path/to/archive-run \
-  --scenario-id baseline \
-  --model beam
-```
-
-Or inspect one explicit run id:
-
-```bash
-python examples/consist/restart_replay_inspection.py \
-  /path/to/archive-run \
-  --run-id RUN_ID
-```
-
-What it shows:
-
-- archive summary
-- selected run id
-- archived output keys for that run
-- output hashes when available
-- recovery-root counts and paths
-
-Use this when you want to sanity-check whether the archive has the material
-that replay/restart tooling can recover from.
+For the supported checkpoint, confirm that the archived output links can
+materialize to the current `beam_postprocess` resolver destinations. For all
+other restarts, inspect the durable stage/year frontier and let normal native
+step resolution choose current inputs.
 
 ## Where To Go Next
 

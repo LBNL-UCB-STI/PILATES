@@ -32,7 +32,7 @@ outputs. Dynamic selections remain resolver-owned.
 
 A resolver returns `ResolvedStepInputs`. It selects the current coupler values
 for the declared semantic roles, freezes selected artifacts in
-`BindingResult.inputs`, and records their deterministic materialization
+`ResolvedStepInputs.binding`, and records their deterministic materialization
 destinations. Required roles must be complete before execution.
 
 Stages call `execute_step(...)` with the `StepDefinition`. `execute_step()`
@@ -60,7 +60,7 @@ then a restart validates that snapshot, hydrates the recorded artifacts to the
 current resolver destinations, re-resolves the successor, and executes native
 postprocess once. The `beam_postprocess_in_progress` mutation gate remains
 non-restartable. Other restarts resume their normal stage/year frontier; a
-skipped ActivitySim mid-stage does not receive a generic replay path.
+skipped ActivitySim mid-stage does not receive a second recovery path.
 
 ## Adjacent pages
 

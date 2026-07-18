@@ -14,6 +14,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.steps.beam import (
     _materialize_native_outputs,
+    _resolved_beam_inputs,
     _native_beam_postprocess,
     beam_full_skim,
     beam_postprocess,
@@ -228,6 +229,122 @@ def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(
             / "path_traversal_links_2030_2.parquet"
         ),
     }
+
+
+def test_beam_required_roles_do_not_resolve_from_a_namespace_view(
+    tmp_path: Path,
+) -> None:
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return default
+
+        def view(self, namespace: str) -> object:
+            assert namespace == "beam"
+            return type(
+                "BeamView",
+                (),
+                {
+                    "get": lambda _self, key, default=None: (
+                        tmp_path / "view-only-plans.csv"
+                    )
+                },
+            )()
+
+    resolved = _resolved_beam_inputs(
+        step_name="beam_run",
+        coupler=Coupler(),
+        workspace=SimpleNamespace(
+            get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input")
+        ),
+        required_roles=(BEAM_PLANS_IN,),
+    )
+
+    assert resolved.binding.inputs == {}
+    assert resolved.source_by_role[BEAM_PLANS_IN] == "missing"
+    assert BEAM_PLANS_IN not in resolved.logical_destinations
+
+
+def test_beam_required_roles_prefer_the_exact_global_storage_value(
+    tmp_path: Path,
+) -> None:
+    global_plans = tmp_path / "global-plans.csv"
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return {BEAM_PLANS_IN: global_plans}.get(key, default)
+
+        def view(self, namespace: str) -> object:
+            assert namespace == "beam"
+            return type(
+                "BeamView",
+                (),
+                {"get": lambda _self, key, default=None: tmp_path / "view-plans.csv"},
+            )()
+
+    resolved = _resolved_beam_inputs(
+        step_name="beam_run",
+        coupler=Coupler(),
+        workspace=SimpleNamespace(
+            get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input")
+        ),
+        required_roles=(BEAM_PLANS_IN,),
+    )
+
+    assert resolved.binding.inputs == {BEAM_PLANS_IN: global_plans}
+    assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
+
+
+def test_beam_postprocess_does_not_admit_view_only_zarr_skims(
+    tmp_path: Path,
+) -> None:
+    events_path = tmp_path / "source-events.parquet"
+    _write_event_types(events_path, ["Event A"])
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return {
+                "events_parquet_2030_2": events_path,
+                "raw_od_skims_2030_2": tmp_path / "source-skims.omx",
+            }.get(key, default)
+
+        def keys(self):
+            return ("events_parquet_2030_2", "raw_od_skims_2030_2")
+
+        def view(self, namespace: str) -> object:
+            assert namespace == "activitysim"
+            return type(
+                "ActivitySimView",
+                (),
+                {
+                    "get": lambda _self, key, default=None: (
+                        tmp_path / "view-only-skims.zarr"
+                    )
+                },
+            )()
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        get_asim_output_dir=lambda: str(tmp_path / "asim-output"),
+    )
+    state = SimpleNamespace(year=2030, iteration=2)
+    resolved = beam_postprocess.resolve_inputs(
+        settings=SimpleNamespace(activitysim=object()),
+        state=state,
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+    options = beam_postprocess.execution_options(
+        settings=object(),
+        state=state,
+        workspace=workspace,
+        resolved_inputs=resolved,
+    )
+
+    assert ZARR_SKIMS not in (resolved.binding.inputs or {})
+    assert ZARR_SKIMS not in resolved.optional_roles
+    assert ZARR_SKIMS not in resolved.logical_destinations
+    assert ZARR_SKIMS not in options.input_paths
 
 
 def test_beam_postprocess_projector_has_fresh_hit_parity_for_closed_split_outputs(

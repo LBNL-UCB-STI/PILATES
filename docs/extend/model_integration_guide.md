@@ -29,7 +29,7 @@ provenance, and dynamic semantic families.
 ## Input and output discipline
 
 Resolve input roles once. A resolver may record diagnostics, but execution
-uses its concrete `BindingResult.inputs`, not a second key lookup. Give each
+uses its concrete `ResolvedStepInputs.binding`, not a second key lookup. Give each
 input a deterministic destination so Consist can materialize it. A projector
 must validate the declared current destination; it must not fall back to an
 archive source or a previous workspace.

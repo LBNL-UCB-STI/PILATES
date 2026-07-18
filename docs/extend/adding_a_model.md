@@ -30,14 +30,15 @@ stage-call snippets.
   output lineage.
 - PILATES owns semantic role selection, typed output validation, stage order,
   and restart policy.
-- Stages sequence definitions; they do not rediscover inputs or replay outputs.
+- Stages sequence definitions; they do not rediscover inputs or reconstruct
+  completed results.
 
 Use the coupler only as the current semantic-role map. Introduce a new role
 only when a workflow boundary needs it; an archive location is not a role.
 
 ## Restart-sensitive work
 
-Do not add a generic replay path for an interrupted model. The sole committed
+Do not add a generic mid-stage recovery path for an interrupted model. The sole committed
 mid-stage restart is `beam_run_completed -> beam_postprocess`, which restores
 the exact pinned successor closure and obeys its mutation gate.
 

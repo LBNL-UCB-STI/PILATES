@@ -36,7 +36,7 @@ summary: Checklist for a native Consist model boundary in PILATES.
 
 - [ ] Add Consist metadata/config-adapter policy only when it affects identity.
 - [ ] Require cache hits to hydrate requested output destinations before reuse.
-- [ ] Keep restart policy in PILATES; do not invent a generic replay mechanism.
+- [ ] Keep restart policy in PILATES; do not invent a second mid-stage recovery mechanism.
 - [ ] Preserve the sole BEAM committed boundary and its postprocess mutation
   gate when touching supply-demand behavior.
 

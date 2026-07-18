@@ -21,7 +21,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List
 
-from pilates.workflows.coupler_namespace import coupler_storage_keys
+from pilates.workflows.coupler_namespace import (
+    coupler_storage_keys,
+    coupler_storage_value,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -190,3 +193,19 @@ def test_coupler_storage_keys_preserves_raw_storage_order() -> None:
         "events_parquet_2030_1",
         "raw_od_skims_2030_1",
     )
+
+
+def test_coupler_storage_value_uses_only_the_global_storage_key() -> None:
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return {"beam_plans_in": "global"}.get(key, default)
+
+        def view(self, namespace: str) -> object:
+            assert namespace == "beam"
+            return type(
+                "BeamView",
+                (),
+                {"get": lambda _self, key, default=None: "view"},
+            )()
+
+    assert coupler_storage_value(Coupler(), "beam_plans_in") == "global"

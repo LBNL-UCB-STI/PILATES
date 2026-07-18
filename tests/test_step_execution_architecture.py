@@ -4,69 +4,104 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import subprocess
 
-import pytest
 
-
-_PRODUCTION_FILES = (
-    Path("pilates/workflows/stages/supply_demand_beam.py"),
-    Path("pilates/workflows/steps/activitysim.py"),
-    Path("pilates/workflows/steps/beam.py"),
-    Path("pilates/workflows/steps/urbansim_atlas.py"),
-    Path("pilates/workflows/steps/postprocessing.py"),
-    Path("pilates/workflows/binding.py"),
-    Path("pilates/workflows/boundary_audit.py"),
-    Path("pilates/workflows/steps/shared.py"),
+_REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+_RETIRED_EXECUTION_SYMBOLS = frozenset(
+    {
+        "BindingPlan",
+        "StepBindingSpec",
+        "StepRef",
+        "StandardStepSpec",
+        "StepOutputsHolder",
+        "run_with_cache_recovery",
+        "run_manifested_steps",
+    }
 )
-_LEGACY_FACTORY_NAMES = {
-    "make_activitysim_preprocess_step",
-    "make_activitysim_run_step",
-    "make_activitysim_postprocess_step",
-    "make_beam_preprocess_step",
-    "make_beam_run_step",
-    "make_beam_postprocess_step",
-    "make_beam_full_skim_step",
-    "make_urbansim_preprocess_step",
-    "make_urbansim_run_step",
-    "make_urbansim_postprocess_step",
-    "make_atlas_preprocess_step",
-    "make_atlas_run_step",
-    "make_atlas_postprocess_step",
-    "_try_restore_completed_beam_run_for_restart",
-    "build_binding_plan",
-    "build_key_only_binding_plan",
-}
-_LEGACY_IMPORT_NAMES = {
-    "StageRunner",
-    "BindingPlan",
-    "StepBindingSpec",
-    "StepOutputsHolder",
-    "StandardStepSpec",
-    "build_standard_step",
-}
+_RETIRED_FACTORY_NAMES = frozenset(
+    {
+        "make_activitysim_preprocess_step",
+        "make_activitysim_run_step",
+        "make_activitysim_postprocess_step",
+        "make_beam_preprocess_step",
+        "make_beam_run_step",
+        "make_beam_postprocess_step",
+        "make_beam_full_skim_step",
+        "make_urbansim_preprocess_step",
+        "make_urbansim_run_step",
+        "make_urbansim_postprocess_step",
+        "make_atlas_preprocess_step",
+        "make_atlas_run_step",
+        "make_atlas_postprocess_step",
+        "_try_restore_completed_beam_run_for_restart",
+        "build_binding_plan",
+        "build_key_only_binding_plan",
+    }
+)
+_RETIRED_SYMBOLS = _RETIRED_EXECUTION_SYMBOLS | _RETIRED_FACTORY_NAMES
 
 
-@pytest.mark.parametrize("path", _PRODUCTION_FILES)
-def test_native_step_production_modules_exclude_retired_execution_symbols(
-    path: Path,
-) -> None:
-    """Keep retired holder/factory/replay code out of the production AST."""
-    tree = ast.parse(path.read_text(), filename=str(path))
-    defined_names = {
+def _tracked_production_python_files() -> tuple[Path, ...]:
+    """Return the tracked production modules without inspecting untracked worktrees."""
+    completed = subprocess.run(
+        ["git", "ls-files", "-z", "--", "pilates"],
+        cwd=_REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+    )
+    files = tuple(
+        _REPOSITORY_ROOT / Path(raw_path.decode())
+        for raw_path in completed.stdout.split(b"\0")
+        if raw_path.endswith(b".py")
+    )
+    assert files, "Expected tracked production Python modules under pilates/."
+    return files
+
+
+def _retired_symbols_in(tree: ast.AST) -> set[str]:
+    """Find retired execution API use through Python syntax, not text matching."""
+    defined = {
         node.name
         for node in ast.walk(tree)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
     }
-    imported_names = {
-        alias.name
+    imports = {
+        candidate
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom)
+        if isinstance(node, (ast.Import, ast.ImportFrom))
         for alias in node.names
+        for candidate in (alias.name, alias.asname)
+        if candidate is not None
     }
-    referenced_names = {
-        node.id for node in ast.walk(tree) if isinstance(node, ast.Name)
+    names = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    attributes = {
+        node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)
     }
+    return _RETIRED_SYMBOLS & (defined | imports | names | attributes)
 
-    assert not defined_names & _LEGACY_FACTORY_NAMES
-    assert not imported_names & _LEGACY_IMPORT_NAMES
-    assert not referenced_names & _LEGACY_IMPORT_NAMES
+
+def test_native_step_production_modules_exclude_retired_execution_symbols() -> None:
+    """Every tracked production module must stay on the single native path."""
+    violations: dict[Path, set[str]] = {}
+    for path in _tracked_production_python_files():
+        tree = ast.parse(path.read_text(), filename=str(path))
+        retired = _retired_symbols_in(tree)
+        if retired:
+            violations[path.relative_to(_REPOSITORY_ROOT)] = retired
+
+    assert not violations, "Retired execution symbols found: " + repr(violations)
+
+
+def test_ast_guard_detects_retired_execution_imports_and_references() -> None:
+    """Keep the all-production scan sensitive to the prohibited API forms."""
+    imports = "\n".join(
+        f"from retired_execution import {symbol}"
+        for symbol in sorted(_RETIRED_EXECUTION_SYMBOLS)
+    )
+    attributes = "\n".join(
+        f"retired_execution.{symbol}" for symbol in sorted(_RETIRED_EXECUTION_SYMBOLS)
+    )
+
+    assert _retired_symbols_in(ast.parse(imports)) >= _RETIRED_EXECUTION_SYMBOLS
+    assert _retired_symbols_in(ast.parse(attributes)) >= _RETIRED_EXECUTION_SYMBOLS

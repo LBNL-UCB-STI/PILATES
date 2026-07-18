@@ -7,7 +7,7 @@ summary: Detailed step-by-step lineage reference for the current PILATES workflo
 
 ## How To Read This Page
 
-- Each stage below shows what PILATES reads, what it publishes, and which keys matter for restart or replay.
+- Each stage below shows what PILATES reads, what it publishes, and which keys matter for restart.
 - The list is derived from the current workflow catalog and step publication logic, not from older migration notes.
 - The emphasis is on workflow-visible lineage: what later tracked steps can resolve through published keys, not every internal temporary file.
 - For key meanings and query facets, use [Artifact Semantics](artifact_semantics.md) and [Artifact Facet Catalog](artifact_facet_catalog.md). This page focuses on where those roles move through the workflow.
@@ -23,7 +23,8 @@ What PILATES does:
 
 Why it matters:
 
-- Restart bootstrap can re-enter the workflow through the same tracked path, so later stages do not need a special lineage model just because a run resumed.
+- Restart begins at the normal stage frontier, so later stages do not need a
+  second lineage model just because a run resumed.
 
 ### UrbanSim
 
@@ -70,7 +71,9 @@ interchangeable.
 
 **Why the next step cares**
 
-- postprocess needs the runner output to make it the public mutable datastore handoff, while downstream restart/audit paths can still distinguish the forecast-output role
+- postprocess needs the runner output to make it the public mutable datastore
+  handoff, while downstream restart and audit paths can still distinguish the
+  forecast-output role
 
 #### `urbansim_postprocess`
 
@@ -103,7 +106,7 @@ important H5 roles explicit for the next stage:
 `USIM_POPULATION_SOURCE_H5` may initially point at the UrbanSim runner output,
 while `USIM_DATASTORE_CURRENT_H5` prefers the postprocessed mutable datastore
 when postprocess produced one. Keeping those names distinct prevents later
-ActivitySim or restart binding from treating every H5 path as the same concept.
+ActivitySim or restart handling from treating every H5 path as the same concept.
 
 ### ATLAS
 
@@ -194,7 +197,8 @@ ActivitySim or restart binding from treating every H5 path as the same concept.
 **Why the next step cares**
 
 - postprocess archives the actual ActivitySim-side inputs and outputs that the workflow used
-- Numba/Sharrow warming is node-local runtime preparation for a multiprocessing miss. It is not a tracked, archived, or replayed workflow artifact.
+- Numba/Sharrow warming is node-local runtime preparation for a multiprocessing
+  miss. It is not a tracked or archived workflow artifact.
 
 #### `activitysim_postprocess`
 
@@ -204,7 +208,7 @@ ActivitySim or restart binding from treating every H5 path as the same concept.
 
 **Publishes**
 
-- archived ActivitySim input/output materials needed for inspection and replay
+- archived ActivitySim input/output materials needed for inspection
 - the `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) family used by later archive and lineage queries
 
 **Why the next stage cares**
@@ -224,7 +228,7 @@ ActivitySim or restart binding from treating every H5 path as the same concept.
 
 **Publishes**
 
-- the staged BEAM run inputs and any archived-input snapshots that replay logic needs to recover later
+- the staged BEAM run inputs and archived-input snapshots used for inspection
 
 **Why the next step cares**
 
@@ -288,10 +292,14 @@ Why it matters:
 
 ## Restart-Relevant Notes
 
-- Restart queries use the workflow catalog to determine the producer step for a key.
-- The current restart logic gives special treatment to `ZARR_SKIMS`, ActivitySim archive inputs, and BEAM archived inputs because those are the keys the replay-first path needs to restore.
-- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) and `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) are also restart-relevant because they preserve the published UrbanSim datastore lineage for archive inspection and explicit recovery cases.
-- The launcher now prefers replay plus cache hits. The older manual hydration helpers remain available only for explicit recovery cases and tests.
+- The public restart policy resumes at a stage boundary, with the sole
+  mid-stage boundary `beam_run_completed -> beam_postprocess`.
+- `ZARR_SKIMS` and the published ActivitySim and BEAM artifacts remain
+  restart-relevant because normal native step resolution can consume their
+  declared roles at the resumed frontier.
+- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) and
+  `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) preserve published
+  UrbanSim datastore lineage for archive inspection.
 
 ## Adjacent Pages
 
