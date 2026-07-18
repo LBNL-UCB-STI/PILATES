@@ -8,14 +8,26 @@ import pandas as pd
 
 from consist import BindingResult, resolve_step_contract
 
+from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
+    BEAM_CONFIG_FILE,
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    FINAL_SKIMS_OMX,
+    LINKSTATS,
+    LINKSTATS_WARMSTART,
+    USIM_DATASTORE_BASE_H5,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import (
@@ -143,11 +155,20 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
             assert contract.output_paths is None
             continue
 
+        resolved_inputs = (
+            ResolvedStepInputs(
+                step_name="activitysim_run",
+                binding=BindingResult(inputs={}),
+                metadata={"activitysim_produces_zarr": True},
+            )
+            if name == "activitysim_run"
+            else None
+        )
         declared_paths = definition.output_paths(
             settings=settings,
             state=state,
             workspace=workspace,
-            resolved_inputs=None,
+            resolved_inputs=resolved_inputs,
         )
         if contract.output_paths is None:
             assert contract.outputs is not None
@@ -156,6 +177,135 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
             assert _contract_output_paths(
                 contract.output_paths
             ) == _contract_output_paths(declared_paths)
+
+
+def test_native_steps_declare_static_consist_metadata() -> None:
+    expected = {
+        "urbansim_preprocess": {
+            "inputs": {USIM_DATASTORE_H5},
+            "optional": {FINAL_SKIMS_OMX},
+            "schema_outputs": {
+                USIM_DATASTORE_H5,
+                ASIM_OMX_SKIMS,
+                "hh_size",
+                "income_rates",
+                "relmap",
+                "geoid_to_zone",
+                "schools",
+                "school_districts",
+            },
+        },
+        "urbansim_run": {
+            "inputs": {"usim_mutable_data_dir"},
+            "optional": set(),
+            "schema_outputs": {USIM_DATASTORE_H5, "usim_forecast_output"},
+        },
+        "urbansim_postprocess": {
+            "inputs": {USIM_DATASTORE_H5},
+            "optional": set(),
+            "schema_outputs": {USIM_DATASTORE_H5},
+        },
+        "atlas_preprocess": {
+            "inputs": {USIM_DATASTORE_H5},
+            "optional": set(),
+            "schema_outputs": {
+                "atlas_mutable_input_dir",
+                "atlas_households_csv",
+                "atlas_blocks_csv",
+                "atlas_persons_csv",
+                "atlas_residential_csv",
+                "atlas_jobs_csv",
+                "atlas_grave_csv",
+            },
+        },
+        "atlas_run": {
+            "inputs": {"atlas_mutable_input_dir"},
+            "optional": set(),
+            "schema_outputs": {ATLAS_OUTPUT_DIR},
+        },
+        "atlas_postprocess": {
+            "inputs": {ATLAS_OUTPUT_DIR, USIM_DATASTORE_H5},
+            "optional": set(),
+            "schema_outputs": {USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT},
+        },
+        "activitysim_preprocess": {
+            "inputs": {USIM_POPULATION_SOURCE_H5},
+            "optional": {FINAL_SKIMS_OMX},
+            "schema_outputs": {
+                ASIM_LAND_USE_IN,
+                ASIM_HOUSEHOLDS_IN,
+                ASIM_PERSONS_IN,
+                ASIM_OMX_SKIMS,
+            },
+        },
+        "activitysim_run": {
+            "inputs": {
+                ASIM_LAND_USE_IN,
+                ASIM_HOUSEHOLDS_IN,
+                ASIM_PERSONS_IN,
+            },
+            "optional": {ZARR_SKIMS, ASIM_OMX_SKIMS},
+            "schema_outputs": {ZARR_SKIMS, *ASIM_REQUIRED_RUN_OUTPUT_KEYS},
+        },
+        "activitysim_postprocess": {
+            "inputs": {
+                ASIM_HOUSEHOLDS_IN,
+                ASIM_PERSONS_IN,
+                ASIM_LAND_USE_IN,
+                ASIM_OMX_SKIMS,
+                ZARR_SKIMS,
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+            },
+            "optional": {
+                USIM_POPULATION_SOURCE_H5,
+                USIM_DATASTORE_CURRENT_H5,
+                USIM_DATASTORE_BASE_H5,
+            },
+            "schema_outputs": {USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS},
+        },
+        "beam_preprocess": {
+            "inputs": {
+                BEAM_CONFIG_FILE,
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+            },
+            "optional": {LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT},
+            "schema_outputs": {
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+                LINKSTATS_WARMSTART,
+                "vehicles_beam_in",
+            },
+        },
+        "beam_run": {
+            "inputs": {
+                BEAM_CONFIG_FILE,
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+            },
+            "optional": {LINKSTATS_WARMSTART, ZARR_SKIMS},
+            "schema_outputs": {LINKSTATS, "beam_plans_out"},
+        },
+        "beam_postprocess": {
+            "inputs": set(),
+            "optional": {ZARR_SKIMS},
+            "schema_outputs": {ZARR_SKIMS, "final_skims_omx"},
+        },
+        "beam_full_skim": {
+            "inputs": {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN},
+            "optional": {LINKSTATS_WARMSTART},
+            "schema_outputs": {"beam_full_skims"},
+        },
+    }
+
+    for name, expected_metadata in expected.items():
+        metadata = STEP_DEFINITIONS[name].function.__consist_step__
+        assert set(metadata.inputs or ()) == expected_metadata["inputs"]
+        assert set(metadata.optional_input_keys or ()) == expected_metadata["optional"]
+        assert set(metadata.schema_outputs or ()) == expected_metadata["schema_outputs"]
 
 
 def test_native_model_family_projectors_agree_with_declared_destinations(

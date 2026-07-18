@@ -59,6 +59,16 @@ class _CouplerStub:
         return self._values.get(key, default)
 
 
+class _CountingCouplerStub(_CouplerStub):
+    def __init__(self, values):
+        super().__init__(values)
+        self.calls: list[str] = []
+
+    def get(self, key, default=None):
+        self.calls.append(key)
+        return super().get(key, default)
+
+
 def _surface_stub(
     *,
     activity_demand_enabled: bool,
@@ -92,29 +102,93 @@ def test_binding_plan_converts_to_consist_binding_result():
     assert plan.to_scenario_run_kwargs()["binding"] == binding
 
 
-def test_resolve_artifact_roles_builds_native_binding_without_binding_plan():
+def test_resolve_artifact_roles_freezes_completed_native_selection_once():
+    required = object()
+    optional = object()
+    metadata_only = object()
+    coupler = _CountingCouplerStub(
+        {
+            "required": required,
+            "optional": optional,
+            "metadata_only": metadata_only,
+        }
+    )
     resolved = resolve_artifact_roles(
         step_name="native_step",
         required_roles=("required",),
-        optional_roles=("optional",),
+        optional_roles=("optional", "absent_optional", "metadata_only"),
         artifact_rules=(
             ArtifactBindingRule(semantic_key="required"),
             ArtifactBindingRule(semantic_key="optional", required=False),
+            ArtifactBindingRule(
+                semantic_key="metadata_only",
+                required=False,
+                pass_mode="metadata_only",
+            ),
         ),
         logical_destinations={
             "required": Path("/tmp/required"),
             "optional": Path("/tmp/optional"),
+            "absent_optional": Path("/tmp/absent-optional"),
+            "metadata_only": Path("/tmp/metadata-only"),
         },
-        coupler=_CouplerStub({"optional": "/tmp/optional-source"}),
-        explicit_inputs={"required": "/tmp/required-source"},
+        coupler=coupler,
         settings=None,
         state=None,
         workspace=None,
     )
 
-    assert resolved.binding.inputs == {"required": "/tmp/required-source"}
-    assert resolved.binding.optional_input_keys == ("optional",)
-    assert resolved.source_by_role == {"required": "explicit", "optional": "coupler"}
+    assert resolved.binding.inputs == {"required": required, "optional": optional}
+    assert not resolved.binding.input_keys
+    assert not resolved.binding.optional_input_keys
+    assert resolved.source_by_role == {
+        "required": "coupler",
+        "optional": "coupler",
+        "absent_optional": "missing",
+        "metadata_only": "coupler",
+    }
+    assert resolved.selected_key_by_role == {
+        "required": "required",
+        "optional": "optional",
+        "metadata_only": "metadata_only",
+    }
+    assert resolved.metadata["resolved_values_by_semantic_key"] == {
+        "metadata_only": metadata_only
+    }
+    assert coupler.calls == ["required", "optional", "absent_optional", "metadata_only"]
+
+
+def test_resolve_artifact_roles_freezes_explicit_and_fallback_artifacts():
+    explicit = object()
+    fallback = object()
+
+    resolved = resolve_artifact_roles(
+        step_name="native_step",
+        required_roles=("explicit", "fallback"),
+        optional_roles=(),
+        artifact_rules=(
+            ArtifactBindingRule(semantic_key="explicit"),
+            ArtifactBindingRule(
+                semantic_key="fallback",
+                allow_fallback=True,
+            ),
+        ),
+        logical_destinations={
+            "explicit": Path("/tmp/explicit"),
+            "fallback": Path("/tmp/fallback"),
+        },
+        coupler=_CouplerStub({}),
+        explicit_inputs={"explicit": explicit},
+        fallback_inputs={"fallback": fallback},
+        settings=None,
+        state=None,
+        workspace=None,
+    )
+
+    assert resolved.binding.inputs == {"explicit": explicit, "fallback": fallback}
+    assert not resolved.binding.input_keys
+    assert not resolved.binding.optional_input_keys
+    assert resolved.source_by_role == {"explicit": "explicit", "fallback": "fallback"}
 
 
 def test_resolve_artifact_roles_fails_closed_for_missing_required_role():
@@ -1255,7 +1329,7 @@ def test_build_key_only_binding_plan_preserves_optional_key_split():
         "asim_land_use_in",
         "zarr_skims",
     ]
-    assert plan.optional_input_keys == []
+    assert plan.optional_input_keys == ["zarr_skims"]
     assert not plan.missing_required
 
 

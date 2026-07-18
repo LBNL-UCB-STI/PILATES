@@ -1,15 +1,23 @@
 from pilates.workflows import catalog
-from pilates.workflows.steps import schema_step_builder_registry
+from pilates.workflows.steps import STEP_DEFINITIONS
 from pilates.workflows.steps import shared as step_shared
 from pilates.runtime.launcher import _build_schema_steps
 from types import SimpleNamespace
+from types import MappingProxyType
 
 
-def test_step_outputs_classes_are_catalog_derived():
-    expected = {
-        spec.step_name: spec.outputs_class for spec in catalog.tracked_step_specs()
+def test_step_outputs_classes_are_an_immutable_legacy_holder_map():
+    assert isinstance(step_shared.STEP_OUTPUTS_CLASSES, MappingProxyType)
+    assert set(step_shared.STEP_OUTPUTS_CLASSES) == {
+        spec.step_name for spec in catalog.tracked_step_specs()
     }
-    assert step_shared.STEP_OUTPUTS_CLASSES == expected
+
+    try:
+        step_shared.STEP_OUTPUTS_CLASSES["new_step"] = object  # type: ignore[index]
+    except TypeError:
+        pass
+    else:  # pragma: no cover - MappingProxyType always rejects assignment.
+        raise AssertionError("legacy holder output map must be immutable")
 
 
 def test_step_dependencies_are_catalog_derived():
@@ -36,18 +44,28 @@ def test_runtime_step_dependencies_match_catalog_steps():
 
 def test_schema_steps_follow_catalog_order():
     schema_steps = _build_schema_steps()
-    models = [step.__consist_step__.model for step in schema_steps]
-    assert models == list(catalog.schema_step_names())
+    expected = [
+        STEP_DEFINITIONS[spec.step_name].function
+        for spec in catalog.schema_step_specs()
+    ]
+    assert schema_steps == expected
 
 
-def test_schema_step_builder_registry_covers_catalog_schema_steps():
-    registry = schema_step_builder_registry()
-    assert set(catalog.schema_step_names()) <= set(registry)
+def test_schema_steps_do_not_construct_legacy_factory_closures(monkeypatch):
+    monkeypatch.setattr(
+        "pilates.workflows.steps.schema_step_builder_registry",
+        lambda: (_ for _ in ()).throw(AssertionError("legacy factory registry used")),
+    )
+
+    assert _build_schema_steps() == [
+        STEP_DEFINITIONS[spec.step_name].function
+        for spec in catalog.schema_step_specs()
+    ]
 
 
-def test_tracked_catalog_steps_define_outputs_class():
+def test_tracked_catalog_steps_do_not_own_typed_output_classes():
     for spec in catalog.tracked_step_specs():
-        assert spec.outputs_class is not None
+        assert not hasattr(spec, "outputs_class")
 
 
 def test_catalog_step_names_are_unique():

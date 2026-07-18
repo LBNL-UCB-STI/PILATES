@@ -537,6 +537,12 @@ def test_pinned_closure_hydrates_multi_producer_files_and_manifest_zarr(tmp_path
         "beam-run-1",
         "asim-run-1",
     ]
+    assert all(
+        kwargs["preserve_existing"] is False
+        and kwargs["on_missing"] == "warn"
+        and kwargs["db_fallback"] == "never"
+        for _run_id, kwargs in tracker.hydrate_calls
+    )
     assert events_destination.is_file()
     assert zarr_destination.is_dir()
 

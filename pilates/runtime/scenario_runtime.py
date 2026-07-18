@@ -14,11 +14,7 @@ from typing import (
 )
 
 from pilates.config import PilatesConfig
-from pilates.workflows.catalog import schema_step_names, schema_step_specs
-from pilates.workflows.steps import (
-    StepOutputsHolder,
-    schema_step_builder_registry,
-)
+from pilates.workflows.catalog import schema_step_specs
 
 logger = logging.getLogger(__name__)
 
@@ -326,25 +322,6 @@ class ScenarioParentLinkProxy:
         return result
 
 
-class SchemaCoupler:
-    """No-op coupler used to construct decorated step callables for schema introspection."""
-
-    def get(self, _key: str, default: Optional[Any] = None) -> Any:
-        return default
-
-    def set(self, _key: str, _value: Any) -> None:
-        return None
-
-    def update(self, _mapping: Dict[str, Any]) -> None:
-        return None
-
-    def view(self, _namespace: str) -> "SchemaCoupler":
-        return self
-
-    def declare_outputs(self, *args: Any, **kwargs: Any) -> None:
-        return None
-
-
 DEFAULT_CACHE_EPOCH = 2
 
 
@@ -357,29 +334,8 @@ def resolve_cache_epoch(settings: PilatesConfig) -> int:
 
 
 def build_schema_steps() -> List[Callable[..., Any]]:
-    """
-    Build schema-validation step instances with a schema-only coupler.
-
-    These are intentionally not reused as runtime step instances. Schema and
-    runtime assembly call the same ``make_*`` factories, but they pass
-    different couplers: ``SchemaCoupler`` here for contract discovery, and a
-    live workflow coupler during execution. Keeping them as separate instances
-    preserves that boundary while letting the model-local factories stay
-    closure-based.
-    """
-    coupler = SchemaCoupler()
-    outputs_holder = StepOutputsHolder()
-    step_factories = schema_step_builder_registry()
-    ordered_steps = schema_step_names()
-    missing_factories = [name for name in ordered_steps if name not in step_factories]
-    if missing_factories:
-        raise RuntimeError(
-            "Missing schema step factories for: " + ", ".join(missing_factories)
-        )
-    return [
-        step_factories[step_name](coupler=coupler, outputs_holder=outputs_holder)
-        for step_name in ordered_steps
-    ]
+    """Return catalog-ordered committed native Consist callables for schema checks."""
+    return [spec.definition.function for spec in schema_step_specs()]
 
 
 def filter_schema_steps_for_enabled_models(
@@ -388,18 +344,15 @@ def filter_schema_steps_for_enabled_models(
     surface: "EnabledWorkflowSurface",
     include_optional: bool = True,
 ) -> List[Callable[..., Any]]:
-    enabled_models = surface.enabled_schema_step_names(
+    enabled_step_names = surface.enabled_schema_step_names(
         include_optional=include_optional
     )
-
-    filtered: List[Callable[..., Any]] = []
-    for step_func in steps:
-        meta = getattr(step_func, "__consist_step__", None)
-        model_name = getattr(meta, "model", "") if meta is not None else ""
-        if model_name not in enabled_models:
-            continue
-        filtered.append(step_func)
-    return filtered
+    enabled_step_functions = {
+        spec.definition.function
+        for spec in schema_step_specs(include_optional=include_optional)
+        if spec.step_name in enabled_step_names
+    }
+    return [step_func for step_func in steps if step_func in enabled_step_functions]
 
 
 def _required_output_keys_for_surface(

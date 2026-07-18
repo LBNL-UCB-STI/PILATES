@@ -1634,6 +1634,18 @@ def _resolve_atlas_postprocess_inputs(
 @define_step(
     model="urbansim_preprocess",
     name_template="urbansim_preprocess__y{year}__i{iteration}__phase_{phase}",
+    inputs={USIM_DATASTORE_H5: None},
+    optional_input_keys=(FINAL_SKIMS_OMX,),
+    schema_outputs=[
+        USIM_DATASTORE_H5,
+        "omx_skims",
+        "hh_size",
+        "income_rates",
+        "relmap",
+        "geoid_to_zone",
+        "schools",
+        "school_districts",
+    ],
     output_paths=_native_contract_output_paths(
         _urbansim_preprocess_native_output_paths
     ),
@@ -1659,6 +1671,8 @@ def _native_urbansim_preprocess(
 @define_step(
     model="urbansim_run",
     name_template="urbansim_run__y{year}__i{iteration}__phase_{phase}",
+    inputs={USIM_MUTABLE_DATA_DIR: None},
+    schema_outputs=[USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT],
     output_paths=_native_contract_output_paths(_urbansim_run_native_output_paths),
     input_binding="paths",
     **consist_step_meta("urbansim_run"),
@@ -1681,6 +1695,8 @@ def _native_urbansim_run(
 @define_step(
     model="urbansim_postprocess",
     name_template="urbansim_postprocess__y{year}__i{iteration}__phase_{phase}",
+    inputs={USIM_DATASTORE_H5: None},
+    schema_outputs=[USIM_DATASTORE_H5],
     output_paths=_native_contract_output_paths(
         _urbansim_postprocess_native_output_paths
     ),
@@ -1705,6 +1721,16 @@ def _native_urbansim_postprocess(
 @define_step(
     model="atlas_preprocess",
     name_template="atlas_preprocess__y{year}__i{iteration}__phase_{phase}",
+    inputs={USIM_DATASTORE_H5: None},
+    schema_outputs=[
+        "atlas_mutable_input_dir",
+        "atlas_households_csv",
+        "atlas_blocks_csv",
+        "atlas_persons_csv",
+        "atlas_residential_csv",
+        "atlas_jobs_csv",
+        "atlas_grave_csv",
+    ],
     output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta("atlas_preprocess"),
@@ -1724,6 +1750,8 @@ def _native_atlas_preprocess(
 @define_step(
     model="atlas_run",
     name_template="atlas_run__y{year}__i{iteration}__phase_{phase}",
+    inputs={"atlas_mutable_input_dir": None},
+    schema_outputs=[ATLAS_OUTPUT_DIR],
     output_paths=_native_contract_output_paths(_atlas_run_native_output_paths),
     input_binding="paths",
     **consist_step_meta("atlas_run"),
@@ -1746,6 +1774,8 @@ def _native_atlas_run(
 @define_step(
     model="atlas_postprocess",
     name_template="atlas_postprocess__y{year}__i{iteration}__phase_{phase}",
+    inputs={ATLAS_OUTPUT_DIR: None, USIM_DATASTORE_H5: None},
+    schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
     output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta("atlas_postprocess"),

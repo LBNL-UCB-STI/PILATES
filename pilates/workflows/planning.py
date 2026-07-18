@@ -532,7 +532,7 @@ class _PlanBuilder:
 
     def _build_assumptions(self) -> List[str]:
         assumptions = [
-            "Artifact edges come from workflow_step_contracts_by_name(); step ordering is tracked separately via depends_on and upstream_step_inputs.",
+            "Artifact edges come from workflow_step_contracts_by_name(); step ordering is tracked separately via catalog depends_on policy.",
             "Missing or blank contracts are preserved as underdeclared gaps instead of being guessed from runtime code.",
         ]
         if self.include_postprocessing:
@@ -688,6 +688,9 @@ class _PlanBuilder:
             step_name=step_name,
             atlas_year=atlas_year,
         )
+        spec = workflow_step_spec_for_step_name(step_name)
+        if spec is None:
+            raise KeyError(f"Unknown workflow step: {step_name}")
         self._step_sequence += 1
         step_id = "step_%03d_%s" % (self._step_sequence, _slugify(step_name))
         step_run = PlannedStepRun(
@@ -708,12 +711,11 @@ class _PlanBuilder:
             iteration=iteration,
             atlas_year=atlas_year,
             optional=bool(contract["optional"]),
-            depends_on=list(contract["depends_on"]),
-            upstream_step_inputs=list(contract["upstream_step_inputs"]),
+            depends_on=list(spec.depends_on),
         )
         self.plan.step_runs.append(step_run)
         self._add_declared_input_edges(step_run, contract)
-        self._add_dependency_edges(step_run, contract)
+        self._add_dependency_edges(step_run)
         self._add_declared_output_edges(step_run, contract)
         self._add_contract_gaps(step_run, contract)
         self._latest_step_by_name[step_name] = step_id
@@ -957,11 +959,8 @@ class _PlanBuilder:
     def _add_dependency_edges(
         self,
         step_run: PlannedStepRun,
-        contract: Mapping[str, Any],
     ) -> None:
-        for upstream_name in list(contract["depends_on"]) + list(
-            contract["upstream_step_inputs"]
-        ):
+        for upstream_name in step_run.depends_on:
             upstream_step_id = self._latest_step_by_name.get(str(upstream_name))
             if upstream_step_id is None:
                 continue
@@ -1037,20 +1036,14 @@ class _PlanBuilder:
         )
 
         if not has_declared_inputs and (
-            contract["depends_on"]
-            or contract["upstream_step_inputs"]
-            or step_run.step_name == "postprocessing"
+            step_run.depends_on or step_run.step_name == "postprocessing"
         ):
             message = "No declared input contract is available for this step."
             if step_run.step_name == "postprocessing":
                 message = "Postprocessing currently reads workspace outputs directly; inbound artifact contract is not declared."
             self._append_gap(step_run, "underdeclared_inputs", message)
 
-        if (
-            not has_declared_outputs
-            and spec is not None
-            and spec.outputs_class is not None
-        ):
+        if not has_declared_outputs and spec is not None and spec.tracked:
             self._append_gap(
                 step_run,
                 "underdeclared_outputs",

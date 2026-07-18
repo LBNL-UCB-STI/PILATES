@@ -191,7 +191,12 @@ def _settings(cache_enabled=True, code_identity=None):
 
 
 def _state():
-    return SimpleNamespace(start_year=2017)
+    return SimpleNamespace(
+        start_year=2017,
+        current_year=2017,
+        forecast_year=2017,
+        data_initialized=False,
+    )
 
 
 def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
@@ -847,6 +852,153 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
     assert isinstance(coupler.get("plans_beam_in"), str)
     assert isinstance(coupler.get("households_beam_in"), str)
     assert isinstance(coupler.get("persons_beam_in"), str)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_urbansim_roles(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    assert coupler.get("usim_datastore_h5") == str(staged_h5)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {"usim_datastore_h5": "/existing/current.h5"}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    assert coupler.get("usim_datastore_h5") == "/existing/current.h5"
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        SimpleNamespace(
+            start_year=2017,
+            current_year=2023,
+            forecast_year=2028,
+            data_initialized=False,
+        ),
+        SimpleNamespace(
+            start_year=2017,
+            current_year=2017,
+            forecast_year=2017,
+            data_initialized=True,
+        ),
+    ],
+    ids=["later_year", "restart_at_initial_year"],
+)
+def test_seed_bootstrap_artifacts_to_coupler_does_not_backfill_current_urbansim_role_outside_initial_frontier(
+    tmp_path,
+    state,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+    coupler.set("usim_datastore_base_h5", str(staged_h5))
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    assert coupler.get("usim_datastore_h5") is None
+
+
+def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consumer(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    settings = _settings()
+    settings.run.models = SimpleNamespace(
+        land_use=None,
+        activity_demand=None,
+        vehicle_ownership=None,
+        traffic_assignment=None,
+    )
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") is None
+    assert coupler.get("usim_datastore_h5") is None
 
 
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(

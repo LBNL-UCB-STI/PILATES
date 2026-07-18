@@ -43,6 +43,7 @@ from pilates.workflows.outputs_base import declared_outputs_for_step_outputs_cla
 from pilates.workflows.outputs_base import required_outputs_for_step_outputs_class
 from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.steps import (
+    STEP_DEFINITIONS,
     StepOutputsHolder,
     make_activitysim_postprocess_step,
     make_activitysim_preprocess_step,
@@ -170,21 +171,33 @@ def test_filter_schema_steps_for_enabled_models_supports_surface_subset():
         run=SimpleNamespace(models=SimpleNamespace()),
     )
     surface = build_enabled_workflow_surface(settings)
+    native_steps = scenario_runtime.build_schema_steps()
 
     filtered = scenario_runtime.filter_schema_steps_for_enabled_models(
-        _declared_schema_steps(),
+        native_steps,
         include_optional=True,
         surface=surface,
     )
 
     filtered_names = {
-        getattr(getattr(step, "__consist_step__", None), "model", None)
-        for step in filtered
+        name
+        for name, definition in STEP_DEFINITIONS.items()
+        if definition.function in filtered
     }
     assert "activitysim_preprocess" in filtered_names
     assert "beam_preprocess" in filtered_names
     assert "urbansim_preprocess" not in filtered_names
     assert "atlas_preprocess" not in filtered_names
+
+    native_activitysim_steps = {
+        STEP_DEFINITIONS[name].function
+        for name in (
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        )
+    }
+    assert native_activitysim_steps <= set(filtered)
 
 
 def test_validate_workflow_step_contracts_flags_output_provider_catalog_drift(

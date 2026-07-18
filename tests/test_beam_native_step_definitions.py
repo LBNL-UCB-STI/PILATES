@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -12,6 +13,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.steps.beam import (
+    _materialize_native_outputs,
     _native_beam_postprocess,
     beam_full_skim,
     beam_postprocess,
@@ -32,6 +34,22 @@ def _write_event_types(path: Path, event_types: list[str]) -> None:
     import pandas as pd
 
     pd.DataFrame({"type": event_types}).to_parquet(path, index=False)
+
+
+def test_materialize_native_outputs_preserves_same_directory_source(
+    tmp_path: Path,
+) -> None:
+    skims = tmp_path / "skims.zarr"
+    marker = skims / ".zgroup"
+    marker.parent.mkdir()
+    marker.write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+    _materialize_native_outputs(
+        source_paths={ZARR_SKIMS: skims},
+        declared_outputs={ZARR_SKIMS: skims},
+    )
+
+    assert marker.read_text(encoding="utf-8") == '{"zarr_format": 2}\n'
 
 
 def test_native_beam_definitions_resolve_consist_contracts(
@@ -107,6 +125,18 @@ def test_native_beam_definitions_resolve_consist_contracts(
     assert contracts["beam_preprocess"].output_paths
     assert contracts["beam_run"].output_paths
     assert contracts["beam_full_skim"].output_paths
+
+
+def test_native_beam_artifact_inputs_match_callable_parameter_names() -> None:
+    for definition in (beam_preprocess, beam_run, beam_full_skim):
+        declared = definition.function.__consist_step__
+        declared_artifact_inputs = set(declared.inputs or {})
+        declared_artifact_inputs.update(declared.input_keys or ())
+        declared_artifact_inputs.update(declared.optional_input_keys or ())
+
+        assert declared_artifact_inputs <= set(
+            inspect.signature(definition.function).parameters
+        )
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(

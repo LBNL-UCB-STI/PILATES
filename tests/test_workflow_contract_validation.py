@@ -71,17 +71,25 @@ def test_catalog_declared_key_matching_covers_dynamic_families():
         "linkstats_2018_0",
         direction="output",
     )
+    # ATLAS's mutable input directory is the sole static run input.  CPI, ADOPT,
+    # and vehicle mappings are files within that prepared directory, not separate
+    # artifacts in the native step contract.
     assert catalog.workflow_step_key_is_declared(
+        "atlas_run",
+        "atlas_mutable_input_dir",
+        direction="input",
+    )
+    assert not catalog.workflow_step_key_is_declared(
         "atlas_run",
         "cpi",
         direction="input",
     )
-    assert catalog.workflow_step_key_is_declared(
+    assert not catalog.workflow_step_key_is_declared(
         "atlas_run",
         "adopt/zev_mandate/new_vehicles_biannual_values_2023",
         direction="input",
     )
-    assert catalog.workflow_step_key_is_declared(
+    assert not catalog.workflow_step_key_is_declared(
         "atlas_run",
         "vehicle_type_mapping_evMandForced2",
         direction="input",
@@ -404,24 +412,18 @@ def test_log_and_set_output_does_not_warn_for_declared_dynamic_output(caplog, tm
     )
 
 
-def test_log_and_set_output_does_not_warn_for_declared_optional_output(
-    caplog, tmp_path
-):
-    coupler = _FakeCoupler()
-    artifact_path = tmp_path / "artifact.txt"
-    artifact_path.write_text("artifact", encoding="utf-8")
-
-    with caplog.at_level("WARNING"):
-        log_and_set_output(
-            key="linkstats_warmstart",
-            path=str(artifact_path),
-            description="test artifact",
-            coupler=coupler,
-            step_name="beam_run",
-        )
-
-    assert not any(
-        "published undeclared output key" in record.message for record in caplog.records
+def test_beam_warmstart_is_input_only_not_a_declared_output():
+    # Warning emission is intentionally process-global one-shot state.  The
+    # contract assertion itself is the invariant this regression protects.
+    assert catalog.workflow_step_key_is_declared(
+        "beam_run",
+        "linkstats_warmstart",
+        direction="input",
+    )
+    assert not catalog.workflow_step_key_is_declared(
+        "beam_run",
+        "linkstats_warmstart",
+        direction="output",
     )
 
 

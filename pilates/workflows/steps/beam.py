@@ -1856,6 +1856,8 @@ def _materialize_native_outputs(
                 f"BEAM native output {key!r} is missing before declared output logging: "
                 f"{source}."
             )
+        if source.resolve() == destination.resolve():
+            continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
             if destination.exists():
@@ -2514,15 +2516,22 @@ def _log_native_output_records(*, outputs: Any, context: Any) -> None:
         BEAM_PERSONS_IN: None,
     },
     optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
+    schema_outputs=[
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+        "vehicles_beam_in",
+    ],
     output_paths=_native_contract_output_paths(_beam_preprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta("beam_preprocess"),
 )
 def _native_beam_preprocess(
     beam_config_file: Path,
-    beam_plans_in: Path,
-    beam_households_in: Path,
-    beam_persons_in: Path,
+    plans_beam_in: Path,
+    households_beam_in: Path,
+    persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
     atlas_vehicles2_output: Path | None = None,
     *,
@@ -2538,9 +2547,9 @@ def _native_beam_preprocess(
     from pilates.beam.preprocessor import BeamPreprocessor
 
     inputs = {
-        BEAM_PLANS_IN: beam_plans_in,
-        BEAM_HOUSEHOLDS_IN: beam_households_in,
-        BEAM_PERSONS_IN: beam_persons_in,
+        BEAM_PLANS_IN: plans_beam_in,
+        BEAM_HOUSEHOLDS_IN: households_beam_in,
+        BEAM_PERSONS_IN: persons_beam_in,
     }
     if linkstats_warmstart is not None:
         inputs[LINKSTATS_WARMSTART] = linkstats_warmstart
@@ -2583,15 +2592,16 @@ def _native_beam_preprocess(
         BEAM_PERSONS_IN: None,
     },
     optional_input_keys=(LINKSTATS_WARMSTART, ZARR_SKIMS),
+    schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
     **consist_step_meta("beam_run"),
 )
 def _native_beam_run(
     beam_config_file: Path,
-    beam_plans_in: Path,
-    beam_households_in: Path,
-    beam_persons_in: Path,
+    plans_beam_in: Path,
+    households_beam_in: Path,
+    persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
     zarr_skims: Path | None = None,
     *,
@@ -2603,9 +2613,9 @@ def _native_beam_run(
     if not beam_config_file.exists():
         raise FileNotFoundError(f"beam_run config is missing: {beam_config_file}")
     prepared = {
-        BEAM_PLANS_IN: beam_plans_in,
-        BEAM_HOUSEHOLDS_IN: beam_households_in,
-        BEAM_PERSONS_IN: beam_persons_in,
+        BEAM_PLANS_IN: plans_beam_in,
+        BEAM_HOUSEHOLDS_IN: households_beam_in,
+        BEAM_PERSONS_IN: persons_beam_in,
     }
     if linkstats_warmstart is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
@@ -2637,6 +2647,7 @@ def _native_beam_run(
     model="beam_postprocess",
     name_template="beam_postprocess__y{year}__i{iteration}__phase_{phase}",
     optional_input_keys=(ZARR_SKIMS,),
+    schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),
     input_binding="paths",
     **consist_step_meta("beam_postprocess"),
@@ -2715,14 +2726,15 @@ def _native_beam_postprocess(
         BEAM_PERSONS_IN: None,
     },
     optional_input_keys=(LINKSTATS_WARMSTART,),
+    schema_outputs=["beam_full_skims"],
     output_paths=_native_contract_output_paths(_beam_full_skim_native_output_paths),
     input_binding="paths",
     **consist_step_meta("beam_full_skim"),
 )
 def _native_beam_full_skim(
-    beam_plans_in: Path,
-    beam_households_in: Path,
-    beam_persons_in: Path,
+    plans_beam_in: Path,
+    households_beam_in: Path,
+    persons_beam_in: Path,
     linkstats_warmstart: Path | None = None,
     *,
     settings: Any,
@@ -2731,9 +2743,9 @@ def _native_beam_full_skim(
     _consist_ctx: Any,
 ) -> None:
     prepared = {
-        BEAM_PLANS_IN: beam_plans_in,
-        BEAM_HOUSEHOLDS_IN: beam_households_in,
-        BEAM_PERSONS_IN: beam_persons_in,
+        BEAM_PLANS_IN: plans_beam_in,
+        BEAM_HOUSEHOLDS_IN: households_beam_in,
+        BEAM_PERSONS_IN: persons_beam_in,
     }
     if linkstats_warmstart is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart

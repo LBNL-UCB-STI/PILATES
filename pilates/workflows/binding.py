@@ -40,7 +40,7 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
-from pilates.utils.state_access import iteration_index
+from pilates.utils.state_access import iteration_index, uses_input_datastore
 from pilates.utils.usim_h5 import (
     ensure_usim_population_year_table_aliases,
     resolve_usim_population_table_paths,
@@ -1301,8 +1301,6 @@ def resolve_artifact_roles(
     optional = tuple(optional_roles)
     rule_by_role = {rule.semantic_key: rule for rule in artifact_rules}
     inputs: Dict[str, Any] = {}
-    input_keys: list[str] = []
-    optional_input_keys: list[str] = []
     source_by_role: Dict[str, str] = {}
     selected_key_by_role: Dict[str, str] = {}
     candidate_paths_by_role: Dict[str, list[str]] = {}
@@ -1334,9 +1332,7 @@ def resolve_artifact_roles(
             selected_key_by_role[role] = matched_candidate or selected_key
         if source != "missing" and rule.pass_mode == "metadata_only":
             resolved_values_by_role[role] = value
-        elif source == "coupler" and selected_key is not None:
-            (input_keys if is_required else optional_input_keys).append(selected_key)
-        elif source in {"explicit", "fallback"}:
+        elif source != "missing":
             inputs[role] = value
 
     metadata: Dict[str, Any] = {}
@@ -1348,8 +1344,6 @@ def resolve_artifact_roles(
         step_name=step_name,
         binding=BindingResult(
             inputs=inputs or None,
-            input_keys=tuple(dict.fromkeys(input_keys)) or None,
-            optional_input_keys=tuple(dict.fromkeys(optional_input_keys)) or None,
             metadata=metadata or None,
         ),
         required_roles=required,
@@ -1638,6 +1632,47 @@ def _bootstrap_beam_warmstart_artifacts(
     return {LINKSTATS_WARMSTART: warmstart_path}
 
 
+def _bootstrap_urbansim_initial_datastore(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    **_: Any,
+) -> Optional[Mapping[str, str]]:
+    """Publish the bootstrap-staged UrbanSim input H5 at the initial frontier."""
+    if getattr(state, "data_initialized", None) is not False:
+        return None
+    if not uses_input_datastore(state):
+        return None
+
+    models = getattr(getattr(settings, "run", None), "models", None)
+    requires_urbansim_datastore = (
+        getattr(models, "land_use", None) == "urbansim"
+        or getattr(models, "activity_demand", None) == "activitysim"
+        or getattr(models, "vehicle_ownership", None) == "atlas"
+    )
+    if not requires_urbansim_datastore:
+        return None
+
+    get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
+    urbansim_cfg = getattr(settings, "urbansim", None)
+    if not callable(get_usim_data_dir) or urbansim_cfg is None:
+        return None
+
+    from pilates.urbansim.postprocessor import get_usim_datastore_fname
+
+    staged_input_h5 = os.path.join(
+        get_usim_data_dir(),
+        get_usim_datastore_fname(settings, io="input"),
+    )
+    if not os.path.exists(staged_input_h5):
+        return None
+    return {
+        USIM_DATASTORE_BASE_H5: staged_input_h5,
+        USIM_DATASTORE_CURRENT_H5: staged_input_h5,
+    }
+
+
 def bootstrap_stage_boundary_durability_policy() -> tuple[
     StageBoundaryDurabilityRule, ...
 ]:
@@ -1649,6 +1684,15 @@ def bootstrap_stage_boundary_durability_policy() -> tuple[
     """
 
     return (
+        StageBoundaryDurabilityRule(
+            name="urbansim_initial_datastore",
+            semantic_keys=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
+            resolve=_bootstrap_urbansim_initial_datastore,
+            notes=(
+                "The initial workflow frontier consumes the bootstrap-staged "
+                "UrbanSim input datastore as both its immutable base and current role."
+            ),
+        ),
         StageBoundaryDurabilityRule(
             name="beam_exchange_inputs",
             semantic_keys=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),

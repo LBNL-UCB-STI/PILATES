@@ -1,12 +1,14 @@
 from types import SimpleNamespace
 
 import pytest
+from consist import define_step
 
 from pilates.runtime.launcher import (
     _build_schema_steps,
     _filter_schema_steps_for_enabled_models,
 )
 from pilates.workflows.catalog import enabled_schema_step_models
+from pilates.workflows.steps import STEP_DEFINITIONS
 from pilates.workflows.surface import build_enabled_workflow_surface
 
 
@@ -36,6 +38,14 @@ def _surface(settings):
     return build_enabled_workflow_surface(settings)
 
 
+def _step_names(steps):
+    functions_to_names = {
+        definition.function: step_name
+        for step_name, definition in STEP_DEFINITIONS.items()
+    }
+    return {functions_to_names[step] for step in steps}
+
+
 def test_filter_schema_steps_for_activitysim_beam_only_excludes_urbansim_atlas():
     settings = _settings(
         activity_demand="activitysim",
@@ -49,13 +59,27 @@ def test_filter_schema_steps_for_activitysim_beam_only_excludes_urbansim_atlas()
         surface=_surface(settings),
     )
 
-    models = {step.__consist_step__.model for step in required_steps}
-
-    assert any(model.startswith("activitysim_") for model in models)
-    assert any(model.startswith("beam_") for model in models)
-    assert all(not model.startswith("urbansim_") for model in models)
-    assert all(not model.startswith("atlas_") for model in models)
-    assert "beam_full_skim" not in models
+    assert {
+        STEP_DEFINITIONS[step_name].function
+        for step_name in (
+            "activitysim_preprocess",
+            "activitysim_run",
+            "activitysim_postprocess",
+        )
+    }.issubset(required_steps)
+    assert all(
+        step not in required_steps
+        for step_name in (
+            "urbansim_preprocess",
+            "urbansim_run",
+            "urbansim_postprocess",
+            "atlas_preprocess",
+            "atlas_run",
+            "atlas_postprocess",
+            "beam_full_skim",
+        )
+        for step in (STEP_DEFINITIONS[step_name].function,)
+    )
 
 
 def test_filter_schema_steps_matches_catalog_enablement_models():
@@ -70,7 +94,7 @@ def test_filter_schema_steps_matches_catalog_enablement_models():
         include_optional=False,
         surface=_surface(settings),
     )
-    models = {step.__consist_step__.model for step in required_steps}
+    step_names = _step_names(required_steps)
     expected = enabled_schema_step_models(
         settings,
         is_model_enabled=lambda current_settings, *, flag_attr, model_attr: (
@@ -85,7 +109,7 @@ def test_filter_schema_steps_matches_catalog_enablement_models():
         ),
         include_optional=False,
     )
-    assert models == expected
+    assert step_names == expected
 
 
 def test_filter_schema_steps_all_disabled_returns_empty():
@@ -115,10 +139,27 @@ def test_filter_schema_steps_optional_toggle_controls_beam_full_skim():
         include_optional=False,
         surface=_surface(settings),
     )
-    with_models = {step.__consist_step__.model for step in with_optional}
-    without_models = {step.__consist_step__.model for step in without_optional}
-    assert "beam_full_skim" in with_models
-    assert "beam_full_skim" not in without_models
+    assert "beam_full_skim" in _step_names(with_optional)
+    assert "beam_full_skim" not in _step_names(without_optional)
+
+
+def test_filter_schema_steps_rejects_nonregistry_callable_with_enabled_model_label():
+    @define_step(model="beam_run")
+    def unrelated_beam_run() -> None:
+        pass
+
+    settings = _settings(
+        activity_demand="activitysim",
+        traffic_assignment="beam",
+    )
+    filtered = _filter_schema_steps_for_enabled_models(
+        [*_build_schema_steps(), unrelated_beam_run],
+        include_optional=False,
+        surface=_surface(settings),
+    )
+
+    assert unrelated_beam_run not in filtered
+    assert STEP_DEFINITIONS["activitysim_run"].function in filtered
 
 
 @pytest.mark.parametrize(
@@ -159,10 +200,10 @@ def test_filter_schema_steps_run_models_shape_uses_catalog_enablement_mapping(
         include_optional=False,
         surface=surface,
     )
-    models = {step.__consist_step__.model for step in required_steps}
+    step_names = _step_names(required_steps)
 
-    assert any(model.startswith(expected_prefix) for model in models)
+    assert any(step_name.startswith(expected_prefix) for step_name in step_names)
     for other_prefix in ("urbansim_", "atlas_", "activitysim_", "beam_"):
         if other_prefix == expected_prefix:
             continue
-        assert all(not model.startswith(other_prefix) for model in models)
+        assert all(not step_name.startswith(other_prefix) for step_name in step_names)

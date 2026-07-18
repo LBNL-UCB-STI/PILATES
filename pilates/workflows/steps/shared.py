@@ -187,7 +187,7 @@ import inspect as pyinspect
 import logging
 from dataclasses import dataclass, fields
 from pathlib import Path
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import (
     Any,
     Callable,
@@ -272,7 +272,6 @@ from pilates.workflows.catalog import (
     WORKFLOW_STEP_SPECS,
     runtime_step_dependencies_from_catalog,
     step_dependencies_from_catalog,
-    step_outputs_classes_from_catalog,
     workflow_step_key_match,
     workflow_step_spec_for_step_name,
 )
@@ -761,7 +760,27 @@ def _upstream_outputs_view(
     return upstream
 
 
-STEP_OUTPUTS_CLASSES = step_outputs_classes_from_catalog()
+# Legacy holder reconstruction and startup validation only.  This map is
+# intentionally not derived from the workflow catalog or native StepDefinitions:
+# neither is the owner of typed PILATES holder policy.  Task 7 deletes the holder
+# stack and this temporary legacy map with it.
+STEP_OUTPUTS_CLASSES = MappingProxyType(
+    {
+        "urbansim_preprocess": UrbanSimPreprocessOutputs,
+        "urbansim_run": UrbanSimRunOutputs,
+        "urbansim_postprocess": UrbanSimPostprocessOutputs,
+        "atlas_preprocess": AtlasPreprocessOutputs,
+        "atlas_run": AtlasRunOutputs,
+        "atlas_postprocess": AtlasPostprocessOutputs,
+        "activitysim_preprocess": ActivitySimPreprocessOutputs,
+        "activitysim_run": ActivitySimRunOutputs,
+        "activitysim_postprocess": ActivitySimPostprocessOutputs,
+        "beam_preprocess": BeamPreprocessOutputs,
+        "beam_run": BeamRunOutputs,
+        "beam_postprocess": BeamPostprocessOutputs,
+        "beam_full_skim": BeamFullSkimOutputs,
+    }
+)
 
 
 STEP_DEPENDENCIES = step_dependencies_from_catalog()
