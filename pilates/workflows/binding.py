@@ -1,9 +1,8 @@
 """
 Workflow binding-layer data structures.
 
-This module is intentionally narrow for the foundation batch: it defines the
-runtime binding policy objects and the ``BindingPlan -> consist.BindingResult``
-adapter used at the ``scenario.run(...)`` boundary.
+This module defines runtime binding policy objects and freezes selected
+artifacts into ``consist.BindingResult`` values for native step execution.
 
 Semantic workflow contracts remain owned by ``catalog.py``. Binding specs may
 derive their artifact universe from the catalog by reference so runtime binding
@@ -14,7 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -35,7 +34,6 @@ from pilates.runtime.archive_paths import archive_fallback_path, first_existing_
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
-    artifact_to_path,
     resolve_input_precedence,
 )
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
@@ -124,169 +122,6 @@ class ArtifactBindingRule:
     pass_mode: Literal["auto", "input_key_only", "explicit_only", "metadata_only"] = (
         "auto"
     )
-
-
-@dataclass(frozen=True)
-class StepBindingSpec:
-    """
-    Runtime binding policy for a workflow step.
-
-    When ``derive_from_catalog`` is true, semantic input/output keys are pulled
-    from ``catalog.py`` by reference. The foundation batch keeps the API small
-    while giving the execution layer a first-class binding surface.
-    """
-
-    step_name: str
-    derive_from_catalog: bool = True
-    artifact_rules: tuple[ArtifactBindingRule, ...] = ()
-    required_output_paths: tuple[str, ...] = ()
-    optional_output_paths: tuple[str, ...] = ()
-    notes: Optional[str] = None
-
-    @classmethod
-    def from_catalog(
-        cls,
-        step_name: str,
-        *,
-        settings: Any = None,
-        notes: Optional[str] = None,
-    ) -> "StepBindingSpec":
-        from pilates.workflows.catalog import workflow_step_contracts_by_name
-
-        contracts = workflow_step_contracts_by_name(settings=settings)
-        contract = contracts.get(step_name)
-        if contract is None:
-            raise KeyError(f"Unknown workflow step '{step_name}'.")
-
-        artifact_rules = tuple(
-            [
-                *(
-                    ArtifactBindingRule(semantic_key=key, required=True)
-                    for key in contract.get("input_keys", ())
-                ),
-                *(
-                    ArtifactBindingRule(semantic_key=key, required=False)
-                    for key in contract.get("optional_input_keys", ())
-                ),
-            ]
-        )
-        return cls(
-            step_name=step_name,
-            derive_from_catalog=True,
-            artifact_rules=artifact_rules,
-            required_output_paths=tuple(contract.get("output_keys", ())),
-            optional_output_paths=tuple(contract.get("optional_output_keys", ())),
-            notes=notes,
-        )
-
-    def with_rule_overrides(
-        self,
-        *overrides: ArtifactBindingRule,
-        notes: Optional[str] = None,
-    ) -> "StepBindingSpec":
-        by_key = {rule.semantic_key: rule for rule in self.artifact_rules}
-        for override in overrides:
-            existing = by_key.get(override.semantic_key)
-            if existing is None:
-                by_key[override.semantic_key] = override
-                continue
-            by_key[override.semantic_key] = ArtifactBindingRule(
-                semantic_key=existing.semantic_key,
-                required=override.required,
-                allow_explicit=override.allow_explicit,
-                allow_coupler=override.allow_coupler,
-                allow_fallback=override.allow_fallback,
-                preferred_keys=override.preferred_keys or existing.preferred_keys,
-                fallback_provider=(
-                    override.fallback_provider
-                    if override.fallback_provider is not None
-                    else existing.fallback_provider
-                ),
-                pass_mode=override.pass_mode,
-            )
-        return StepBindingSpec(
-            step_name=self.step_name,
-            derive_from_catalog=self.derive_from_catalog,
-            artifact_rules=tuple(by_key.values()),
-            required_output_paths=self.required_output_paths,
-            optional_output_paths=self.optional_output_paths,
-            notes=notes if notes is not None else self.notes,
-        )
-
-    def semantic_input_keys(self) -> tuple[str, ...]:
-        if self.derive_from_catalog:
-            from pilates.workflows.catalog import workflow_step_spec_for_step_name
-
-            step_spec = workflow_step_spec_for_step_name(self.step_name)
-            if step_spec is not None:
-                return _ordered_unique(
-                    step_spec.input_keys,
-                    step_spec.optional_input_keys,
-                )
-        return tuple(rule.semantic_key for rule in self.artifact_rules)
-
-    def semantic_output_keys(self) -> tuple[str, ...]:
-        if self.derive_from_catalog:
-            from pilates.workflows.catalog import workflow_step_spec_for_step_name
-
-            step_spec = workflow_step_spec_for_step_name(self.step_name)
-            if step_spec is not None:
-                return tuple(step_spec.output_keys)
-        return tuple(self.required_output_paths)
-
-
-@dataclass(frozen=True)
-class BindingPlan:
-    """
-    PILATES-local binding plan for a resolved workflow step.
-    """
-
-    step_name: Optional[str] = None
-    inputs: Optional[Dict[str, Any]] = field(default_factory=dict)
-    input_keys: Optional[list[str]] = field(default_factory=list)
-    optional_input_keys: Optional[list[str]] = field(default_factory=list)
-    source_by_key: Dict[str, str] = field(default_factory=dict)
-    coupler_key_by_key: Dict[str, str] = field(default_factory=dict)
-    missing_required: list[str] = field(default_factory=list)
-    output_paths: Optional[Dict[str, Any]] = None
-    metadata: Optional[Dict[str, Any]] = None
-
-    def stepref_inputs(self) -> Optional[Dict[str, Any]]:
-        inputs = dict(self.inputs) if self.inputs is not None else {}
-        return inputs if inputs else None
-
-    def stepref_input_keys(self) -> Optional[list[str]]:
-        input_keys = list(self.input_keys) if self.input_keys is not None else []
-        return input_keys if input_keys else None
-
-    def stepref_optional_input_keys(self) -> Optional[list[str]]:
-        optional_input_keys = (
-            list(self.optional_input_keys)
-            if self.optional_input_keys is not None
-            else []
-        )
-        return optional_input_keys if optional_input_keys else None
-
-    def to_binding_result(self) -> BindingResult:
-        inputs = dict(self.inputs) if self.inputs is not None else {}
-        input_keys = list(self.input_keys) if self.input_keys is not None else []
-        optional_input_keys = (
-            list(self.optional_input_keys)
-            if self.optional_input_keys is not None
-            else []
-        )
-        return BindingResult(
-            inputs=inputs if inputs else None,
-            input_keys=input_keys if input_keys else None,
-            optional_input_keys=optional_input_keys if optional_input_keys else None,
-            metadata=dict(self.metadata) if self.metadata else None,
-        )
-
-    def to_scenario_run_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {"binding": self.to_binding_result()}
-        if self.output_paths is not None:
-            kwargs["output_paths"] = dict(self.output_paths)
-        return kwargs
 
 
 @dataclass(frozen=True)
@@ -382,153 +217,6 @@ def activitysim_datastore_selection_rules() -> tuple[ArtifactBindingRule, ...]:
             ),
             fallback_provider="urbansim_inputs_for_year",
         ),
-    )
-
-
-def beam_preprocess_binding_plan(
-    *,
-    coupler: Optional[CouplerProtocol],
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    year: Optional[int],
-    activity_demand_outputs: Optional[Mapping[str, Any]],
-    previous_beam_outputs: Optional[Mapping[str, Any]],
-    surface: "EnabledWorkflowSurface",
-) -> BindingPlan:
-    """
-    Build the BEAM preprocess binding plan from explicit upstream artifacts.
-
-    The plan itself owns fallback selection for the BEAM-only exchange inputs,
-    warm-start linkstats, and optional ATLAS vehicles2 resolution.
-    """
-    resolved_profile = surface.profile
-    if resolved_profile.activity_demand_enabled and activity_demand_outputs is None:
-        if previous_beam_outputs is None:
-            raise RuntimeError(
-                "TrafficAssignment iteration 0 requires activity_demand_outputs "
-                "or previous_beam_outputs. Ensure ActivityDemand completed or "
-                "provide warm-start outputs before running BEAM."
-            )
-
-    explicit_inputs: Dict[str, Any] = {}
-    if activity_demand_outputs is not None:
-        activity_keys = {
-            "beam_plans_asim_out",
-            "beam_plans_out",
-            "households_asim_out",
-            "linkstats",
-            "persons_asim_out",
-        }
-        for key, value in activity_demand_outputs.items():
-            if key in activity_keys:
-                explicit_inputs[key] = value
-    if previous_beam_outputs is not None:
-        for key, value in previous_beam_outputs.items():
-            if key.startswith("linkstats"):
-                explicit_inputs[key] = value
-
-    if not resolved_profile.activity_demand_enabled:
-        get_value = getattr(coupler, "get", None)
-        if callable(get_value):
-            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
-                value = artifact_to_path(get_value(key), workspace)
-                if value:
-                    explicit_inputs.setdefault(key, value)
-        exchange_inputs = _beam_preprocess_exchange_inputs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            surface=surface,
-        )
-        if exchange_inputs:
-            for key, value in exchange_inputs.items():
-                explicit_inputs.setdefault(key, value)
-
-    explicit_linkstats_value = next(
-        (
-            value
-            for key, value in explicit_inputs.items()
-            if key.startswith("linkstats")
-        ),
-        None,
-    )
-    if explicit_linkstats_value is not None:
-        explicit_inputs.setdefault(LINKSTATS_WARMSTART, explicit_linkstats_value)
-    else:
-        warmstart_inputs = _beam_preprocess_warmstart_inputs(
-            settings=settings,
-            coupler=coupler,
-            workspace=workspace,
-            surface=surface,
-        )
-        if warmstart_inputs:
-            for key, value in warmstart_inputs.items():
-                explicit_inputs.setdefault(key, value)
-
-    require_exact_atlas_vehicles = bool(
-        resolved_profile.activity_demand_enabled
-        and activity_demand_outputs is not None
-        and resolved_profile.vehicle_ownership_model_enabled
-        and iteration_index(state, default=0) == 0
-    )
-    get_value = getattr(coupler, "get", None)
-    restored_atlas_vehicle = None
-    if callable(get_value):
-        restored_atlas_vehicle = artifact_to_existing_path(
-            get_value(ATLAS_VEHICLES2_OUTPUT), workspace
-        )
-    atlas_inputs = _beam_preprocess_atlas_inputs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-        require_exact_year=require_exact_atlas_vehicles,
-    )
-    # When BEAM is consuming the ActivitySim outputs from the current phase,
-    # keep the ATLAS vehicles2 selection anchored to that same local year before
-    # considering older coupler state from a restart/recovery path.
-    prefer_current_atlas_inputs = bool(
-        resolved_profile.activity_demand_enabled
-        and activity_demand_outputs is not None
-        and atlas_inputs
-    )
-    if prefer_current_atlas_inputs:
-        for key, value in atlas_inputs.items():
-            explicit_inputs.setdefault(key, value)
-
-    if callable(get_value):
-        current_atlas_vehicle = (
-            atlas_inputs.get(ATLAS_VEHICLES2_OUTPUT) if atlas_inputs else None
-        )
-        if (
-            prefer_current_atlas_inputs
-            and restored_atlas_vehicle
-            and current_atlas_vehicle
-            and os.fspath(restored_atlas_vehicle) != os.fspath(current_atlas_vehicle)
-        ):
-            logger.warning(
-                "BEAM preprocess is using current ActivitySim-year ATLAS vehicles2 "
-                "instead of an existing coupler %s value: selected=%s ignored=%s",
-                ATLAS_VEHICLES2_OUTPUT,
-                current_atlas_vehicle,
-                restored_atlas_vehicle,
-            )
-        if restored_atlas_vehicle:
-            explicit_inputs.setdefault(ATLAS_VEHICLES2_OUTPUT, restored_atlas_vehicle)
-    if atlas_inputs and not prefer_current_atlas_inputs:
-        for key, value in atlas_inputs.items():
-            explicit_inputs.setdefault(key, value)
-
-    return build_binding_plan(
-        step_name="beam_preprocess",
-        coupler=coupler,
-        explicit_inputs=explicit_inputs,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=year,
-        surface=surface,
     )
 
 
@@ -1126,35 +814,41 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
     }
 
 
-def binding_spec_for_step_name(
+def artifact_rules_for_step_name(
     step_name: str,
     *,
     settings: Any = None,
-) -> Optional[StepBindingSpec]:
-    """
-    Return a runtime binding spec for ``step_name``.
+) -> tuple[ArtifactBindingRule, ...]:
+    """Return catalog-derived native selection rules with local overrides."""
+    from pilates.workflows.catalog import workflow_step_contracts_by_name
 
-    The base binding surface derives from the semantic catalog. Pilot-step
-    overrides only declare runtime resolution policy, not a second artifact
-    registry.
-    """
-
-    try:
-        spec = StepBindingSpec.from_catalog(step_name, settings=settings)
-    except KeyError:
-        return None
-    overrides = _pilot_binding_overrides().get(step_name)
-    if not overrides:
-        return spec
-    return spec.with_rule_overrides(*overrides)
-
-
-def _binding_rule_lookup(
-    spec: Optional[StepBindingSpec],
-) -> Dict[str, ArtifactBindingRule]:
-    if spec is None:
-        return {}
-    return {rule.semantic_key: rule for rule in spec.artifact_rules}
+    contract = workflow_step_contracts_by_name(settings=settings).get(step_name)
+    if contract is None:
+        return ()
+    rules = {
+        key: ArtifactBindingRule(semantic_key=key, required=True)
+        for key in contract.get("input_keys", ())
+    }
+    rules.update(
+        {
+            key: ArtifactBindingRule(semantic_key=key, required=False)
+            for key in contract.get("optional_input_keys", ())
+        }
+    )
+    for override in _pilot_binding_overrides().get(step_name, ()):
+        existing = rules.get(override.semantic_key)
+        rules[override.semantic_key] = ArtifactBindingRule(
+            semantic_key=override.semantic_key,
+            required=override.required if existing is None else existing.required,
+            allow_explicit=override.allow_explicit,
+            allow_coupler=override.allow_coupler,
+            allow_fallback=override.allow_fallback,
+            preferred_keys=override.preferred_keys
+            or (() if existing is None else existing.preferred_keys),
+            fallback_provider=override.fallback_provider,
+            pass_mode=override.pass_mode,
+        )
+    return tuple(rules.values())
 
 
 def _lookup_fallback_inputs(
@@ -1352,212 +1046,6 @@ def resolve_artifact_roles(
         selected_key_by_role=selected_key_by_role,
         logical_destinations=logical_destinations,
         metadata=metadata,
-    )
-
-
-def build_binding_plan(
-    *,
-    step_name: str,
-    coupler: Optional[CouplerProtocol] = None,
-    explicit_inputs: Optional[Mapping[str, Any]] = None,
-    fallback_inputs: Optional[Mapping[str, Any]] = None,
-    artifact_rules: Optional[Iterable[ArtifactBindingRule]] = None,
-    restrict_to_inline_rules: bool = False,
-    required_keys: Optional[Iterable[str]] = None,
-    optional_keys: Optional[Iterable[str]] = None,
-    output_paths: Optional[Mapping[str, Any]] = None,
-    metadata: Optional[Mapping[str, Any]] = None,
-    settings: Any = None,
-    state: Any = None,
-    workspace: Any = None,
-    year: Optional[int] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
-) -> BindingPlan:
-    spec = binding_spec_for_step_name(step_name, settings=settings)
-    inline_rules = tuple(artifact_rules or ())
-    rule_lookup = {} if restrict_to_inline_rules else _binding_rule_lookup(spec)
-    for rule in inline_rules:
-        rule_lookup[rule.semantic_key] = rule
-    if year is None and state is not None:
-        year = getattr(state, "year", None)
-    runtime_surface = surface.step_surface(step_name) if surface is not None else None
-
-    required_semantic_keys = tuple(
-        required_keys
-        if required_keys is not None
-        else (
-            runtime_surface.required_input_keys
-            if runtime_surface is not None
-            else (rule.semantic_key for rule in rule_lookup.values() if rule.required)
-        )
-    )
-    optional_semantic_keys = tuple(
-        optional_keys
-        if optional_keys is not None
-        else (
-            runtime_surface.optional_input_keys
-            if runtime_surface is not None
-            else (
-                rule.semantic_key for rule in rule_lookup.values() if not rule.required
-            )
-        )
-    )
-    caller_scoped_fallback_inputs = fallback_inputs is not None and (
-        required_keys is not None or optional_keys is not None
-    )
-
-    plan_inputs: Dict[str, Any] = {}
-    plan_input_keys: list[str] = []
-    plan_optional_input_keys: list[str] = []
-    source_by_key: Dict[str, str] = {}
-    coupler_key_by_key: Dict[str, str] = {}
-    missing_required: list[str] = []
-    selected_key_by_semantic_key: Dict[str, str] = {}
-    candidate_paths_by_semantic_key: Dict[str, list[str]] = {}
-    resolved_values_by_semantic_key: Dict[str, Any] = {}
-
-    def _default_rule(semantic_key: str, *, required: bool) -> ArtifactBindingRule:
-        return ArtifactBindingRule(semantic_key=semantic_key, required=required)
-
-    for semantic_key, is_required in [(key, True) for key in required_semantic_keys] + [
-        (key, False) for key in optional_semantic_keys
-    ]:
-        rule = rule_lookup.get(semantic_key) or _default_rule(
-            semantic_key, required=is_required
-        )
-        if runtime_surface is not None:
-            role_policy = runtime_surface.input_role_policies.get(semantic_key)
-            if role_policy is not None:
-                rule = ArtifactBindingRule(
-                    semantic_key=rule.semantic_key,
-                    required=is_required,
-                    allow_explicit=(
-                        rule.allow_explicit and role_policy.explicit_inputs_allowed
-                    ),
-                    allow_coupler=(
-                        rule.allow_coupler and role_policy.coupler_fallback_allowed
-                    ),
-                    allow_fallback=(
-                        rule.allow_fallback
-                        and role_policy.workspace_archive_fallback_allowed
-                    ),
-                    preferred_keys=rule.preferred_keys,
-                    fallback_provider=rule.fallback_provider,
-                    pass_mode=rule.pass_mode,
-                )
-        if caller_scoped_fallback_inputs and not rule.allow_fallback:
-            rule = ArtifactBindingRule(
-                semantic_key=rule.semantic_key,
-                required=rule.required,
-                allow_explicit=rule.allow_explicit,
-                allow_coupler=rule.allow_coupler,
-                allow_fallback=True,
-                preferred_keys=rule.preferred_keys,
-                fallback_provider=rule.fallback_provider,
-                pass_mode=rule.pass_mode,
-            )
-        source, selected_key, value, matched_candidate, candidate_paths = (
-            _resolve_rule_binding(
-                rule=rule,
-                coupler=coupler,
-                explicit_inputs=explicit_inputs,
-                fallback_inputs=fallback_inputs,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                year=year,
-                surface=surface,
-            )
-        )
-        source_by_key[semantic_key] = source
-        if candidate_paths:
-            candidate_paths_by_semantic_key.update(candidate_paths)
-        if selected_key is not None:
-            coupler_key_by_key[semantic_key] = selected_key
-            selected_key_by_semantic_key[semantic_key] = (
-                matched_candidate or selected_key
-            )
-        if source != "missing" and rule.pass_mode == "metadata_only":
-            resolved_values_by_semantic_key[semantic_key] = value
-        elif source == "coupler" and selected_key is not None:
-            if is_required:
-                plan_input_keys.append(selected_key)
-            else:
-                plan_optional_input_keys.append(selected_key)
-        elif source in {"explicit", "fallback"}:
-            plan_inputs[semantic_key] = value
-        elif is_required:
-            missing_required.append(semantic_key)
-
-    plan_metadata = dict(metadata or {})
-    if selected_key_by_semantic_key:
-        plan_metadata.setdefault("selected_key_by_semantic_key", {}).update(
-            selected_key_by_semantic_key
-        )
-    if candidate_paths_by_semantic_key:
-        plan_metadata.setdefault(_CANDIDATE_PATHS_METADATA_KEY, {}).update(
-            candidate_paths_by_semantic_key
-        )
-    if resolved_values_by_semantic_key:
-        plan_metadata.setdefault(_RESOLVED_VALUES_METADATA_KEY, {}).update(
-            resolved_values_by_semantic_key
-        )
-    if spec is not None and spec.notes and "notes" not in plan_metadata:
-        plan_metadata["notes"] = spec.notes
-
-    return BindingPlan(
-        step_name=step_name,
-        inputs=plan_inputs,
-        input_keys=list(dict.fromkeys(plan_input_keys)),
-        optional_input_keys=list(dict.fromkeys(plan_optional_input_keys)),
-        source_by_key=source_by_key,
-        coupler_key_by_key=coupler_key_by_key,
-        missing_required=missing_required,
-        output_paths=dict(output_paths) if output_paths is not None else None,
-        metadata=plan_metadata or None,
-    )
-
-
-def build_key_only_binding_plan(
-    *,
-    step_name: str,
-    input_keys: Optional[Iterable[str]] = None,
-    optional_input_keys: Optional[Iterable[str]] = None,
-    coupler: Optional[CouplerProtocol] = None,
-    metadata: Optional[Mapping[str, Any]] = None,
-    settings: Any = None,
-    state: Any = None,
-    workspace: Any = None,
-    year: Optional[int] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
-) -> BindingPlan:
-    """
-    Build a binding plan for steps that consume coupler-backed keys only.
-
-    This keeps dynamic key lists on the shared binding path so stages no longer
-    need to assemble raw ``BindingPlan(input_keys=...)`` envelopes by hand.
-    """
-    ordered_input_keys = list(dict.fromkeys(input_keys or ()))
-    if not ordered_input_keys:
-        return BindingPlan(
-            step_name=step_name,
-            metadata=dict(metadata) if metadata else None,
-        )
-
-    optional_key_set = set(optional_input_keys or ())
-    required_keys = [key for key in ordered_input_keys if key not in optional_key_set]
-    optional_keys = [key for key in ordered_input_keys if key in optional_key_set]
-    return build_binding_plan(
-        step_name=step_name,
-        coupler=coupler,
-        required_keys=required_keys,
-        optional_keys=optional_keys or None,
-        metadata=metadata,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=year,
-        surface=surface,
     )
 
 

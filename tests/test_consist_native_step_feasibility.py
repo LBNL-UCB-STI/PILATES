@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
+
 from consist import BindingResult, define_step
 from consist.core.tracker import Tracker
-from consist.types import CacheOptions, ExecutionOptions, OutputArtifactSpec
+from consist.types import CacheOptions, ExecutionOptions
 
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -13,7 +13,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_PERSONS_IN,
     FINAL_SKIMS_OMX,
 )
-from pilates.workflows.steps import StepOutputsHolder, make_activitysim_preprocess_step
 
 
 def _tracker(tmp_path: Path) -> Tracker:
@@ -266,54 +265,6 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
     upstream_omx.parent.mkdir(parents=True, exist_ok=True)
     upstream_omx.write_bytes(b"upstream omx bytes")
 
-    class Coupler:
-        def __init__(self) -> None:
-            self.values: dict[str, object] = {}
-
-        def get(self, key: str, default: object = None) -> object:
-            return self.values.get(key, default)
-
-        def set(self, key: str, value: object) -> None:
-            self.values[key] = value
-
-    actual_step = make_activitysim_preprocess_step(
-        coupler=Coupler(),
-        outputs_holder=StepOutputsHolder(),
-    )
-    actual_meta = actual_step.__consist_step__
-    assert callable(actual_meta.output_paths)
-
-    expected_keys = {
-        ASIM_LAND_USE_IN,
-        ASIM_HOUSEHOLDS_IN,
-        ASIM_PERSONS_IN,
-        ASIM_OMX_SKIMS,
-    }
-    actual_outputs = actual_meta.output_paths(
-        settings=object(),
-        state=object(),
-        workspace=SimpleNamespace(
-            get_asim_mutable_data_dir=lambda: str(workspace_three_first),
-            get_asim_mutable_configs_dir=lambda: str(tmp_path / "configs"),
-        ),
-    )
-    assert set(actual_outputs) == expected_keys
-    assert all(
-        isinstance(output, OutputArtifactSpec) for output in actual_outputs.values()
-    )
-    assert {output.path for output in actual_outputs.values()} == {
-        str(workspace_three_first / "land_use.csv"),
-        str(workspace_three_first / "households.csv"),
-        str(workspace_three_first / "persons.csv"),
-        str(workspace_three_first / "skims.omx"),
-    }
-    assert str(workspace_three_first) not in {
-        output.path for output in actual_outputs.values()
-    }
-    assert str(tmp_path / "configs") not in {
-        output.path for output in actual_outputs.values()
-    }
-
     calls: list[str] = []
 
     @define_step(model="activitysim_preprocess_file_contract", input_binding="paths")
@@ -358,6 +309,12 @@ def test_activitysim_preprocess_file_outputs_rehydrate_and_retain_omx_lineage(
                 ),
             )
 
+    expected_keys = {
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_OMX_SKIMS,
+    }
     expected_three_file_keys = expected_keys - {ASIM_OMX_SKIMS}
     three_first = run_preprocess(
         workspace_three_first,

@@ -64,7 +64,9 @@ def test_resolved_binding_cannot_be_mutated_after_selection() -> None:
         resolved.binding.inputs["explicit"] = "changed"  # type: ignore[index]
 
 
-def test_resolved_required_and_optional_roles_cannot_be_mutated_after_selection() -> None:
+def test_resolved_required_and_optional_roles_cannot_be_mutated_after_selection() -> (
+    None
+):
     required_roles = ["skims"]
     optional_roles = ["warmstart"]
     resolved = ResolvedStepInputs(

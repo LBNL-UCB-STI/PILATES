@@ -12,7 +12,7 @@ from consist.protocols import ArtifactRecordLike
 
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.coupler_helpers import artifact_to_path
-from pilates.workflows.binding import BindingPlan
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -112,7 +112,7 @@ def emit_recovery_boundary_audit(
     *,
     boundary: str,
     successor_step: str,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     predecessor_outputs: Optional[Mapping[str, Any]] = None,
     state: WorkflowState,
     workspace: Workspace,
@@ -128,11 +128,9 @@ def emit_recovery_boundary_audit(
     if audit_path is None:
         return None
 
-    required_keys = sorted(
-        set(binding.input_keys or ()) - set(binding.optional_input_keys or ())
-    )
-    optional_keys = sorted(set(binding.optional_input_keys or ()))
-    bound_inputs = dict(binding.inputs or {})
+    required_keys = sorted(set(binding.required_roles))
+    optional_keys = sorted(set(binding.optional_roles))
+    bound_inputs = dict(binding.binding.inputs or {})
     predecessor_values = dict(predecessor_outputs or {})
     payload = {
         "schema_version": "v1",
@@ -152,9 +150,13 @@ def emit_recovery_boundary_audit(
             "required_input_keys": required_keys,
             "optional_input_keys": optional_keys,
             "bound_input_keys": sorted(bound_inputs),
-            "missing_required": sorted(binding.missing_required or ()),
-            "source_by_key": dict(sorted(binding.source_by_key.items())),
-            "coupler_key_by_key": dict(sorted(binding.coupler_key_by_key.items())),
+            "missing_required": sorted(
+                key
+                for key in binding.required_roles
+                if binding.source_by_role.get(key) == "missing"
+            ),
+            "source_by_key": dict(sorted(binding.source_by_role.items())),
+            "coupler_key_by_key": dict(sorted(binding.selected_key_by_role.items())),
         },
         "artifacts": {
             key: _artifact_observation(

@@ -7,14 +7,10 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import (
     CouplerProtocol,
-    ScenarioRestorationLike,
     ScenarioWithCoupler,
 )
 from pilates.utils.coupler_helpers import (
@@ -26,14 +22,11 @@ from pilates.utils.formatting import formatted_print
 from pilates.beam.outputs import BeamRunOutputs
 from pilates.workflows.resume import (
     HistoricalOutputRequest,
-    ResumeBoundaryPolicy,
     ResumeDecision,
     ResumeDisposition,
     ResumePlanningError,
     ResumeProjectionError,
     RestoreExecutionResult,
-    build_resume_plan,
-    execute_restore_decision,
 )
 from pilates.workflows.beam_checkpoint import (
     PinnedClosureMember,
@@ -41,7 +34,6 @@ from pilates.workflows.beam_checkpoint import (
     beam_postprocess_is_in_progress,
     checkpoint_fingerprint_matches,
     hydrate_pinned_closure,
-    is_verified_hydrated_recovery_output,
     is_verified_hydrated_zarr_directory,
     mark_beam_postprocess_in_progress,
     read_beam_run_checkpoint,
@@ -49,13 +41,9 @@ from pilates.workflows.beam_checkpoint import (
     validate_pinned_closure_snapshot,
     verify_archive_visible_pinned_closure_bytes,
 )
-from pilates.workflows.binding import BindingPlan
-from pilates.workflows.orchestration import run_workflow
-from pilates.workflows.orchestration import StageRunner
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import (
-    StepOutputsHolder,
     beam_full_skim,
     beam_postprocess,
     beam_preprocess,
@@ -78,7 +66,7 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
+    pass
 
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
@@ -104,8 +92,6 @@ class TrafficAssignmentPhaseInputs:
 
     year: int
     iteration: int
-    activity_demand_outputs: Optional[Dict[str, Any]]
-    previous_beam_outputs: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -121,7 +107,7 @@ class TrafficAssignmentPhaseOutputs:
         and coupler rather than this public handoff.
     """
 
-    previous_beam_outputs: Optional[Dict[str, Any]]
+    pass
 
 
 @dataclass(frozen=True)
@@ -195,7 +181,7 @@ def _beam_restart_identity_context(
 
 def beam_preprocess_binding_diagnostic_payload(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -228,9 +214,11 @@ def beam_preprocess_binding_diagnostic_payload(
         for key, path in required_local_inputs.items()
         if path and not os.path.exists(path)
     )
-    missing_required = (
-        binding.missing_required if binding.missing_required is not None else []
-    )
+    missing_required = [
+        role
+        for role in binding.required_roles
+        if binding.source_by_role.get(role) in {None, "missing"}
+    ]
     missing_restart_inputs = sorted(set(missing_required) | set(missing_local_inputs))
     resolved_identity_context = dict(
         identity_context
@@ -276,35 +264,13 @@ def beam_preprocess_binding_diagnostic_payload(
             "iteration",
             getattr(state, "current_inner_iter", None),
         ),
-        "input_keys": sorted(
-            binding.input_keys if binding.input_keys is not None else []
-        ),
-        "optional_input_keys": sorted(
-            binding.optional_input_keys
-            if binding.optional_input_keys is not None
-            else []
-        ),
-        "bound_input_keys": sorted(
-            (binding.inputs if binding.inputs is not None else {}).keys()
-        ),
+        "input_keys": sorted(binding.required_roles),
+        "optional_input_keys": sorted(binding.optional_roles),
+        "bound_input_keys": sorted((binding.binding.inputs or {}).keys()),
         "missing_required": sorted(missing_required),
         "missing_restart_inputs": missing_restart_inputs,
-        "source_by_key": dict(
-            sorted(
-                (
-                    binding.source_by_key if binding.source_by_key is not None else {}
-                ).items()
-            )
-        ),
-        "coupler_key_by_key": dict(
-            sorted(
-                (
-                    binding.coupler_key_by_key
-                    if binding.coupler_key_by_key is not None
-                    else {}
-                ).items()
-            )
-        ),
+        "source_by_key": dict(sorted((binding.source_by_role).items())),
+        "coupler_key_by_key": dict(sorted((binding.selected_key_by_role).items())),
         "required_local_inputs": _stringify_mapping_values(required_local_inputs),
         "missing_local_inputs": missing_local_inputs,
         "identity_summary": dict(identity_summary or {}),
@@ -319,7 +285,7 @@ def beam_preprocess_binding_diagnostic_payload(
 
 def _emit_beam_preprocess_binding_diagnostic(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -345,7 +311,7 @@ def _emit_beam_preprocess_binding_diagnostic(
 
 def _raise_if_restart_beam_config_missing(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -364,7 +330,7 @@ def _raise_if_restart_beam_config_missing(
     if expected_path is not None and expected_path.exists():
         return
 
-    binding_inputs = binding.inputs if binding.inputs is not None else {}
+    binding_inputs = binding.binding.inputs or {}
     config_value = binding_inputs.get(BEAM_CONFIG_FILE)
     config_hint = f" Resolved binding value: {config_value}." if config_value else ""
     raise RuntimeError(
@@ -442,11 +408,7 @@ def _build_beam_postprocess_input_keys(
     for prefix in ("events_parquet", "raw_od_skims", "raw_od_skims_zarr"):
         final_key = f"{prefix}_{year}_{iteration}"
         if final_key in deduped:
-            deduped = [
-                key
-                for key in deduped
-                if not key.startswith(f"{final_key}_sub")
-            ]
+            deduped = [key for key in deduped if not key.startswith(f"{final_key}_sub")]
     return deduped or None
 
 
@@ -820,122 +782,6 @@ def _open_beam_checkpoint_tracker(snapshot_path: Path, archive_run_dir: Path) ->
     )
 
 
-def _try_restore_completed_beam_run_for_restart(
-    *,
-    scenario: ScenarioRestorationLike,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    surface: "EnabledWorkflowSurface",
-    year: int,
-    iteration: int,
-) -> Optional[_RecoveredBeamRun]:
-    if not bool(getattr(state, "is_restart_run", False)):
-        return None
-    if outputs_holder.beam_run is not None:
-        return _RecoveredBeamRun(
-            outputs=outputs_holder.beam_run,
-            producer_run_id=None,
-        )
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is not None and beam_checkpoint_record_present(archive_run_dir):
-        raise RuntimeError(
-            "Committed BEAM checkpoint must use checkpoint-first postprocess dispatch."
-        )
-
-    tracker = cr.current_tracker()
-    if tracker is None:
-        return None
-    policy = ResumeBoundaryPolicy(
-        step_name="beam_run",
-        rerun_forbidden=True,
-        allows_restore=lambda candidate_state, _surface: candidate_state.is_restart_run,
-        output_requests=_beam_restart_output_requests,
-    )
-    plan = build_resume_plan(
-        state=state,
-        surface=surface,
-        settings=settings,
-        workspace=workspace,
-        tracker=tracker,
-        year=year,
-        iteration=iteration,
-        policy=policy,
-    )
-    decision = plan.decisions["beam_run"]
-    if decision.disposition is not ResumeDisposition.RESTORE:
-        return None
-
-    execution: RestoreExecutionResult = execute_restore_decision(
-        decision=decision,
-        tracker=tracker,
-        source_root=_archive_run_dir_for_restart(state),
-        projection_adapter=lambda hydration: _project_hydrated_beam_run_outputs(
-            hydration_result=hydration,
-            workspace=workspace,
-            coupler=coupler,
-        ),
-        required_output_validator=lambda request, item: (
-            is_verified_hydrated_recovery_output(item, destination=request.destination)
-        ),
-    )
-    _emit_beam_restart_recovery_readiness_diagnostic(
-        state=state,
-        decision=decision,
-        execution=execution,
-        iteration=iteration,
-    )
-    if not execution.succeeded or not isinstance(
-        execution.projected_outputs, BeamRunOutputs
-    ):
-        raise RuntimeError(
-            "BEAM restart found a completed same-run beam_run but could not "
-            "hydrate the required outputs for postprocess. Refusing to rerun "
-            f"BEAM from restart because the completed run is authoritative. "
-            f"run_id={decision.source_run_id} failed_keys={execution.failed_keys} "
-            f"category={execution.failure_category}"
-        )
-
-    outputs = execution.projected_outputs
-    outputs_holder.beam_run = outputs
-    for parent_year in _restored_beam_parent_years(
-        state=state,
-        run_year=year,
-    ):
-        scenario.remember_restored_run_id(
-            model_name="beam_run",
-            year=parent_year,
-            iteration=iteration,
-            run_id=decision.source_run_id,
-        )
-    restored_keys = sorted(outputs.raw_outputs.keys())
-    logger.info(
-        "[BEAM][restart] restored completed beam_run from Consist run_id=%s hydrated_keys=%s",
-        decision.source_run_id,
-        restored_keys,
-    )
-    _emit_artifact_lifecycle_event(
-        "beam_restart_binding",
-        key="beam_restart_binding",
-        artifact_family="beam_restart_diagnostic",
-        diagnostic="beam_restart_binding",
-        restart_run=True,
-        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
-        forecast_year=getattr(state, "forecast_year", None),
-        iteration=iteration,
-        recovery_mode="consist_completed_run_hydration",
-        recovered_run_id=decision.source_run_id,
-        hydrated_output_keys=restored_keys,
-        drift_classification="completed_beam_run_recovered",
-    )
-    return _RecoveredBeamRun(
-        outputs=outputs,
-        producer_run_id=decision.source_run_id,
-    )
-
-
 def _publish_completed_beam_run_checkpoint(
     *,
     scenario: ScenarioWithCoupler,
@@ -1248,67 +1094,6 @@ def _derive_beam_run_input_keys(
     return run_input_keys
 
 
-def _finalize_beam_run_input_keys(
-    *,
-    beam_run_input_keys: Optional[list[str]],
-    outputs_holder: StepOutputsHolder,
-) -> list[str]:
-    """
-    Reconcile BEAM run inputs with the artifacts actually published by preprocess.
-
-    The pre-run key derivation happens before BEAM preprocess executes, but
-    preprocess may decide to publish ``linkstats_warmstart`` after resolving
-    previous outputs. Use the realized preprocess outputs as the final contract.
-    """
-    finalized_keys = list(
-        beam_run_input_keys
-        or [
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        ]
-    )
-    preprocess_outputs = outputs_holder.beam_preprocess
-    prepared_inputs = (
-        preprocess_outputs.prepared_inputs if preprocess_outputs is not None else {}
-    )
-    has_warmstart = LINKSTATS_WARMSTART in prepared_inputs
-    has_vehicles = _BEAM_VEHICLES_IN in prepared_inputs
-    if has_warmstart and LINKSTATS_WARMSTART not in finalized_keys:
-        finalized_keys.append(LINKSTATS_WARMSTART)
-    if not has_warmstart and LINKSTATS_WARMSTART in finalized_keys:
-        finalized_keys = [key for key in finalized_keys if key != LINKSTATS_WARMSTART]
-    if has_vehicles and _BEAM_VEHICLES_IN not in finalized_keys:
-        finalized_keys.append(_BEAM_VEHICLES_IN)
-    return finalized_keys
-
-
-def _make_beam_stage_runner(
-    *,
-    scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    year: int,
-    iteration: int,
-    runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
-    context: WorkflowRuntimeContext,
-) -> StageRunner:
-    """Build the execution context shared by BEAM stage slices."""
-    return StageRunner(
-        stage_name="beam",
-        scenario=scenario,
-        state=context.state,
-        settings=context.settings,
-        workspace=context.workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=f"{year}_iter{iteration}",
-        iteration=iteration,
-        runtime_kwargs_extra=runtime_kwargs_extra,
-        run_workflow_fn=run_workflow,
-    )
-
-
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
     """Inject a controlled restart-canary failure after BEAM run completion."""
     if os.environ.get(_FAIL_AFTER_BEAM_RUN_ENV) != "1":
@@ -1459,14 +1244,8 @@ def _run_beam_full_skim_step(
 def _run_traffic_assignment_phase(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     inputs: TrafficAssignmentPhaseInputs,
-    outputs_holder: object | None = None,
-    context: Optional[WorkflowRuntimeContext] = None,
-    state: Optional[WorkflowState] = None,
-    settings: Optional[PilatesConfig] = None,
-    workspace: Optional[Workspace] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    context: WorkflowRuntimeContext,
 ) -> TrafficAssignmentPhaseOutputs:
     """
     Run BEAM for a single supply-demand iteration.
@@ -1492,17 +1271,9 @@ def _run_traffic_assignment_phase(
     TrafficAssignmentPhaseOutputs
         Combined BEAM outputs for warm-starting the next iteration.
     """
-    runtime_context = ensure_workflow_runtime_context(
-        context=context,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    settings = runtime_context.settings
-    state = runtime_context.state
-    workspace = runtime_context.workspace
-    del coupler, outputs_holder
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
 
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
 
@@ -1520,21 +1291,21 @@ def _run_traffic_assignment_phase(
             scenario=scenario,
             year=inputs.year,
             iteration=inputs.iteration,
-            context=runtime_context,
+            context=context,
         )
     else:
         combined_beam_outputs = _run_beam_steps(
             scenario=scenario,
             year=inputs.year,
             iteration=inputs.iteration,
-            context=runtime_context,
+            context=context,
         )
         if _should_run_full_skim(settings, inputs.iteration):
             full_skim_outputs = _run_beam_full_skim_step(
                 scenario=scenario,
                 year=inputs.year,
                 iteration=inputs.iteration,
-                context=runtime_context,
+                context=context,
             )
             if full_skim_outputs is not None:
                 if combined_beam_outputs is None:
@@ -1547,4 +1318,4 @@ def _run_traffic_assignment_phase(
         state.Stage.traffic_assignment,
     )
 
-    return TrafficAssignmentPhaseOutputs(previous_beam_outputs=combined_beam_outputs)
+    return TrafficAssignmentPhaseOutputs()

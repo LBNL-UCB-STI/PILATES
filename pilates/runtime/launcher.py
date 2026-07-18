@@ -88,15 +88,12 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
-from pilates.workflows.stages.supply_demand_resume import (
-    seed_supply_demand_parent_run_ids_for_resume,
-)
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
 
-from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts  # noqa: E402
+from pilates.workflows.steps import validate_workflow_step_contracts  # noqa: E402
 from consist.types import CacheOptions  # noqa: E402
 
 logging.basicConfig(
@@ -818,14 +815,6 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
-            if is_restart_run:
-                seed_supply_demand_parent_run_ids_for_resume(
-                    scenario=tagged_scenario,
-                    workspace=workspace,
-                    state=state,
-                    tracker=tracker,
-                    settings=settings,
-                )
             if is_restart_run and state.data_initialized:
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "
@@ -852,14 +841,11 @@ def main(
                     cr.current_run_id(),
                 )
                 land_use_handoff = LandUseToSupplyDemandHandoff()
-                outputs_holder_year = StepOutputsHolder()
-
                 if state.should_run(WorkflowState.Stage.land_use):
                     land_use_handoff = run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         coupler=coupler,
                         year=year,
-                        outputs_holder_year=outputs_holder_year,
                         context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.land_use)
@@ -889,7 +875,6 @@ def main(
                         coupler=coupler,
                         year=year,
                         handoff=land_use_handoff,
-                        build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
                             lambda iteration, y=year: (
                                 snapshot_manager.on_outer_iteration_boundary(

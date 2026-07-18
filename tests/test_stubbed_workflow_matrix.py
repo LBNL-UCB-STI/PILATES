@@ -46,7 +46,7 @@ from pilates.workflows.stages.supply_demand import (
 from pilates.workflows.stages.vehicle_ownership import (
     run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
 )
-from pilates.workflows.steps import StepOutputsHolder
+from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from tests.workflow_contract_harness import (
     write_file as _write_file,
     write_parquet as _write_parquet,
@@ -57,7 +57,6 @@ from workflow_state import WorkflowState
 def run_land_use_stage(
     *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
 ):
-    kwargs.pop("outputs_holder_year", None)
     context = context or WorkflowRuntimeContext.from_parts(
         settings=settings,
         state=state,
@@ -317,8 +316,7 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
-        usim_inputs={},
-        build_manifest_path=_manifest_builder(tmp_path, "beam_only_manifests"),
+        handoff=LandUseToSupplyDemandHandoff(),
     )
 
     steps = _steps_by_model(env)
@@ -487,8 +485,7 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
-        usim_inputs={},
-        build_manifest_path=_manifest_builder(tmp_path, "asim_beam_manifests"),
+        handoff=LandUseToSupplyDemandHandoff(),
     )
 
     steps = _steps_by_model(env)
@@ -588,7 +585,6 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     monkeypatch.setattr(UrbansimRunner, "_run", _fake_urbansim_run)
     monkeypatch.setattr(AtlasRunner, "_run", _fake_atlas_run)
 
-    outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
         state=state,
@@ -596,7 +592,6 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
-        outputs_holder_year=outputs_holder_year,
     )
 
     run_vehicle_ownership_stage(

@@ -371,14 +371,14 @@ def _build_step_runtime_surface(
     - binding-spec fallback/explicit/coupler policy
     - restart- or run-shape-specific overlays
     """
-    from pilates.workflows.binding import binding_spec_for_step_name
+    from pilates.workflows.binding import artifact_rules_for_step_name
 
     step_spec = workflow_step_spec_for_step_name(step_name)
     if step_spec is None:
         raise KeyError(f"Unknown workflow step '{step_name}'.")
     contracts = workflow_step_contracts_by_name(settings=settings)
     contract = contracts.get(step_name, {})
-    binding_spec = binding_spec_for_step_name(step_name, settings=settings)
+    binding_rules = artifact_rules_for_step_name(step_name, settings=settings)
 
     required_inputs = tuple(contract.get("input_keys", ()))
     optional_inputs = tuple(contract.get("optional_input_keys", ()))
@@ -402,8 +402,8 @@ def _build_step_runtime_surface(
     )
     input_role_policies: Dict[str, InputRolePolicy] = {}
     declared_input_keys = set(_ordered_unique(required_inputs, optional_inputs))
-    if binding_spec is not None:
-        for rule in binding_spec.artifact_rules:
+    if binding_rules:
+        for rule in binding_rules:
             if (
                 rule.semantic_key not in declared_input_keys
                 and rule.semantic_key not in policy_overrides

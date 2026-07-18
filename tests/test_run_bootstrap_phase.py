@@ -9,7 +9,6 @@ import pytest
 from consist.types import CacheOptions
 
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
 from pilates.atlas.inputs import build_atlas_static_inputs_fallback
 from pilates.generic.records import FileRecord, RecordStore
@@ -382,7 +381,7 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation(monkeypatch, tmp_path, 
                 "cache_hit": False,
                 "execute_fn": True,
                 "run_id": "bootstrap_probe",
-                "meta": {"cache_miss_explplanation": explanation},
+                "meta": {"cache_miss_explanation": explanation},
             }
         ]
     )
@@ -403,9 +402,6 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation(monkeypatch, tmp_path, 
         "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
         "reason=config_changed candidate_run_id=bootstrap_prior"
     ) in caplog.text
-    assert "BOOTSTRAP cache miss details:" in caplog.text
-    assert "config_keys_changed" in caplog.text
-    assert "fallbacks_used" in caplog.text
 
 
 def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatch):
@@ -554,88 +550,6 @@ def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fal
         "probe_run_id": "bootstrap_probe",
         "materialization_run_id": "bootstrap_fallback",
     }
-
-
-def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
-    explanation = {
-        "reason": "inputs_changed",
-        "candidate_run_id": "step_prior",
-        "confidence": "medium",
-        "matched_components": ["config_hash"],
-        "mismatched_components": ["input_hash"],
-        "details": {
-            "input_keys_added": ["beam_skims_input"],
-            "input_artifact_changes": {
-                "beam_skims_input": {"change": "upstream_run_drift"}
-            },
-        },
-    }
-    outputs = object()
-
-    def _run_step(_cache_options):
-        return SimpleNamespace(
-            cache_hit=False,
-            run=SimpleNamespace(
-                id="step_run", meta={"cache_miss_explanation": explanation}
-            ),
-        )
-
-    with caplog.at_level(logging.DEBUG):
-        result, recovered_outputs, metadata = (
-            cache_recovery_module.run_with_cache_recovery(
-                stage_name="atlas",
-                step_name="atlas_run",
-                run_step=_run_step,
-                read_outputs=lambda: outputs,
-                recover_outputs=lambda _result: None,
-            )
-        )
-
-    assert result.run.id == "step_run"
-    assert recovered_outputs is outputs
-    assert metadata["initial_cache_hit"] is False
-    assert metadata["cache_miss_explanation"] == explanation
-    assert (
-        "[atlas] Cache miss for atlas_run. reason=inputs_changed "
-        "candidate_run_id=step_prior"
-    ) in caplog.text
-    assert "[atlas] Cache miss details for atlas_run:" in caplog.text
-    assert "input_keys_added" in caplog.text
-
-
-def test_run_with_cache_recovery_reexecutes_unusable_cache_hit() -> None:
-    outputs = None
-    calls = []
-
-    def _run_step(cache_options):
-        nonlocal outputs
-        calls.append(cache_options)
-        if cache_options is None:
-            return SimpleNamespace(cache_hit=True)
-
-        assert cache_options.cache_mode == "overwrite"
-        outputs = object()
-        return SimpleNamespace(cache_hit=False)
-
-    result, recovered_outputs, metadata = cache_recovery_module.run_with_cache_recovery(
-        stage_name="activity_demand_preprocess",
-        step_name="activitysim_preprocess",
-        run_step=_run_step,
-        read_outputs=lambda: outputs,
-        recover_outputs=lambda _result: None,
-        rerun_on_unusable_cache_hit=lambda: _run_step(
-            cache_recovery_module.CacheOptions(cache_mode="overwrite")
-        ),
-    )
-
-    assert result.cache_hit is False
-    assert recovered_outputs is outputs
-    assert calls[0] is None
-    assert calls[1].cache_mode == "overwrite"
-    assert metadata["initial_cache_hit"] is True
-    assert metadata["rejected_cache_hit"] is True
-    assert metadata["rerun_after_rejected_cache_hit"] is True
-    assert metadata["final_cache_hit"] is False
 
 
 def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_path):

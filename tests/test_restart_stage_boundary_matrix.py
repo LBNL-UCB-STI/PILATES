@@ -11,15 +11,7 @@ from types import SimpleNamespace
 import pytest
 from consist import BindingResult
 
-from pilates.workflows.artifact_keys import (
-    ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
-    BEAM_HOUSEHOLDS_IN,
-    BEAM_PERSONS_IN,
-    BEAM_PLANS_IN,
-    LINKSTATS,
-)
-from pilates.workflows.binding import BindingPlan
+from pilates.workflows.artifact_keys import LINKSTATS
 from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage
@@ -33,85 +25,7 @@ from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
     _emit_beam_restart_recovery_readiness_diagnostic,
     _maybe_fail_after_beam_run_for_canary,
-    beam_preprocess_binding_diagnostic_payload,
 )
-
-
-def _restart_binding(
-    *,
-    config_path: Path,
-    vehicles_path: Path,
-    source_by_key: dict[str, str],
-) -> BindingPlan:
-    return BindingPlan(
-        step_name="beam_preprocess",
-        inputs={
-            BEAM_PLANS_IN: "/tmp/plans.parquet",
-            BEAM_HOUSEHOLDS_IN: "/tmp/households.parquet",
-            BEAM_PERSONS_IN: "/tmp/persons.parquet",
-            ATLAS_VEHICLES2_OUTPUT: str(vehicles_path),
-            BEAM_CONFIG_FILE: str(config_path),
-        },
-        input_keys=[
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-            BEAM_CONFIG_FILE,
-            ATLAS_VEHICLES2_OUTPUT,
-        ],
-        source_by_key=source_by_key,
-        coupler_key_by_key={ATLAS_VEHICLES2_OUTPUT: ATLAS_VEHICLES2_OUTPUT},
-    )
-
-
-def _restart_context(
-    tmp_path: Path,
-) -> tuple[SimpleNamespace, SimpleNamespace, SimpleNamespace, Path, Path]:
-    beam_root = tmp_path / "beam" / "input"
-    region_dir = beam_root / "sfbay"
-    region_dir.mkdir(parents=True)
-    config_path = region_dir / "beam.conf"
-    config_path.write_text("beam config", encoding="utf-8")
-    vehicles_path = tmp_path / "atlas" / "vehicles2_2021.csv"
-    vehicles_path.parent.mkdir(parents=True)
-    vehicles_path.write_text("vehicleId,householdId\n1,10\n", encoding="utf-8")
-    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(beam_root))
-    settings = SimpleNamespace(
-        run=SimpleNamespace(region="sfbay"),
-        beam=SimpleNamespace(config="beam.conf"),
-    )
-    state = SimpleNamespace(
-        is_restart_run=True,
-        year=2019,
-        forecast_year=2021,
-        iteration=0,
-    )
-    return workspace, settings, state, config_path, vehicles_path
-
-
-def test_beam_restart_binding_diagnostic_classifies_complete_binding(tmp_path):
-    workspace, settings, state, config_path, vehicles_path = _restart_context(tmp_path)
-
-    payload = beam_preprocess_binding_diagnostic_payload(
-        binding=_restart_binding(
-            config_path=config_path,
-            vehicles_path=vehicles_path,
-            source_by_key={
-                ATLAS_VEHICLES2_OUTPUT: "coupler",
-                BEAM_CONFIG_FILE: "expected_inputs",
-            },
-        ),
-        state=state,
-        settings=settings,
-        workspace=workspace,
-    )
-
-    assert payload["drift_classification"] == "binding_surface_complete"
-    assert payload["missing_restart_inputs"] == []
-    assert ATLAS_VEHICLES2_OUTPUT in payload["bound_input_keys"]
-    assert payload["required_local_inputs"]["beam_primary_config_file"] == str(
-        config_path
-    )
 
 
 def test_beam_restart_canary_failpoint_requires_explicit_env(monkeypatch):
@@ -401,36 +315,3 @@ def test_beam_restart_recovery_readiness_diagnostic_uses_existing_restore_result
     assert fields["missing_required_keys"] == []
     assert fields["hydration_api_available"] is True
     assert fields["drift_classification"] == "complete"
-
-
-def test_beam_restart_binding_diagnostic_classifies_cache_drift(tmp_path):
-    workspace, settings, state, config_path, vehicles_path = _restart_context(tmp_path)
-
-    payload = beam_preprocess_binding_diagnostic_payload(
-        binding=_restart_binding(
-            config_path=config_path,
-            vehicles_path=vehicles_path,
-            source_by_key={
-                ATLAS_VEHICLES2_OUTPUT: "coupler",
-                BEAM_CONFIG_FILE: "expected_inputs",
-            },
-        ),
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        identity_context={
-            "identity_summary": {"adapter": {"hash": "abc"}},
-            "cache_miss_explanation": {
-                "reason": "config_and_inputs_changed",
-                "adapter_identity_changed": ["config_bundle_hash"],
-                "input_keys_changed": ["atlas_vehicles2_output"],
-            },
-        },
-    )
-
-    assert payload["drift_classification"] == "content_or_config_drift"
-    assert payload["identity_summary"] == {"adapter": {"hash": "abc"}}
-    assert payload["identity_drift_components"] == {
-        "adapter_identity_changed": ["config_bundle_hash"],
-        "input_keys_changed": ["atlas_vehicles2_output"],
-    }

@@ -140,7 +140,7 @@ def test_stage_modules_do_not_call_coupler_methods_directly():
     """
     Stage modules must resolve coupler values via workflow helpers only.
 
-    Stage assembly should stay declarative (`StepRef` + input resolution) and
+    Stage assembly should stay declarative (legacy step-reference plus input resolution) and
     avoid imperative coupler manipulation.
     """
     violations: List[CouplerCall] = []

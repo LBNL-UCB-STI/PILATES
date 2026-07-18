@@ -3,17 +3,13 @@ from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
 
 from pilates.config.models import PilatesConfig
 from pilates.workflows.binding import (
-    build_binding_plan,
+    resolve_artifact_roles,
     urbansim_datastore_selection_rules,
 )
 from pilates.workflows.artifact_keys import (
     OMX_SKIMS,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
-)
-from pilates.workflows.input_resolution import (
-    resolved_value_for_key,
-    selected_candidate_key,
 )
 
 if TYPE_CHECKING:
@@ -71,31 +67,27 @@ def build_urbansim_inputs(
     inputs: Dict[str, Any] = {}
     descriptions: Dict[str, str] = {}
 
-    resolution = build_binding_plan(
+    resolution = resolve_artifact_roles(
         step_name="urbansim_input_selection",
         settings=settings,
         state=state,
         workspace=workspace,
         year=year,
-        surface=surface,
         artifact_rules=urbansim_datastore_selection_rules(),
-        restrict_to_inline_rules=True,
-        required_keys=[USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5],
+        required_roles=(USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5),
+        optional_roles=(),
+        logical_destinations={},
     )
 
     # Keep both semantic handles explicit even when they resolve to the same
     # physical file. The workflow uses ``base`` and ``current`` as distinct
     # roles for restart-sensitive provenance and downstream handoffs.
     for semantic_key in (USIM_DATASTORE_BASE_H5, USIM_DATASTORE_CURRENT_H5):
-        value = resolved_value_for_key(
-            resolved=resolution,
-            key=semantic_key,
-            coupler=None,
-        )
+        value = (resolution.binding.inputs or {}).get(semantic_key)
         if value is None:
             continue
         inputs[semantic_key] = str(value)
-        selected_key = selected_candidate_key(resolution, semantic_key)
+        selected_key = resolution.selected_key_by_role.get(semantic_key)
         suffix = " (fallback)" if selected_key != semantic_key else ""
         if semantic_key == USIM_DATASTORE_BASE_H5:
             descriptions[semantic_key] = (

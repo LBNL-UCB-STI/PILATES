@@ -16,6 +16,7 @@ import h5py
 
 from pilates.workflows.stages import land_use
 from pilates.workflows.stages import postprocessing
+from pilates.workflows.stages import supply_demand
 from pilates.workflows.stages import supply_demand_activity
 from pilates.workflows.stages import supply_demand_beam
 from pilates.workflows.stages import vehicle_ownership
@@ -92,3 +93,12 @@ def test_direct_native_stage_paths_do_not_restore_legacy_runners() -> None:
         source = _function_source(function)
         assert "StageRunner" not in source
         assert "run_workflow" not in source
+
+
+def test_supply_demand_fails_closed_for_skipped_activitysim_without_beam_checkpoint() -> (
+    None
+):
+    source = _function_source(supply_demand.run_supply_demand_stage)
+    assert "ActivitySim is skipped outside the committed BEAM checkpoint" in source
+    assert "_restore_activity_demand_outputs_for_resume" not in source
+    assert "Step" + "OutputsHolder" not in source

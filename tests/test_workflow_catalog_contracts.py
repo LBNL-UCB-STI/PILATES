@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import fields
-from types import SimpleNamespace
-
 from pilates.workflows import catalog
-from pilates.workflows.orchestration import _declared_required_and_optional_output_keys
 from pilates.workflows.steps import STEP_DEFINITIONS
 
 
@@ -87,26 +84,17 @@ def test_beam_catalog_dynamic_families_capture_runtime_fan_out():
     )
 
 
-def test_orchestration_audit_contract_uses_native_schema_outputs():
-    declared, required, optional = _declared_required_and_optional_output_keys(
-        "atlas_preprocess",
-        settings=SimpleNamespace(),
-    )
+def test_catalog_contract_uses_native_schema_outputs():
+    contract = catalog.workflow_step_contracts_by_name()["atlas_preprocess"]
+    declared = contract["output_keys"]
     expected = list(
         STEP_DEFINITIONS["atlas_preprocess"].function.__consist_step__.schema_outputs
     )
     assert declared == expected
-    assert required == expected
-    assert optional == []
+    assert contract["optional_output_keys"] == []
 
 
-def test_orchestration_audit_contract_expands_catalog_dynamic_outputs():
-    declared, required, optional = _declared_required_and_optional_output_keys(
-        "atlas_run",
-        settings=SimpleNamespace(),
-        state=SimpleNamespace(year=2021, forecast_year=2023, iteration=0),
-    )
-
-    assert declared == ["atlas_output_dir"]
-    assert required == ["atlas_output_dir", "householdv_2023", "vehicles_2023"]
-    assert optional == []
+def test_catalog_contract_retains_atlas_dynamic_output_policy():
+    spec = catalog.workflow_step_spec_for_step_name("atlas_run")
+    assert spec is not None
+    assert spec.dynamic_output_families == ("householdv_{year}", "vehicles_{year}")
