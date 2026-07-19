@@ -18,7 +18,12 @@ import shutil
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
-from consist import BindingResult, CacheOptions, ExecutionOptions, define_step
+from consist import (
+    BindingResult,
+    CacheOptions,
+    ExecutionOptions,
+    define_step,
+)
 
 from pilates.beam.config_hocon import (
     beam_primary_config_path,
@@ -933,7 +938,11 @@ def _resolve_beam_postprocess_inputs(
 
 
 def _resolve_beam_full_skim_inputs(
-    *, settings: Any, state: Any, workspace: Any, coupler: Any
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: Any,
 ) -> ResolvedStepInputs:
     return _resolved_beam_inputs(
         step_name="beam_full_skim",

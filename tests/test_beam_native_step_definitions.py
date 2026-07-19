@@ -4,7 +4,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from consist import BindingResult, resolve_step_contract
+from consist import (
+    BindingResult,
+    Tracker,
+    resolve_step_contract,
+)
 
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -138,6 +142,48 @@ def test_native_beam_artifact_inputs_match_callable_parameter_names() -> None:
         assert declared_artifact_inputs <= set(
             inspect.signature(definition.function).parameters
         )
+
+
+def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
+    tmp_path: Path,
+) -> None:
+    assert beam_full_skim.preflight_identity is False
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    values = {}
+    with tracker.start_run("seed", "test"):
+        for key in (
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            "linkstats_warmstart",
+        ):
+            source = tmp_path / f"{key}.csv"
+            source.write_text(f"{key}\n", encoding="utf-8")
+            values[key] = tracker.log_artifact(source, key=key, direction="input")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return values.get(key, default)
+
+    settings = object()
+    state = SimpleNamespace()
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input")
+    )
+    resolved = beam_full_skim.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    assert isinstance(resolved.binding, BindingResult)
+    assert dict(resolved.binding.inputs or {}) == values
+    assert set(resolved.logical_destinations) == set(values)
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(

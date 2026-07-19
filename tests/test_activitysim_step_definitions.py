@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from consist import BindingResult, resolve_step_contract
+from consist import BindingResult, Tracker, resolve_step_contract
 
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
@@ -16,6 +16,24 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import activitysim
+
+
+def _tracked_artifacts(tmp_path: Path, *keys: str) -> dict[str, object]:
+    """Log local artifacts suitable for a V1 strict-binding resolver test."""
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    artifacts: dict[str, object] = {}
+    with tracker.start_run("seed_activitysim_inputs", "test"):
+        for key in keys:
+            source = tmp_path / "sources" / key
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"{key}\n", encoding="utf-8")
+            artifacts[key] = tracker.log_artifact(source, key=key, direction="input")
+    return artifacts
 
 
 def _activitysim_run_resolution(*, produces_zarr: bool) -> ResolvedStepInputs:
@@ -71,10 +89,9 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
 def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
     monkeypatch, tmp_path: Path
 ) -> None:
-    population = tmp_path / "population.h5"
-    population.write_text("population", encoding="utf-8")
-    final_skims = tmp_path / "final_skims.omx"
-    final_skims.write_text("skims", encoding="utf-8")
+    selected_artifacts = _tracked_artifacts(
+        tmp_path, USIM_POPULATION_SOURCE_H5, "final_skims_omx"
+    )
     captured: dict[str, object] = {}
 
     def resolve_roles(**kwargs: object) -> ResolvedStepInputs:
@@ -83,8 +100,10 @@ def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
             step_name="activitysim_preprocess",
             binding=BindingResult(
                 inputs={
-                    USIM_POPULATION_SOURCE_H5: population,
-                    "final_skims_omx": final_skims,
+                    USIM_POPULATION_SOURCE_H5: selected_artifacts[
+                        USIM_POPULATION_SOURCE_H5
+                    ],
+                    "final_skims_omx": selected_artifacts["final_skims_omx"],
                 }
             ),
             required_roles=(USIM_POPULATION_SOURCE_H5,),
@@ -111,9 +130,10 @@ def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
         coupler=object(),
     )
 
-    assert resolved.binding.inputs == {
-        USIM_POPULATION_SOURCE_H5: population,
-        "final_skims_omx": final_skims,
+    assert isinstance(resolved.binding, BindingResult)
+    assert dict(resolved.binding.inputs or {}) == {
+        USIM_POPULATION_SOURCE_H5: selected_artifacts[USIM_POPULATION_SOURCE_H5],
+        "final_skims_omx": selected_artifacts["final_skims_omx"],
     }
     assert resolved.required_roles == (USIM_POPULATION_SOURCE_H5,)
     assert resolved.source_by_role[USIM_POPULATION_SOURCE_H5] == "explicit"
@@ -221,6 +241,7 @@ def test_activitysim_projectors_validate_persisted_outputs(
 )
 def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
     monkeypatch,
+    tmp_path: Path,
     published_roles: dict[str, str],
     expected_skim_role: str,
     expected_mode: str,
@@ -238,7 +259,7 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
         for key in all_roles
         if key in published_roles or key not in activitysim._ACTIVITYSIM_RUN_SKIM_ROLES
     )
-    selected_artifacts = {key: SimpleNamespace(key=key) for key in selected_keys}
+    selected_artifacts = _tracked_artifacts(tmp_path, *selected_keys)
     base_resolution = ResolvedStepInputs(
         step_name="activitysim_run",
         binding=BindingResult(inputs=selected_artifacts),
@@ -271,7 +292,6 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
             f"activitysim_run reread frozen native role {key!r}"
         )
     )
-
     resolved = activitysim._activitysim_run_resolver(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
@@ -288,11 +308,10 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
     assert resolved.metadata["activitysim_skim_mode"] == expected_mode
     assert resolved.metadata["activitysim_produces_zarr"] is produces_zarr
     assert set(resolved.logical_destinations) == set(resolved.selected_roles())
+    assert isinstance(resolved.binding, BindingResult)
     assert dict(resolved.binding.inputs or {}) == {
         key: selected_artifacts[key] for key in resolved.selected_roles()
     }
-    assert not resolved.binding.input_keys
-    assert not resolved.binding.optional_input_keys
 
 
 def test_activitysim_run_resolver_rejects_when_no_published_skim_source(

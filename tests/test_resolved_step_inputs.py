@@ -19,6 +19,15 @@ def test_selected_roles_are_deterministic_and_include_binding_contract_roles() -
     assert resolved.selected_roles() == ("explicit", "required", "optional")
 
 
+def test_selected_roles_handles_an_empty_ordinary_binding() -> None:
+    resolved = ResolvedStepInputs(
+        step_name="example",
+        binding=BindingResult(),
+    )
+
+    assert resolved.selected_roles() == ()
+
+
 def test_require_complete_fails_closed_with_step_and_roles() -> None:
     resolved = ResolvedStepInputs(
         step_name="beam_postprocess",

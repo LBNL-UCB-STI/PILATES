@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from consist import BindingResult, ExecutionOptions, define_step
 from consist.core.tracker import Tracker
 
+from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
@@ -109,6 +110,61 @@ def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
     )
 
     assert projected == "persisted"
+
+
+def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> None:
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    source = tmp_path / "source.txt"
+    source.write_text("selected\n", encoding="utf-8")
+    with tracker.start_run("seed", "test"):
+        artifact = tracker.log_artifact(source, key="payload", direction="input")
+
+    @define_step(model="example", outputs=["result"])
+    def example(payload: Path, *, settings, state, workspace) -> None:
+        del payload, settings, state, workspace
+
+    binding = build_resolved_binding(
+        step_name="example",
+        function=example,
+        selected_artifacts={"payload": artifact},
+        logical_destinations={"payload": Path("inputs/payload.txt")},
+        selection_diagnostics={},
+        step_identity=SimpleNamespace(
+            name="example__y2030__i1__phase_test",
+            step_contract_identity="sha256:step-v1:" + "0" * 64,
+        ),
+    )
+    supplied = ResolvedStepInputs(step_name="example", binding=binding)
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: (_ for _ in ()).throw(AssertionError("resolver")),
+        project_outputs=lambda outputs, **_: outputs["result"],
+    )
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(coupler="coupler")
+    scenario.run = lambda **kwargs: (
+        seen.update(kwargs) or SimpleNamespace(outputs={"result": "persisted"})
+    )
+
+    execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings="settings",
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+        resolved_inputs=supplied,
+    )
+
+    assert seen["binding"] is binding
 
 
 def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:

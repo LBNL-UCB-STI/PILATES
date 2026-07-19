@@ -39,6 +39,28 @@ The projector validates persisted outputs at their declared destinations.
 Consequently fresh runs, admitted cache hits, and the committed restart path
 produce the same typed handoff from `RunResult.outputs`.
 
+## Advanced immutable bindings
+
+Ordinary `BindingResult`/Coupler binding remains the default. A small set of
+native definitions uses Consist `ResolvedBinding` only when every selected
+execution input is a locally tracked artifact, maps to a named callable
+parameter, and can be consumed from the strict run-owned snapshot.
+
+For those definitions, `execute_step()` asks Consist to preflight the final
+decorated identity once, the resolver freezes the selected inputs with that
+identity, and the same identity is reused for `scenario.run()`. Strict binding
+identity contains the step contract, typed artifact identities, and relative
+destinations; selection diagnostics and admission explanation remain in
+invocation evidence and do not alter cache reuse.
+
+Dynamic workspace-only inputs remain on ordinary binding. This includes BEAM
+postprocess/restart closure inputs, raw BEAM configuration inputs, the BEAM
+full-skim runner's workspace mount, ActivitySim population-source fallback and
+runner workspace inputs, and model adapters that read a workspace path instead
+of their callable parameter.
+Strict BEAM linkstats admission is also deferred; it does not change ordinary
+BEAM warm-start behavior.
+
 ## Ownership
 
 | Concern | Owner |

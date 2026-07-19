@@ -4,7 +4,15 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Sequence
 
-from consist import BindingResult, CacheOptions, ExecutionOptions, define_step
+from consist import (
+    Artifact,
+    BindingResult,
+    CacheOptions,
+    ExecutionOptions,
+    ResolvedBinding,
+    StepIdentity,
+    define_step,
+)
 
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
@@ -27,6 +35,7 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     USIM_MUTABLE_DATA_DIR,
 )
+from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -122,10 +131,12 @@ def _validation_context(
 def _resolve_native_inputs(
     *,
     step_name: str,
+    function: Callable[..., Any],
     required_roles: Sequence[str],
     optional_roles: Sequence[str],
     logical_destinations: Mapping[str, Path],
     coupler: CouplerProtocol,
+    step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
     """Select fixed semantic roles once and retain their Consist artifacts."""
 
@@ -146,9 +157,37 @@ def _resolve_native_inputs(
         if destination is not None:
             selected_destinations[role] = destination
 
+    if step_identity is None:
+        binding: BindingResult | ResolvedBinding = BindingResult(inputs=selected_inputs)
+    else:
+        selected_artifacts: dict[str, Artifact] = {}
+        for role, value in selected_inputs.items():
+            if not isinstance(value, Artifact):
+                raise TypeError(
+                    f"{step_name} strict binding requires a tracked Artifact for "
+                    f"{role!r}, got {type(value).__name__}"
+                )
+            selected_artifacts[role] = value
+        binding = build_resolved_binding(
+            step_name=step_name,
+            function=function,
+            selected_artifacts=selected_artifacts,
+            logical_destinations={
+                role: Path("inputs") / role for role in selected_artifacts
+            },
+            selection_diagnostics={
+                "source_by_role": source_by_role,
+                "selected_key_by_role": selected_key_by_role,
+            },
+            source_by_parameter={
+                role: source_by_role[role] for role in selected_artifacts
+            },
+            step_identity=step_identity,
+        )
+
     return ResolvedStepInputs(
         step_name=step_name,
-        binding=BindingResult(inputs=selected_inputs),
+        binding=binding,
         required_roles=tuple(required_roles),
         optional_roles=tuple(optional_roles),
         source_by_role=source_by_role,
@@ -305,6 +344,7 @@ def _resolve_urbansim_preprocess_inputs(
     }
     return _resolve_native_inputs(
         step_name="urbansim_preprocess",
+        function=_native_urbansim_preprocess,
         required_roles=(USIM_DATASTORE_H5,),
         optional_roles=(FINAL_SKIMS_OMX,),
         logical_destinations=destinations,
@@ -322,6 +362,7 @@ def _resolve_urbansim_run_inputs(
     del settings, state
     return _resolve_native_inputs(
         step_name="urbansim_run",
+        function=_native_urbansim_run,
         required_roles=(USIM_MUTABLE_DATA_DIR,),
         optional_roles=(),
         logical_destinations={
@@ -337,9 +378,11 @@ def _resolve_urbansim_postprocess_inputs(
     state: WorkflowState,
     workspace: Workspace,
     coupler: CouplerProtocol,
+    step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
     return _resolve_native_inputs(
         step_name="urbansim_postprocess",
+        function=_native_urbansim_postprocess,
         required_roles=(USIM_DATASTORE_H5,),
         optional_roles=(),
         logical_destinations={
@@ -352,6 +395,7 @@ def _resolve_urbansim_postprocess_inputs(
             )
         },
         coupler=coupler,
+        step_identity=step_identity,
     )
 
 
@@ -371,6 +415,7 @@ def _resolve_atlas_preprocess_inputs(
         )[USIM_DATASTORE_H5]
     return _resolve_native_inputs(
         step_name="atlas_preprocess",
+        function=_native_atlas_preprocess,
         required_roles=(USIM_DATASTORE_H5,),
         optional_roles=(),
         logical_destinations={USIM_DATASTORE_H5: Path(atlas_input)},
@@ -388,6 +433,7 @@ def _resolve_atlas_run_inputs(
     del settings, state
     return _resolve_native_inputs(
         step_name="atlas_run",
+        function=_native_atlas_run,
         required_roles=("atlas_mutable_input_dir",),
         optional_roles=(),
         logical_destinations={
@@ -406,6 +452,7 @@ def _resolve_atlas_postprocess_inputs(
 ) -> ResolvedStepInputs:
     return _resolve_native_inputs(
         step_name="atlas_postprocess",
+        function=_native_atlas_postprocess,
         required_roles=(ATLAS_OUTPUT_DIR, USIM_DATASTORE_H5),
         optional_roles=(),
         logical_destinations={
@@ -876,6 +923,7 @@ URBANSIM_POSTPROCESS = StepDefinition(
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
+    preflight_identity=True,
 )
 
 ATLAS_PREPROCESS = StepDefinition(

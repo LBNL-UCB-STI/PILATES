@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -27,6 +28,13 @@ from typing import (
     Sequence,
 )
 
+from consist import (
+    AdmissionEvidence,
+    Artifact,
+    ResolvedBinding,
+    ResolvedBindingBuilder,
+    StepIdentity,
+)
 from consist.types import BindingResult
 
 from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
@@ -74,6 +82,82 @@ if TYPE_CHECKING:
 
 _CANDIDATE_PATHS_METADATA_KEY = "candidate_paths_by_semantic_key"
 _RESOLVED_VALUES_METADATA_KEY = "resolved_values_by_semantic_key"
+
+
+def build_resolved_binding(
+    *,
+    step_name: str,
+    function: Callable[..., Any],
+    selected_artifacts: Mapping[str, Artifact],
+    logical_destinations: Mapping[str, Path],
+    selection_diagnostics: Mapping[str, Any],
+    admission_evidence: Mapping[str, AdmissionEvidence] | None = None,
+    source_by_parameter: Mapping[str, str] | None = None,
+    step_identity: StepIdentity,
+) -> ResolvedBinding:
+    """Freeze locally tracked named inputs into one V1 strict binding."""
+
+    parameters = inspect.signature(function).parameters
+    destinations = {
+        parameter: Path(destination)
+        for parameter, destination in logical_destinations.items()
+    }
+    if set(selected_artifacts) != set(destinations):
+        raise ValueError(
+            "strict binding artifacts and destinations must have matching parameters"
+        )
+    if len(set(destinations.values())) != len(destinations):
+        raise ValueError("strict binding destinations must be unique")
+
+    builder = ResolvedBindingBuilder(
+        step_name=step_identity.name,
+        step_contract_identity=step_identity.step_contract_identity,
+    ).with_diagnostics(selection_diagnostics)
+    evidence_by_parameter = admission_evidence or {}
+    sources = source_by_parameter or {}
+    for parameter, artifact in selected_artifacts.items():
+        if (
+            parameter not in parameters
+            or parameters[parameter].kind is inspect.Parameter.VAR_KEYWORD
+        ):
+            raise ValueError(
+                f"strict binding requires named callable parameter: {parameter!r}"
+            )
+        if not isinstance(artifact, Artifact):
+            raise TypeError(
+                f"strict binding input {parameter!r} must be a tracked Artifact"
+            )
+        destination = destinations[parameter]
+        if destination.is_absolute():
+            raise ValueError("strict binding destinations must be relative")
+        source = sources.get(parameter, "coupler")
+        if source not in {
+            "explicit",
+            "coupler",
+            "fallback",
+            "pinned",
+            "external_admitted",
+        }:
+            raise ValueError(
+                f"invalid strict binding source for {parameter!r}: {source!r}"
+            )
+        builder.bind_tracked_artifact(
+            parameter=parameter,
+            artifact=artifact,
+            destination=destination,
+            source=source,
+            selected_role=parameter,
+        )
+        evidence = evidence_by_parameter.get(parameter)
+        if evidence is not None:
+            builder.with_admission(parameter=parameter, evidence=evidence)
+    unknown_evidence = set(evidence_by_parameter).difference(selected_artifacts)
+    if unknown_evidence:
+        raise ValueError(
+            "admission evidence has no bound input: "
+            + ", ".join(sorted(unknown_evidence))
+        )
+    return builder.freeze()
 
 
 def _ordered_unique(*groups: Sequence[str]) -> tuple[str, ...]:

@@ -7,7 +7,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from consist import BindingResult
+from consist import BindingResult, ResolvedBinding
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,7 +15,7 @@ class ResolvedStepInputs:
     """One completed PILATES semantic input decision for one invocation."""
 
     step_name: str
-    binding: BindingResult
+    binding: BindingResult | ResolvedBinding
     required_roles: tuple[str, ...] = ()
     optional_roles: tuple[str, ...] = ()
     source_by_role: Mapping[str, str] = field(default_factory=dict)
@@ -28,6 +28,11 @@ class ResolvedStepInputs:
 
         object.__setattr__(self, "required_roles", tuple(self.required_roles))
         object.__setattr__(self, "optional_roles", tuple(self.optional_roles))
+        if isinstance(self.binding, ResolvedBinding):
+            object.__setattr__(self, "binding", self.binding)
+            self._freeze_diagnostics()
+            return
+
         input_keys = self.binding.input_keys
         optional_input_keys = self.binding.optional_input_keys
         object.__setattr__(
@@ -56,6 +61,10 @@ class ResolvedStepInputs:
                 ),
             ),
         )
+        self._freeze_diagnostics()
+
+    def _freeze_diagnostics(self) -> None:
+        """Freeze selection diagnostics without rebuilding a strict binding."""
 
         object.__setattr__(
             self, "source_by_role", MappingProxyType(dict(self.source_by_role))
@@ -74,6 +83,8 @@ class ResolvedStepInputs:
 
     def selected_roles(self) -> tuple[str, ...]:
         inputs = tuple((self.binding.inputs or {}).keys())
+        if isinstance(self.binding, ResolvedBinding):
+            return inputs
         required = self.binding.input_keys
         optional = self.binding.optional_input_keys
         required_roles = (

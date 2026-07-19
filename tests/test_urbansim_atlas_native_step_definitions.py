@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from consist import resolve_step_contract
+from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
 
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -22,6 +23,7 @@ from pilates.workflows.steps.urbansim_atlas import (
     URBANSIM_PREPROCESS,
     URBANSIM_RUN,
 )
+from pilates.workflows.step_execution import execute_step
 
 
 def _settings() -> SimpleNamespace:
@@ -132,23 +134,282 @@ def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
     source.parent.mkdir()
     source.write_text("h5 bytes\n", encoding="utf-8")
 
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    with tracker.start_run("seed", "test"):
+        artifact = tracker.log_artifact(
+            source,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+
     class _Coupler:
         def get(self, key: str):
-            return {USIM_MUTABLE_DATA_DIR: source}.get(key)
+            return {USIM_DATASTORE_H5: artifact}.get(key)
 
     workspace = _workspace(tmp_path)
-    resolved = URBANSIM_RUN.resolve_inputs(
-        settings=_settings(),
-        state=_state(),
+    settings = _settings()
+    state = _state()
+    with tracker.scenario("urbansim") as scenario:
+        identity = scenario.resolve_step_identity(
+            URBANSIM_POSTPROCESS.function,
+            year=state.year,
+            iteration=1,
+            phase="postprocess",
+            stage="land_use",
+            execution_options=ExecutionOptions(
+                input_binding="paths",
+                runtime_kwargs={
+                    "settings": settings,
+                    "state": state,
+                    "workspace": workspace,
+                },
+            ),
+        )
+        resolved = URBANSIM_POSTPROCESS.resolve_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=_Coupler(),
+            step_identity=identity,
+        )
+
+    assert isinstance(resolved.binding, ResolvedBinding)
+    assert resolved.binding.step_name == identity.name
+    assert resolved.binding.step_contract_identity == identity.step_contract_identity
+    assert (
+        resolved.binding.inputs[USIM_DATASTORE_H5].artifact.artifact_id == artifact.id
+    )
+    assert resolved.binding.inputs[USIM_DATASTORE_H5].destination == Path(
+        "inputs/usim_datastore_h5"
+    )
+    assert resolved.source_by_role == {USIM_DATASTORE_H5: "coupler"}
+    assert resolved.logical_destinations == {
+        USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir())
+        / "output_2030.h5"
+    }
+
+
+def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "source" / "urbansim-data.h5"
+    source.parent.mkdir()
+    source.write_text("tracked h5 bytes\n", encoding="utf-8")
+    output = tmp_path / "workspace" / "outputs" / "processed.h5"
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    with tracker.start_run("seed", "test"):
+        artifact = tracker.log_artifact(
+            source,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+
+    seen: dict[str, Path] = {}
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(self, outputs: object, _workspace: object) -> None:
+            snapshot = outputs.usim_datastore_h5
+            seen["snapshot"] = snapshot
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(snapshot.read_bytes())
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    definition = replace(
+        URBANSIM_POSTPROCESS,
+        output_paths=lambda **_kwargs: {USIM_DATASTORE_H5: output},
+        project_outputs=lambda outputs, **_kwargs: outputs,
+    )
+    settings = _settings()
+    state = _state()
+    workspace = _workspace(tmp_path / "workspace")
+
+    with tracker.scenario("urbansim") as scenario:
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, artifact)
+        result, projected = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="land_use",
+            year=state.year,
+            iteration=1,
+            phase="postprocess",
+        )
+
+    snapshot = seen["snapshot"]
+    assert snapshot != source
+    assert snapshot.read_text(encoding="utf-8") == "tracked h5 bytes\n"
+    assert snapshot.is_relative_to(tmp_path / "consist-runs" / ".resolved-bindings")
+    assert output.read_bytes() == source.read_bytes()
+    assert projected == result.outputs
+
+
+def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
+    tmp_path: Path,
+) -> None:
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    roles = (USIM_DATASTORE_H5, "atlas_mutable_input_dir", ATLAS_OUTPUT_DIR)
+    artifacts = {}
+    with tracker.start_run("seed", "test"):
+        for role in roles:
+            source = tmp_path / "source" / role
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"{role}\n", encoding="utf-8")
+            artifacts[role] = tracker.log_artifact(
+                source,
+                key=role,
+                direction="input",
+            )
+
+    class _Coupler:
+        def get(self, key: str):
+            return artifacts.get(key)
+
+    settings = _settings()
+    state = _state()
+    workspace = _workspace(tmp_path)
+    eligible_definitions = (URBANSIM_POSTPROCESS,)
+
+    with tracker.scenario("urbansim-atlas") as scenario:
+        for definition in eligible_definitions:
+            assert definition.preflight_identity is True
+            identity = scenario.resolve_step_identity(
+                definition.function,
+                year=state.year,
+                iteration=1,
+                phase=definition.name.rsplit("_", 1)[1],
+                stage="land_use",
+                execution_options=ExecutionOptions(
+                    input_binding="paths",
+                    runtime_kwargs={
+                        "settings": settings,
+                        "state": state,
+                        "workspace": workspace,
+                    },
+                ),
+            )
+            resolved = definition.resolve_inputs(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                coupler=_Coupler(),
+                step_identity=identity,
+            )
+
+            assert isinstance(resolved.binding, ResolvedBinding)
+            assert resolved.binding.step_name == identity.name
+            assert (
+                resolved.binding.step_contract_identity
+                == identity.step_contract_identity
+            )
+            assert all(
+                not input.destination.is_absolute()
+                for input in resolved.binding.inputs.values()
+                if input.destination is not None
+            )
+
+    assert URBANSIM_RUN.preflight_identity is False
+
+
+def test_native_callables_forward_resolved_paths_to_model_adapters(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = _workspace(tmp_path)
+    state = _state()
+    settings = _settings()
+    snapshots = {
+        "usim_datastore_h5": tmp_path / "snapshots" / "usim.h5",
+        "atlas_mutable_input_dir": tmp_path / "snapshots" / "atlas-input",
+        ATLAS_OUTPUT_DIR: tmp_path / "snapshots" / "atlas-output",
+    }
+    calls: dict[str, object] = {}
+
+    class _UrbanSimPreprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, _workspace: object, **kwargs: object) -> None:
+            calls["urbansim_preprocess"] = kwargs
+
+    class _AtlasPreprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def preprocess(self, _workspace: object, **kwargs: object) -> None:
+            calls["atlas_preprocess"] = kwargs
+
+    class _AtlasRunner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, inputs: object, _workspace: object) -> None:
+            calls["atlas_run"] = inputs
+
+    class _AtlasPostprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(
+            self, _outputs: object, _workspace: object, **kwargs: object
+        ) -> None:
+            calls["atlas_postprocess"] = kwargs
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPreprocessor", _UrbanSimPreprocessor)
+    monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _AtlasPreprocessor)
+    monkeypatch.setattr(urbansim_atlas, "AtlasRunner", _AtlasRunner)
+    monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _AtlasPostprocessor)
+
+    urbansim_atlas._native_urbansim_preprocess(
+        snapshots["usim_datastore_h5"],
+        settings=settings,
+        state=state,
         workspace=workspace,
-        coupler=_Coupler(),
+    )
+    urbansim_atlas._native_atlas_preprocess(
+        snapshots["usim_datastore_h5"],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    urbansim_atlas._native_atlas_run(
+        snapshots["atlas_mutable_input_dir"],
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    urbansim_atlas._native_atlas_postprocess(
+        snapshots[ATLAS_OUTPUT_DIR],
+        snapshots["usim_datastore_h5"],
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
 
-    assert resolved.binding.inputs == {USIM_MUTABLE_DATA_DIR: source}
-    assert resolved.source_by_role == {USIM_MUTABLE_DATA_DIR: "coupler"}
-    assert resolved.logical_destinations == {
-        USIM_MUTABLE_DATA_DIR: Path(workspace.get_usim_mutable_data_dir())
-    }
+    # Native callables accept resolved paths, while these legacy adapters
+    # continue to read their remaining workspace-owned state.
+    assert calls["urbansim_preprocess"] == {"final_skims_omx": None}
+    assert calls["atlas_preprocess"] == {}
+    assert (
+        getattr(calls["atlas_run"], "atlas_mutable_input_dir")
+        == snapshots["atlas_mutable_input_dir"]
+    )
+    assert calls["atlas_postprocess"] == {}
 
 
 def test_native_atlas_postprocess_projector_uses_persisted_outputs_only(

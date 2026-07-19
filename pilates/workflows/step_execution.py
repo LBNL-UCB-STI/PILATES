@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, TypeVar
 
-from consist import ExecutionOptions, RunResult
+from consist import ExecutionOptions, RunResult, StepIdentity
 
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
@@ -28,12 +28,34 @@ def execute_step(
 ) -> tuple[RunResult, OutputT]:
     """Resolve once, run once, then project persisted ``RunResult.outputs`` once."""
 
-    resolved = resolved_inputs or definition.resolve_inputs(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        coupler=scenario.coupler,
-    )
+    base_runtime_kwargs = {
+        **(runtime_kwargs or {}),
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+    }
+    step_identity: StepIdentity | None = None
+    if definition.preflight_identity:
+        preflight_options = ExecutionOptions(
+            input_binding="paths", runtime_kwargs=base_runtime_kwargs
+        )
+        step_identity = scenario.resolve_step_identity(
+            definition.function,
+            year=year,
+            iteration=iteration,
+            phase=phase,
+            stage=stage,
+            execution_options=preflight_options,
+        )
+    resolver_kwargs: dict[str, Any] = {
+        "settings": settings,
+        "state": state,
+        "workspace": workspace,
+        "coupler": scenario.coupler,
+    }
+    if step_identity is not None:
+        resolver_kwargs["step_identity"] = step_identity
+    resolved = resolved_inputs or definition.resolve_inputs(**resolver_kwargs)
     resolved.require_complete()
     options = (
         definition.execution_options(
@@ -55,10 +77,7 @@ def execute_step(
         container=options.container,
         runtime_kwargs={
             **(options.runtime_kwargs or {}),
-            **(runtime_kwargs or {}),
-            "settings": settings,
-            "state": state,
-            "workspace": workspace,
+            **base_runtime_kwargs,
         },
         inject_context=options.inject_context,
     )
@@ -87,6 +106,7 @@ def execute_step(
             else None
         ),
         execution_options=options,
+        step_identity=step_identity,
     )
     return result, definition.project_outputs(
         result.outputs,

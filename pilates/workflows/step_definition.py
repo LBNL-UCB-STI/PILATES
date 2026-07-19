@@ -24,3 +24,4 @@ class StepDefinition(Generic[OutputT]):
     output_paths: Callable[..., Mapping[str, Any]] | None = None
     execution_options: Callable[..., ExecutionOptions] | None = None
     cache_options: Callable[..., CacheOptions] | None = None
+    preflight_identity: bool = False

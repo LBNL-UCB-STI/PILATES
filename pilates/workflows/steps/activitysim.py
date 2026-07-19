@@ -375,7 +375,7 @@ def _activitysim_run_resolver(
         _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: skim_mode,
         _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: produces_zarr,
     }
-    return ResolvedStepInputs(
+    selected = ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=BindingResult(
             inputs=binding_inputs,
@@ -400,6 +400,7 @@ def _activitysim_run_resolver(
         },
         metadata=metadata,
     )
+    return selected
 
 
 def _activitysim_postprocess_resolver(
