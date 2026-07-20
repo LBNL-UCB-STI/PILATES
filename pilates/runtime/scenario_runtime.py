@@ -272,7 +272,11 @@ class ScenarioParentLinkProxy:
         model_name = self._infer_model_name(run_kwargs)
         year = coerce_int(run_kwargs.get("year"))
         iteration = coerce_int(run_kwargs.get("iteration"))
-        if model_name and "model" not in run_kwargs:
+        if (
+            model_name
+            and "model" not in run_kwargs
+            and run_kwargs.get("step_identity") is None
+        ):
             run_kwargs["model"] = model_name
         parent_expected = self._should_expect_parent(
             model_name=model_name,
