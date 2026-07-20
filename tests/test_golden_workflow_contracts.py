@@ -28,18 +28,6 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
 from tests.test_golden_stub_workflow import _write_file
-from tests.workflow_contract_harness import build_runtime_context
-
-
-def run_land_use_stage(
-    *, context=None, settings=None, state=None, workspace=None, **kwargs
-):
-    context = context or build_runtime_context(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    return _run_land_use_stage(context=context, **kwargs)
 
 
 def _initialize(env) -> None:
@@ -97,7 +85,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
 
     _initialize(golden_stub_env)
 
-    usim_inputs = run_land_use_stage(
+    usim_inputs = _run_land_use_stage(
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,

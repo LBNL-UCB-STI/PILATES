@@ -54,42 +54,6 @@ from tests.workflow_contract_harness import (
 from workflow_state import WorkflowState
 
 
-def run_land_use_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_land_use_stage(context=context, **kwargs)
-
-
-def run_vehicle_ownership_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_vehicle_ownership_stage(context=context, **kwargs)
-
-
-def run_supply_demand_stage(
-    *, context=None, settings=None, state=None, workspace=None, surface=None, **kwargs
-):
-    context = context or WorkflowRuntimeContext.from_parts(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    return _run_supply_demand_stage(context=context, **kwargs)
-
-
 def _reconfigure_models(
     settings,
     *,
@@ -231,6 +195,11 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         activity_demand=False,
         traffic_assignment=True,
     )
+    env["context"] = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
     _mark_initialized(env, state, marker_name=".beam_only_initialized.txt")
 
     zarr_path = Path(env["zarr_path"])
@@ -312,14 +281,12 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
-    run_supply_demand_stage(
+    _run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         handoff=LandUseToSupplyDemandHandoff(),
+        context=env["context"],
     )
 
     steps = _steps_by_model(env)
@@ -356,6 +323,11 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
         vehicle_ownership=False,
         activity_demand=True,
         traffic_assignment=True,
+    )
+    env["context"] = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
     _mark_initialized(env, state, marker_name=".asim_beam_initialized.txt")
 
@@ -486,14 +458,12 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
-    run_supply_demand_stage(
+    _run_supply_demand_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         handoff=LandUseToSupplyDemandHandoff(),
+        context=env["context"],
     )
 
     steps = _steps_by_model(env)
@@ -520,6 +490,11 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         vehicle_ownership=True,
         activity_demand=False,
         traffic_assignment=False,
+    )
+    env["context"] = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
     )
     _mark_initialized(
         env,
@@ -593,23 +568,19 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     monkeypatch.setattr(UrbansimRunner, "_run", _fake_urbansim_run)
     monkeypatch.setattr(AtlasRunner, "_run", _fake_atlas_run)
 
-    usim_inputs = run_land_use_stage(
+    usim_inputs = _run_land_use_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
+        context=env["context"],
     )
 
-    run_vehicle_ownership_stage(
+    _run_vehicle_ownership_stage(
         scenario=scenario,
-        state=state,
-        settings=settings,
-        workspace=workspace,
         coupler=coupler,
         year=state.forecast_year,
         build_atlas_static_inputs_fallback=lambda _workspace: {},
+        context=env["context"],
     )
 
     assert USIM_DATASTORE_H5 in usim_inputs

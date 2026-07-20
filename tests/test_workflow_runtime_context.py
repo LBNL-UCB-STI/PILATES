@@ -3,10 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.postprocessing import run_postprocessing_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
@@ -59,7 +56,6 @@ def test_workflow_runtime_context_reuses_explicit_surface() -> None:
     )
 
     assert context.surface is surface
-    assert ensure_workflow_runtime_context(context=context) is context
 
 
 def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
