@@ -234,6 +234,35 @@ class RestartArtifactRequirementRule:
 
 BindingFallbackProvider = Callable[..., Optional[Mapping[str, Any]]]
 
+FallbackPolicyClass = Literal[
+    "bootstrap",
+    "recovery",
+    "format_selection",
+    "legacy_compatibility",
+]
+FallbackPolicyEndState = Literal["retain", "replace_with_producer_handoff", "delete"]
+FallbackIdentitySource = Literal[
+    "tracked_artifact",
+    "admitted_local_file",
+    "pinned_run_member",
+    "none",
+]
+
+
+@dataclass(frozen=True)
+class FallbackProviderInventoryEntry:
+    """Declared authority and retirement policy for one generic provider."""
+
+    identifier: str
+    consuming_steps: tuple[str, ...]
+    semantic_roles: tuple[str, ...]
+    trigger: str
+    candidate_order: tuple[str, ...]
+    identity_source: FallbackIdentitySource
+    policy_class: FallbackPolicyClass
+    intended_end_state: FallbackPolicyEndState
+    focused_tests: tuple[str, ...]
+
 
 def activitysim_population_source_selection_rules() -> tuple[ArtifactBindingRule, ...]:
     """
@@ -790,6 +819,136 @@ _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
     "beam_preprocess_config_input": _beam_preprocess_config_input,
 }
+
+
+# This inventory classifies the authority of the current generic providers.  It
+# deliberately does not alter their selection behavior; subsequent slices use
+# these entries to replace raw-path fallback with explicit producer handoffs.
+FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
+    FallbackProviderInventoryEntry(
+        identifier="urbansim_inputs_for_year",
+        consuming_steps=("activitysim_preprocess", "atlas_preprocess"),
+        semantic_roles=(
+            USIM_DATASTORE_BASE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_FORECAST_OUTPUT,
+            USIM_POPULATION_SOURCE_H5,
+        ),
+        trigger=(
+            "the requested UrbanSim datastore is absent from explicit inputs "
+            "and the coupler"
+        ),
+        candidate_order=(
+            "configured local input datastore",
+            "archive copy of the input datastore",
+            "local forecast-year population-source snapshot",
+            "archive copy of the population-source snapshot",
+            "configured local forecast output",
+            "archive copy of the forecast output",
+        ),
+        identity_source="none",
+        policy_class="legacy_compatibility",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_workflow_binding.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="activitysim_input_datastore",
+        consuming_steps=("activitysim_postprocess",),
+        semantic_roles=(USIM_DATASTORE_BASE_H5,),
+        trigger="no explicit or coupler-backed ActivitySim input datastore exists",
+        candidate_order=("configured mutable UrbanSim input datastore",),
+        identity_source="none",
+        policy_class="bootstrap",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_activitysim_step_definitions.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="activitysim_population_source",
+        consuming_steps=("activitysim_preprocess", "activitysim_postprocess"),
+        semantic_roles=(
+            USIM_POPULATION_SOURCE_H5,
+            USIM_POPULATION_HOUSEHOLDS_TABLE,
+            USIM_POPULATION_PERSONS_TABLE,
+            USIM_POPULATION_JOBS_TABLE,
+            USIM_POPULATION_BLOCKS_TABLE,
+        ),
+        trigger=(
+            "no explicit or coupler-backed forecast-year population source exists"
+        ),
+        candidate_order=(
+            "explicit population source",
+            "explicit base or current datastore outside land-use",
+            "configured mutable UrbanSim input datastore outside land-use",
+            "forecast-year UrbanSim datastore candidates",
+        ),
+        identity_source="none",
+        policy_class="legacy_compatibility",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_activitysim_step_definitions.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="beam_preprocess_exchange_inputs",
+        consuming_steps=("beam_preprocess",),
+        semantic_roles=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
+        trigger="BEAM runs without ActivitySim-provided exchange inputs",
+        candidate_order=(
+            "registered existing BEAM exchange record",
+            "existing workspace exchange file",
+        ),
+        identity_source="none",
+        policy_class="bootstrap",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_beam_preprocessor_exchange_folder.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="beam_preprocess_warmstart_inputs",
+        consuming_steps=("beam_preprocess",),
+        semantic_roles=(LINKSTATS_WARMSTART,),
+        trigger="no normal BEAM linkstats warmstart binding exists",
+        candidate_order=(
+            "coupler linkstats warmstart materialization",
+            "configured initial linkstats path",
+        ),
+        identity_source="none",
+        policy_class="recovery",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_beam_preprocessor_linkstats_warmstart.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="beam_preprocess_atlas_inputs",
+        consuming_steps=("beam_preprocess",),
+        semantic_roles=(ATLAS_VEHICLES2_OUTPUT,),
+        trigger=(
+            "BEAM traffic assignment and vehicle ownership are enabled on the "
+            "first inner iteration, with no explicit or coupler-backed vehicles2 "
+            "handoff"
+        ),
+        candidate_order=(
+            "forecast-year local ATLAS vehicles2",
+            "forecast-year archive ATLAS vehicles2",
+            "artifact or environment materialization of the selected exact-year path",
+            "previous-year local/archive vehicles2 compatibility path when exact year is not required",
+        ),
+        identity_source="none",
+        policy_class="legacy_compatibility",
+        intended_end_state="replace_with_producer_handoff",
+        focused_tests=("tests/test_vehicle_ownership_usim_selection.py",),
+    ),
+    FallbackProviderInventoryEntry(
+        identifier="beam_preprocess_config_input",
+        consuming_steps=("beam_preprocess",),
+        semantic_roles=(BEAM_CONFIG_FILE,),
+        trigger="the configured BEAM config is absent from explicit inputs and coupler",
+        candidate_order=(
+            "configured local primary BEAM config",
+            "archive copy of the primary BEAM config",
+        ),
+        identity_source="none",
+        policy_class="legacy_compatibility",
+        intended_end_state="delete",
+        focused_tests=("tests/test_beam_native_step_definitions.py",),
+    ),
+)
 
 
 def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:

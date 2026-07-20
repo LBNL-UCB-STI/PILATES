@@ -9,7 +9,6 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from pilates.activitysim.outputs import has_asim_run_marker
 from pilates.beam.config_hocon import (
     BeamConfigHoconError,
     beam_config_env_overrides,
@@ -878,16 +877,9 @@ def copy_with_compression_asim_file_to_beam(
     )
 
     if not os.path.exists(asim_file_path):
-        logger.error("ActivitySim output file does not exist: %s", asim_file_path)
-        return [
-            FileRecord(
-                file_path=beam_file_path,
-                description=f"Missing BEAM input file: {beam_file_name}",
-                short_name=f"{beam_file_name}_beam_in_missing",
-                year=getattr(state, "current_year", None),
-                iteration=getattr(state, "current_inner_iter", None),
-            )
-        ]
+        raise FileNotFoundError(
+            f"ActivitySim input '{beam_file_name}' does not exist: {asim_file_path}"
+        )
 
     table_type = "plans" if "plans" in beam_file_name else beam_file_name
     df = BeamDataHelper.read_and_clean(asim_file_path, table_type, file_format)
@@ -1067,79 +1059,27 @@ def copy_plans_from_asim(
                 record.file_path,
             )
 
-    required_asim_base_names = ["households", "persons", "beam_plans"]
-    asim_output_dir = workspace.get_asim_output_dir()
-
-    allow_final_pipeline = has_asim_run_marker(
-        asim_output_dir,
-        state.current_year,
-        state.current_inner_iter,
-    )
-    if not allow_final_pipeline:
-        logger.warning(
-            "ASim success marker not found for year %s iteration %s; "
-            "skipping final_pipeline fallback for BEAM inputs.",
-            state.current_year,
-            state.current_inner_iter,
+    required_asim_base_names = ("households", "persons", "beam_plans")
+    missing_records = [
+        name for name in required_asim_base_names if name not in asim_file_paths
+    ]
+    if missing_records:
+        raise ValueError(
+            "BEAM requires ActivitySim input records for: "
+            f"{', '.join(missing_records)}. "
+            "BEAM preprocessing does not discover ActivitySim outputs from the workspace."
         )
 
-    asim_output_iter_dir = os.path.join(
-        asim_output_dir,
-        f"year-{state.current_year}-iteration-{state.current_inner_iter}",
-    )
-
-    for base_name in required_asim_base_names:
-        if base_name in asim_file_paths:
-            continue
-        expected_file_name = f"{base_name}.{file_format}"
-        candidate_paths = [
-            os.path.join(asim_output_iter_dir, expected_file_name),
-            os.path.join(asim_output_iter_dir, base_name, f"final.{file_format}"),
-        ]
-        if allow_final_pipeline:
-            candidate_paths.append(
-                os.path.join(
-                    asim_output_dir,
-                    "final_pipeline",
-                    base_name,
-                    f"final.{file_format}",
-                )
-            )
-        found_path = next(
-            (path for path in candidate_paths if os.path.exists(path)), None
+    missing_sources: list[str] = []
+    for name in required_asim_base_names:
+        source_path, _record = asim_file_paths[name]
+        if source_path is None or not os.path.exists(source_path):
+            missing_sources.append(f"{name}={source_path}")
+    if missing_sources:
+        raise FileNotFoundError(
+            "BEAM received ActivitySim input records whose source files do not exist: "
+            f"{', '.join(missing_sources)}"
         )
-
-        if found_path:
-            logger.warning(
-                "ActivitySim output file '%s' (expected: %s) not found in input records. "
-                "Falling back to filesystem at: %s",
-                base_name,
-                expected_file_name,
-                found_path,
-            )
-            dummy_path = (
-                os.path.relpath(found_path, base_path)
-                if base_path and os.path.isabs(base_path)
-                else found_path
-            )
-            dummy_record = FileRecord(
-                file_path=dummy_path,
-                short_name=base_name,
-                description=(
-                    "ActivitySim output file found via filesystem fallback "
-                    f"({os.path.basename(found_path)})"
-                ),
-                year=state.current_year,
-            )
-            asim_file_paths[base_name] = (found_path, dummy_record)
-        else:
-            logger.warning(
-                "Required ActivitySim output file '%s' (expected: %s) not found in input "
-                "records AND not found on filesystem at any of: %s",
-                base_name,
-                expected_file_name,
-                ", ".join(candidate_paths),
-            )
 
     if state.current_inner_iter <= 0:
         record_list = copy_initial_asim_files_fn(

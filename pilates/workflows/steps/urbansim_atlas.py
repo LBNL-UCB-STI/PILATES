@@ -324,7 +324,16 @@ def _atlas_postprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    return AtlasPostprocessor.expected_outputs(settings, state, workspace)
+    outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
+    # ATLAS mutates the exact datastore supplied to the callable.  Native
+    # resolution stages that role at UrbanSim's forecast-output destination,
+    # including in the start year; output projection must name that same file.
+    outputs[USIM_POPULATION_SOURCE_H5] = _urbansim_run_native_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )[USIM_DATASTORE_H5]
+    return outputs
 
 
 def _resolve_urbansim_preprocess_inputs(
@@ -499,9 +508,10 @@ def _native_urbansim_preprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del usim_datastore_h5, settings
+    del settings
     UrbansimPreprocessor("urbansim", state).preprocess(
         workspace,
+        usim_datastore_h5=usim_datastore_h5,
         final_skims_omx=final_skims_omx,
     )
 
@@ -581,8 +591,11 @@ def _native_atlas_preprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del usim_datastore_h5, settings
-    AtlasPreprocessor("atlas", state).preprocess(workspace)
+    del settings
+    AtlasPreprocessor("atlas", state).preprocess(
+        workspace,
+        usim_datastore_h5=usim_datastore_h5,
+    )
 
 
 @define_step(
@@ -627,7 +640,7 @@ def _native_atlas_postprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings, usim_datastore_h5
+    del settings
     forecast_year = state.forecast_year
     AtlasPostprocessor("atlas", state).postprocess(
         AtlasRunOutputs(
@@ -640,6 +653,7 @@ def _native_atlas_postprocess(
             },
         ),
         workspace,
+        usim_datastore_h5=usim_datastore_h5,
     )
 
 

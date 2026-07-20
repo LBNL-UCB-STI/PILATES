@@ -11,16 +11,6 @@ if TYPE_CHECKING:
 
 from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
-from pilates.beam.launch_paths import (
-    configure_staged_linkstats_reference,
-    prepare_r5_raw_rebuild,
-)
-from pilates.beam.config_hocon import (
-    BeamConfigHoconError,
-    beam_config_env_overrides,
-    beam_primary_config_path,
-    update_staged_beam_config_value,
-)
 from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
 from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
@@ -105,23 +95,6 @@ def _record_store_from_artifact_mappings(
         },
     )
     return combined
-
-
-# Mappings for BEAM configuration parameters
-beam_param_map = {
-    "beam_sample": "beam.agentsim.agentSampleSizeAsFractionOfPopulation",
-    "beam_replanning_portion": "beam.agentsim.agents.plans.merge.fraction",
-    "max_plans_memory": "beam.replanning.maxAgentPlanMemorySize",
-    "beam.agentsim.taz.filePath": "beam.agentsim.taz.filePath",
-    "beam.agentsim.taz.tazIdFieldName": "beam.agentsim.taz.tazIdFieldName",
-}
-
-BEAM_PYDANTIC_PATH_MAP = {
-    "beam_sample": "beam.sample",
-    "beam_replanning_portion": "beam.replanning_portion",
-    "max_plans_memory": "beam.max_plans_memory",
-    "skim_zone_geoid_col": "beam.skim_zone_geoid_col",
-}
 
 
 def _prepare_beam_zone_shapefile(
@@ -373,6 +346,8 @@ class BeamPreprocessor(GenericPreprocessor):
                 short_name = raw_name.split("_asim_out")[0]
             else:
                 short_name = raw_name
+            if short_name == "plans":
+                short_name = "beam_plans"
 
             if short_name in self.required_input_data:
                 input_records.add_record(record)
@@ -388,12 +363,6 @@ class BeamPreprocessor(GenericPreprocessor):
             if short_name.startswith("linkstats"):
                 previous_beam_records.append(record)
 
-        # Update BEAM config based on settings
-        self._update_beam_config(
-            "max_plans_memory",
-            value_override=0 if self.settings.beam.discard_plans_every_year else None,
-            base_path=workspace.full_path,
-        )
         # Prepare the zone shapefile to ensure consistent zone ordering
         if self.settings.shared.geography.zones is not None:
             self.prepare_beam_zone_shapefile(workspace)
@@ -469,13 +438,6 @@ class BeamPreprocessor(GenericPreprocessor):
         # Ensure linkstats file is present and recorded
         self._handle_linkstats(workspace, previous_beam_records, store)
         self._configure_linkstats_warmstart(workspace, store)
-
-        # Force BEAM/R5 onto its raw-source rebuild branch. Consist's BEAM
-        # adapter records the selected raw OSM member during canonicalization.
-        prepare_r5_raw_rebuild(
-            settings=self.settings,
-            workspace=workspace,
-        )
 
         logger.info("[BEAM Preprocessor] BEAM preprocessing complete.")
         return store
@@ -598,27 +560,10 @@ class BeamPreprocessor(GenericPreprocessor):
 
     def prepare_beam_zone_shapefile(self, workspace: "Workspace") -> Optional[str]:
         """
-        Creates a sorted zone shapefile for BEAM from the canonical zone definitions
-        and updates the BEAM config to use it.
+        Creates a sorted zone shapefile for the later derived launch config.
         """
 
         output_shapefile_path = _prepare_beam_zone_shapefile(workspace, self.settings)
-        output_shapefile_name = os.path.basename(output_shapefile_path)
-
-        logger.info("Updating BEAM configuration to use the new sorted shapefile.")
-        relative_shapefile_path = os.path.join("shape", output_shapefile_name)
-
-        # FIX: Pass workspace.full_path explicitly
-        self._update_beam_config(
-            "beam.agentsim.taz.filePath",
-            value_override="${beam.inputDirectory}" + f"/{relative_shapefile_path}",
-            base_path=workspace.full_path,
-        )
-        self._update_beam_config(
-            "beam.agentsim.taz.tazIdFieldName",
-            value_override=self.settings.shared.geography.zones.activitysim_index_col,
-            base_path=workspace.full_path,
-        )
         return output_shapefile_path
 
     def _copy_vehicles_from_atlas(
@@ -733,7 +678,7 @@ class BeamPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         store: RecordStore,
     ) -> None:
-        """Bind an optional staged warm-start record to final BEAM HOCON."""
+        """Record an optional staged warm-start for the later launch compiler."""
 
         warmstart_record = next(
             (
@@ -751,17 +696,10 @@ class BeamPreprocessor(GenericPreprocessor):
             if record_path.is_absolute()
             else Path(workspace.full_path) / record_path
         )
-        reference = configure_staged_linkstats_reference(
-            settings=self.settings,
-            workspace=workspace,
-            staged_path=staged_path,
-        )
         warmstart_record.metadata.update(
             {
-                "config_key": reference.config_key,
-                "execution_path": str(reference.execution_path),
-                "physical_target_path": str(reference.physical_target_path),
-                "container_path": reference.container_path,
+                "launch_config_key": "beam.warmStart.initialLinkstatsFilePath",
+                "staged_path": str(staged_path),
             }
         )
 
@@ -841,111 +779,13 @@ class BeamPreprocessor(GenericPreprocessor):
         )
         return None
 
-    def _update_beam_config(
-        self, param: str, value_override=None, base_path: str = None
-    ):
+    def _update_beam_config(self, *_args: Any, **_kwargs: Any) -> None:
+        """Reject obsolete in-preprocess configuration mutation.
+
+        The post-preprocess launch compiler owns all BEAM configuration
+        overrides so the config Consist fingerprints is also the mounted tree.
         """
-        Update a BEAM config file parameter with a new value.
 
-        Args:
-            param: The config parameter key.
-            value_override: The value to set.
-            base_path: The root directory of the workspace.
-        """
-        config_header = beam_param_map.get(param)
-        if not config_header:
-            logger.warning(
-                f"[BEAM Preprocessor] Tried to modify parameter {param} but couldn't find it in settings.yaml"
-            )
-            return
-
-        if value_override is not None:
-            config_value = value_override
-        else:
-            pydantic_path = BEAM_PYDANTIC_PATH_MAP.get(param)
-            if not pydantic_path:
-                logger.warning(
-                    f"Parameter '{param}' has no defined Pydantic path. Cannot update beam config."
-                )
-                return
-            beam_settings = self.settings.beam
-            if beam_settings is None:
-                logger.warning(
-                    "BEAM config is missing; cannot resolve parameter '%s'.",
-                    param,
-                )
-                return
-            if pydantic_path == "beam.sample":
-                config_value = beam_settings.sample
-            elif pydantic_path == "beam.replanning_portion":
-                config_value = beam_settings.replanning_portion
-            elif pydantic_path == "beam.max_plans_memory":
-                config_value = beam_settings.max_plans_memory
-            elif pydantic_path == "beam.skim_zone_geoid_col":
-                config_value = beam_settings.skim_zone_geoid_col
-            else:
-                logger.warning(
-                    "Unsupported BEAM Pydantic path '%s' for parameter '%s'.",
-                    pydantic_path,
-                    param,
-                )
-                return
-
-        if config_value is None:
-            logger.debug(
-                f"Skipping beam config update for '{param}' because value is None."
-            )
-            return
-
-        # FIX: Determine root path robustly
-        root = base_path
-        if not root and hasattr(self.state, "workspace"):
-            root = self.state.workspace.full_path
-
-        if not root:
-            logger.error(
-                f"Cannot update BEAM config for {param}: Workspace root path could not be determined."
-            )
-            return
-
-        beam_config_path = beam_primary_config_path(
-            self.settings,
-            workspace_path=root,
-        )
-
-        if not beam_config_path.exists():
-            logger.warning(
-                f"[BEAM Preprocessor] BEAM config file does not exist: {beam_config_path}"
-            )
-            return
-
-        try:
-            changed = update_staged_beam_config_value(
-                beam_config_path,
-                key=config_header,
-                value=config_value,
-                env_overrides=beam_config_env_overrides(
-                    self.settings,
-                    workspace_path=root,
-                ),
-            )
-        except BeamConfigHoconError:
-            logger.error(
-                "[BEAM Preprocessor] Failed to update staged BEAM config key %s in %s",
-                config_header,
-                beam_config_path,
-                exc_info=True,
-            )
-            raise
-
-        if not changed:
-            logger.info(
-                "[BEAM Preprocessor] Config already up to date for %s in %s",
-                config_header,
-                beam_config_path,
-            )
-            return
-
-        logger.info(
-            f"[BEAM Preprocessor] Updated config {config_header} to {config_value} in {beam_config_path}"
+        raise RuntimeError(
+            "BeamPreprocessor no longer writes HOCON; use build_beam_launch_config."
         )

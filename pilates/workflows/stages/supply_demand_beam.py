@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
@@ -20,6 +21,9 @@ from pilates.utils.coupler_helpers import (
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.outputs import BeamRunOutputs
+from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
+from pilates.beam.config_hocon import beam_config_root
+from pilates.beam.launch_paths import prepare_r5_raw_rebuild
 from pilates.workflows.resume import (
     HistoricalOutputRequest,
     ResumeDecision,
@@ -1133,6 +1137,41 @@ def _run_beam_preprocess_step(
     return outputs
 
 
+def _compile_beam_launch_config(
+    *,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    year: int,
+    iteration: int,
+    preprocess_outputs: Any,
+) -> BeamLaunchConfig:
+    """Create the one derived config tree consumed by the next BEAM process."""
+
+    source_root = beam_config_root(settings, workspace=workspace)
+    output_dir = (
+        Path(workspace.full_path)
+        / ".pilates-beam-launch-config"
+        / f"y{year}"
+        / f"i{iteration}"
+    )
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=output_dir,
+        identity=scenario.tracker.identity,
+        prepared_inputs=preprocess_outputs.prepared_inputs,
+    )
+    prepare_r5_raw_rebuild(
+        settings=settings,
+        workspace=workspace,
+        config_root=launch_config.root,
+    )
+    return launch_config
+
+
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
@@ -1164,7 +1203,21 @@ def _run_beam_steps(
         iteration=iteration,
         phase="preprocess",
     )
-    del preprocess_outputs
+    launch_config = _compile_beam_launch_config(
+        scenario=scenario,
+        settings=settings,
+        workspace=workspace,
+        year=year,
+        iteration=iteration,
+        preprocess_outputs=preprocess_outputs,
+    )
+    run_inputs = beam_run.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=scenario.coupler,
+        launch_config=launch_config,
+    )
     run_result, _ = execute_step(
         scenario=scenario,
         definition=beam_run,
@@ -1175,6 +1228,8 @@ def _run_beam_steps(
         year=year,
         iteration=iteration,
         phase="run",
+        runtime_kwargs={"beam_launch_config": launch_config},
+        resolved_inputs=run_inputs,
     )
     postprocess_inputs = beam_postprocess.resolve_inputs(
         settings=settings,
@@ -1215,7 +1270,20 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    return step_output_handoff_mapping(postprocess_outputs, coupler=scenario.coupler)
+    combined_outputs = step_output_handoff_mapping(
+        postprocess_outputs, coupler=scenario.coupler
+    )
+    if _should_run_full_skim(settings, iteration):
+        full_skim_outputs = _run_beam_full_skim_step(
+            scenario=scenario,
+            year=year,
+            iteration=iteration,
+            context=context,
+            launch_config=launch_config,
+        )
+        if full_skim_outputs is not None:
+            combined_outputs.update(full_skim_outputs)
+    return combined_outputs
 
 
 def _run_beam_full_skim_step(
@@ -1224,9 +1292,17 @@ def _run_beam_full_skim_step(
     year: int,
     iteration: int,
     context: WorkflowRuntimeContext,
+    launch_config: BeamLaunchConfig,
 ) -> Optional[Dict[str, Any]]:
     """Execute full skims through its native definition."""
 
+    full_skim_inputs = beam_full_skim.resolve_inputs(
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        coupler=scenario.coupler,
+        launch_config=launch_config,
+    )
     _, outputs = execute_step(
         scenario=scenario,
         definition=beam_full_skim,
@@ -1237,6 +1313,8 @@ def _run_beam_full_skim_step(
         year=year,
         iteration=iteration,
         phase="full_skim",
+        runtime_kwargs={"beam_launch_config": launch_config},
+        resolved_inputs=full_skim_inputs,
     )
     return {key: path for key, path, _description in outputs._iter_record_items()}
 
@@ -1279,7 +1357,7 @@ def _run_traffic_assignment_phase(
 
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
-        _run_beam_preprocess_step(
+        preprocess_outputs = _run_beam_preprocess_step(
             scenario=scenario,
             settings=settings,
             state=state,
@@ -1287,11 +1365,20 @@ def _run_traffic_assignment_phase(
             year=inputs.year,
             iteration=inputs.iteration,
         )
+        launch_config = _compile_beam_launch_config(
+            scenario=scenario,
+            settings=settings,
+            workspace=workspace,
+            year=inputs.year,
+            iteration=inputs.iteration,
+            preprocess_outputs=preprocess_outputs,
+        )
         combined_beam_outputs = _run_beam_full_skim_step(
             scenario=scenario,
             year=inputs.year,
             iteration=inputs.iteration,
             context=context,
+            launch_config=launch_config,
         )
     else:
         combined_beam_outputs = _run_beam_steps(
@@ -1300,17 +1387,6 @@ def _run_traffic_assignment_phase(
             iteration=inputs.iteration,
             context=context,
         )
-        if _should_run_full_skim(settings, inputs.iteration):
-            full_skim_outputs = _run_beam_full_skim_step(
-                scenario=scenario,
-                year=inputs.year,
-                iteration=inputs.iteration,
-                context=context,
-            )
-            if full_skim_outputs is not None:
-                if combined_beam_outputs is None:
-                    combined_beam_outputs = {}
-                combined_beam_outputs.update(full_skim_outputs)
 
     state.complete_step(
         state.Stage.supply_demand_loop,

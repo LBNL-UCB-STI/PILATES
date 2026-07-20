@@ -17,11 +17,9 @@ import pandas as pd
 from pilates.config import PilatesConfig
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord, sanitize_artifact_key
-from pilates.runtime.archive_paths import first_existing_path
 from pilates.atlas.inputs import atlas_selected_scenario, atlas_static_input_relpaths
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.utils import consist_runtime as cr
-from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.path_utils import find_project_root
 from pilates.utils.settings_helper import get as get_setting
 from pilates.utils.usim_h5 import resolve_usim_h5_table_key
@@ -119,12 +117,6 @@ def _export_atlas_table_to_csv(
         index=True,
         index_label=expected_index_name,
     )
-
-
-def _resolve_existing_artifact_path(
-    value: Any, *, workspace: "Workspace"
-) -> Optional[str]:
-    return artifact_to_existing_path(value, workspace=workspace)
 
 
 def _restart_required_atlas_input_years(
@@ -606,6 +598,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
     ) -> AtlasPreprocessOutputs:
         """
@@ -681,44 +674,9 @@ class AtlasPreprocessor(GenericPreprocessor):
                 atlas_year=self.state.year,
             )
 
-            # 2. Set path for UrbanSim output
-            urbansim_output_path = os.path.join(previous_run_dir, "urbansim", "data")
-        else:
-            # This is a fresh run
-            urbansim_output_path = workspace.get_usim_mutable_data_dir()
-
-        artifact_current_h5 = getattr(self.state, "atlas_usim_datastore_h5", None)
-        artifact_base_h5 = getattr(self.state, "atlas_usim_datastore_base_h5", None)
-        current_h5_path = _resolve_existing_artifact_path(
-            artifact_current_h5,
-            workspace=workspace,
-        )
-        base_h5_path = _resolve_existing_artifact_path(
-            artifact_base_h5,
-            workspace=workspace,
-        )
-        preferred_h5 = first_existing_path(
-            base_h5_path if self.state.is_start_year() else current_h5_path,
-            current_h5_path if self.state.is_start_year() else base_h5_path,
-        )
-
-        if preferred_h5 is not None:
-            urbansim_output = preferred_h5
-        else:
-            if self.state.is_start_year():
-                urbansim_output_fname = _get_usim_datastore_fname(settings, io="input")
-            else:
-                urbansim_output_fname = _get_usim_datastore_fname(
-                    settings, io="output", year=self.state.forecast_year
-                )
-            urbansim_output = os.path.join(urbansim_output_path, urbansim_output_fname)
-            logger.warning(
-                "[AtlasPreprocessor] Falling back to template-resolved UrbanSim H5. "
-                "Preferred artifacts were unavailable: current=%s base=%s fallback=%s",
-                artifact_current_h5,
-                artifact_base_h5,
-                urbansim_output,
-            )
+        if usim_datastore_h5 is None:
+            raise TypeError("AtlasPreprocessor._preprocess requires usim_datastore_h5")
+        urbansim_output = Path(usim_datastore_h5)
 
         atlas_input_path = os.path.join(
             workspace.get_atlas_mutable_input_dir(),
@@ -958,10 +916,17 @@ class AtlasPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPreprocessOutputs:
         """Prepare ATLAS inputs and return typed outputs."""
+        if usim_datastore_h5 is None:
+            raise TypeError("AtlasPreprocessor.preprocess requires usim_datastore_h5")
         self.state.set_sub_stage_progress("preprocessor")
-        return self._preprocess(workspace, previous_records)
+        return self._preprocess(
+            workspace,
+            previous_records,
+            usim_datastore_h5=usim_datastore_h5,
+        )
 
 
 def compute_accessibility(

@@ -8,6 +8,7 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
+from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.outputs_base import ValidationContext
@@ -95,7 +96,7 @@ def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     workspace = _Workspace(tmp_path)
     captured = {}
 
-    def _fake_run(store: RecordStore, _workspace) -> RecordStore:
+    def _fake_run(store: RecordStore, _workspace, _launch_config) -> RecordStore:
         captured["store"] = store
         return RecordStore(
             recordList=[
@@ -115,6 +116,10 @@ def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     outputs = runner.run(
         preprocess_outputs,
         workspace,
+        launch_config=BeamLaunchConfig(
+            root=tmp_path / "beam-launch",
+            primary_config=tmp_path / "beam-launch" / "beam.conf",
+        ),
         extra_inputs={"zarr_skims": tmp_path / "asim-output" / "cache" / "skims.zarr"},
     )
 
@@ -135,7 +140,56 @@ def test_beam_runner_run_rejects_non_typed_inputs(tmp_path) -> None:
     runner = BeamRunner("beam_runner", _StubState())
 
     with pytest.raises(TypeError, match="BeamPreprocessOutputs"):
-        runner.run(object(), _Workspace(tmp_path))
+        runner.run(
+            object(),
+            _Workspace(tmp_path),
+            launch_config=BeamLaunchConfig(
+                root=tmp_path / "beam-launch",
+                primary_config=tmp_path / "beam-launch" / "beam.conf",
+            ),
+        )
+
+
+def test_beam_runner_mounts_the_bound_launch_tree(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.current_inner_iter = 2
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", memory="4g"),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+    )
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = launch_root / "configs" / "beam.conf"
+    launch_primary.parent.mkdir(parents=True)
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(root=launch_root, primary_config=launch_primary)
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args: ("beam", "image"))
+    monkeypatch.setattr(
+        runner,
+        "run_container",
+        lambda **kwargs: captured.update(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        "pilates.beam.runner.rename_beam_output_directory",
+        lambda *_args: ("old", str(tmp_path / "beam-output")),
+    )
+    monkeypatch.setattr(runner, "gather_outputs", lambda *_args: [])
+
+    runner._run(RecordStore(), workspace, launch_config)
+
+    assert captured["command"] == "--config=/app/input/configs/beam.conf"
+    assert captured["volumes"] == {
+        str(launch_root): {"bind": "/app/input", "mode": "rw"},
+        str(tmp_path / "beam-output"): {"bind": "/app/output", "mode": "rw"},
+    }
 
 
 def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(

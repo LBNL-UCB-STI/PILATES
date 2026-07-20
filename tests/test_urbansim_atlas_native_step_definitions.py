@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import pytest
 from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
@@ -14,7 +15,9 @@ from pilates.workflows.artifact_keys import (
     USIM_MUTABLE_DATA_DIR,
     USIM_POPULATION_SOURCE_H5,
 )
+from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import urbansim_atlas
+from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
 from pilates.workflows.steps.urbansim_atlas import (
     ATLAS_POSTPROCESS,
     ATLAS_PREPROCESS,
@@ -24,6 +27,7 @@ from pilates.workflows.steps.urbansim_atlas import (
     URBANSIM_RUN,
 )
 from pilates.workflows.step_execution import execute_step
+from workflow_state import WorkflowState
 
 
 def _settings() -> SimpleNamespace:
@@ -125,6 +129,140 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         USIM_POPULATION_SOURCE_H5,
         ATLAS_VEHICLES2_OUTPUT,
     }
+
+
+def test_atlas_postprocess_output_uses_the_bound_forecast_datastore_at_start_year(
+    tmp_path: Path,
+) -> None:
+    settings = _settings()
+    state = _state()
+    state.is_start_year = lambda: True
+    workspace = _workspace(tmp_path)
+
+    output_paths = ATLAS_POSTPROCESS.output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    assert Path(output_paths[USIM_POPULATION_SOURCE_H5]) == (
+        Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5"
+    )
+
+
+def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tracker_root = tmp_path / "consist-runs"
+    tracker = Tracker(
+        run_dir=tracker_root,
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    source_h5 = tracker_root / "fixtures" / "bound.h5"
+    source_h5.parent.mkdir(parents=True)
+    source_h5.write_bytes(b"bound H5 bytes")
+    source_atlas_output = tracker_root / "fixtures" / "atlas-output"
+    source_atlas_output.mkdir()
+    with tracker.start_run("seed", "test"):
+        h5_artifact = tracker.log_artifact(
+            source_h5,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+        atlas_output_artifact = tracker.log_artifact(
+            source_atlas_output,
+            key=ATLAS_OUTPUT_DIR,
+            direction="input",
+        )
+
+    settings = _settings()
+    parent_state = SimpleNamespace(
+        year=2023,
+        current_year=2023,
+        forecast_year=2029,
+        start_year=2017,
+        full_settings=settings,
+        set_sub_stage_progress=lambda _value: None,
+    )
+    state = AtlasSubState(cast(WorkflowState, parent_state), 2023)
+    workspace = _workspace(tracker_root / "workspace")
+    output_h5 = Path(workspace.get_usim_mutable_data_dir()) / "output_2023.h5"
+    stale_input = Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5"
+    output_h5.parent.mkdir(parents=True)
+    output_h5.write_bytes(b"stale output")
+    stale_input.write_bytes(b"stale input")
+    vehicles2 = Path(workspace.get_atlas_output_dir()) / "vehicles2_2023.csv"
+    seen: dict[str, Path | bytes] = {}
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(
+            self,
+            _outputs: object,
+            _workspace: object,
+            *,
+            usim_datastore_h5: Path,
+        ) -> None:
+            seen["path"] = usim_datastore_h5
+            seen["before"] = usim_datastore_h5.read_bytes()
+            usim_datastore_h5.write_bytes(b"updated bound H5 bytes")
+            vehicles2.parent.mkdir(parents=True, exist_ok=True)
+            vehicles2.write_text("vehicle_id\n1\n", encoding="utf-8")
+
+    monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _Postprocessor)
+    definition = replace(
+        ATLAS_POSTPROCESS,
+        output_paths=lambda **_kwargs: {
+            USIM_POPULATION_SOURCE_H5: output_h5,
+            ATLAS_VEHICLES2_OUTPUT: vehicles2,
+        },
+        project_outputs=lambda outputs, **_kwargs: outputs,
+    )
+
+    with tracker.scenario("atlas-interval-start") as scenario:
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, h5_artifact)
+        scenario.coupler.set_from_artifact(ATLAS_OUTPUT_DIR, atlas_output_artifact)
+        result, projected = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="vehicle_ownership",
+            year=state.year,
+            iteration=1,
+            phase="postprocess",
+        )
+
+    assert seen == {"path": output_h5, "before": b"bound H5 bytes"}
+    assert output_h5.read_bytes() == b"updated bound H5 bytes"
+    assert stale_input.read_bytes() == b"stale input"
+    assert result.output_path(USIM_POPULATION_SOURCE_H5) == output_h5
+    assert projected == result.outputs
+
+
+def test_urbansim_preprocess_stages_the_bound_datastore_over_workspace_state(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    bound_snapshot = tmp_path / "consist-snapshot" / "input_001.h5"
+    bound_snapshot.parent.mkdir()
+    bound_snapshot.write_bytes(b"bound snapshot")
+    stale_workspace_copy = Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5"
+    stale_workspace_copy.parent.mkdir(parents=True)
+    stale_workspace_copy.write_bytes(b"stale workspace copy")
+
+    staged = _stage_declared_urbansim_datastore(
+        settings=_settings(),
+        workspace=workspace,
+        usim_datastore_h5=bound_snapshot,
+    )
+
+    assert staged == stale_workspace_copy
+    assert staged.read_bytes() == b"bound snapshot"
 
 
 def test_native_resolver_selects_one_coupler_artifact_at_its_model_destination(
@@ -401,15 +539,22 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         workspace=workspace,
     )
 
-    # Native callables accept resolved paths, while these legacy adapters
-    # continue to read their remaining workspace-owned state.
-    assert calls["urbansim_preprocess"] == {"final_skims_omx": None}
-    assert calls["atlas_preprocess"] == {}
+    # The bound datastore path is an execution input, not a hint for an
+    # adapter-owned workspace lookup.
+    assert calls["urbansim_preprocess"] == {
+        "usim_datastore_h5": snapshots["usim_datastore_h5"],
+        "final_skims_omx": None,
+    }
+    assert calls["atlas_preprocess"] == {
+        "usim_datastore_h5": snapshots["usim_datastore_h5"]
+    }
     assert (
         getattr(calls["atlas_run"], "atlas_mutable_input_dir")
         == snapshots["atlas_mutable_input_dir"]
     )
-    assert calls["atlas_postprocess"] == {}
+    assert calls["atlas_postprocess"] == {
+        "usim_datastore_h5": snapshots["usim_datastore_h5"]
+    }
 
 
 def test_native_atlas_postprocess_projector_uses_persisted_outputs_only(

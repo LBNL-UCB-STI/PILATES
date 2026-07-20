@@ -16,6 +16,7 @@ from consist.protocols import (
     ScenarioLike as ConsistScenarioLike,
     TrackerLike as ConsistTrackerLike,
 )
+from consist.core.identity import IdentityManager
 
 
 @runtime_checkable
@@ -46,6 +47,7 @@ class ScenarioLike(ConsistScenarioLike, Protocol):
 @runtime_checkable
 class TrackerLike(ConsistTrackerLike, Protocol):
     persistence: TrackerPersistenceLike
+    identity: IdentityManager
 
     def log_h5_container(
         self,
@@ -70,6 +72,7 @@ class TrackerLike(ConsistTrackerLike, Protocol):
 @runtime_checkable
 class ScenarioWithCoupler(ScenarioLike, Protocol):
     coupler: "CouplerProtocol"
+    tracker: TrackerLike
 
     def declare_outputs(self, *names: str, **kwargs: Any) -> None: ...
 

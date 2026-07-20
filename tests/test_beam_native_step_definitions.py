@@ -26,6 +26,9 @@ from pilates.workflows.steps.beam import (
     beam_run,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.steps import beam as beam_steps
+from pilates.workflows.steps.shared import BeamRunOutputs
+from pilates.beam.launch_config import BeamLaunchConfig
 
 
 def _empty_resolved_inputs() -> ResolvedStepInputs:
@@ -144,6 +147,128 @@ def test_native_beam_artifact_inputs_match_callable_parameter_names() -> None:
         )
 
 
+def test_native_beam_run_validates_canonical_launch_references_before_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "beam.conf"
+    config.write_text("beam {}\n", encoding="utf-8")
+    inputs = {}
+    for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+        path = tmp_path / f"{key}.csv"
+        path.write_text(f"{key}\n", encoding="utf-8")
+        inputs[key] = path
+    mutable_data_dir = tmp_path / "beam-input"
+    mutable_data_dir.mkdir()
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    context = SimpleNamespace(canonicalization=object())
+    events: list[tuple[str, object]] = []
+
+    launch_config = BeamLaunchConfig(root=tmp_path, primary_config=config)
+
+    def validate_linkstats(*, settings, workspace, run_context, config_root) -> None:
+        assert workspace is not None
+        assert config_root == launch_config.root
+        events.append(("linkstats", run_context))
+
+    def validate_r5(*, settings, workspace, run_context, config_root) -> None:
+        assert workspace is not None
+        assert config_root == launch_config.root
+        events.append(("r5", run_context))
+
+    class Runner:
+        def __init__(self, name: str, state: object) -> None:
+            assert name == "beam_run"
+
+        def run(self, *_args, **_kwargs) -> object:
+            events.append(("runner", context))
+            return BeamRunOutputs(
+                beam_output_dir=tmp_path / "beam-output",
+                raw_outputs={},
+            )
+
+    monkeypatch.setattr(
+        beam_steps,
+        "validate_staged_linkstats_reference",
+        validate_linkstats,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "validate_r5_execution_reference",
+        validate_r5,
+        raising=False,
+    )
+    monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "_materialize_native_outputs", lambda **_kwargs: None
+    )
+
+    beam_steps._native_beam_run(
+        config,
+        inputs[BEAM_PLANS_IN],
+        inputs[BEAM_HOUSEHOLDS_IN],
+        inputs[BEAM_PERSONS_IN],
+        settings=object(),
+        state=SimpleNamespace(year=2030, iteration=1),
+        workspace=workspace,
+        beam_launch_config=launch_config,
+        _consist_ctx=context,
+    )
+
+    assert events == [
+        ("linkstats", context),
+        ("r5", context),
+        ("runner", context),
+    ]
+
+
+def test_native_beam_run_fails_closed_before_starting_runner(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "beam.conf"
+    config.write_text("beam {}\n", encoding="utf-8")
+    inputs = []
+    for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+        path = tmp_path / f"{key}.csv"
+        path.write_text(f"{key}\n", encoding="utf-8")
+        inputs.append(path)
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    def reject_linkstats(**_kwargs) -> None:
+        raise RuntimeError("linkstats launch proof failed")
+
+    class Runner:
+        def __init__(self, *_args, **_kwargs) -> None:
+            raise AssertionError("BeamRunner must not start after failed launch proof")
+
+    monkeypatch.setattr(
+        beam_steps, "validate_staged_linkstats_reference", reject_linkstats
+    )
+    monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
+
+    with pytest.raises(RuntimeError, match="linkstats launch proof failed"):
+        beam_steps._native_beam_run(
+            config,
+            *inputs,
+            settings=object(),
+            state=SimpleNamespace(year=2030, iteration=1),
+            workspace=workspace,
+            beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
+            _consist_ctx=SimpleNamespace(canonicalization=object()),
+        )
+
+
 def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +294,13 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         def get(self, key: str, default: object = None) -> object:
             return values.get(key, default)
 
+    launch_config_path = tmp_path / "beam-launch" / "beam.conf"
+    launch_config_path.parent.mkdir()
+    launch_config_path.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(
+        root=launch_config_path.parent,
+        primary_config=launch_config_path,
+    )
     settings = object()
     state = SimpleNamespace()
     workspace = SimpleNamespace(
@@ -179,11 +311,15 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         state=state,
         workspace=workspace,
         coupler=Coupler(),
+        launch_config=launch_config,
     )
 
     assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == values
-    assert set(resolved.logical_destinations) == set(values)
+    assert dict(resolved.binding.inputs or {}) == {
+        "beam_config_file": launch_config_path,
+        **values,
+    }
+    assert set(resolved.logical_destinations) == {"beam_config_file", *values}
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(

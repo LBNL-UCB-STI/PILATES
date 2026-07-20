@@ -28,6 +28,11 @@ from consist import (
 from pilates.beam.config_hocon import (
     beam_primary_config_path,
 )
+from pilates.beam.launch_paths import (
+    validate_r5_execution_reference,
+    validate_staged_linkstats_reference,
+)
+from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
@@ -712,9 +717,18 @@ def _resolve_beam_preprocess_inputs(
 
 
 def _resolve_beam_run_inputs(
-    *, settings: Any, state: Any, workspace: Any, coupler: Any
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: Any,
+    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    config_path = _require_primary_beam_config(settings, workspace)
+    config_path = (
+        launch_config.primary_config
+        if launch_config is not None
+        else _require_primary_beam_config(settings, workspace)
+    )
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
@@ -943,13 +957,26 @@ def _resolve_beam_full_skim_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
+    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
+    config_path = (
+        launch_config.primary_config
+        if launch_config is not None
+        else _require_primary_beam_config(settings, workspace)
+    )
     return _resolved_beam_inputs(
         step_name="beam_full_skim",
         coupler=coupler,
         workspace=workspace,
-        required_roles=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
+        required_roles=(
+            BEAM_CONFIG_FILE,
+            BEAM_PLANS_IN,
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+        ),
         optional_roles=(LINKSTATS_WARMSTART,),
+        explicit_inputs={BEAM_CONFIG_FILE: config_path},
+        logical_destinations={BEAM_CONFIG_FILE: config_path},
     )
 
 
@@ -1068,10 +1095,28 @@ def _native_beam_run(
     settings: Any,
     state: Any,
     workspace: Workspace,
+    beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
     if not beam_config_file.exists():
         raise FileNotFoundError(f"beam_run config is missing: {beam_config_file}")
+    if beam_config_file != beam_launch_config.primary_config:
+        raise RuntimeError(
+            "beam_run binding config must be the same derived config mounted by "
+            "the runner."
+        )
+    validate_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=_consist_ctx,
+        config_root=beam_launch_config.root,
+    )
+    validate_r5_execution_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=_consist_ctx,
+        config_root=beam_launch_config.root,
+    )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
         BEAM_HOUSEHOLDS_IN: households_beam_in,
@@ -1085,6 +1130,7 @@ def _native_beam_run(
             prepared_inputs=prepared,
         ),
         workspace,
+        launch_config=beam_launch_config,
         extra_inputs={ZARR_SKIMS: zarr_skims} if zarr_skims is not None else None,
     )
     _validate_native_outputs(
@@ -1181,6 +1227,7 @@ def _native_beam_postprocess(
     model="beam_full_skim",
     name_template="beam_full_skim__y{year}__i{iteration}__phase_{phase}",
     inputs={
+        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1192,6 +1239,7 @@ def _native_beam_postprocess(
     **consist_step_meta("beam_full_skim"),
 )
 def _native_beam_full_skim(
+    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1200,8 +1248,14 @@ def _native_beam_full_skim(
     settings: Any,
     state: Any,
     workspace: Workspace,
+    beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
+    if beam_config_file != beam_launch_config.primary_config:
+        raise RuntimeError(
+            "beam_full_skim binding config must be the same derived config mounted "
+            "by the runner."
+        )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
         BEAM_HOUSEHOLDS_IN: households_beam_in,
@@ -1217,6 +1271,7 @@ def _native_beam_full_skim(
             prepared_inputs=prepared,
         ),
         workspace,
+        launch_config=beam_launch_config,
     )
     _validate_native_outputs(
         produced,

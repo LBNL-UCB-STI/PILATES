@@ -74,6 +74,7 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
             },
         ),
         workspace,
+        usim_datastore_h5=usim_h5,
     )
 
     assert len(calls) == 2
@@ -152,6 +153,7 @@ def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
             },
         ),
         workspace,
+        usim_datastore_h5=base_h5,
     )
 
     assert seen["h5_file_path"] == str(base_h5)
@@ -200,6 +202,7 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
                 },
             ),
             workspace,
+            usim_datastore_h5=usim_h5,
         )
 
 
