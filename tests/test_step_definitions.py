@@ -295,7 +295,12 @@ def test_native_steps_declare_static_consist_metadata() -> None:
             "schema_outputs": {ZARR_SKIMS, "final_skims_omx"},
         },
         "beam_full_skim": {
-            "inputs": {BEAM_CONFIG_FILE, BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN},
+            "inputs": {
+                BEAM_CONFIG_FILE,
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+            },
             "optional": {LINKSTATS_WARMSTART},
             "schema_outputs": {"beam_full_skims"},
         },
