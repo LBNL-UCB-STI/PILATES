@@ -565,6 +565,14 @@ def _declared_step_model(step_func: Callable[..., Any]) -> Optional[str]:
     return None
 
 
+def _declared_step_name(step_func: Callable[..., Any]) -> Optional[str]:
+    """Return the registered native identity for a decorated step callable."""
+    for spec in WORKFLOW_STEP_SPECS:
+        if spec.definition.function is step_func:
+            return spec.step_name
+    return None
+
+
 def _step_meta_value(step_meta: Any, name: str) -> Any:
     if step_meta is None:
         return None
@@ -771,14 +779,15 @@ def validate_workflow_step_contracts(
     errors: list[str] = []
     declared_by_name: Dict[str, Callable[..., Any]] = {}
     for step in declared_steps:
-        name = _declared_step_model(step)
-        if name is None:
+        model = _declared_step_model(step)
+        if model is None:
             errors.append(
                 "Declared step callable is missing __consist_step__.model metadata"
             )
             continue
+        name = _declared_step_name(step) or model
         if name in declared_by_name:
-            errors.append(f"Duplicate declared step model name: {name}")
+            errors.append(f"Duplicate declared step identity: {name}")
             continue
         declared_by_name[name] = step
 
@@ -801,11 +810,15 @@ def validate_workflow_step_contracts(
         if spec is None:
             continue
         step_meta = getattr(step, "__consist_step__", None)
-        outputs = getattr(step_meta, "outputs", ()) if step_meta is not None else ()
-        if outputs is not None and not set(spec.output_keys).issubset(set(outputs)):
+        schema_outputs = (
+            getattr(step_meta, "schema_outputs", ()) if step_meta is not None else ()
+        )
+        if schema_outputs is not None and not set(spec.output_keys).issubset(
+            set(schema_outputs)
+        ):
             errors.append(
-                f"Step '{name}' metadata outputs omit catalog outputs "
-                + ", ".join(sorted(set(spec.output_keys) - set(outputs)))
+                f"Step '{name}' metadata schema outputs omit catalog outputs "
+                + ", ".join(sorted(set(spec.output_keys) - set(schema_outputs)))
             )
 
     if errors:

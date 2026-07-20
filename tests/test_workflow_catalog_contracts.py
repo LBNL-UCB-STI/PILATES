@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from pilates.runtime.scenario_runtime import build_schema_steps
 from pilates.workflows import catalog
 from pilates.workflows.steps import STEP_DEFINITIONS
+from pilates.workflows.steps.shared import validate_workflow_step_contracts
 
 
 def _metadata_keys(values) -> tuple[str, ...]:
@@ -34,6 +36,14 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
         assert spec.optional_output_keys == ()
         assert spec.holder_inputs == spec.depends_on
         assert spec.upstream_step_inputs == spec.depends_on
+
+
+def test_native_schema_steps_allow_shared_consist_model_metadata():
+    """Preprocess/run/postprocess may share a Consist model category."""
+    validate_workflow_step_contracts(
+        declared_steps=build_schema_steps(),
+        require_all_tracked_declared=False,
+    )
 
 
 def test_workflow_step_contract_export_projects_native_metadata():
