@@ -63,7 +63,7 @@ def _skip_r5_rebuild_in_exchange_input_tests(monkeypatch):
     """Keep exchange-input unit tests independent of the R5 launch contract."""
 
     monkeypatch.setattr(
-        "pilates.beam.preprocessor.prepare_r5_raw_rebuild",
+        "pilates.beam.launch_paths.prepare_r5_raw_rebuild",
         lambda **_kwargs: None,
     )
 

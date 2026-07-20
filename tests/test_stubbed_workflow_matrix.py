@@ -265,6 +265,9 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
             (
                 f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
                 'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
+                'beam.outputs.baseOutputDirectory = "/app/output"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.physsim.inputNetworkFilePath = ""',
             )
         )
         + "\n",
@@ -279,7 +282,7 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         },
     )
 
-    def _fake_beam_run(self, input_store, _workspace):
+    def _fake_beam_run(self, input_store, _workspace, _launch_config):
         assert "zarr_skims" not in input_store.to_mapping()
         events = beam_output_dir / "events.parquet"
         linkstats = beam_output_dir / "linkstats.csv.gz"
@@ -457,12 +460,17 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
             (
                 f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
                 'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
+                'beam.outputs.baseOutputDirectory = "/app/output"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.physsim.inputNetworkFilePath = ""',
+                'beam.agentsim.taz.filePath = ""',
+                'beam.agentsim.taz.tazIdFieldName = ""',
             )
         )
         + "\n",
     )
 
-    def _fake_beam_run(self, _input_store, _workspace):
+    def _fake_beam_run(self, _input_store, _workspace, _launch_config):
         linkstats = beam_output_dir / "linkstats.csv.gz"
         plans_out = beam_output_dir / "plans.parquet"
         _write_file(linkstats, "stub")
