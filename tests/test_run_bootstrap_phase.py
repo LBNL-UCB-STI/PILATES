@@ -42,6 +42,41 @@ class DummyWorkspace:
         return os.path.join(self.full_path, "beam", "input")
 
 
+def test_fresh_bootstrap_sequence_defers_initialized_marker_until_coupler_seed(
+    monkeypatch,
+):
+    """Initial UrbanSim roles must be seeded while the state is still fresh."""
+    state = SimpleNamespace(data_initialized=False)
+    state.set_data_initialized = lambda value: setattr(state, "data_initialized", value)
+    prepared = SimpleNamespace(
+        settings=SimpleNamespace(),
+        state=state,
+        surface=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        tracker=SimpleNamespace(),
+        scenario_id="base",
+        seed=None,
+        is_restart_run=False,
+    )
+    bootstrap_result = {"staged_artifact_summary": {"copied_records_total": 1}}
+
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module, "run_bootstrap_phase", lambda **_kwargs: bootstrap_result
+    )
+    monkeypatch.setattr(
+        run_module, "_assert_bootstrap_output_invariant", lambda _result: None
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "log_bootstrap_result_summary",
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert run_module._run_bootstrap_sequence(prepared) is bootstrap_result
+    assert state.data_initialized is False
+
+
 class DummyInitialization:
     def __init__(self, *_args, **_kwargs):
         pass

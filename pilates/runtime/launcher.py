@@ -645,8 +645,6 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
             surface=surface,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
-        if not state.data_initialized:
-            state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
@@ -746,7 +744,7 @@ def main(
         # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
         # Initialization runs before entering scenario step execution so bootstrap
         # lifecycle can evolve independently from normal model steps.
-        _run_bootstrap_sequence(prepared)
+        bootstrap_result = _run_bootstrap_sequence(prepared)
 
         # 6. START SCENARIO CONTEXT
         # The scenario context is where all model execution happens. Each step runs inside
@@ -815,6 +813,8 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            if bootstrap_result is not None and not state.data_initialized:
+                state.set_data_initialized(True)
             if is_restart_run and state.data_initialized:
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "
