@@ -426,7 +426,7 @@ def _activitysim_postprocess_resolver(
     inputs = dict(resolved.binding.inputs or {})
     population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
-    if not _same_artifact(population_source, current_datastore):
+    if not _is_population_source_alias(population_source, current_datastore):
         return resolved
 
     # Vehicle ownership intentionally aliases the current datastore role to
@@ -451,15 +451,18 @@ def _activitysim_postprocess_resolver(
     )
 
 
-def _same_artifact(left: Any, right: Any) -> bool:
-    """Return whether two bound values denote one tracked artifact."""
+def _is_population_source_alias(population_source: Any, current_datastore: Any) -> bool:
+    """Return whether current datastore is the population-source alias."""
 
-    if left is right:
-        return left is not None
-    return (
-        isinstance(left, Artifact)
-        and isinstance(right, Artifact)
-        and left.id == right.id
+    if population_source is current_datastore:
+        return population_source is not None
+    if not isinstance(population_source, Artifact) or not isinstance(
+        current_datastore, Artifact
+    ):
+        return False
+    return population_source.id == current_datastore.id or (
+        population_source.key == USIM_POPULATION_SOURCE_H5
+        and current_datastore.key == USIM_POPULATION_SOURCE_H5
     )
 
 

@@ -201,6 +201,64 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
     assert resolved.selected_roles() == (USIM_POPULATION_SOURCE_H5,)
 
 
+def test_activitysim_postprocess_resolver_omits_current_artifact_with_population_key(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    source_paths = [tmp_path / "population-a.h5", tmp_path / "population-b.h5"]
+    for index, path in enumerate(source_paths):
+        path.write_text(f"population {index}\n", encoding="utf-8")
+    with tracker.start_run("seed_duplicate_population_key", "test"):
+        current_artifact = tracker.log_artifact(
+            source_paths[0], key=USIM_POPULATION_SOURCE_H5, direction="input"
+        )
+        population_artifact = tracker.log_artifact(
+            source_paths[1], key=USIM_POPULATION_SOURCE_H5, direction="input"
+        )
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_postprocess",
+        binding=BindingResult(
+            inputs={
+                USIM_POPULATION_SOURCE_H5: population_artifact,
+                USIM_DATASTORE_CURRENT_H5: current_artifact,
+            }
+        ),
+        optional_roles=(
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+        ),
+        logical_destinations={
+            USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
+            USIM_DATASTORE_CURRENT_H5: tmp_path / "current.h5",
+        },
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+
+    resolved = activitysim._activitysim_postprocess_resolver(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+
+    assert dict(resolved.binding.inputs or {}) == {
+        USIM_POPULATION_SOURCE_H5: population_artifact,
+    }
+
+
 def test_activitysim_postprocess_uses_population_source_when_current_alias_is_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
