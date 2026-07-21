@@ -147,8 +147,7 @@ def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(
     )
 
     assert Path(output_paths[USIM_POPULATION_SOURCE_H5]) == (
-        Path(workspace.get_usim_mutable_data_dir())
-        / "output_2030_population_source.h5"
+        Path(workspace.get_usim_mutable_data_dir()) / "output_2030_population_source.h5"
     )
 
 
@@ -233,8 +232,7 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     workspace = _workspace(tracker_root / "workspace")
     output_h5 = Path(workspace.get_usim_mutable_data_dir()) / "output_2023.h5"
     population_h5 = (
-        Path(workspace.get_usim_mutable_data_dir())
-        / "output_2023_population_source.h5"
+        Path(workspace.get_usim_mutable_data_dir()) / "output_2023_population_source.h5"
     )
     stale_input = Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5"
     output_h5.parent.mkdir(parents=True)

@@ -12,6 +12,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
+    USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -147,6 +148,96 @@ def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
         "activitysim_population_source"
     )
     assert rules["final_skims_omx"].required is False
+
+
+def test_activitysim_postprocess_resolver_omits_current_alias_of_population_source(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    population_source = _tracked_artifacts(tmp_path, USIM_POPULATION_SOURCE_H5)[
+        USIM_POPULATION_SOURCE_H5
+    ]
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_postprocess",
+        binding=BindingResult(
+            inputs={
+                USIM_POPULATION_SOURCE_H5: population_source,
+                USIM_DATASTORE_CURRENT_H5: population_source,
+            }
+        ),
+        optional_roles=(
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+        ),
+        source_by_role={
+            USIM_POPULATION_SOURCE_H5: "coupler",
+            USIM_DATASTORE_CURRENT_H5: "coupler",
+        },
+        logical_destinations={
+            USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
+            USIM_DATASTORE_CURRENT_H5: tmp_path / "current.h5",
+        },
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+
+    resolved = activitysim._activitysim_postprocess_resolver(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+
+    assert dict(resolved.binding.inputs or {}) == {
+        USIM_POPULATION_SOURCE_H5: population_source,
+    }
+    assert resolved.selected_roles() == (USIM_POPULATION_SOURCE_H5,)
+
+
+def test_activitysim_postprocess_uses_population_source_when_current_alias_is_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Postprocessor:
+        def postprocess(self, *_args: object, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        activitysim.ModelFactory,
+        "get_postprocessor",
+        lambda _self, *_args: _Postprocessor(),
+    )
+    population_source = Path("/inputs/population-source.h5")
+    base_datastore = Path("/inputs/base.h5")
+    output_paths = {
+        key: Path(f"/outputs/{key}") for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+    }
+
+    activitysim._activitysim_postprocess_callable(
+        households_asim_in=Path("/inputs/households.csv"),
+        persons_asim_in=Path("/inputs/persons.csv"),
+        land_use_asim_in=Path("/inputs/land-use.csv"),
+        omx_skims=Path("/inputs/skims.omx"),
+        zarr_skims=Path("/inputs/skims.zarr"),
+        usim_population_source_h5=population_source,
+        usim_datastore_current_h5=None,
+        usim_datastore_base_h5=base_datastore,
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(get_asim_output_dir=lambda: "/outputs"),
+        **output_paths,
+    )
+
+    assert captured["population_source_h5_path"] == str(population_source)
+    assert captured["current_input_h5_path"] == str(population_source)
 
 
 def test_activitysim_projectors_validate_persisted_outputs(

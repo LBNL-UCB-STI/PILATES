@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, Mapping
 
 from consist import (
+    Artifact,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
@@ -410,7 +411,7 @@ def _activitysim_postprocess_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
-    return _native_activitysim_resolved_inputs(
+    resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_postprocess",
         required_roles=_ACTIVITYSIM_POSTPROCESS_REQUIRED_ROLES,
         optional_roles=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
@@ -421,6 +422,44 @@ def _activitysim_postprocess_resolver(
         state=state,
         workspace=workspace,
         coupler=coupler,
+    )
+    inputs = dict(resolved.binding.inputs or {})
+    population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
+    current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
+    if not _same_artifact(population_source, current_datastore):
+        return resolved
+
+    # Vehicle ownership intentionally aliases the current datastore role to
+    # the immutable population snapshot.  The ActivitySim postprocessor can
+    # use that snapshot for both optional parameters, but Consist must receive
+    # the artifact once so requested staging has one unambiguous input key.
+    inputs.pop(USIM_DATASTORE_CURRENT_H5)
+    return ResolvedStepInputs(
+        step_name=resolved.step_name,
+        binding=BindingResult(
+            inputs=inputs or None,
+            input_keys=resolved.binding.input_keys,
+            optional_input_keys=resolved.binding.optional_input_keys,
+            metadata=resolved.binding.metadata,
+        ),
+        required_roles=resolved.required_roles,
+        optional_roles=resolved.optional_roles,
+        source_by_role=resolved.source_by_role,
+        selected_key_by_role=resolved.selected_key_by_role,
+        logical_destinations=resolved.logical_destinations,
+        metadata=resolved.metadata,
+    )
+
+
+def _same_artifact(left: Any, right: Any) -> bool:
+    """Return whether two bound values denote one tracked artifact."""
+
+    if left is right:
+        return left is not None
+    return (
+        isinstance(left, Artifact)
+        and isinstance(right, Artifact)
+        and left.id == right.id
     )
 
 
@@ -889,8 +928,16 @@ def _activitysim_postprocess_callable(
             if usim_population_source_h5 is not None
             else None
         ),
-        current_input_h5_path=str(usim_datastore_current_h5 or usim_datastore_base_h5)
-        if usim_datastore_current_h5 is not None or usim_datastore_base_h5 is not None
+        current_input_h5_path=str(
+            usim_datastore_current_h5
+            or usim_population_source_h5
+            or usim_datastore_base_h5
+        )
+        if (
+            usim_datastore_current_h5 is not None
+            or usim_population_source_h5 is not None
+            or usim_datastore_base_h5 is not None
+        )
         else None,
     )
 
