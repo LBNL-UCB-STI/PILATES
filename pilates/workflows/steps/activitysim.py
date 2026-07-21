@@ -11,6 +11,7 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
+    StepIdentity,
     define_step,
     require_runtime_kwargs,
 )
@@ -37,6 +38,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.binding import (
     ArtifactBindingRule,
+    build_resolved_binding,
     resolve_artifact_roles,
 )
 from pilates.workflows.output_projection import require_output
@@ -410,6 +412,7 @@ def _activitysim_postprocess_resolver(
     state: WorkflowState,
     workspace: Workspace,
     coupler: CouplerProtocol,
+    step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_postprocess",
@@ -424,6 +427,37 @@ def _activitysim_postprocess_resolver(
         coupler=coupler,
     )
     inputs = dict(resolved.binding.inputs or {})
+    if step_identity is not None and all(
+        isinstance(value, Artifact) for value in inputs.values()
+    ):
+        # This callable intentionally gives three named parameters to one
+        # datastore in restart/base-only cases.  A normal BindingResult loses
+        # that parameter-to-artifact relation during requested staging; freeze
+        # it so Consist stages each named parameter by its tracked identity.
+        return ResolvedStepInputs(
+            step_name=resolved.step_name,
+            binding=build_resolved_binding(
+                step_name=resolved.step_name,
+                function=_activitysim_postprocess_callable,
+                selected_artifacts=inputs,
+                logical_destinations={role: Path("inputs") / role for role in inputs},
+                selection_diagnostics={
+                    "source_by_role": resolved.source_by_role,
+                    "selected_key_by_role": resolved.selected_key_by_role,
+                },
+                source_by_parameter={
+                    role: resolved.source_by_role[role] for role in inputs
+                },
+                step_identity=step_identity,
+            ),
+            required_roles=resolved.required_roles,
+            optional_roles=resolved.optional_roles,
+            source_by_role=resolved.source_by_role,
+            selected_key_by_role=resolved.selected_key_by_role,
+            logical_destinations=resolved.logical_destinations,
+            metadata=resolved.metadata,
+        )
+
     population_source = inputs.get(USIM_POPULATION_SOURCE_H5)
     current_datastore = inputs.get(USIM_DATASTORE_CURRENT_H5)
     if not _is_population_source_alias(population_source, current_datastore):
@@ -893,7 +927,7 @@ def _activitysim_postprocess_callable(
     tours_asim_out: Path,
     trips_asim_out: Path,
     usim_population_source_h5: Path | None = None,
-    usim_datastore_current_h5: Path | None = None,
+    usim_datastore_h5: Path | None = None,
     usim_datastore_base_h5: Path | None = None,
     *,
     settings: PilatesConfig,
@@ -932,12 +966,10 @@ def _activitysim_postprocess_callable(
             else None
         ),
         current_input_h5_path=str(
-            usim_datastore_current_h5
-            or usim_population_source_h5
-            or usim_datastore_base_h5
+            usim_datastore_h5 or usim_population_source_h5 or usim_datastore_base_h5
         )
         if (
-            usim_datastore_current_h5 is not None
+            usim_datastore_h5 is not None
             or usim_population_source_h5 is not None
             or usim_datastore_base_h5 is not None
         )
@@ -971,4 +1003,5 @@ activitysim_postprocess = StepDefinition(
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
+    preflight_identity=True,
 )

@@ -79,11 +79,7 @@ ELIGIBILITY_MATRIX = (
         False,
         "runner mounts the mutable ActivitySim workspace instead of strict parameter paths",
     ),
-    EligibilityEntry(
-        "activitysim_postprocess",
-        False,
-        "selected datastore role does not map to a named callable parameter",
-    ),
+    EligibilityEntry("activitysim_postprocess", True),
     EligibilityEntry(
         "beam_preprocess",
         False,

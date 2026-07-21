@@ -5,7 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from consist import BindingResult, Tracker, resolve_step_contract
+from consist import (
+    BindingResult,
+    ExecutionOptions,
+    ResolvedBinding,
+    Tracker,
+    resolve_step_contract,
+)
 
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
@@ -13,6 +19,7 @@ from pilates.workflows.artifact_keys import (
     ASIM_LAND_USE_IN,
     ASIM_PERSONS_IN,
     USIM_DATASTORE_CURRENT_H5,
+    USIM_DATASTORE_BASE_H5,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -259,6 +266,100 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
     }
 
 
+def test_activitysim_postprocess_resolver_freezes_tracked_h5_aliases(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """One tracked H5 may safely satisfy all three named postprocess parameters."""
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    source = tmp_path / "sources" / "model_data.h5"
+    source.parent.mkdir(parents=True)
+    source.write_text("tracked h5\n", encoding="utf-8")
+    with tracker.start_run("seed_postprocess_h5", "test"):
+        artifact = tracker.log_artifact(
+            source,
+            key=USIM_DATASTORE_BASE_H5,
+            direction="input",
+        )
+
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_postprocess",
+        binding=BindingResult(
+            inputs={
+                USIM_POPULATION_SOURCE_H5: artifact,
+                USIM_DATASTORE_CURRENT_H5: artifact,
+                USIM_DATASTORE_BASE_H5: artifact,
+            }
+        ),
+        optional_roles=(
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_DATASTORE_BASE_H5,
+        ),
+        source_by_role={
+            USIM_POPULATION_SOURCE_H5: "coupler",
+            USIM_DATASTORE_CURRENT_H5: "coupler",
+            USIM_DATASTORE_BASE_H5: "coupler",
+        },
+        logical_destinations={
+            USIM_POPULATION_SOURCE_H5: tmp_path / "population-source.h5",
+            USIM_DATASTORE_CURRENT_H5: tmp_path / "current.h5",
+            USIM_DATASTORE_BASE_H5: tmp_path / "base.h5",
+        },
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
+    workspace = SimpleNamespace(full_path=str(tmp_path))
+    with tracker.scenario("activitysim-postprocess") as scenario:
+        identity = scenario.resolve_step_identity(
+            activitysim._activitysim_postprocess_callable,
+            year=2025,
+            iteration=0,
+            phase="postprocess",
+            stage="supply_demand",
+            execution_options=ExecutionOptions(
+                input_binding="paths",
+                runtime_kwargs={
+                    "settings": settings,
+                    "state": state,
+                    "workspace": workspace,
+                },
+            ),
+        )
+        resolved = activitysim._activitysim_postprocess_resolver(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=object(),
+            step_identity=identity,
+        )
+
+    assert isinstance(resolved.binding, ResolvedBinding)
+    assert set(resolved.binding.inputs) == {
+        USIM_POPULATION_SOURCE_H5,
+        USIM_DATASTORE_CURRENT_H5,
+        USIM_DATASTORE_BASE_H5,
+    }
+    assert {
+        input.artifact.artifact_id for input in resolved.binding.inputs.values()
+    } == {artifact.id}
+
+
 def test_activitysim_postprocess_uses_population_source_when_current_alias_is_omitted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -286,7 +387,7 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
         omx_skims=Path("/inputs/skims.omx"),
         zarr_skims=Path("/inputs/skims.zarr"),
         usim_population_source_h5=population_source,
-        usim_datastore_current_h5=None,
+        usim_datastore_h5=None,
         usim_datastore_base_h5=base_datastore,
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
