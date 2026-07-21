@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+import pandas as pd
 import pytest
 from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
 
@@ -131,7 +132,7 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
     }
 
 
-def test_atlas_postprocess_output_uses_the_bound_forecast_datastore_at_start_year(
+def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(
     tmp_path: Path,
 ) -> None:
     settings = _settings()
@@ -146,8 +147,49 @@ def test_atlas_postprocess_output_uses_the_bound_forecast_datastore_at_start_yea
     )
 
     assert Path(output_paths[USIM_POPULATION_SOURCE_H5]) == (
-        Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5"
+        Path(workspace.get_usim_mutable_data_dir())
+        / "output_2030_population_source.h5"
     )
+
+
+def test_native_atlas_postprocess_publishes_exact_year_population_snapshot(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = _workspace(tmp_path)
+    state = _state()
+    settings = _settings()
+    datastore = Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5"
+    datastore.parent.mkdir(parents=True)
+    with pd.HDFStore(datastore, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    class _AtlasPostprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(
+            self, _outputs: object, _workspace: object, **_kwargs: object
+        ) -> None:
+            pass
+
+    monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _AtlasPostprocessor)
+
+    urbansim_atlas._native_atlas_postprocess(
+        Path(workspace.get_atlas_output_dir()),
+        datastore,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    population_source = (
+        Path(workspace.get_usim_mutable_data_dir()) / "output_2030_population_source.h5"
+    )
+    assert population_source.exists()
+    with pd.HDFStore(population_source, mode="r") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/2030/{table_name}" in store
 
 
 def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_output(
@@ -161,7 +203,9 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     )
     source_h5 = tracker_root / "fixtures" / "bound.h5"
     source_h5.parent.mkdir(parents=True)
-    source_h5.write_bytes(b"bound H5 bytes")
+    with pd.HDFStore(source_h5, mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
     source_atlas_output = tracker_root / "fixtures" / "atlas-output"
     source_atlas_output.mkdir()
     with tracker.start_run("seed", "test"):
@@ -188,6 +232,10 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     state = AtlasSubState(cast(WorkflowState, parent_state), 2023)
     workspace = _workspace(tracker_root / "workspace")
     output_h5 = Path(workspace.get_usim_mutable_data_dir()) / "output_2023.h5"
+    population_h5 = (
+        Path(workspace.get_usim_mutable_data_dir())
+        / "output_2023_population_source.h5"
+    )
     stale_input = Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5"
     output_h5.parent.mkdir(parents=True)
     output_h5.write_bytes(b"stale output")
@@ -207,8 +255,9 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
             usim_datastore_h5: Path,
         ) -> None:
             seen["path"] = usim_datastore_h5
-            seen["before"] = usim_datastore_h5.read_bytes()
-            usim_datastore_h5.write_bytes(b"updated bound H5 bytes")
+            with pd.HDFStore(usim_datastore_h5, mode="w") as store:
+                for table_name in ("households", "persons", "jobs", "blocks"):
+                    store.put(f"/{table_name}", pd.DataFrame({"value": [2]}))
             vehicles2.parent.mkdir(parents=True, exist_ok=True)
             vehicles2.write_text("vehicle_id\n1\n", encoding="utf-8")
 
@@ -216,7 +265,7 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     definition = replace(
         ATLAS_POSTPROCESS,
         output_paths=lambda **_kwargs: {
-            USIM_POPULATION_SOURCE_H5: output_h5,
+            USIM_POPULATION_SOURCE_H5: population_h5,
             ATLAS_VEHICLES2_OUTPUT: vehicles2,
         },
         project_outputs=lambda outputs, **_kwargs: outputs,
@@ -237,10 +286,13 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
             phase="postprocess",
         )
 
-    assert seen == {"path": output_h5, "before": b"bound H5 bytes"}
-    assert output_h5.read_bytes() == b"updated bound H5 bytes"
+    assert seen == {"path": output_h5}
+    with pd.HDFStore(output_h5, mode="r") as store:
+        assert store["/households"].iloc[0, 0] == 2
     assert stale_input.read_bytes() == b"stale input"
-    assert result.output_path(USIM_POPULATION_SOURCE_H5) == output_h5
+    assert result.output_path(USIM_POPULATION_SOURCE_H5) == population_h5
+    with pd.HDFStore(population_h5, mode="r") as store:
+        assert "/2023/households" in store
     assert projected == result.outputs
 
 
@@ -476,6 +528,10 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         "atlas_mutable_input_dir": tmp_path / "snapshots" / "atlas-input",
         ATLAS_OUTPUT_DIR: tmp_path / "snapshots" / "atlas-output",
     }
+    snapshots["usim_datastore_h5"].parent.mkdir(parents=True)
+    with pd.HDFStore(snapshots["usim_datastore_h5"], mode="w") as store:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
     calls: dict[str, object] = {}
 
     class _UrbanSimPreprocessor:

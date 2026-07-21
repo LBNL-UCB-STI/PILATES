@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Sequence
 
@@ -43,6 +44,7 @@ from pilates.workflows.step_definition import StepDefinition
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.utils.consist_runtime import require_runtime_kwargs
+from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -325,14 +327,18 @@ def _atlas_postprocess_native_output_paths(
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
     outputs = AtlasPostprocessor.expected_outputs(settings, state, workspace)
-    # ATLAS mutates the exact datastore supplied to the callable.  Native
-    # resolution stages that role at UrbanSim's forecast-output destination,
-    # including in the start year; output projection must name that same file.
-    outputs[USIM_POPULATION_SOURCE_H5] = _urbansim_run_native_output_paths(
+    # ATLAS mutates the exact datastore supplied to the callable.  Its published
+    # ActivitySim source is a distinct post-mutation snapshot, so it can carry
+    # exact-year HDF5 aliases without changing the mutable UrbanSim handoff.
+    updated_datastore = _urbansim_run_native_output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
     )[USIM_DATASTORE_H5]
+    updated_path = Path(updated_datastore)
+    outputs[USIM_POPULATION_SOURCE_H5] = updated_path.with_name(
+        f"{updated_path.stem}_population_source{updated_path.suffix}"
+    )
     return outputs
 
 
@@ -654,6 +660,14 @@ def _native_atlas_postprocess(
         ),
         workspace,
         usim_datastore_h5=usim_datastore_h5,
+    )
+    population_source = usim_datastore_h5.with_name(
+        f"{usim_datastore_h5.stem}_population_source{usim_datastore_h5.suffix}"
+    )
+    shutil.copy2(usim_datastore_h5, population_source)
+    ensure_usim_population_year_table_aliases(
+        h5_path=str(population_source),
+        year=state.forecast_year,
     )
 
 
