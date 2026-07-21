@@ -864,26 +864,33 @@ def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
 
 
 @pytest.mark.parametrize(
-    "state",
+    ("state", "expected_current"),
     [
-        SimpleNamespace(
-            start_year=2017,
-            current_year=2023,
-            forecast_year=2028,
-            data_initialized=False,
+        (
+            SimpleNamespace(
+                start_year=2017,
+                current_year=2023,
+                forecast_year=2028,
+                data_initialized=False,
+            ),
+            None,
         ),
-        SimpleNamespace(
-            start_year=2017,
-            current_year=2017,
-            forecast_year=2017,
-            data_initialized=True,
+        (
+            SimpleNamespace(
+                start_year=2017,
+                current_year=2017,
+                forecast_year=2017,
+                data_initialized=True,
+            ),
+            "bootstrap datastore",
         ),
     ],
     ids=["later_year", "restart_at_initial_year"],
 )
-def test_seed_bootstrap_artifacts_to_coupler_does_not_backfill_current_urbansim_role_outside_initial_frontier(
+def test_seed_bootstrap_artifacts_to_coupler_publishes_current_urbansim_role_only_at_initial_frontier(
     tmp_path,
     state,
+    expected_current,
 ):
     class DummyCoupler:
         def __init__(self):
@@ -910,7 +917,11 @@ def test_seed_bootstrap_artifacts_to_coupler_does_not_backfill_current_urbansim_
     )
 
     assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
-    assert coupler.get("usim_datastore_h5") is None
+    current = coupler.get("usim_datastore_h5")
+    if expected_current is None:
+        assert current is None
+    else:
+        assert Path(current).read_text(encoding="utf-8") == expected_current
 
 
 def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consumer(

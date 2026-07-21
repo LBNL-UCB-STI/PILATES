@@ -1371,8 +1371,6 @@ def _bootstrap_urbansim_initial_datastore(
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     """Publish the bootstrap-staged UrbanSim input H5 at the initial frontier."""
-    if getattr(state, "data_initialized", None) is not False:
-        return None
     if not uses_input_datastore(state):
         return None
 
