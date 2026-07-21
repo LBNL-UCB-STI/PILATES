@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,12 +18,15 @@ from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
+    ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_BASE_H5,
     USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import activitysim
 
 
@@ -358,6 +362,155 @@ def test_activitysim_postprocess_resolver_freezes_tracked_h5_aliases(
     assert {
         input.artifact.artifact_id for input in resolved.binding.inputs.values()
     } == {artifact.id}
+
+
+def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The native postprocessor receives distinct strict snapshots for H5 aliases."""
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    required_roles = (
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_OMX_SKIMS,
+        ZARR_SKIMS,
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    )
+    with tracker.start_run("seed_postprocess_inputs", "test"):
+        h5_source = tmp_path / "sources" / "model_data.h5"
+        h5_source.parent.mkdir(parents=True)
+        h5_source.write_text("tracked h5\n", encoding="utf-8")
+        h5_artifact = tracker.log_artifact(
+            h5_source,
+            key=USIM_DATASTORE_BASE_H5,
+            direction="input",
+        )
+        inputs = {
+            USIM_POPULATION_SOURCE_H5: h5_artifact,
+            USIM_DATASTORE_CURRENT_H5: h5_artifact,
+            USIM_DATASTORE_BASE_H5: h5_artifact,
+        }
+        for role in required_roles:
+            source = tmp_path / "sources" / role
+            source.write_text(f"{role}\n", encoding="utf-8")
+            inputs[role] = tracker.log_artifact(source, key=role, direction="input")
+
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_postprocess",
+        binding=BindingResult(inputs=inputs),
+        required_roles=required_roles,
+        optional_roles=(
+            USIM_POPULATION_SOURCE_H5,
+            USIM_DATASTORE_CURRENT_H5,
+            USIM_DATASTORE_BASE_H5,
+        ),
+        source_by_role={role: "coupler" for role in inputs},
+        logical_destinations={
+            role: tmp_path / "logical-inputs" / role for role in inputs
+        },
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+
+    output_paths = {
+        key: tmp_path / "outputs" / key
+        for key in (USIM_DATASTORE_CURRENT_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS)
+    }
+    monkeypatch.setattr(
+        activitysim,
+        "activitysim_postprocess_output_paths",
+        lambda **_kwargs: output_paths,
+    )
+    received: dict[str, str] = {}
+
+    class _Postprocessor:
+        def postprocess(self, *_args: object, **kwargs: object) -> None:
+            received.update(
+                {
+                    key: str(kwargs[key])
+                    for key in (
+                        "population_source_h5_path",
+                        "current_input_h5_path",
+                    )
+                }
+            )
+            for path in output_paths.values():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("persisted output\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        activitysim.ModelFactory,
+        "get_postprocessor",
+        lambda _self, *_args: _Postprocessor(),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda **_kwargs: {
+            "config": {"model": "activitysim"},
+            "identity_inputs": [],
+        },
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="test"))
+    state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
+    asim_output_dir = tmp_path / "asim-output"
+    asim_output_dir.mkdir()
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "asim-inputs"),
+    )
+
+    with tracker.scenario("activitysim-postprocess-aliases") as scenario:
+        result, projected = execute_step(
+            scenario=scenario,
+            definition=replace(
+                activitysim.activitysim_postprocess,
+                output_paths=lambda **_kwargs: output_paths,
+            ),
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="supply_demand",
+            year=2025,
+            iteration=0,
+            phase="postprocess",
+        )
+
+    snapshot_root = (
+        tracker.run_dir / ".resolved-bindings" / result.run.id / "inputs"
+    ).resolve()
+    population_snapshot = snapshot_root / USIM_POPULATION_SOURCE_H5
+    current_snapshot = snapshot_root / USIM_DATASTORE_CURRENT_H5
+    base_snapshot = snapshot_root / USIM_DATASTORE_BASE_H5
+    assert Path(received["population_source_h5_path"]) == population_snapshot
+    assert Path(received["current_input_h5_path"]) == current_snapshot
+    assert len({population_snapshot, current_snapshot, base_snapshot}) == 3
+    assert all(
+        path.read_text(encoding="utf-8") == "tracked h5\n"
+        for path in (
+            population_snapshot,
+            current_snapshot,
+            base_snapshot,
+        )
+    )
+    assert projected.usim_datastore_h5 == output_paths[USIM_DATASTORE_CURRENT_H5]
+    assert result.outputs[USIM_DATASTORE_CURRENT_H5].container_uri == str(
+        output_paths[USIM_DATASTORE_CURRENT_H5]
+    )
 
 
 def test_activitysim_postprocess_uses_population_source_when_current_alias_is_omitted(
