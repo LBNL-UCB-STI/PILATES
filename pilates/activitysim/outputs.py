@@ -66,6 +66,11 @@ ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
     "workplace_shadow_prices": "workplace_shadow_prices_asim_out",
 }
 
+# ``plans`` was a historical PILATES configuration spelling.  Current
+# ActivitySim publishes the generated BEAM plan table as ``beam_plans`` in the
+# checkpoint final-pipeline directory.
+ASIM_PIPELINE_TABLE_ALIASES: Dict[str, str] = {"plans": "beam_plans"}
+
 ASIM_OPTIONAL_RUN_OUTPUT_KEYS: Tuple[str, ...] = (
     ASIM_OUTPUT_KEY_MAP["person_windows"],
     ASIM_OUTPUT_KEY_MAP["proto_disaggregate_accessibility"],
@@ -93,12 +98,13 @@ def normalize_asim_output_key(key: str) -> str:
 
 
 def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
-    """Return configured ActivitySim table names indexed by semantic output key.
+    """Return physical final-pipeline table names indexed by semantic output key.
 
     ``output_tables.tables`` is the execution contract: it determines which
     final-pipeline tables ActivitySim actually creates.  The mapping preserves
-    the concrete source table name (notably ``plans``) while exposing PILATES'
-    stable semantic key (``beam_plans_asim_out``).
+    the physical source table name while exposing PILATES' stable semantic key
+    (``beam_plans_asim_out``).  The legacy ``plans`` selector is resolved to
+    ActivitySim's actual ``beam_plans`` final-pipeline directory.
     """
 
     activitysim = settings.activitysim
@@ -115,11 +121,12 @@ def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
         output_key = normalize_asim_output_key(table_name)
         if output_key not in ASIM_OUTPUT_KEY_MAP.values():
             continue
-        existing = configured.setdefault(output_key, table_name)
-        if existing != table_name:
+        pipeline_table_name = ASIM_PIPELINE_TABLE_ALIASES.get(table_name, table_name)
+        existing = configured.setdefault(output_key, pipeline_table_name)
+        if existing != pipeline_table_name:
             raise ValueError(
                 "activitysim.output_tables.tables maps multiple source tables to "
-                f"the same semantic output {output_key!r}: {existing!r}, {table_name!r}"
+                f"the same semantic output {output_key!r}: {existing!r}, {pipeline_table_name!r}"
             )
     return configured
 

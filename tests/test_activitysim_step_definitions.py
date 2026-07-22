@@ -87,10 +87,10 @@ def _activitysim_test_settings() -> SimpleNamespace:
     )
 
 
-def test_activitysim_output_contract_uses_configured_source_table_names(
+def test_activitysim_output_contract_maps_legacy_plans_to_beam_plans_pipeline(
     tmp_path: Path,
 ) -> None:
-    """Only configured tables are declared, retaining the real ``plans`` path."""
+    """Legacy ``plans`` selects the stable role at the real pipeline location."""
 
     settings = SimpleNamespace(
         activitysim=SimpleNamespace(
@@ -117,7 +117,7 @@ def test_activitysim_output_contract_uses_configured_source_table_names(
         "persons_asim_out": "persons",
         "tours_asim_out": "tours",
         "trips_asim_out": "trips",
-        "beam_plans_asim_out": "plans",
+        "beam_plans_asim_out": "beam_plans",
     }
 
     run_outputs = activitysim.activitysim_run_output_paths(
@@ -135,7 +135,7 @@ def test_activitysim_output_contract_uses_configured_source_table_names(
     assert set(run_outputs) == set(configured)
     assert set(postprocess_outputs) == set(configured)
     assert run_outputs["beam_plans_asim_out"].path.endswith(
-        "final_pipeline/plans/final.parquet"
+        "final_pipeline/beam_plans/final.parquet"
     )
     assert str(postprocess_outputs["beam_plans_asim_out"]).endswith(
         "year-2025-iteration-0/beam_plans.parquet"
