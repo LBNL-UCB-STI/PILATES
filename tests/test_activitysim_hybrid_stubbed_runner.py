@@ -435,3 +435,50 @@ def test_activitysim_postprocess_rehydrates_existing_iteration_outputs(
         postprocess_outputs.processed_output_hashes["beam_plans_asim_out"]
         == "hash_beam_plans_out"
     )
+
+
+def test_activitysim_postprocess_archives_native_semantic_keys_to_table_stems(
+    tmp_path: Path,
+) -> None:
+    """Native semantic keys retain the legacy archive filenames."""
+
+    settings = _build_settings(tmp_path)
+    settings.land_use_enabled = False
+    settings.vehicle_ownership_model_enabled = False
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = False
+    settings.replanning_enabled = False
+    settings.state_file_loc = str(tmp_path / "state.yaml")
+    workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
+    state = WorkflowState.from_settings(settings)
+    state.current_year = settings.run.start_year
+    state.forecast_year = settings.run.start_year
+    state.current_inner_iter = 0
+
+    raw_dir = Path(workspace.get_asim_output_dir()) / "native-raw"
+    households = raw_dir / "households.parquet"
+    persons = raw_dir / "persons.parquet"
+    _write_parquet(households, pd.DataFrame({"household_id": [1]}))
+    _write_parquet(persons, pd.DataFrame({"person_id": [1]}))
+
+    outputs = ActivitySimRunOutputs(
+        output_dir=Path(workspace.get_asim_output_dir()),
+        raw_outputs={
+            "households_asim_out": households,
+            "persons_asim_out": persons,
+        },
+    )
+    postprocess_outputs = ActivitysimPostprocessor("activitysim", state).postprocess(
+        outputs, workspace
+    )
+    archive_dir = (
+        Path(workspace.get_asim_output_dir())
+        / f"year-{state.current_year}-iteration-{state.current_inner_iter}"
+    )
+
+    assert postprocess_outputs.processed_outputs["households_asim_out"] == (
+        archive_dir / "households.parquet"
+    )
+    assert postprocess_outputs.processed_outputs["persons_asim_out"] == (
+        archive_dir / "persons.parquet"
+    )

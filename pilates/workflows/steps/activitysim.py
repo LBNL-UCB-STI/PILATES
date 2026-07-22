@@ -25,7 +25,10 @@ from pilates.activitysim.runner import (
     ActivitysimRunner,
     asim_runtime_zarr_path,
 )
-from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    configured_asim_output_keys,
+)
 from pilates.activitysim.postprocessor import ActivitysimPostprocessor
 from pilates.config.models import PilatesConfig
 from pilates.workflows.artifact_keys import (
@@ -96,7 +99,7 @@ def activitysim_run_output_paths(
 ) -> Dict[str, Any]:
     """Return cache-recoverable ActivitySim outputs and their logging metadata."""
     expected_outputs = ActivitysimRunner.expected_outputs(settings, state, workspace)
-    output_keys = set(ASIM_REQUIRED_RUN_OUTPUT_KEYS)
+    output_keys = set(configured_asim_output_keys(settings))
     if produces_zarr:
         expected_outputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
         output_keys.add(ZARR_SKIMS)
@@ -209,13 +212,12 @@ _ACTIVITYSIM_RUN_REQUIRED_ROLES = (
 _ACTIVITYSIM_RUN_SKIM_ROLES = (ZARR_SKIMS, ASIM_OMX_SKIMS)
 _ACTIVITYSIM_SKIM_MODE_METADATA_KEY = "activitysim_skim_mode"
 _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY = "activitysim_produces_zarr"
-_ACTIVITYSIM_POSTPROCESS_REQUIRED_ROLES = (
+_ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES = (
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ZARR_SKIMS,
-    *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
 )
 _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES = (
     USIM_POPULATION_SOURCE_H5,
@@ -416,7 +418,10 @@ def _activitysim_postprocess_resolver(
 ) -> ResolvedStepInputs:
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_postprocess",
-        required_roles=_ACTIVITYSIM_POSTPROCESS_REQUIRED_ROLES,
+        required_roles=(
+            *_ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES,
+            *configured_asim_output_keys(settings),
+        ),
         optional_roles=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
         logical_destinations=ActivitysimPostprocessor.declared_expected_inputs(
             settings, state, workspace
@@ -719,7 +724,8 @@ def _project_activitysim_run_outputs(
                 declared_outputs=declared_outputs,
                 workspace=workspace,
             )
-            for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+            for key in declared_outputs
+            if key.endswith("_asim_out")
         },
         zarr_skims=(
             _persisted_output_path(
@@ -755,7 +761,9 @@ def _project_activitysim_postprocess_outputs(
     declared_outputs = activitysim_postprocess_output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS:
+    for key in declared_outputs:
+        if not key.endswith("_asim_out"):
+            continue
         require_output(outputs, step_name="activitysim_postprocess", key=key)
     projected = ActivitySimPostprocessOutputs(
         usim_datastore_h5=(
@@ -896,9 +904,9 @@ def _activitysim_run_callable(
         ASIM_LAND_USE_IN: None,
         ASIM_OMX_SKIMS: None,
         ZARR_SKIMS: None,
-        **{key: None for key in ASIM_REQUIRED_RUN_OUTPUT_KEYS},
     },
     optional_input_keys=(
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
         USIM_POPULATION_SOURCE_H5,
         USIM_DATASTORE_CURRENT_H5,
         USIM_DATASTORE_BASE_H5,
@@ -916,16 +924,16 @@ def _activitysim_postprocess_callable(
     land_use_asim_in: Path,
     omx_skims: Path,
     zarr_skims: Path,
-    accessibility_asim_out: Path,
-    beam_plans_asim_out: Path,
-    disaggregate_accessibility_asim_out: Path,
-    households_asim_out: Path,
-    joint_tour_participants_asim_out: Path,
-    land_use_asim_out: Path,
-    non_mandatory_tour_destination_accessibility_asim_out: Path,
-    persons_asim_out: Path,
-    tours_asim_out: Path,
-    trips_asim_out: Path,
+    accessibility_asim_out: Path | None = None,
+    beam_plans_asim_out: Path | None = None,
+    disaggregate_accessibility_asim_out: Path | None = None,
+    households_asim_out: Path | None = None,
+    joint_tour_participants_asim_out: Path | None = None,
+    land_use_asim_out: Path | None = None,
+    non_mandatory_tour_destination_accessibility_asim_out: Path | None = None,
+    persons_asim_out: Path | None = None,
+    tours_asim_out: Path | None = None,
+    trips_asim_out: Path | None = None,
     usim_population_source_h5: Path | None = None,
     usim_datastore_h5: Path | None = None,
     usim_datastore_base_h5: Path | None = None,
@@ -941,20 +949,20 @@ def _activitysim_postprocess_callable(
     raw_outputs = ActivitySimRunOutputs(
         output_dir=Path(workspace.get_asim_output_dir()),
         raw_outputs={
-            "accessibility_asim_out": Path(accessibility_asim_out),
-            "beam_plans_asim_out": Path(beam_plans_asim_out),
-            "disaggregate_accessibility_asim_out": Path(
-                disaggregate_accessibility_asim_out
-            ),
-            "households_asim_out": Path(households_asim_out),
-            "joint_tour_participants_asim_out": Path(joint_tour_participants_asim_out),
-            "land_use_asim_out": Path(land_use_asim_out),
-            "non_mandatory_tour_destination_accessibility_asim_out": Path(
-                non_mandatory_tour_destination_accessibility_asim_out
-            ),
-            "persons_asim_out": Path(persons_asim_out),
-            "tours_asim_out": Path(tours_asim_out),
-            "trips_asim_out": Path(trips_asim_out),
+            key: Path(path)
+            for key, path in {
+                "accessibility_asim_out": accessibility_asim_out,
+                "beam_plans_asim_out": beam_plans_asim_out,
+                "disaggregate_accessibility_asim_out": disaggregate_accessibility_asim_out,
+                "households_asim_out": households_asim_out,
+                "joint_tour_participants_asim_out": joint_tour_participants_asim_out,
+                "land_use_asim_out": land_use_asim_out,
+                "non_mandatory_tour_destination_accessibility_asim_out": non_mandatory_tour_destination_accessibility_asim_out,
+                "persons_asim_out": persons_asim_out,
+                "tours_asim_out": tours_asim_out,
+                "trips_asim_out": trips_asim_out,
+            }.items()
+            if path is not None
         },
     )
     ModelFactory().get_postprocessor("activitysim", state).postprocess(

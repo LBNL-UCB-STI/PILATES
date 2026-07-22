@@ -16,9 +16,9 @@ from pilates.activitysim.outputs import (
 from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import FileRecord
 from pilates.activitysim.outputs import (
-    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     normalize_asim_output_key,
     has_asim_run_marker,
+    configured_asim_output_keys,
 )
 from pilates.activitysim.runner import (
     asim_required_run_output_paths,
@@ -38,6 +38,7 @@ def _postprocess_output_stem(output_key: str) -> str:
 
 
 def _activitysim_iteration_output_paths(
+    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
 ) -> Dict[str, str]:
@@ -52,7 +53,7 @@ def _activitysim_iteration_output_paths(
         output_key: str(
             iteration_dir / f"{_postprocess_output_stem(output_key)}.parquet"
         )
-        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+        for output_key in configured_asim_output_keys(settings)
     }
 
 
@@ -853,11 +854,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         Declare the input paths/artifacts this postprocessor expects without
         disk checks.
         """
-        del settings
         inputs: Dict[str, Any] = {
             "asim_output_dir": workspace.get_asim_output_dir(),
             **asim_staged_input_paths(workspace),
-            **asim_required_run_output_paths(workspace),
+            **asim_required_run_output_paths(settings, workspace),
         }
         inputs[ZARR_SKIMS] = asim_runtime_zarr_path(workspace)
         return inputs
@@ -924,7 +924,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 state,
             ),
         }
-        outputs.update(_activitysim_iteration_output_paths(state, workspace))
+        outputs.update(_activitysim_iteration_output_paths(settings, state, workspace))
         outputs.update(_activitysim_archived_input_paths(state, workspace))
         return outputs
 
@@ -1158,7 +1158,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             output_key = normalize_asim_output_key(clean_name)
             target = os.path.join(
                 iteration_folder_path,
-                clean_name + ".parquet",
+                _postprocess_output_stem(output_key) + ".parquet",
             )
             content_hash = raw_outputs.raw_output_hashes.get(short_name)
             if os.path.abspath(source) == os.path.abspath(target):

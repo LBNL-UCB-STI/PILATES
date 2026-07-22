@@ -3,7 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING, Union
+from typing import (
+    Any,
+    ClassVar,
+    Dict,
+    Iterable,
+    Mapping,
+    Optional,
+    Tuple,
+    TYPE_CHECKING,
+    Union,
+)
 import json
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
@@ -80,6 +90,44 @@ ASIM_REQUIRED_RUN_OUTPUT_KEYS: Tuple[str, ...] = tuple(
 
 def normalize_asim_output_key(key: str) -> str:
     return ASIM_OUTPUT_KEY_MAP.get(key, key)
+
+
+def configured_asim_output_tables(settings: Any) -> Dict[str, str]:
+    """Return configured ActivitySim table names indexed by semantic output key.
+
+    ``output_tables.tables`` is the execution contract: it determines which
+    final-pipeline tables ActivitySim actually creates.  The mapping preserves
+    the concrete source table name (notably ``plans``) while exposing PILATES'
+    stable semantic key (``beam_plans_asim_out``).
+    """
+
+    activitysim = settings.activitysim
+    output_tables = activitysim.output_tables
+    if not isinstance(output_tables, Mapping):
+        raise TypeError("activitysim.output_tables must be a mapping")
+    tables = output_tables.get("tables", ())
+    if not isinstance(tables, (list, tuple)):
+        raise TypeError("activitysim.output_tables.tables must be a sequence")
+
+    configured: Dict[str, str] = {}
+    for table in tables:
+        table_name = str(table)
+        output_key = normalize_asim_output_key(table_name)
+        if output_key not in ASIM_OUTPUT_KEY_MAP.values():
+            continue
+        existing = configured.setdefault(output_key, table_name)
+        if existing != table_name:
+            raise ValueError(
+                "activitysim.output_tables.tables maps multiple source tables to "
+                f"the same semantic output {output_key!r}: {existing!r}, {table_name!r}"
+            )
+    return configured
+
+
+def configured_asim_output_keys(settings: Any) -> Tuple[str, ...]:
+    """Return the semantic output keys enabled by the active ActivitySim config."""
+
+    return tuple(configured_asim_output_tables(settings))
 
 
 def _record_path(record: Any, workspace: "Workspace") -> Optional[Path]:

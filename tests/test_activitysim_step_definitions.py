@@ -14,7 +14,11 @@ from consist import (
     resolve_step_contract,
 )
 
-from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    configured_asim_output_tables,
+)
+from pilates.activitysim.postprocessor import _activitysim_iteration_output_paths
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -59,6 +63,84 @@ def _activitysim_run_resolution(*, produces_zarr: bool) -> ResolvedStepInputs:
             "activitysim_produces_zarr": produces_zarr,
         },
     )
+
+
+def _activitysim_test_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        activitysim=SimpleNamespace(
+            output_tables={
+                "tables": [
+                    "accessibility",
+                    "beam_plans",
+                    "disaggregate_accessibility",
+                    "households",
+                    "joint_tour_participants",
+                    "land_use",
+                    "non_mandatory_tour_destination_accessibility",
+                    "persons",
+                    "tours",
+                    "trips",
+                ]
+            }
+        ),
+    )
+
+
+def test_activitysim_output_contract_uses_configured_source_table_names(
+    tmp_path: Path,
+) -> None:
+    """Only configured tables are declared, retaining the real ``plans`` path."""
+
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(
+            output_tables={
+                "tables": [
+                    "checkpoints",
+                    "households",
+                    "persons",
+                    "tours",
+                    "trips",
+                    "plans",
+                ]
+            }
+        )
+    )
+    state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
+    workspace = SimpleNamespace(
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output")
+    )
+
+    configured = configured_asim_output_tables(settings)
+    assert configured == {
+        "households_asim_out": "households",
+        "persons_asim_out": "persons",
+        "tours_asim_out": "tours",
+        "trips_asim_out": "trips",
+        "beam_plans_asim_out": "plans",
+    }
+
+    run_outputs = activitysim.activitysim_run_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        produces_zarr=False,
+    )
+    postprocess_outputs = _activitysim_iteration_output_paths(
+        settings,
+        state,
+        workspace,
+    )
+
+    assert set(run_outputs) == set(configured)
+    assert set(postprocess_outputs) == set(configured)
+    assert run_outputs["beam_plans_asim_out"].path.endswith(
+        "final_pipeline/plans/final.parquet"
+    )
+    assert str(postprocess_outputs["beam_plans_asim_out"]).endswith(
+        "year-2025-iteration-0/beam_plans.parquet"
+    )
+    assert "accessibility_asim_out" not in run_outputs
 
 
 def test_activitysim_definitions_resolve_native_consist_contracts(
@@ -200,7 +282,7 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
     )
 
     resolved = activitysim._activitysim_postprocess_resolver(
-        settings=SimpleNamespace(),
+        settings=_activitysim_test_settings(),
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
         coupler=object(),
@@ -210,6 +292,55 @@ def test_activitysim_postprocess_resolver_omits_current_alias_of_population_sour
         USIM_POPULATION_SOURCE_H5: population_source,
     }
     assert resolved.selected_roles() == (USIM_POPULATION_SOURCE_H5,)
+
+
+def test_activitysim_postprocess_resolver_requires_only_configured_outputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disabled ActivitySim table cannot become a postprocess input requirement."""
+
+    captured: dict[str, tuple[str, ...]] = {}
+
+    def _resolve_native(**kwargs: object) -> ResolvedStepInputs:
+        roles = kwargs["required_roles"]
+        assert isinstance(roles, tuple)
+        captured["required_roles"] = roles
+        return ResolvedStepInputs(
+            step_name="activitysim_postprocess",
+            binding=BindingResult(),
+        )
+
+    monkeypatch.setattr(
+        activitysim, "_native_activitysim_resolved_inputs", _resolve_native
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(
+            output_tables={"tables": ["households", "persons", "plans"]}
+        )
+    )
+
+    activitysim._activitysim_postprocess_resolver(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+
+    assert captured["required_roles"] == (
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_LAND_USE_IN,
+        ASIM_OMX_SKIMS,
+        ZARR_SKIMS,
+        "households_asim_out",
+        "persons_asim_out",
+        "beam_plans_asim_out",
+    )
 
 
 def test_activitysim_postprocess_resolver_omits_current_artifact_with_population_key(
@@ -259,7 +390,7 @@ def test_activitysim_postprocess_resolver_omits_current_artifact_with_population
     )
 
     resolved = activitysim._activitysim_postprocess_resolver(
-        settings=SimpleNamespace(),
+        settings=_activitysim_test_settings(),
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
         coupler=object(),
@@ -326,6 +457,11 @@ def test_activitysim_postprocess_resolver_freezes_tracked_h5_aliases(
         staticmethod(lambda *_args: {}),
     )
 
+    monkeypatch.setattr(
+        activitysim,
+        "configured_asim_output_keys",
+        lambda _settings: ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
     workspace = SimpleNamespace(full_path=str(tmp_path))
@@ -463,6 +599,11 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
             "config": {"model": "activitysim"},
             "identity_inputs": [],
         },
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "configured_asim_output_keys",
+        lambda _settings: ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     )
     settings = SimpleNamespace(run=SimpleNamespace(region="test"))
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)

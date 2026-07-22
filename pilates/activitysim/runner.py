@@ -1,6 +1,5 @@
 import logging
 import os
-import re
 import shutil
 import inspect
 from pathlib import Path
@@ -16,11 +15,11 @@ from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 from pilates.activitysim.outputs import (
-    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
     write_asim_run_marker,
     clear_asim_run_marker,
+    configured_asim_output_tables,
 )
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -150,13 +149,13 @@ def asim_staged_input_paths(workspace: Workspace) -> Dict[str, str]:
     }
 
 
-def asim_required_run_output_paths(workspace: Workspace) -> Dict[str, str]:
+def asim_required_run_output_paths(
+    settings: PilatesConfig, workspace: Workspace
+) -> Dict[str, str]:
     final_pipeline_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
     return {
-        output_key: str(
-            final_pipeline_dir / re.sub(r"_asim_out$", "", output_key) / "final.parquet"
-        )
-        for output_key in ASIM_REQUIRED_RUN_OUTPUT_KEYS
+        output_key: str(final_pipeline_dir / table_name / "final.parquet")
+        for output_key, table_name in configured_asim_output_tables(settings).items()
     }
 
 
@@ -443,9 +442,9 @@ class ActivitysimRunner(GenericRunner):
             - See `pilates/activitysim/inputs.py` for the corresponding input
               descriptions used by ActivitySim and downstream models.
         """
-        del settings, state
+        del state
         outputs: Dict[str, Any] = {"asim_output_dir": workspace.get_asim_output_dir()}
-        outputs.update(asim_required_run_output_paths(workspace))
+        outputs.update(asim_required_run_output_paths(settings, workspace))
         return outputs
 
     def __init__(
