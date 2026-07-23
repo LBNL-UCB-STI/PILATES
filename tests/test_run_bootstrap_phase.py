@@ -12,6 +12,12 @@ from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import launcher as run_module
 from pilates.atlas.inputs import build_atlas_static_inputs_fallback
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
+)
 from pilates.utils import consist_db_snapshot as snapshot_module
 from workflow_state import WorkflowState
 
@@ -1368,6 +1374,104 @@ def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
     )
 
     assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
+
+
+def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
+    tmp_path,
+):
+    class Coupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    exchange_paths = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in exchange_paths.values():
+        path.write_text(path.stem, encoding="utf-8")
+
+    warmstart_path = tmp_path / "beam" / "input" / "test" / "warmstart.parquet"
+    warmstart_path.parent.mkdir(parents=True)
+    warmstart_path.write_text("linkstats", encoding="utf-8")
+
+    class ModelFactory:
+        def get_preprocessor(self, model_name, _state):
+            assert model_name == "beam"
+            return SimpleNamespace(
+                existing_beam_exchange_inputs=lambda _workspace: RecordStore(
+                    recordList=[
+                        FileRecord(file_path=str(path), short_name=key)
+                        for key, path in exchange_paths.items()
+                    ]
+                )
+            )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test",
+            models=SimpleNamespace(traffic_assignment="beam", activity_demand=None),
+        ),
+        beam=SimpleNamespace(warmstart_linkstats_path="warmstart.parquet"),
+    )
+    coupler = Coupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=DummyWorkspace(full_path=str(tmp_path)),
+        coupler=coupler,
+        model_factory_cls=ModelFactory,
+    )
+
+    assert coupler.values == {
+        **{key: str(path) for key, path in exchange_paths.items()},
+        LINKSTATS_WARMSTART: str(warmstart_path),
+    }
+
+
+def test_seed_bootstrap_artifacts_publishes_warmstart_with_activitysim(
+    tmp_path,
+):
+    class Coupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    warmstart_path = tmp_path / "beam" / "input" / "test" / "warmstart.parquet"
+    warmstart_path.parent.mkdir(parents=True)
+    warmstart_path.write_text("linkstats", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test",
+            models=SimpleNamespace(
+                traffic_assignment="beam",
+                activity_demand="activitysim",
+            ),
+        ),
+        beam=SimpleNamespace(warmstart_linkstats_path="warmstart.parquet"),
+    )
+    coupler = Coupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=DummyWorkspace(full_path=str(tmp_path)),
+        coupler=coupler,
+    )
+
+    assert coupler.values == {LINKSTATS_WARMSTART: str(warmstart_path)}
 
 
 def test_seed_bootstrap_artifacts_to_coupler_does_not_publish_activitysim_runtime_caches(

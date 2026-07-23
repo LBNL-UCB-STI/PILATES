@@ -11,6 +11,7 @@ from consist import (
 )
 
 from pilates.workflows.artifact_keys import (
+    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -18,6 +19,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.steps.beam import (
     _materialize_native_outputs,
+    _resolve_beam_preprocess_inputs,
     _resolved_beam_inputs,
     _native_beam_postprocess,
     beam_full_skim,
@@ -320,6 +322,111 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         **values,
     }
     assert set(resolved.logical_destinations) == {"beam_config_file", *values}
+
+
+def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    activitysim_outputs = {
+        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+        "households_asim_out": tmp_path / "households.parquet",
+        "persons_asim_out": tmp_path / "persons.parquet",
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return activitysim_outputs.get(key, default)
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        )
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2030),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    inputs = resolved.binding.inputs or {}
+    assert inputs[BEAM_PLANS_IN] is activitysim_outputs["beam_plans_asim_out"]
+    assert inputs[BEAM_HOUSEHOLDS_IN] is activitysim_outputs["households_asim_out"]
+    assert inputs[BEAM_PERSONS_IN] is activitysim_outputs["persons_asim_out"]
+    assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
+    assert resolved.selected_key_by_role == {
+        BEAM_CONFIG_FILE: BEAM_CONFIG_FILE,
+        BEAM_PLANS_IN: "beam_plans_asim_out",
+        BEAM_HOUSEHOLDS_IN: "households_asim_out",
+        BEAM_PERSONS_IN: "persons_asim_out",
+    }
+    assert set(inputs) == {
+        BEAM_CONFIG_FILE,
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+    }
+
+
+def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2030, current_inner_iter=0),
+        workspace=SimpleNamespace(
+            get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        ),
+        coupler=Coupler(),
+    )
+
+    with pytest.raises(RuntimeError, match="atlas_vehicles2_output"):
+        resolved.require_complete()
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(

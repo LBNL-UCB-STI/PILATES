@@ -52,9 +52,14 @@ from pilates.workflows.artifact_keys import (
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
+from pilates.workflows.binding import (
+    artifact_rules_for_step_name,
+    resolve_artifact_roles,
+)
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.workflows.step_definition import StepDefinition
 from pilates.workflows.outputs_base import ValidationContext
@@ -678,20 +683,44 @@ def _resolve_beam_preprocess_inputs(
     *, settings: Any, state: Any, workspace: Any, coupler: Any
 ) -> ResolvedStepInputs:
     config_path = _require_primary_beam_config(settings, workspace)
-    resolved = _resolved_beam_inputs(
+    surface = build_enabled_workflow_surface(settings)
+    requires_atlas_vehicles = (
+        surface.profile.vehicle_ownership_model_enabled
+        and getattr(state, "current_inner_iter", 0) == 0
+    )
+    required_roles = (
+        BEAM_CONFIG_FILE,
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        *((ATLAS_VEHICLES2_OUTPUT,) if requires_atlas_vehicles else ()),
+    )
+    optional_roles = (
+        LINKSTATS_WARMSTART,
+        *((ATLAS_VEHICLES2_OUTPUT,) if not requires_atlas_vehicles else ()),
+    )
+    resolved = resolve_artifact_roles(
         step_name="beam_preprocess",
         coupler=coupler,
+        settings=settings,
+        state=state,
         workspace=workspace,
-        required_roles=(
-            BEAM_CONFIG_FILE,
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
+        required_roles=required_roles,
+        optional_roles=optional_roles,
+        artifact_rules=artifact_rules_for_step_name(
+            "beam_preprocess", settings=settings
         ),
-        optional_roles=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
         explicit_inputs={BEAM_CONFIG_FILE: config_path},
         logical_destinations={BEAM_CONFIG_FILE: config_path},
+        year=resolve_forecast_year(state),
+        surface=surface,
     )
+    logical_destinations = dict(resolved.logical_destinations)
+    for key, source in (resolved.binding.inputs or {}).items():
+        logical_destinations.setdefault(
+            key,
+            _input_destination(workspace=workspace, key=key, source=source),
+        )
     return ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=resolved.binding,
@@ -699,7 +728,7 @@ def _resolve_beam_preprocess_inputs(
         optional_roles=resolved.optional_roles,
         source_by_role=resolved.source_by_role,
         selected_key_by_role=resolved.selected_key_by_role,
-        logical_destinations=resolved.logical_destinations,
+        logical_destinations=logical_destinations,
         metadata={
             "native_output_keys": tuple(
                 key

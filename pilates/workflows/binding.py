@@ -37,16 +37,14 @@ from consist import (
 )
 from consist.types import BindingResult
 
-from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.runtime.archive_paths import archive_fallback_path, first_existing_path
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.coupler_helpers import (
-    artifact_to_existing_path,
     resolve_input_precedence,
 )
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
-from pilates.utils.state_access import iteration_index, uses_input_datastore
+from pilates.utils.state_access import uses_input_datastore
 from pilates.utils.usim_h5 import (
     ensure_usim_population_year_table_aliases,
     resolve_usim_population_table_paths,
@@ -55,7 +53,6 @@ from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -676,148 +673,10 @@ def _activitysim_population_source(
     return None
 
 
-def _beam_preprocess_exchange_inputs(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: "EnabledWorkflowSurface",
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Yearless BEAM exchange-input fallback delegated to model state."""
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-
-    resolved_profile = surface.profile
-    if resolved_profile.activity_demand_enabled:
-        return None
-
-    from pilates.beam.beam_exchange import register_existing_beam_exchange_inputs
-
-    try:
-        record_store = register_existing_beam_exchange_inputs(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-        )
-    except FileNotFoundError as exc:
-        logger.warning(
-            "BEAM preprocess could not seed default exchange inputs: %s",
-            exc,
-        )
-        return None
-
-    artifacts: Dict[str, Any] = {}
-    workspace_root = getattr(workspace, "full_path", None)
-    for record in record_store.all_records():
-        key = getattr(record, "short_name", None)
-        if key not in {BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN}:
-            continue
-        path = record.get_absolute_path(base_path=workspace_root)
-        if path and os.path.exists(path):
-            artifacts[key] = path
-    return artifacts or None
-
-
-def _beam_preprocess_warmstart_inputs(
-    *,
-    settings: Any,
-    coupler: Optional[CouplerProtocol],
-    workspace: Any,
-    surface: Optional["EnabledWorkflowSurface"] = None,
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Yearless BEAM warmstart fallback resolved from coupler or workspace."""
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-
-    get_value = getattr(coupler, "get", None)
-    if callable(get_value):
-        value = get_value(LINKSTATS_WARMSTART)
-        warmstart_path = artifact_to_existing_path(
-            value,
-            workspace,
-        )
-        if warmstart_path:
-            return {LINKSTATS_WARMSTART: warmstart_path}
-
-    warmstart_path = resolve_initial_linkstats_path(settings, workspace)
-    if warmstart_path:
-        return {LINKSTATS_WARMSTART: warmstart_path}
-    return None
-
-
-def _beam_preprocess_atlas_inputs(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    surface: "EnabledWorkflowSurface",
-    require_exact_year: bool = False,
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Forecast-year ATLAS vehicles2 fallback.
-
-    The provider derives candidate filenames from ``state.forecast_year`` and
-    ``state.forecast_year - 1`` and intentionally ignores planner ``year``.
-    """
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-    resolved_profile = surface.profile
-    if not resolved_profile.vehicle_ownership_model_enabled:
-        return None
-
-    current_iter = iteration_index(state, default=0)
-    if current_iter != 0:
-        return None
-
-    resolved = resolve_atlas_vehicles2_source(
-        state=state,
-        workspace=workspace,
-        require_exact_year=require_exact_year,
-    )
-    if resolved is not None:
-        return {ATLAS_VEHICLES2_OUTPUT: str(resolved.selected_path)}
-    return None
-
-
-def _beam_preprocess_config_input(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    **_: Any,
-) -> Optional[Mapping[str, Any]]:
-    """Yearless BEAM config fallback with state-aware archive resolution."""
-    if get_traffic_assignment_model(settings) != "beam":
-        return None
-
-    try:
-        from pilates.beam.config_hocon import beam_primary_config_path
-
-        local_path = beam_primary_config_path(settings, workspace=workspace)
-    except Exception:
-        return None
-
-    archive_path = archive_fallback_path(
-        state=state,
-        workspace=workspace,
-        local_path=local_path,
-    )
-    selected = first_existing_path(local_path, archive_path)
-    if selected is None:
-        return None
-    return {BEAM_CONFIG_FILE: str(selected)}
-
-
 _FALLBACK_PROVIDERS: Dict[str, BindingFallbackProvider] = {
     "urbansim_inputs_for_year": _urbansim_inputs_for_year,
     "activitysim_input_datastore": _activitysim_input_datastore,
     "activitysim_population_source": _activitysim_population_source,
-    "beam_preprocess_exchange_inputs": _beam_preprocess_exchange_inputs,
-    "beam_preprocess_warmstart_inputs": _beam_preprocess_warmstart_inputs,
-    "beam_preprocess_atlas_inputs": _beam_preprocess_atlas_inputs,
-    "beam_preprocess_config_input": _beam_preprocess_config_input,
 }
 
 
@@ -885,68 +744,6 @@ FALLBACK_PROVIDER_INVENTORY: tuple[FallbackProviderInventoryEntry, ...] = (
         policy_class="legacy_compatibility",
         intended_end_state="replace_with_producer_handoff",
         focused_tests=("tests/test_activitysim_step_definitions.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="beam_preprocess_exchange_inputs",
-        consuming_steps=("beam_preprocess",),
-        semantic_roles=(BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN),
-        trigger="BEAM runs without ActivitySim-provided exchange inputs",
-        candidate_order=(
-            "registered existing BEAM exchange record",
-            "existing workspace exchange file",
-        ),
-        identity_source="none",
-        policy_class="bootstrap",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_beam_preprocessor_exchange_folder.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="beam_preprocess_warmstart_inputs",
-        consuming_steps=("beam_preprocess",),
-        semantic_roles=(LINKSTATS_WARMSTART,),
-        trigger="no normal BEAM linkstats warmstart binding exists",
-        candidate_order=(
-            "coupler linkstats warmstart materialization",
-            "configured initial linkstats path",
-        ),
-        identity_source="none",
-        policy_class="recovery",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_beam_preprocessor_linkstats_warmstart.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="beam_preprocess_atlas_inputs",
-        consuming_steps=("beam_preprocess",),
-        semantic_roles=(ATLAS_VEHICLES2_OUTPUT,),
-        trigger=(
-            "BEAM traffic assignment and vehicle ownership are enabled on the "
-            "first inner iteration, with no explicit or coupler-backed vehicles2 "
-            "handoff"
-        ),
-        candidate_order=(
-            "forecast-year local ATLAS vehicles2",
-            "forecast-year archive ATLAS vehicles2",
-            "artifact or environment materialization of the selected exact-year path",
-            "previous-year local/archive vehicles2 compatibility path when exact year is not required",
-        ),
-        identity_source="none",
-        policy_class="legacy_compatibility",
-        intended_end_state="replace_with_producer_handoff",
-        focused_tests=("tests/test_vehicle_ownership_usim_selection.py",),
-    ),
-    FallbackProviderInventoryEntry(
-        identifier="beam_preprocess_config_input",
-        consuming_steps=("beam_preprocess",),
-        semantic_roles=(BEAM_CONFIG_FILE,),
-        trigger="the configured BEAM config is absent from explicit inputs and coupler",
-        candidate_order=(
-            "configured local primary BEAM config",
-            "archive copy of the primary BEAM config",
-        ),
-        identity_source="none",
-        policy_class="legacy_compatibility",
-        intended_end_state="delete",
-        focused_tests=("tests/test_beam_native_step_definitions.py",),
     ),
 )
 
@@ -1017,41 +814,26 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
                 semantic_key=BEAM_PLANS_IN,
                 required=True,
                 preferred_keys=(BEAM_PLANS_IN, "beam_plans_asim_out", BEAM_PLANS_OUT),
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_HOUSEHOLDS_IN,
                 required=True,
                 preferred_keys=(BEAM_HOUSEHOLDS_IN, "households_asim_out"),
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=BEAM_PERSONS_IN,
                 required=True,
                 preferred_keys=(BEAM_PERSONS_IN, "persons_asim_out"),
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_exchange_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=LINKSTATS_WARMSTART,
                 required=False,
                 preferred_keys=(LINKSTATS_WARMSTART, LINKSTATS),
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_warmstart_inputs",
             ),
             ArtifactBindingRule(
                 semantic_key=ATLAS_VEHICLES2_OUTPUT,
                 required=False,
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_atlas_inputs",
-            ),
-            ArtifactBindingRule(
-                semantic_key=BEAM_CONFIG_FILE,
-                required=True,
-                allow_fallback=True,
-                fallback_provider="beam_preprocess_config_input",
+                allow_fallback=False,
             ),
         ),
     }
@@ -1169,6 +951,22 @@ def _resolve_rule_binding(
     surface: Optional["EnabledWorkflowSurface"],
 ) -> tuple[str, Optional[str], Optional[Any], Optional[str], Dict[str, list[str]]]:
     candidates = rule.preferred_keys or (rule.semantic_key,)
+    scoped_coupler = coupler if rule.allow_coupler else None
+    for candidate in candidates:
+        resolved = resolve_input_precedence(
+            key=candidate,
+            coupler=scoped_coupler,
+            explicit_inputs=explicit_inputs if rule.allow_explicit else None,
+        )
+        if resolved.source == "missing":
+            continue
+        selected_key = resolved.storage_key or candidate
+        if rule.pass_mode == "explicit_only" and resolved.source == "coupler":
+            continue
+        if rule.pass_mode == "input_key_only" and resolved.source == "explicit":
+            continue
+        return resolved.source, selected_key, resolved.value, candidate, {}
+
     rule_fallback_inputs = (
         _lookup_fallback_inputs(
             rule=rule,
@@ -1186,34 +984,26 @@ def _resolve_rule_binding(
     rule_fallback_inputs, candidate_paths_by_semantic_key = (
         _split_candidate_paths_metadata(rule_fallback_inputs)
     )
-    scoped_coupler = coupler if rule.allow_coupler else None
+    if rule_fallback_inputs is None:
+        return "missing", None, None, None, candidate_paths_by_semantic_key
 
-    fallback_passes = (None, rule_fallback_inputs) if rule_fallback_inputs else (None,)
-    for pass_fallback_inputs in fallback_passes:
-        for candidate in candidates:
-            resolved = resolve_input_precedence(
-                key=candidate,
-                coupler=scoped_coupler,
-                explicit_inputs=explicit_inputs if rule.allow_explicit else None,
-                fallback_inputs=pass_fallback_inputs,
-            )
-            if resolved.source == "missing":
-                continue
-            selected_key = resolved.storage_key or candidate
-            if rule.pass_mode == "explicit_only" and resolved.source == "coupler":
-                continue
-            if rule.pass_mode == "input_key_only" and resolved.source in {
-                "explicit",
-                "fallback",
-            }:
-                continue
-            return (
-                resolved.source,
-                selected_key,
-                resolved.value,
-                candidate,
-                candidate_paths_by_semantic_key,
-            )
+    for candidate in candidates:
+        resolved = resolve_input_precedence(
+            key=candidate,
+            coupler=None,
+            fallback_inputs=rule_fallback_inputs,
+        )
+        if resolved.source == "missing":
+            continue
+        if rule.pass_mode == "input_key_only":
+            continue
+        return (
+            resolved.source,
+            candidate,
+            resolved.value,
+            candidate,
+            candidate_paths_by_semantic_key,
+        )
     return "missing", None, None, None, candidate_paths_by_semantic_key
 
 
@@ -1231,6 +1021,7 @@ def resolve_artifact_roles(
     explicit_inputs: Optional[Mapping[str, Any]] = None,
     fallback_inputs: Optional[Mapping[str, Any]] = None,
     year: Optional[int] = None,
+    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> ResolvedStepInputs:
     """Select semantic roles directly into one native Consist binding envelope."""
 
@@ -1260,7 +1051,7 @@ def resolve_artifact_roles(
                 state=state,
                 workspace=workspace,
                 year=year,
-                surface=None,
+                surface=surface,
             )
         )
         source_by_role[role] = source
@@ -1350,11 +1141,6 @@ def _bootstrap_beam_warmstart_artifacts(
     **_: Any,
 ) -> Optional[Mapping[str, str]]:
     if get_traffic_assignment_model(settings) != "beam":
-        return None
-
-    activity_demand_model = getattr(getattr(settings, "run", None), "models", None)
-    activity_demand_model = getattr(activity_demand_model, "activity_demand", None)
-    if activity_demand_model is not None:
         return None
 
     warmstart_path = resolve_initial_linkstats_path(settings, workspace)
