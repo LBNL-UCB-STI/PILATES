@@ -417,11 +417,6 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
         not state.is_restart_run
         or not state.is_enabled(state.Stage.activity_demand)
         or state.current_major_stage != state.Stage.supply_demand_loop
-        or state.should_run(
-            state.Stage.supply_demand_loop,
-            state.iteration,
-            state.Stage.activity_demand,
-        )
         or beam_checkpoint_resume_requested(state=state)
     ):
         return False

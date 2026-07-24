@@ -1792,7 +1792,7 @@ def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
         Stage = _Stage
         is_restart_run = True
         current_major_stage = _Stage.supply_demand_loop
-        current_sub_stage = _Stage.traffic_assignment
+        current_sub_stage = _Stage.activity_demand
         current_inner_iter = 0
         sub_stage_progress = "runner"
         write_count = 0
@@ -1819,11 +1819,10 @@ def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
             self.current_inner_iter = value
 
         def should_run(self, major_stage, iteration=0, sub_stage=None):
-            return not (
+            return (
                 major_stage == self.Stage.supply_demand_loop
                 and iteration == self.current_inner_iter
                 and sub_stage == self.Stage.activity_demand
-                and self.current_sub_stage == self.Stage.traffic_assignment
             )
 
         def write_state(self):
