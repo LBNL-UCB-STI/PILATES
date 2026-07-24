@@ -1773,6 +1773,79 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
     ]
 
 
+def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
+    monkeypatch,
+) -> None:
+    class _StageValue(str):
+        @property
+        def name(self) -> str:
+            return str(self)
+
+    class _Stage:
+        land_use = _StageValue("land_use")
+        vehicle_ownership_model = _StageValue("vehicle_ownership_model")
+        supply_demand_loop = _StageValue("supply_demand_loop")
+        activity_demand = _StageValue("activity_demand")
+        traffic_assignment = _StageValue("traffic_assignment")
+
+    class _State:
+        Stage = _Stage
+        is_restart_run = True
+        current_major_stage = _Stage.supply_demand_loop
+        current_sub_stage = _Stage.traffic_assignment
+        current_inner_iter = 0
+        sub_stage_progress = "runner"
+        write_count = 0
+        major_stage_order = (
+            _Stage.land_use,
+            _Stage.vehicle_ownership_model,
+            _Stage.supply_demand_loop,
+        )
+
+        def is_enabled(self, stage):
+            return stage in {
+                self.Stage.land_use,
+                self.Stage.vehicle_ownership_model,
+                self.Stage.activity_demand,
+                self.Stage.traffic_assignment,
+            }
+
+        @property
+        def iteration(self):
+            return self.current_inner_iter
+
+        @iteration.setter
+        def iteration(self, value):
+            self.current_inner_iter = value
+
+        def should_run(self, major_stage, iteration=0, sub_stage=None):
+            return not (
+                major_stage == self.Stage.supply_demand_loop
+                and iteration == self.current_inner_iter
+                and sub_stage == self.Stage.activity_demand
+                and self.current_sub_stage == self.Stage.traffic_assignment
+            )
+
+        def write_state(self):
+            self.write_count += 1
+
+    state = _State()
+    monkeypatch.setattr(
+        run_module,
+        "beam_checkpoint_resume_requested",
+        lambda **_kwargs: False,
+    )
+
+    assert run_module._rewind_uncommitted_activitysim_restart_to_provider_boundary(
+        state=state
+    )
+    assert state.current_major_stage == state.Stage.land_use
+    assert state.current_sub_stage is None
+    assert state.current_inner_iter == 0
+    assert state.sub_stage_progress is None
+    assert state.write_count == 1
+
+
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
     class WorkspaceStub:
         def __init__(self, _settings, local_root: str, folder_name: str):

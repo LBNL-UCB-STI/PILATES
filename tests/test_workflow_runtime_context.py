@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.postprocessing import run_postprocessing_stage
@@ -142,8 +144,7 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     assert seen["beam_context"] is context
 
 
-def test_supply_demand_restart_rewinds_to_activitysim_without_beam_checkpoint(
-    monkeypatch,
+def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
     tmp_path: Path,
 ) -> None:
     class _FakeStage:
@@ -158,8 +159,7 @@ def test_supply_demand_restart_rewinds_to_activitysim_without_beam_checkpoint(
         current_sub_stage = _FakeStage.traffic_assignment
         year = 2018
         forecast_year = 2018
-        is_restart_run = True
-        write_count = 0
+        is_restart_run = False
 
         def should_run(self, major_stage, iteration=None, sub_stage=None):
             if major_stage != self.Stage.supply_demand_loop:
@@ -174,12 +174,6 @@ def test_supply_demand_restart_rewinds_to_activitysim_without_beam_checkpoint(
                 sub_stage
             )
 
-        def write_state(self):
-            self.write_count += 1
-
-        def complete_step(self, *_args, **_kwargs):
-            return None
-
     settings = SimpleNamespace(
         run=SimpleNamespace(
             supply_demand_iters=1,
@@ -193,36 +187,17 @@ def test_supply_demand_restart_rewinds_to_activitysim_without_beam_checkpoint(
         workspace=SimpleNamespace(full_path=str(tmp_path)),
         surface=SimpleNamespace(profile=SimpleNamespace()),
     )
-    phases: list[str] = []
-
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand.beam_checkpoint_resume_requested",
-        lambda **_kwargs: False,
-    )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
-        lambda **_kwargs: phases.append("activitysim"),
-    )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
-        lambda **_kwargs: phases.append("beam"),
-    )
-    monkeypatch.setattr(
-        "pilates.workflows.stages.supply_demand.flush_archive_queue",
-        lambda *args, **kwargs: None,
-    )
-
-    run_supply_demand_stage(
-        scenario=SimpleNamespace(),
-        coupler=SimpleNamespace(),
-        year=2018,
-        handoff=LandUseToSupplyDemandHandoff(),
-        context=context,
-    )
-
-    assert phases == ["activitysim", "beam"]
-    assert state.current_sub_stage == state.Stage.activity_demand
-    assert state.write_count == 1
+    with pytest.raises(
+        RuntimeError,
+        match="ActivitySim is skipped outside the committed BEAM checkpoint",
+    ):
+        run_supply_demand_stage(
+            scenario=SimpleNamespace(),
+            coupler=SimpleNamespace(),
+            year=2018,
+            handoff=LandUseToSupplyDemandHandoff(),
+            context=context,
+        )
 
 
 def test_run_postprocessing_stage_uses_runtime_context(

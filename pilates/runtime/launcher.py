@@ -89,6 +89,9 @@ from pilates.workflows.stages import (
     run_vehicle_ownership_stage,
 )
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
+from pilates.workflows.stages.supply_demand_beam import (
+    beam_checkpoint_resume_requested,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
@@ -395,6 +398,56 @@ def _enforce_resume_rewind_guardrail(
         allow_rewind_resume=allow_rewind_resume,
         read_archive_run_state_year_fn=_read_archive_run_state_year,
     )
+
+
+def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+    *, state: WorkflowState
+) -> bool:
+    """Re-enter the provider chain when restart lacks a BEAM checkpoint.
+
+    A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
+    Consequently, an ActivitySim rewind cannot begin inside supply-demand on a
+    fresh restart: the required UrbanSim/ATLAS roles have not been republished
+    into the new scenario coupler.  Rewind to the earliest enabled upstream
+    major stage instead, allowing ordinary native steps and Consist cache hits
+    to republish those roles.
+    """
+
+    if (
+        not state.is_restart_run
+        or not state.is_enabled(state.Stage.activity_demand)
+        or state.current_major_stage != state.Stage.supply_demand_loop
+        or state.should_run(
+            state.Stage.supply_demand_loop,
+            state.iteration,
+            state.Stage.activity_demand,
+        )
+        or beam_checkpoint_resume_requested(state=state)
+    ):
+        return False
+
+    provider_boundary = state.Stage.supply_demand_loop
+    for candidate in state.major_stage_order:
+        if candidate == state.Stage.supply_demand_loop:
+            break
+        if state.is_enabled(candidate):
+            provider_boundary = candidate
+            break
+
+    resumed_iteration = state.iteration
+    state.current_major_stage = provider_boundary
+    state.current_inner_iter = 0
+    state.current_sub_stage = None
+    state.sub_stage_progress = None
+    state.write_state()
+    logger.warning(
+        "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
+        "from supply-demand iteration=%s to provider boundary=%s so native "
+        "steps republish ActivitySim inputs.",
+        resumed_iteration,
+        provider_boundary.name,
+    )
+    return True
 
 
 def _prepare_run_context(
@@ -820,6 +873,8 @@ def main(
                     "Restart replay mode active: skipping bespoke restart "
                     "hydration and relying on scenario replay plus Consist cache hits."
                 )
+
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

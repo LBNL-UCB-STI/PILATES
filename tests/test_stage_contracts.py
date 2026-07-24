@@ -95,8 +95,11 @@ def test_direct_native_stage_paths_do_not_restore_legacy_runners() -> None:
         assert "run_workflow" not in source
 
 
-def test_supply_demand_rewinds_skipped_activitysim_without_beam_checkpoint() -> None:
+def test_supply_demand_fails_closed_for_skipped_activitysim_without_beam_checkpoint() -> (
+    None
+):
     source = _function_source(supply_demand.run_supply_demand_stage)
-    assert "_rewind_uncheckpointed_activitysim_restart" in source
+    assert "ActivitySim is skipped outside the committed BEAM checkpoint" in source
+    assert "_rewind_uncheckpointed_activitysim_restart" not in source
     assert "_restore_activity_demand_outputs_for_resume" not in source
     assert "Step" + "OutputsHolder" not in source
