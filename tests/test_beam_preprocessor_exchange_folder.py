@@ -403,7 +403,7 @@ def test_beam_preprocess_prefers_explicit_atlas_vehicle_input_over_workspace_fal
     )
 
 
-def test_beam_preprocess_rejects_stale_restored_vehicle_input_for_activitysim(
+def test_beam_preprocess_rejects_nonsemantic_vehicle_alias_for_activitysim(
     monkeypatch, tmp_path
 ):
     preprocessor = _make_preprocessor(
@@ -461,14 +461,14 @@ def test_beam_preprocess_rejects_stale_restored_vehicle_input_for_activitysim(
 
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
 
-    with pytest.raises(FileNotFoundError, match="exact forecast-year ATLAS vehicles2"):
+    with pytest.raises(ValueError, match="explicit ATLAS vehicles2 source_path"):
         preprocessor.preprocess(
             workspace,
             beam_preprocess_inputs={"vehicles_beam_in": str(stale_vehicles)},
         )
 
 
-def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
+def test_beam_preprocess_stages_explicit_archive_vehicle_source_with_metadata(
     monkeypatch, tmp_path
 ):
     preprocessor = _make_preprocessor(
@@ -532,7 +532,10 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
 
     monkeypatch.setattr(preprocessor, "_copy_plans_from_asim", _fake_copy_plans)
 
-    outputs = preprocessor.preprocess(workspace)
+    outputs = preprocessor.preprocess(
+        workspace,
+        beam_preprocess_inputs={ATLAS_VEHICLES2_OUTPUT: str(archive_vehicles)},
+    )
 
     assert (
         outputs.prepared_inputs["vehicles_beam_in"] == scenario_dir / "vehicles.parquet"
@@ -545,7 +548,7 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
     assert metadata["source_year"] == 2018
     assert metadata["forecast_year"] == 2018
     assert metadata["source_resolution_mode"] == "exact_forecast_year"
-    assert metadata["source_storage_location"] == "archive"
+    assert metadata["source_storage_location"] == "explicit"
     assert metadata["filtered_to_staged_households"] is True
     assert metadata["staged_household_filter_input_vehicle_rows"] == 2
     assert metadata["staged_household_filter_removed_vehicle_rows"] == 1
@@ -556,7 +559,7 @@ def test_beam_preprocess_stages_archive_exact_vehicle_source_with_metadata(
     )
 
 
-def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(
+def test_beam_preprocessor_expected_inputs_do_not_discover_archive_atlas_vehicle_candidate(
     tmp_path,
 ):
     local_root = tmp_path / "local-run"
@@ -601,7 +604,7 @@ def test_beam_preprocessor_expected_inputs_use_archive_atlas_vehicle_candidate(
 
     expected = BeamPreprocessor.expected_inputs(settings, state, workspace)
 
-    assert expected[ATLAS_VEHICLES2_OUTPUT] == str(archive_vehicles)
+    assert expected[ATLAS_VEHICLES2_OUTPUT] is None
 
 
 def test_normalize_beam_vehicle_columns_synthesizes_global_ids_for_household_local_ids():

@@ -44,6 +44,7 @@ from pilates.workflows.binding import (
     build_resolved_binding,
     resolve_artifact_roles,
 )
+from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.state_helpers import resolve_forecast_year
@@ -83,6 +84,19 @@ _ACTIVITYSIM_POPULATION_TABLE_KEYS = (
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_BLOCKS_TABLE,
 )
+
+
+def _land_use_enabled(state: WorkflowState) -> bool:
+    """Return whether this invocation has a preceding UrbanSim producer."""
+
+    try:
+        return state.is_enabled(WorkflowState.Stage.land_use)
+    except AttributeError:
+        # Lightweight resolver tests and legacy callers may use a state facade
+        # without enabled-stage metadata.  Those retain bootstrap semantics.
+        return False
+
+
 _ACTIVITYSIM_CONFIG_REFERENCES_ARCHIVED_KEY = "activitysim_config_references_archived"
 _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE_LOCK = threading.Lock()
 _ACTIVITYSIM_CONFIG_REFERENCE_ARCHIVE_CACHE: Dict[
@@ -239,6 +253,7 @@ def _native_activitysim_resolved_inputs(
 ) -> ResolvedStepInputs:
     """Freeze the one ActivitySim semantic selection for a native invocation."""
 
+    allow_population_bootstrap_fallback = not _land_use_enabled(state)
     workspace_root = Path(getattr(workspace, "full_path", "."))
     destinations = {
         key: Path(path)
@@ -266,9 +281,13 @@ def _native_activitysim_resolved_inputs(
         rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
             semantic_key=USIM_POPULATION_SOURCE_H5,
             required=True,
-            allow_fallback=True,
+            allow_fallback=allow_population_bootstrap_fallback,
             preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-            fallback_provider="activitysim_population_source",
+            fallback_provider=(
+                "activitysim_population_source"
+                if allow_population_bootstrap_fallback
+                else None
+            ),
         )
     elif step_name == "activitysim_postprocess":
         rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
@@ -285,9 +304,13 @@ def _native_activitysim_resolved_inputs(
         rules[USIM_POPULATION_SOURCE_H5] = ArtifactBindingRule(
             semantic_key=USIM_POPULATION_SOURCE_H5,
             required=False,
-            allow_fallback=True,
+            allow_fallback=allow_population_bootstrap_fallback,
             preferred_keys=(USIM_POPULATION_SOURCE_H5,),
-            fallback_provider="activitysim_population_source",
+            fallback_provider=(
+                "activitysim_population_source"
+                if allow_population_bootstrap_fallback
+                else None
+            ),
         )
 
     return resolve_artifact_roles(
@@ -311,10 +334,19 @@ def _activitysim_preprocess_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    requires_beam_skim = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
     return _native_activitysim_resolved_inputs(
         step_name="activitysim_preprocess",
-        required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
-        optional_roles=_ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES,
+        required_roles=(
+            *_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
+            *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
+        ),
+        optional_roles=(
+            () if requires_beam_skim else _ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES
+        ),
         logical_destinations=ActivitysimPreprocessor.declared_expected_inputs(
             settings, state, workspace
         ),
@@ -831,11 +863,14 @@ def _activitysim_preprocess_callable(
 ) -> None:
     """Run ActivitySim preprocessing from the resolved semantic input paths."""
 
-    del settings
     ModelFactory().get_preprocessor("activitysim", state).preprocess(
         workspace,
         final_skims_omx=final_skims_omx,
         population_source_h5_path=str(usim_population_source_h5),
+        allow_workspace_skim_fallback=not requires_prior_beam_skim_handoff(
+            settings=settings,
+            state=state,
+        ),
     )
 
 

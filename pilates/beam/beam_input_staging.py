@@ -15,7 +15,6 @@ from pilates.beam.config_hocon import (
     beam_primary_config_path,
     resolve_beam_config_value,
 )
-from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.coupler_helpers import resolve_existing_path
@@ -132,6 +131,11 @@ def copy_vehicles_from_atlas(
     require_exact_year: bool = False,
     preferred_format: Optional[str] = None,
 ) -> Optional[FileRecord]:
+    if not source_path:
+        raise ValueError(
+            "BEAM vehicle staging requires an explicit ATLAS vehicles2 source_path; "
+            "workspace/archive vehicle discovery is not supported."
+        )
     beam_scenario_folder = resolve_beam_exchange_scenario_folder_fn(workspace)
     os.makedirs(beam_scenario_folder, exist_ok=True)
     beam_vehicles_format = _beam_vehicle_file_format(preferred_format)
@@ -141,16 +145,7 @@ def copy_vehicles_from_atlas(
     )
 
     source_metadata: Dict[str, Any] = {}
-    atlas_candidates = [source_path] if source_path else []
-    if not atlas_candidates:
-        resolved_source = resolve_atlas_vehicles2_source(
-            state=state,
-            workspace=workspace,
-            require_exact_year=require_exact_year,
-        )
-        if resolved_source is not None:
-            atlas_candidates.append(str(resolved_source.selected_path))
-            source_metadata = resolved_source.as_input_metadata()
+    atlas_candidates = [source_path]
 
     atlas_vehicle_file_loc = None
     for candidate in atlas_candidates:

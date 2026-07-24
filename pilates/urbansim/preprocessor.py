@@ -551,6 +551,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> UrbanSimPreprocessOutputs:
         """Prepare UrbanSim inputs and return typed outputs."""
         if usim_datastore_h5 is None:
@@ -563,6 +564,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
             previous_records,
             usim_datastore_h5=usim_datastore_h5,
             final_skims_omx=final_skims_omx,
+            allow_workspace_skim_fallback=allow_workspace_skim_fallback,
         )
 
     def _preprocess(
@@ -571,6 +573,7 @@ class UrbansimPreprocessor(GenericPreprocessor):
         previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> UrbanSimPreprocessOutputs:
         """
         Preprocess UrbanSim data, including copying necessary skims.
@@ -634,6 +637,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
                             source_skims_path,
                         )
                     else:
+                        if not allow_workspace_skim_fallback:
+                            raise FileNotFoundError(
+                                "UrbanSim preprocess requires the resolved "
+                                "final_skims_omx handoff after BEAM has run."
+                            )
                         if final_skims_omx is not None:
                             logger.warning(
                                 "[UrbansimPreprocessor] Explicit final_skims_omx artifact "

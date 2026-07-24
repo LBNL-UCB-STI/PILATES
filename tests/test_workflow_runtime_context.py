@@ -142,6 +142,89 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     assert seen["beam_context"] is context
 
 
+def test_supply_demand_restart_rewinds_to_activitysim_without_beam_checkpoint(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class _FakeStage:
+        supply_demand_loop = "supply_demand_loop"
+        activity_demand = "activity_demand"
+        traffic_assignment = "traffic_assignment"
+
+    class _FakeState:
+        Stage = _FakeStage
+        iteration = 0
+        current_major_stage = _FakeStage.supply_demand_loop
+        current_sub_stage = _FakeStage.traffic_assignment
+        year = 2018
+        forecast_year = 2018
+        is_restart_run = True
+        write_count = 0
+
+        def should_run(self, major_stage, iteration=None, sub_stage=None):
+            if major_stage != self.Stage.supply_demand_loop:
+                return False
+            if iteration != self.iteration:
+                return False
+            if sub_stage is None:
+                return True
+            return (self.Stage.activity_demand, self.Stage.traffic_assignment).index(
+                self.current_sub_stage
+            ) <= (self.Stage.activity_demand, self.Stage.traffic_assignment).index(
+                sub_stage
+            )
+
+        def write_state(self):
+            self.write_count += 1
+
+        def complete_step(self, *_args, **_kwargs):
+            return None
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            supply_demand_iters=1,
+            models=SimpleNamespace(activity_demand="activitysim"),
+        )
+    )
+    state = _FakeState()
+    context = WorkflowRuntimeContext.from_parts(
+        settings=settings,
+        state=state,
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        surface=SimpleNamespace(profile=SimpleNamespace()),
+    )
+    phases: list[str] = []
+
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand.beam_checkpoint_resume_requested",
+        lambda **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
+        lambda **_kwargs: phases.append("activitysim"),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
+        lambda **_kwargs: phases.append("beam"),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand.flush_archive_queue",
+        lambda *args, **kwargs: None,
+    )
+
+    run_supply_demand_stage(
+        scenario=SimpleNamespace(),
+        coupler=SimpleNamespace(),
+        year=2018,
+        handoff=LandUseToSupplyDemandHandoff(),
+        context=context,
+    )
+
+    assert phases == ["activitysim", "beam"]
+    assert state.current_sub_stage == state.Stage.activity_demand
+    assert state.write_count == 1
+
+
 def test_run_postprocessing_stage_uses_runtime_context(
     monkeypatch, tmp_path: Path
 ) -> None:

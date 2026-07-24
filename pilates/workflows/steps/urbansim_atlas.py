@@ -37,6 +37,7 @@ from pilates.workflows.artifact_keys import (
     USIM_MUTABLE_DATA_DIR,
 )
 from pilates.workflows.binding import build_resolved_binding
+from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -349,6 +350,10 @@ def _resolve_urbansim_preprocess_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    requires_beam_skim = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
     output_paths = _urbansim_preprocess_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -360,8 +365,11 @@ def _resolve_urbansim_preprocess_inputs(
     return _resolve_native_inputs(
         step_name="urbansim_preprocess",
         function=_native_urbansim_preprocess,
-        required_roles=(USIM_DATASTORE_H5,),
-        optional_roles=(FINAL_SKIMS_OMX,),
+        required_roles=(
+            USIM_DATASTORE_H5,
+            *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
+        ),
+        optional_roles=(() if requires_beam_skim else (FINAL_SKIMS_OMX,)),
         logical_destinations=destinations,
         coupler=coupler,
     )
@@ -421,6 +429,10 @@ def _resolve_atlas_preprocess_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    requires_beam_skim = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
     atlas_input = AtlasPreprocessor.expected_inputs(settings, state, workspace)[
         USIM_DATASTORE_H5
     ]
@@ -431,9 +443,16 @@ def _resolve_atlas_preprocess_inputs(
     return _resolve_native_inputs(
         step_name="atlas_preprocess",
         function=_native_atlas_preprocess,
-        required_roles=(USIM_DATASTORE_H5,),
-        optional_roles=(),
-        logical_destinations={USIM_DATASTORE_H5: Path(atlas_input)},
+        required_roles=(
+            USIM_DATASTORE_H5,
+            *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
+        ),
+        optional_roles=(() if requires_beam_skim else (FINAL_SKIMS_OMX,)),
+        logical_destinations={
+            USIM_DATASTORE_H5: Path(atlas_input),
+            FINAL_SKIMS_OMX: Path(workspace.get_atlas_mutable_input_dir())
+            / "final_skims.omx",
+        },
         coupler=coupler,
     )
 
@@ -514,11 +533,14 @@ def _native_urbansim_preprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
     UrbansimPreprocessor("urbansim", state).preprocess(
         workspace,
         usim_datastore_h5=usim_datastore_h5,
         final_skims_omx=final_skims_omx,
+        allow_workspace_skim_fallback=not requires_prior_beam_skim_handoff(
+            settings=settings,
+            state=state,
+        ),
     )
 
 
@@ -576,6 +598,7 @@ def _native_urbansim_postprocess(
     model="atlas_preprocess",
     name_template="atlas_preprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={USIM_DATASTORE_H5: None},
+    optional_input_keys=(FINAL_SKIMS_OMX,),
     schema_outputs=[
         "atlas_mutable_input_dir",
         "atlas_households_csv",
@@ -592,15 +615,20 @@ def _native_urbansim_postprocess(
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_preprocess(
     usim_datastore_h5: Path,
+    final_skims_omx: Path | None = None,
     *,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
     AtlasPreprocessor("atlas", state).preprocess(
         workspace,
         usim_datastore_h5=usim_datastore_h5,
+        final_skims_omx=final_skims_omx,
+        allow_workspace_skim_fallback=not requires_prior_beam_skim_handoff(
+            settings=settings,
+            state=state,
+        ),
     )
 
 

@@ -598,9 +598,12 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
     assert calls["urbansim_preprocess"] == {
         "usim_datastore_h5": snapshots["usim_datastore_h5"],
         "final_skims_omx": None,
+        "allow_workspace_skim_fallback": True,
     }
     assert calls["atlas_preprocess"] == {
-        "usim_datastore_h5": snapshots["usim_datastore_h5"]
+        "usim_datastore_h5": snapshots["usim_datastore_h5"],
+        "final_skims_omx": None,
+        "allow_workspace_skim_fallback": True,
     }
     assert (
         getattr(calls["atlas_run"], "atlas_mutable_input_dir")

@@ -2219,6 +2219,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
         population_source_h5_path: Optional[str] = None,
         usim_population_households_table: Optional[str] = None,
         usim_population_persons_table: Optional[str] = None,
@@ -2231,6 +2232,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         preprocess_kwargs: Dict[str, Any] = {}
         if final_skims_omx is not None:
             preprocess_kwargs["final_skims_omx"] = final_skims_omx
+        if not allow_workspace_skim_fallback:
+            preprocess_kwargs["allow_workspace_skim_fallback"] = False
         if population_source_h5_path is None:
             population_source_h5_path = (
                 str(usim_datastore_h5)
@@ -2290,6 +2293,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
         population_source_h5_path: Optional[str] = None,
         resolved_h5_table_paths: Optional[Dict[str, str]] = None,
     ) -> RecordStore:
@@ -2333,6 +2337,12 @@ class ActivitysimPreprocessor(GenericPreprocessor):
                 "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
                 "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
                 final_skims_omx,
+            )
+
+        if explicit_skims_path is None and not allow_workspace_skim_fallback:
+            raise FileNotFoundError(
+                "ActivitySim preprocess requires the resolved final_skims_omx "
+                "handoff after BEAM has run."
             )
 
         # Ensure BEAM input data is present, even if Initialization was skipped or incomplete

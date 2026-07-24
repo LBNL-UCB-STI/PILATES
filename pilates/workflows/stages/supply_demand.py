@@ -23,6 +23,38 @@ from .supply_demand_beam import (
 logger = logging.getLogger(__name__)
 
 
+def _rewind_uncheckpointed_activitysim_restart(
+    *,
+    settings,
+    state,
+    has_committed_beam_checkpoint: bool,
+) -> bool:
+    """Re-run ActivitySim rather than reconstructing an uncommitted handoff."""
+
+    if (
+        not state.is_restart_run
+        or settings.run.models.activity_demand is None
+        or has_committed_beam_checkpoint
+        or state.current_major_stage != state.Stage.supply_demand_loop
+        or state.should_run(
+            state.Stage.supply_demand_loop,
+            state.iteration,
+            state.Stage.activity_demand,
+        )
+    ):
+        return False
+
+    state.current_sub_stage = state.Stage.activity_demand
+    state.sub_stage_progress = None
+    state.write_state()
+    logger.warning(
+        "[supply_demand][restart] no committed BEAM checkpoint exists; "
+        "rewinding iteration=%s to ActivitySim instead of reconstructing a handoff.",
+        state.iteration,
+    )
+    return True
+
+
 def run_supply_demand_stage(
     *,
     scenario: ScenarioWithCoupler,
@@ -60,8 +92,9 @@ def run_supply_demand_stage(
         orchestration-level safe-point actions such as DB snapshots.
 
     A committed ``beam_run_completed -> beam_postprocess`` checkpoint is the
-    only mid-stage restart boundary. Other resumed frontiers run their ordinary
-    native stage sequence; ActivitySim is never reconstructed from a manifest.
+    only mid-stage restart boundary. Without one, an in-progress restart safely
+    rewinds to ActivitySim for that iteration; it never reconstructs an
+    ActivitySim handoff from a manifest.
     """
     settings = context.settings
     state = context.state
@@ -84,6 +117,11 @@ def run_supply_demand_stage(
             clamped_total_iters,
         )
         total_iters = clamped_total_iters
+    _rewind_uncheckpointed_activitysim_restart(
+        settings=settings,
+        state=state,
+        has_committed_beam_checkpoint=beam_checkpoint_resume_requested(state=state),
+    )
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
@@ -112,9 +150,8 @@ def run_supply_demand_stage(
             )
         elif settings.run.models.activity_demand is not None:
             raise RuntimeError(
-                "ActivitySim is skipped outside the committed BEAM checkpoint "
-                "boundary; normal native stage execution cannot reconstruct a "
-                "mid-stage ActivitySim handoff."
+                "ActivitySim is skipped without a committed BEAM checkpoint "
+                "after restart rewind; refusing to reconstruct a mid-stage handoff."
             )
 
         # C2. TRAFFIC ASSIGNMENT

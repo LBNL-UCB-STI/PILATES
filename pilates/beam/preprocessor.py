@@ -13,14 +13,12 @@ from pilates.config import PilatesConfig
 from pilates.beam import beam_exchange
 from pilates.beam import beam_input_staging
 from pilates.beam.outputs import BeamPreprocessOutputs
-from pilates.beam.vehicle_source import resolve_atlas_vehicles2_source
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
-from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -220,28 +218,12 @@ class BeamPreprocessor(GenericPreprocessor):
             if beam_config
             else None
         )
-        atlas_vehicle_input = None
-        forecast_year = resolve_forecast_year(state)
-        if atlas_output_dir is not None and forecast_year is not None:
-            try:
-                resolved_vehicle_source = resolve_atlas_vehicles2_source(
-                    state=state,
-                    workspace=workspace,
-                    require_exact_year=(
-                        settings.runtime.flags.activity_demand_enabled
-                        and getattr(state, "current_inner_iter", 0) == 0
-                    ),
-                )
-            except FileNotFoundError:
-                resolved_vehicle_source = None
-            if resolved_vehicle_source is not None:
-                atlas_vehicle_input = str(resolved_vehicle_source.selected_path)
         return {
             BEAM_MUTABLE_DATA_DIR: workspace.get_beam_mutable_data_dir(),
             BEAM_CONFIG_FILE: beam_config_path,
             ASIM_OUTPUT_DIR: asim_output_dir,
             ATLAS_OUTPUT_DIR: atlas_output_dir,
-            ATLAS_VEHICLES2_OUTPUT: atlas_vehicle_input,
+            ATLAS_VEHICLES2_OUTPUT: None,
             **beam_input_paths,
         }
 
@@ -377,12 +359,8 @@ class BeamPreprocessor(GenericPreprocessor):
             self.settings.vehicle_ownership_model_enabled
             and self.state.current_inner_iter == 0
         ):
-            require_exact_vehicle_source = self._activity_demand_enabled()
-            source_short_names = (
-                (ATLAS_VEHICLES2_OUTPUT,)
-                if require_exact_vehicle_source
-                else (ATLAS_VEHICLES2_OUTPUT, "vehicles_beam_in")
-            )
+            require_exact_vehicle_source = True
+            source_short_names = (ATLAS_VEHICLES2_OUTPUT,)
             restored_vehicle_source = next(
                 (
                     record.file_path

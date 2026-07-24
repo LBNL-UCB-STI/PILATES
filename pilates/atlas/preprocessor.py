@@ -600,6 +600,7 @@ class AtlasPreprocessor(GenericPreprocessor):
         previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> AtlasPreprocessOutputs:
         """
         Prepares all data needed to run ATLAS, including extracting UrbanSim outputs
@@ -699,6 +700,11 @@ class AtlasPreprocessor(GenericPreprocessor):
                     expected_beam_skims_path,
                 )
             else:
+                if not allow_workspace_skim_fallback:
+                    raise FileNotFoundError(
+                        "ATLAS preprocess requires the resolved final_skims_omx "
+                        "handoff after BEAM has run."
+                    )
                 if final_skims_omx is not None:
                     logger.warning(
                         "[AtlasPreprocessor] Explicit final_skims_omx artifact did not "
@@ -917,6 +923,8 @@ class AtlasPreprocessor(GenericPreprocessor):
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
         usim_datastore_h5: Optional[Path] = None,
+        final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> AtlasPreprocessOutputs:
         """Prepare ATLAS inputs and return typed outputs."""
         if usim_datastore_h5 is None:
@@ -926,6 +934,8 @@ class AtlasPreprocessor(GenericPreprocessor):
             workspace,
             previous_records,
             usim_datastore_h5=usim_datastore_h5,
+            final_skims_omx=final_skims_omx,
+            allow_workspace_skim_fallback=allow_workspace_skim_fallback,
         )
 
 
