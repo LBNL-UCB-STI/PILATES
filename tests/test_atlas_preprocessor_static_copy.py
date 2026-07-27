@@ -190,7 +190,8 @@ def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year
     ) == [2017, 2021]
 
 
-def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_path):
+def test_restart_atlas_stage_preflight_requires_only_static_inputs(tmp_path):
+    """The vehicle stage reruns ATLAS; it does not resume a child substage."""
     atlas_input_dir = tmp_path / "atlas" / "atlas_input"
     workspace = type(
         "Workspace",
@@ -230,28 +231,9 @@ def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_pa
         workflow_stage=WorkflowState.Stage,
     )
 
-    assert required is not None
-    assert required["atlas_static::psid_names.Rdat"] == str(
-        atlas_input_dir / "psid_names.Rdat"
-    )
-    assert required["atlas_restart_seed::2017::households"] == str(
-        atlas_input_dir / "year2017" / "households.csv"
-    )
-    assert required["atlas_restart_seed::2017::blocks"] == str(
-        atlas_input_dir / "year2017" / "blocks.csv"
-    )
-    assert required["atlas_restart_prior::2021::households"] == str(
-        atlas_input_dir / "year2021" / "households.csv"
-    )
-    assert required["atlas_restart_prior::2021::grave"] == str(
-        atlas_input_dir / "year2021" / "grave.csv"
-    )
-    assert required["atlas_restart_prior::2021::vehicles_output_RData"] == str(
-        atlas_input_dir / "year2021" / "vehicles_output.RData"
-    )
-    assert required["atlas_restart_prior::2021::households_output_RData"] == str(
-        atlas_input_dir / "year2021" / "households_output.RData"
-    )
+    assert required == {
+        "atlas_static::psid_names.Rdat": str(atlas_input_dir / "psid_names.Rdat")
+    }
 
 
 def test_restart_atlas_stage_entry_requires_static_inputs_not_generated_seed_files(
