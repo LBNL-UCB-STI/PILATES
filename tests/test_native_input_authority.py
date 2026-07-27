@@ -73,6 +73,27 @@ def test_atlas_subyear_requires_prior_beam_skim_at_later_parent_iteration() -> N
     )
 
 
+def test_atlas_later_subyear_does_not_require_beam_skim_before_first_beam_run() -> None:
+    """ATLAS sub-years do not themselves advance the BEAM handoff frontier."""
+
+    class ParentState:
+        year = 2020
+        forecast_year = 2022
+        start_year = 2020
+        full_settings = None
+
+        @property
+        def iteration(self) -> int:
+            return 0
+
+    atlas_state = AtlasSubState(ParentState(), 2022)
+
+    assert not requires_prior_beam_skim_handoff(
+        settings=_settings(),
+        state=atlas_state,
+    )
+
+
 def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     monkeypatch,
 ) -> None:

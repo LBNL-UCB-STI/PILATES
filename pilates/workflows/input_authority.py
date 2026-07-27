@@ -22,4 +22,10 @@ def requires_prior_beam_skim_handoff(*, settings: Any, state: Any) -> bool:
 
     if get_traffic_assignment_model(settings) != "beam":
         return False
-    return state.current_year > settings.run.start_year or state.iteration > 0
+
+    # ``AtlasSubState.current_year`` advances through ATLAS's internal
+    # sub-years before the workflow has executed BEAM.  Its
+    # ``atlas_interval_start_year`` preserves the parent workflow frontier,
+    # which is the only year boundary that can establish a BEAM skim handoff.
+    frontier_year = getattr(state, "atlas_interval_start_year", state.current_year)
+    return frontier_year > settings.run.start_year or state.iteration > 0
