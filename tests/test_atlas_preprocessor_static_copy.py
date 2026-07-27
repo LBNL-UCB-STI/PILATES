@@ -218,6 +218,7 @@ def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_pa
             "year": 2023,
             "current_year": 2023,
             "current_major_stage": WorkflowState.Stage.vehicle_ownership_model,
+            "sub_stage_progress": "runner",
         },
     )()
 
@@ -251,3 +252,52 @@ def test_restart_atlas_required_artifacts_include_prior_subyear_directory(tmp_pa
     assert required["atlas_restart_prior::2021::households_output_RData"] == str(
         atlas_input_dir / "year2021" / "households_output.RData"
     )
+
+
+def test_restart_atlas_stage_entry_requires_static_inputs_not_generated_seed_files(
+    tmp_path,
+):
+    """ATLAS preprocess recreates year inputs when the vehicle stage has not begun."""
+
+    atlas_input_dir = tmp_path / "atlas" / "atlas_input"
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(atlas_input_dir),
+        },
+    )()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "run": type(
+                "RunCfg",
+                (),
+                {"models": type("Models", (), {"vehicle_ownership": "atlas"})()},
+            )()
+        },
+    )()
+    state = type(
+        "State",
+        (),
+        {
+            "start_year": 2017,
+            "year": 2017,
+            "current_year": 2017,
+            "current_major_stage": WorkflowState.Stage.vehicle_ownership_model,
+            "sub_stage_progress": None,
+        },
+    )()
+
+    required = workflow_binding._restart_atlas_required_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        atlas_static_input_relpaths_fn=lambda _settings: ("psid_names.Rdat",),
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    assert required == {
+        "atlas_static::psid_names.Rdat": str(atlas_input_dir / "psid_names.Rdat")
+    }

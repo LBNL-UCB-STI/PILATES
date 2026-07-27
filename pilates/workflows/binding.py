@@ -1400,6 +1400,12 @@ def _restart_atlas_required_artifacts(
     required: Dict[str, str] = {}
     for relpath in atlas_static_input_relpaths_fn(settings):
         required[f"atlas_static::{relpath}"] = os.path.join(atlas_input_dir, relpath)
+    # At the vehicle-ownership stage entry, ``atlas_preprocess`` recreates the
+    # per-year CSV seed files from its UrbanSim datastore input.  They become
+    # restart requirements only after ATLAS has started and may need recovery
+    # to resume a partially completed stage.
+    if not getattr(state, "sub_stage_progress", None):
+        return required or None
     start_year = getattr(state, "start_year", None)
     atlas_year = getattr(state, "year", getattr(state, "current_year", None))
     if start_year is not None and atlas_year is not None:
