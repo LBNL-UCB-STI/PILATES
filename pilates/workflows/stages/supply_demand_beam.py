@@ -7,6 +7,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
+from consist import Artifact
+
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
@@ -688,23 +690,14 @@ def _rebind_beam_postprocess_closure_destinations(
 
 def _resolve_beam_postprocess_closure(
     *,
-    scenario: ScenarioWithCoupler,
     tracker: Any,
     resolved_inputs: ResolvedStepInputs,
     workspace: Workspace,
     year: int,
-    activitysim_year: int,
     iteration: int,
     beam_run_id: str,
 ) -> tuple[PinnedClosureMember, ...]:
     """Freeze exactly one resolved native postprocess input closure."""
-
-    try:
-        activitysim_run_id = scenario._activitysim_run_ids[
-            (activitysim_year, iteration)
-        ]  # type: ignore[attr-defined]
-    except (AttributeError, KeyError):
-        activitysim_run_id = None
 
     outputs_by_run: dict[str, Mapping[str, Any]] = {}
     members: list[PinnedClosureMember] = []
@@ -722,13 +715,27 @@ def _resolve_beam_postprocess_closure(
             raise RuntimeError(
                 f"BEAM postprocess resolved role {role!r} is not a concrete input."
             )
-        producer_run_id = activitysim_run_id if role == ZARR_SKIMS else beam_run_id
-        if producer_run_id is None:
+        selected_artifact = (resolved_inputs.binding.inputs or {})[role]
+        if not isinstance(selected_artifact, Artifact):
             raise RuntimeError(
-                "Cannot commit BEAM postprocess Zarr without the direct "
-                "ActivitySim run ID."
+                "Cannot commit BEAM postprocess input without tracked artifact "
+                f"provenance for {role!r}."
             )
-        output_key = resolved_inputs.selected_key_by_role.get(role, role)
+        producer_run_id = (
+            selected_artifact.run_id if role == ZARR_SKIMS else beam_run_id
+        )
+        output_key = selected_artifact.key
+        artifact_identity = selected_artifact.hash
+        driver = selected_artifact.driver
+        if not producer_run_id or not output_key:
+            raise RuntimeError(
+                "Cannot commit BEAM postprocess input without producer/output "
+                f"provenance for {role!r}."
+            )
+        if not artifact_identity:
+            raise RuntimeError(
+                f"Cannot commit BEAM postprocess input without identity {output_key}."
+            )
         destination = resolved_inputs.logical_destinations.get(role)
         if destination is None:
             raise RuntimeError(
@@ -755,9 +762,18 @@ def _resolve_beam_postprocess_closure(
             raise RuntimeError(
                 f"Cannot commit BEAM postprocess input without output link {output_key}."
             )
-        if not artifact.hash:
+        if artifact.hash != artifact_identity:
             raise RuntimeError(
-                f"Cannot commit BEAM postprocess input without identity {output_key}."
+                f"BEAM postprocess input identity does not match output link {output_key}."
+            )
+        if artifact.driver != driver:
+            raise RuntimeError(
+                f"BEAM postprocess input driver does not match output link {output_key}."
+            )
+        artifact_kind = _closure_artifact_kind(selected_artifact)
+        if _closure_artifact_kind(artifact) != artifact_kind:
+            raise RuntimeError(
+                f"BEAM postprocess input kind does not match output link {output_key}."
             )
         members.append(
             PinnedClosureMember(
@@ -765,9 +781,9 @@ def _resolve_beam_postprocess_closure(
                 role=role,
                 producer_run_id=producer_run_id,
                 output_key=output_key,
-                artifact_identity=str(artifact.hash),
-                artifact_kind=_closure_artifact_kind(artifact),
-                driver=(str(artifact.driver) if artifact.driver is not None else None),
+                artifact_identity=str(artifact_identity),
+                artifact_kind=artifact_kind,
+                driver=(str(driver) if driver is not None else None),
                 destination=destination,
                 required=role in resolved_inputs.required_roles,
             )
@@ -817,12 +833,10 @@ def _publish_completed_beam_run_checkpoint(
     else:
         run_id = producer_run_id
     closure_members = _resolve_beam_postprocess_closure(
-        scenario=scenario,
         tracker=tracker,
         resolved_inputs=postprocess_inputs,
         workspace=workspace,
         year=year,
-        activitysim_year=int(state.forecast_year),
         iteration=iteration,
         beam_run_id=run_id,
     )

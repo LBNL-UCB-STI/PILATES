@@ -24,6 +24,7 @@ from pilates.workflows.beam_checkpoint import (
     publish_beam_run_checkpoint,
     read_beam_run_checkpoint,
     snapshot_and_publish_beam_run_checkpoint,
+    validate_pinned_closure_snapshot,
     verify_archive_visible_pinned_closure_bytes,
     verify_archive_visible_recovery_bytes,
 )
@@ -1026,6 +1027,34 @@ def test_real_consist_snapshot_reopens_pinned_completed_beam_run(tmp_path):
     assert set(snapshot.get_run_outputs("beam-run-1")) == {"linkstats"}
 
 
+def test_pinned_closure_snapshot_rejects_prior_scope_beam_output(tmp_path):
+    artifact = SimpleNamespace(hash="events-hash", driver="parquet", meta={})
+    tracker = SimpleNamespace(
+        get_run=lambda _run_id: SimpleNamespace(
+            status="completed", year=2020, iteration=0
+        ),
+        get_run_outputs=lambda _run_id: {"events_parquet_2021_0": artifact},
+    )
+    member = PinnedClosureMember(
+        member_id="beam-events",
+        role="events_parquet_2021_0",
+        producer_run_id="beam-run-previous-year",
+        output_key="events_parquet_2021_0",
+        artifact_identity="events-hash",
+        artifact_kind="file",
+        driver="parquet",
+        destination=tmp_path / "events.parquet",
+        required=True,
+    )
+
+    with pytest.raises(RuntimeError, match="scope does not match"):
+        validate_pinned_closure_snapshot(
+            tracker=tracker,
+            members=(member,),
+            scope={"year": 2019, "forecast_year": 2021, "iteration": 0},
+        )
+
+
 def test_real_consist_snapshot_hydrates_multi_producer_successor_closure(tmp_path):
     import consist
 
@@ -1043,7 +1072,7 @@ def test_real_consist_snapshot_hydrates_multi_producer_successor_closure(tmp_pat
     with tracker.start_run("beam-run-1", "beam_run", year=2021, iteration=0):
         tracker.log_output(events_source, key="events_parquet_2021_0")
     with tracker.start_run(
-        "activitysim-run-1", "activitysim_run", year=2021, iteration=0
+        "activitysim-run-1", "activitysim_run", year=2020, iteration=0
     ):
         tracker.log_output(
             zarr_source,

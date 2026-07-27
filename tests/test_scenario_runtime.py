@@ -28,3 +28,25 @@ def test_parent_link_proxy_does_not_add_model_override_to_preflight_identity() -
 
     assert seen["step_identity"] is identity
     assert "model" not in seen
+
+
+def test_activitysim_postprocess_does_not_replace_activitysim_run_producer() -> None:
+    """Only the ActivitySim execution phase may seed BEAM's parent producer."""
+
+    @define_step(model="activitysim")
+    def activitysim_step() -> None:
+        return None
+
+    class _Scenario:
+        def __init__(self) -> None:
+            self.run_ids = iter(("activitysim-run-id", "activitysim-postprocess-id"))
+
+        def run(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(run=SimpleNamespace(id=next(self.run_ids)))
+
+    proxy = ScenarioParentLinkProxy(_Scenario())
+
+    proxy.run(fn=activitysim_step, year=2018, iteration=0, phase="run")
+    proxy.run(fn=activitysim_step, year=2018, iteration=0, phase="postprocess")
+
+    assert proxy._activitysim_run_ids == {(2018, 0): "activitysim-run-id"}

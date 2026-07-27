@@ -9,9 +9,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from consist import BindingResult
+from consist import Artifact, BindingResult
 
-from pilates.workflows.artifact_keys import LINKSTATS
+from pilates.workflows.artifact_keys import LINKSTATS, ZARR_SKIMS
 from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage
@@ -139,6 +139,87 @@ def test_fresh_checkpoint_is_published_before_canary_failpoint(monkeypatch):
         )
 
     assert calls == ["preprocess", "run", "published"]
+
+
+def test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache(
+    tmp_path: Path,
+) -> None:
+    """The selected input artifact, rather than transient scenario state, owns provenance."""
+
+    zarr_artifact = Artifact(
+        key=ZARR_SKIMS,
+        container_uri="workspace://activitysim/output/cache/skims.zarr",
+        run_id="activitysim-run-id",
+        hash="zarr-identity",
+        driver="zarr",
+        meta={"directory_artifact": True},
+    )
+    tracker = SimpleNamespace(
+        get_run_outputs=lambda run_id: (
+            {ZARR_SKIMS: zarr_artifact} if run_id == "activitysim-run-id" else {}
+        )
+    )
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_postprocess",
+        binding=BindingResult(inputs={ZARR_SKIMS: zarr_artifact}),
+        required_roles=(ZARR_SKIMS,),
+        source_by_role={ZARR_SKIMS: "coupler"},
+        selected_key_by_role={ZARR_SKIMS: ZARR_SKIMS},
+        logical_destinations={ZARR_SKIMS: tmp_path / "skims.zarr"},
+    )
+    closure = beam_stage._resolve_beam_postprocess_closure(
+        tracker=tracker,
+        resolved_inputs=resolved_inputs,
+        workspace=SimpleNamespace(),
+        year=2017,
+        iteration=0,
+        beam_run_id="beam-run-id",
+    )
+
+    assert closure[0].producer_run_id == "activitysim-run-id"
+    assert closure[0].output_key == ZARR_SKIMS
+    assert closure[0].artifact_identity == "zarr-identity"
+
+
+def test_beam_checkpoint_closure_keeps_requested_beam_run_on_cache_hit(
+    tmp_path: Path,
+) -> None:
+    """A cached BEAM output still belongs to the requested checkpoint run."""
+
+    cached_artifact = Artifact(
+        key="events_parquet_2018_0",
+        container_uri="workspace://beam/output/events.parquet",
+        run_id="beam-cache-source-id",
+        hash="events-identity",
+        driver="parquet",
+        meta={},
+    )
+    tracker = SimpleNamespace(
+        get_run_outputs=lambda run_id: (
+            {cached_artifact.key: cached_artifact}
+            if run_id in {"beam-cache-source-id", "beam-requested-id"}
+            else {}
+        )
+    )
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_postprocess",
+        binding=BindingResult(inputs={cached_artifact.key: cached_artifact}),
+        required_roles=(cached_artifact.key,),
+        source_by_role={cached_artifact.key: "coupler"},
+        selected_key_by_role={cached_artifact.key: cached_artifact.key},
+        logical_destinations={cached_artifact.key: tmp_path / "events.parquet"},
+    )
+
+    closure = beam_stage._resolve_beam_postprocess_closure(
+        tracker=tracker,
+        resolved_inputs=resolved_inputs,
+        workspace=SimpleNamespace(),
+        year=2017,
+        iteration=0,
+        beam_run_id="beam-requested-id",
+    )
+
+    assert closure[0].producer_run_id == "beam-requested-id"
 
 
 @pytest.mark.parametrize("run_mode", ("fresh", "cache"))

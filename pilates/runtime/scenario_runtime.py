@@ -188,6 +188,7 @@ class ScenarioParentLinkProxy:
         model_name: Optional[str],
         year: Optional[int],
         iteration: Optional[int],
+        phase: Optional[str],
         run_id: Optional[str],
     ) -> None:
         if model_name is None or year is None or iteration is None or not run_id:
@@ -196,7 +197,9 @@ class ScenarioParentLinkProxy:
         model_norm = model_name.lower()
         if model_norm == "activitysim" or model_norm.startswith("activitysim_"):
             self._activitysim_step_ids[key] = run_id
-            if model_norm in {"activitysim", "activitysim_run"}:
+            if model_norm == "activitysim_run" or (
+                model_norm == "activitysim" and phase == "run"
+            ):
                 self._activitysim_run_ids[key] = run_id
         elif model_norm in {"beam", "beam_run"}:
             self._beam_run_ids[key] = run_id
@@ -247,6 +250,7 @@ class ScenarioParentLinkProxy:
             model_name=model_name,
             year=year,
             iteration=iteration,
+            phase=None,
             run_id=run_id,
         )
         self._log_parent_link(
@@ -310,6 +314,7 @@ class ScenarioParentLinkProxy:
             model_name=model_name,
             year=year,
             iteration=iteration,
+            phase=(str(run_kwargs["phase"]) if run_kwargs.get("phase") else None),
             run_id=run_id,
         )
         self._log_parent_link(
