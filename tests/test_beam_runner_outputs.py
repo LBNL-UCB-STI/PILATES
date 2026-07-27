@@ -17,6 +17,7 @@ from pilates.workflows.outputs_base import ValidationContext
 class _Workspace:
     def __init__(self, tmp_path: Path) -> None:
         self._tmp_path = tmp_path
+        self.full_path = tmp_path
 
     def get_beam_output_dir(self) -> str:
         return str(self._tmp_path / "beam-output")
@@ -188,6 +189,7 @@ def test_beam_runner_mounts_the_bound_launch_tree(
     assert captured["command"] == "--config=/app/input/configs/beam.conf"
     assert captured["volumes"] == {
         str(launch_root): {"bind": "/app/input", "mode": "rw"},
+        str(launch_root.parent): {"bind": str(launch_root.parent), "mode": "rw"},
         str(tmp_path / "beam-output"): {"bind": "/app/output", "mode": "rw"},
     }
 

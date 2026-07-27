@@ -99,6 +99,27 @@ def _map_host_path_to_container(
     return host_path
 
 
+def _beam_container_volumes(
+    *,
+    input_root: Path,
+    output_root: Path,
+    launch_config: BeamLaunchConfig | None,
+) -> dict[str, dict[str, str]]:
+    """Mount the launch snapshot at its container and configured host paths."""
+
+    volumes = {
+        str(input_root): {"bind": "/app/input", "mode": "rw"},
+        str(output_root): {"bind": "/app/output", "mode": "rw"},
+    }
+    if launch_config is not None:
+        host_path_root = input_root.parent
+        volumes[str(host_path_root)] = {
+            "bind": str(host_path_root),
+            "mode": "rw",
+        }
+    return volumes
+
+
 def _select_latest_linkstats_path(
     records: Optional[RecordStore],
     abs_beam_input: str,
@@ -550,10 +571,11 @@ class BeamRunner(GenericRunner):
             client=client,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
@@ -826,10 +848,11 @@ class BeamFullSkimRunner(GenericRunner):
             client=None,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=" ".join(cmd_parts),
             model_name=self.model_name,
             working_dir="/app",
