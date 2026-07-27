@@ -7,6 +7,7 @@ import pytest
 from consist import BindingResult
 
 from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX, USIM_DATASTORE_H5
+from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import activitysim, urbansim_atlas
@@ -44,6 +45,31 @@ def test_prior_beam_skim_handoff_is_required_only_after_bootstrap() -> None:
     assert not requires_prior_beam_skim_handoff(
         settings=_settings(traffic_assignment=None),
         state=_state(current_year=2022),
+    )
+
+
+def test_atlas_subyear_requires_prior_beam_skim_at_later_parent_iteration() -> None:
+    """ATLAS sub-years retain the parent iteration used by input authority."""
+
+    class ParentState:
+        year = 2020
+        forecast_year = 2022
+        start_year = 2020
+        full_settings = None
+
+        def __init__(self) -> None:
+            self.current_inner_iter = 1
+
+        @property
+        def iteration(self) -> int:
+            return self.current_inner_iter
+
+    parent = ParentState()
+    atlas_state = AtlasSubState(parent, 2020)
+
+    assert requires_prior_beam_skim_handoff(
+        settings=_settings(),
+        state=atlas_state,
     )
 
 
