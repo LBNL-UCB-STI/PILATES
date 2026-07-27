@@ -698,6 +698,12 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
     bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
 
     if is_restart_run:
+        restart_runtime.hydrate_restart_atlas_continuation_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            workflow_stage=WorkflowState.Stage,
+        )
         restart_missing_artifacts_after_bootstrap = (
             _find_missing_restart_local_artifacts(
                 settings=settings,

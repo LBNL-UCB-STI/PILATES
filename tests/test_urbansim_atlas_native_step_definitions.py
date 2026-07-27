@@ -116,6 +116,9 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
     urbansim_run_paths = URBANSIM_RUN.output_paths(
         settings=settings, state=state, workspace=workspace
     )
+    atlas_preprocess_paths = ATLAS_PREPROCESS.output_paths(
+        settings=settings, state=state, workspace=workspace
+    )
     atlas_postprocess_paths = ATLAS_POSTPROCESS.output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -130,6 +133,11 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         USIM_POPULATION_SOURCE_H5,
         ATLAS_VEHICLES2_OUTPUT,
     }
+    assert atlas_preprocess_paths["atlas_residential_csv"] == (
+        Path(workspace.get_atlas_mutable_input_dir())
+        / f"year{state.forecast_year}"
+        / "residential.csv"
+    )
 
 
 def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(

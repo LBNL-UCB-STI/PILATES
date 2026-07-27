@@ -4,6 +4,7 @@ import pytest
 
 from pilates.atlas.preprocessor import AtlasPreprocessor
 import pilates.atlas.preprocessor as atlas_preprocessor_module
+from pilates.runtime import restart as restart_runtime
 from pilates.workflows import binding as workflow_binding
 from workflow_state import WorkflowState
 
@@ -190,8 +191,8 @@ def test_restart_required_atlas_input_years_uses_previous_subyear_not_start_year
     ) == [2017, 2021]
 
 
-def test_restart_atlas_stage_preflight_requires_only_static_inputs(tmp_path):
-    """The vehicle stage reruns ATLAS; it does not resume a child substage."""
+def test_restart_atlas_later_stage_requires_prior_continuation_inputs(tmp_path):
+    """Later ATLAS boundaries cannot recreate their predecessor state."""
     atlas_input_dir = tmp_path / "atlas" / "atlas_input"
     workspace = type(
         "Workspace",
@@ -231,9 +232,17 @@ def test_restart_atlas_stage_preflight_requires_only_static_inputs(tmp_path):
         workflow_stage=WorkflowState.Stage,
     )
 
-    assert required == {
+    expected = {
         "atlas_static::psid_names.Rdat": str(atlas_input_dir / "psid_names.Rdat")
     }
+    expected.update(
+        atlas_preprocessor_module.restart_required_atlas_input_paths(
+            atlas_input_root=str(atlas_input_dir),
+            start_year=2017,
+            atlas_year=2023,
+        )
+    )
+    assert required == expected
 
 
 def test_restart_atlas_stage_entry_requires_static_inputs_not_generated_seed_files(
@@ -283,3 +292,183 @@ def test_restart_atlas_stage_entry_requires_static_inputs_not_generated_seed_fil
     assert required == {
         "atlas_static::psid_names.Rdat": str(atlas_input_dir / "psid_names.Rdat")
     }
+
+
+def test_force_restart_restore_invalidates_stale_file_missing_from_archive(tmp_path):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input" / "year2017"
+    current_atlas_input = current_run_dir / "atlas" / "atlas_input"
+    required = atlas_preprocessor_module.restart_required_atlas_input_paths(
+        atlas_input_root=str(current_atlas_input),
+        start_year=2017,
+        atlas_year=2017,
+    )
+    for key, path in required.items():
+        _touch(Path(path), content="stale")
+        if not key.endswith("::jobs"):
+            _touch(previous_atlas_input / Path(path).name, content="archive")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {"get_atlas_mutable_input_dir": lambda self: str(current_atlas_input)},
+    )()
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(previous_run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2017,
+        force=True,
+    )
+
+    assert (
+        Path(required["atlas_restart_seed::2017::households"]).read_text(
+            encoding="utf-8"
+        )
+        == "archive"
+    )
+    assert not Path(required["atlas_restart_seed::2017::jobs"]).exists()
+
+
+def test_force_restart_restore_is_noop_when_archive_is_workspace(tmp_path):
+    run_dir = tmp_path / "single-run"
+    atlas_input = run_dir / "atlas" / "atlas_input"
+    required = atlas_preprocessor_module.restart_required_atlas_input_paths(
+        atlas_input_root=str(atlas_input),
+        start_year=2017,
+        atlas_year=2017,
+    )
+    for path in required.values():
+        _touch(Path(path), content="authoritative")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {"get_atlas_mutable_input_dir": lambda self: str(atlas_input)},
+    )()
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2017,
+        force=True,
+    )
+
+    assert all(
+        Path(path).read_text(encoding="utf-8") == "authoritative"
+        for path in required.values()
+    )
+
+
+def test_force_restart_restore_replaces_stale_destination_symlink(tmp_path):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input" / "year2017"
+    current_atlas_input = current_run_dir / "atlas" / "atlas_input"
+    required = atlas_preprocessor_module.restart_required_atlas_input_paths(
+        atlas_input_root=str(current_atlas_input),
+        start_year=2017,
+        atlas_year=2017,
+    )
+    household_destination = Path(required["atlas_restart_seed::2017::households"])
+    _touch(previous_atlas_input / household_destination.name, content="archive")
+    external_target = tmp_path / "outside-workspace.csv"
+    _touch(external_target, content="stale")
+    household_destination.parent.mkdir(parents=True)
+    household_destination.symlink_to(external_target)
+
+    workspace = type(
+        "Workspace",
+        (),
+        {"get_atlas_mutable_input_dir": lambda self: str(current_atlas_input)},
+    )()
+    atlas_preprocessor_module._restore_restart_atlas_year_inputs(
+        previous_run_dir=str(previous_run_dir),
+        workspace=workspace,
+        start_year=2017,
+        atlas_year=2017,
+        force=True,
+    )
+
+    assert not household_destination.is_symlink()
+    assert household_destination.read_text(encoding="utf-8") == "archive"
+    assert external_target.read_text(encoding="utf-8") == "stale"
+
+
+def test_restart_hydrates_later_atlas_continuation_before_preflight(tmp_path):
+    previous_run_dir = tmp_path / "previous-run"
+    current_run_dir = tmp_path / "current-run"
+    previous_atlas_input = previous_run_dir / "atlas" / "atlas_input"
+    for year, filenames in {
+        2017: (
+            "households.csv",
+            "blocks.csv",
+            "persons.csv",
+            "residential.csv",
+            "jobs.csv",
+        ),
+        2021: (
+            "households.csv",
+            "blocks.csv",
+            "persons.csv",
+            "grave.csv",
+            "residential.csv",
+            "jobs.csv",
+            "vehicles_output.RData",
+            "households_output.RData",
+        ),
+    }.items():
+        for filename in filenames:
+            _touch(previous_atlas_input / f"year{year}" / filename)
+
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "get_atlas_mutable_input_dir": lambda self: str(
+                current_run_dir / "atlas" / "atlas_input"
+            ),
+        },
+    )()
+    settings = type(
+        "Settings",
+        (),
+        {
+            "run": type(
+                "RunCfg",
+                (),
+                {"models": type("Models", (), {"vehicle_ownership": "atlas"})()},
+            )()
+        },
+    )()
+    state = type(
+        "State",
+        (),
+        {
+            "start_year": 2017,
+            "year": 2023,
+            "current_year": 2023,
+            "run_info_path": str(previous_run_dir / "run_state.yaml"),
+            "current_major_stage": WorkflowState.Stage.vehicle_ownership_model,
+        },
+    )()
+    required = atlas_preprocessor_module.restart_required_atlas_input_paths(
+        atlas_input_root=workspace.get_atlas_mutable_input_dir(),
+        start_year=2017,
+        atlas_year=2023,
+    )
+    for path in required.values():
+        _touch(Path(path), content="stale")
+
+    restart_runtime.hydrate_restart_atlas_continuation_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        workflow_stage=WorkflowState.Stage,
+    )
+
+    assert all(Path(path).exists() for path in required.values())
+    assert all(
+        Path(path).read_text(encoding="utf-8") == "x" for path in required.values()
+    )

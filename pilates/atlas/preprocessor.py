@@ -185,9 +185,10 @@ def _restore_restart_atlas_year_inputs(
     workspace: "Workspace",
     start_year: int,
     atlas_year: int,
+    force: bool = False,
 ) -> None:
     """
-    Rehydrate restart-critical ATLAS year directories from the previous run.
+    Rehydrate restart-critical ATLAS files from the previous run.
 
     For reruns of later ATLAS subyears, restoring only the workflow start year
     is insufficient. The dynamic container also expects the immediately
@@ -198,47 +199,69 @@ def _restore_restart_atlas_year_inputs(
         start_year=start_year,
         atlas_year=atlas_year,
     )
-    missing_paths = [
-        path for path in required_paths.values() if not os.path.exists(path)
-    ]
-    if not missing_paths:
-        return
-
-    for required_year in _restart_required_atlas_input_years(
-        start_year=start_year,
-        atlas_year=atlas_year,
-    ):
-        old_year_input_path = os.path.join(
-            previous_run_dir, "atlas", "atlas_input", f"year{required_year}"
+    configured_atlas_input_root = os.path.abspath(
+        workspace.get_atlas_mutable_input_dir()
+    )
+    atlas_input_root = os.path.realpath(configured_atlas_input_root)
+    previous_atlas_input_root = os.path.realpath(
+        os.path.join(previous_run_dir, "atlas", "atlas_input")
+    )
+    for key, required_destination in required_paths.items():
+        relative_path = os.path.relpath(
+            os.path.abspath(required_destination), configured_atlas_input_root
         )
-        new_year_input_path = os.path.join(
-            workspace.get_atlas_mutable_input_dir(), f"year{required_year}"
-        )
-        year_missing_paths = [
-            path
-            for key, path in required_paths.items()
-            if f"::{required_year}::" in key and not os.path.exists(path)
-        ]
-        if not year_missing_paths:
-            continue
-        if not os.path.exists(old_year_input_path):
-            logger.warning(
-                "[AtlasPreprocessor] Restart requires prior ATLAS input directory "
-                "year%s, but it was missing from previous run: %s",
-                required_year,
-                old_year_input_path,
+        destination = os.path.normpath(os.path.join(atlas_input_root, relative_path))
+        if os.path.commonpath((atlas_input_root, destination)) != atlas_input_root:
+            raise RuntimeError(
+                "Restart-required ATLAS input escapes the mutable input root: "
+                f"{required_destination}"
             )
+        destination_parent = os.path.realpath(os.path.dirname(destination))
+        if (
+            os.path.commonpath((atlas_input_root, destination_parent))
+            != atlas_input_root
+        ):
+            raise RuntimeError(
+                "Restart-required ATLAS input parent escapes the mutable input root: "
+                f"{required_destination}"
+            )
+        source = os.path.join(previous_atlas_input_root, relative_path)
+
+        # Archive and workspace can intentionally be the same location. There
+        # is nothing to rehydrate in that topology, and copying a file onto
+        # itself raises ``SameFileError``.
+        if os.path.normpath(source) == destination:
             continue
+        if not os.path.exists(source):
+            logger.warning(
+                "[AtlasPreprocessor] Restart requires archived ATLAS input %s, "
+                "but it was missing: %s",
+                key,
+                source,
+            )
+            # A forced restart restore treats the archive as authoritative. Do
+            # not let an unverified local remnant satisfy the later existence
+            # check when the authoritative source is absent.
+            if force and os.path.lexists(destination):
+                os.unlink(destination)
+            continue
+        if not force and os.path.exists(destination):
+            continue
+
+        if force and os.path.lexists(destination):
+            os.unlink(destination)
+        elif os.path.lexists(destination):
+            # A dangling destination symlink cannot be copied through. Replace
+            # it with the archived file without following its target.
+            os.unlink(destination)
+
+        os.makedirs(os.path.dirname(destination), exist_ok=True)
         logger.info(
-            "[AtlasPreprocessor] Copying restart-required ATLAS inputs from previous run: %s",
-            old_year_input_path,
+            "[AtlasPreprocessor] Restoring restart-required ATLAS input %s: %s",
+            key,
+            source,
         )
-        shutil.copytree(
-            old_year_input_path,
-            new_year_input_path,
-            dirs_exist_ok=True,
-            symlinks=True,
-        )
+        shutil.copy2(source, destination, follow_symlinks=False)
 
 
 def _record_restart_chained_rdata_inputs(

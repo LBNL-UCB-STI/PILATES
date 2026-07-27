@@ -83,6 +83,73 @@ def test_fresh_bootstrap_sequence_defers_initialized_marker_until_coupler_seed(
     assert state.data_initialized is False
 
 
+def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
+    tmp_path, monkeypatch
+):
+    previous_run_dir = tmp_path / "previous-run"
+    previous_file = (
+        previous_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
+    )
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text("seed\n", encoding="utf-8")
+    current_atlas_input = tmp_path / "current-run" / "atlas" / "atlas_input"
+    state = SimpleNamespace(
+        data_initialized=True,
+        start_year=2017,
+        year=2023,
+        current_year=2023,
+        run_info_path=str(previous_run_dir / "run_state.yaml"),
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            restart_strict=True,
+            models=SimpleNamespace(vehicle_ownership="atlas"),
+        )
+    )
+    prepared = SimpleNamespace(
+        settings=settings,
+        state=state,
+        surface=SimpleNamespace(
+            is_restart_prebootstrap_deferred_artifact_key=lambda _key: False
+        ),
+        workspace=SimpleNamespace(
+            get_atlas_mutable_input_dir=lambda: str(current_atlas_input)
+        ),
+        tracker=SimpleNamespace(),
+        scenario_id="base",
+        seed=None,
+        is_restart_run=True,
+    )
+    observed_paths: list[bool] = []
+
+    def find_missing(**_kwargs):
+        observed_paths.append(
+            (current_atlas_input / "year2017" / "households.csv").exists()
+        )
+        return []
+
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module, "run_bootstrap_phase", lambda **_kwargs: {"bootstrap": "ok"}
+    )
+    monkeypatch.setattr(
+        run_module, "_assert_bootstrap_output_invariant", lambda _result: None
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "log_bootstrap_result_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        run_module, "_find_missing_restart_local_artifacts", find_missing
+    )
+
+    run_module._run_bootstrap_sequence(prepared)
+
+    assert observed_paths == [False, True]
+
+
 class DummyInitialization:
     def __init__(self, *_args, **_kwargs):
         pass
@@ -2652,8 +2719,9 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypa
     )
     state = SimpleNamespace(
         Stage=WorkflowState.Stage,
-        run_info_path=str(run_state_path),
+        run_info_path=str(archive_run_dir / "missing-continuation" / "run_state.yaml"),
         data_initialized=True,
+        is_restart_run=True,
         file_loc=None,
         mirror_file_loc=None,
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model,

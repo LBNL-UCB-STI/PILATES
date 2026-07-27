@@ -296,7 +296,7 @@ def _atlas_preprocess_native_output_paths(
         "atlas_households_csv": year_input_dir / "households.csv",
         "atlas_blocks_csv": year_input_dir / "blocks.csv",
         "atlas_persons_csv": year_input_dir / "persons.csv",
-        "atlas_residential_csv": year_input_dir / "residential_units.csv",
+        "atlas_residential_csv": year_input_dir / "residential.csv",
         "atlas_jobs_csv": year_input_dir / "jobs.csv",
     }
     if state.year > state.start_year:
