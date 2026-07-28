@@ -129,15 +129,6 @@ def _mark_initialized(
         state.set_data_initialized(True)
 
 
-def _manifest_builder(root: Path, prefix: str):
-    def _build(_workspace, year: int, iteration: int) -> Path:
-        manifest_dir = root / prefix
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        return manifest_dir / f"{year}_{iteration}.yaml"
-
-    return _build
-
-
 def _publish_input_roles(
     scenario, state: WorkflowState, roles: dict[str, Path]
 ) -> None:

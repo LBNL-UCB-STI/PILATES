@@ -43,7 +43,7 @@ _RETIRED_SYMBOLS = _RETIRED_EXECUTION_SYMBOLS | _RETIRED_FACTORY_NAMES
 
 
 def _tracked_production_python_files() -> tuple[Path, ...]:
-    """Return the tracked production modules without inspecting untracked worktrees."""
+    """Return present tracked production modules without inspecting untracked worktrees."""
     completed = subprocess.run(
         ["git", "ls-files", "-z", "--", "pilates"],
         cwd=_REPOSITORY_ROOT,
@@ -54,6 +54,7 @@ def _tracked_production_python_files() -> tuple[Path, ...]:
         _REPOSITORY_ROOT / Path(raw_path.decode())
         for raw_path in completed.stdout.split(b"\0")
         if raw_path.endswith(b".py")
+        and (_REPOSITORY_ROOT / Path(raw_path.decode())).is_file()
     )
     assert files, "Expected tracked production Python modules under pilates/."
     return files

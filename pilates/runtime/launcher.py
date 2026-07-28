@@ -299,14 +299,6 @@ def _build_scenario_runtime_contract(
     )
 
 
-def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
-    return (
-        Path(workspace.full_path)
-        / ".workflow"
-        / f"year_{year}_iteration_{iteration}.yaml"
-    )
-
-
 def _log_local_storage_info() -> None:
     log_local_storage_info_if_enabled()
 
