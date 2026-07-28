@@ -16,9 +16,11 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
     ZARR_SKIMS,
 )
 from pilates.workflows.steps.beam import (
+    _beam_preprocess_native_output_paths,
     _materialize_native_outputs,
     _resolve_beam_preprocess_inputs,
     _resolved_beam_inputs,
@@ -61,6 +63,36 @@ def test_materialize_native_outputs_preserves_same_directory_source(
     )
 
     assert marker.read_text(encoding="utf-8") == '{"zarr_format": 2}\n'
+
+
+def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
+    tmp_path: Path,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={LINKSTATS_WARMSTART: tmp_path / "linkstats.parquet"}
+        ),
+        metadata={"native_output_keys": (LINKSTATS_WARMSTART,)},
+    )
+
+    outputs = _beam_preprocess_native_output_paths(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert outputs[LINKSTATS_WARMSTART] == (
+        tmp_path
+        / "beam-input"
+        / ".pilates-consist-outputs"
+        / "beam_preprocess"
+        / "linkstats_warmstart.parquet"
+    )
 
 
 def test_native_beam_definitions_resolve_consist_contracts(

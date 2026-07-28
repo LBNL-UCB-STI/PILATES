@@ -176,6 +176,18 @@ def _native_output_destination(
     return root / ".pilates-consist-outputs" / step_name / f"{key}{suffix}"
 
 
+def _linkstats_warmstart_suffix(
+    *, workspace: Any, resolved_inputs: ResolvedStepInputs | None
+) -> str:
+    """Preserve the selected warm-start file format in its logged output path."""
+    if resolved_inputs is None:
+        return ".csv.gz"
+    source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
+    source_path = artifact_to_path(source, workspace=workspace)
+    suffixes = "".join(Path(source_path).suffixes) if source_path else ""
+    return suffixes or ".csv.gz"
+
+
 def _beam_preprocess_native_output_paths(
     *,
     settings: Any,
@@ -199,7 +211,10 @@ def _beam_preprocess_native_output_paths(
         BEAM_PLANS_IN: ".csv",
         BEAM_HOUSEHOLDS_IN: ".csv",
         BEAM_PERSONS_IN: ".csv",
-        LINKSTATS_WARMSTART: ".csv.gz",
+        LINKSTATS_WARMSTART: _linkstats_warmstart_suffix(
+            workspace=workspace,
+            resolved_inputs=resolved_inputs,
+        ),
         "vehicles_beam_in": ".csv",
     }
     root = Path(workspace.get_beam_mutable_data_dir())
@@ -387,8 +402,14 @@ def _project_beam_preprocess_outputs(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
 ) -> BeamPreprocessOutputs:
+    output_resolved_inputs = (
+        resolved_inputs if "native_output_keys" in resolved_inputs.metadata else None
+    )
     declared_outputs = _beam_preprocess_native_output_paths(
-        settings=settings, state=state, workspace=workspace
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=output_resolved_inputs,
     )
     prepared = {
         key: _path_from_output(
