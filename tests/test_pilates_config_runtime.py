@@ -99,6 +99,14 @@ def test_deprecated_use_consist_warns_and_is_ignored():
     assert settings.shared.database.use_consist is True
 
 
+def test_workflow_rejects_retired_manifest_recovery_config():
+    config = _minimal_config()
+    config["workflow"] = {"manifests": {"disabled_stages": ["supply_demand"]}}
+
+    with pytest.raises(ValueError, match=r"workflow\.manifests"):
+        PilatesConfig(**config)
+
+
 def test_recovery_archive_roots_expand_environment_variables(monkeypatch):
     monkeypatch.setenv("PILATES_RECOVERY_ROOT", "/tmp/recovery-root")
     config = _minimal_config()

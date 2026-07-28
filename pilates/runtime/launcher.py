@@ -81,7 +81,6 @@ from pilates.workflows.surface import (
     EnabledWorkflowSurface,
     build_enabled_workflow_surface,
 )
-from pilates.workflows.boundary_audit import preflight_recovery_boundary_audit
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -296,14 +295,6 @@ def _build_scenario_runtime_contract(
         merge_epoch_facet_fn=_merge_epoch_facet,
         scenario_name_template=_SCENARIO_NAME_TEMPLATE,
         surface=surface,
-    )
-
-
-def build_manifest_path(workspace: Workspace, year: int, iteration: int) -> Path:
-    return (
-        Path(workspace.full_path)
-        / ".workflow"
-        / f"year_{year}_iteration_{iteration}.yaml"
     )
 
 
@@ -616,8 +607,6 @@ def _prepare_run_context(
         workspace=workspace,
         surface=surface,
     )
-    preflight_recovery_boundary_audit(state=state, workspace=workspace)
-
     return PreparedRunContext(
         settings=settings,
         state=state,

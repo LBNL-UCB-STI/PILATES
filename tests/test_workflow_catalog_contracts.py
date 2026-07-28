@@ -13,6 +13,10 @@ def _metadata_keys(values) -> tuple[str, ...]:
 
 
 def test_catalog_retains_only_policy_and_references_committed_definitions():
+    removed_dependency_aliases = (
+        "_".join(("holder", "inputs")),
+        "_".join(("upstream", "step", "inputs")),
+    )
     policy_fields = {field.name for field in fields(catalog.WorkflowStepSpec)}
     assert policy_fields.isdisjoint(
         {
@@ -20,8 +24,8 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
             "optional_input_keys",
             "output_keys",
             "optional_output_keys",
-            "holder_inputs",
-            "upstream_step_inputs",
+            "model_name",
+            *removed_dependency_aliases,
         }
     )
 
@@ -34,8 +38,10 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
         assert spec.schema_output_keys == _metadata_keys(metadata.schema_outputs)
         assert spec.output_keys == spec.schema_output_keys
         assert spec.optional_output_keys == ()
-        assert spec.holder_inputs == spec.depends_on
-        assert spec.upstream_step_inputs == spec.depends_on
+        assert not hasattr(spec, "model_name")
+        assert all(
+            not hasattr(spec, field_name) for field_name in removed_dependency_aliases
+        )
 
 
 def test_native_schema_steps_allow_shared_consist_model_metadata():
@@ -61,6 +67,16 @@ def test_workflow_step_contract_export_projects_native_metadata():
         assert contract["schema_outputs"] == contract["output_keys"]
         assert contract["optional_output_keys"] == []
         assert contract["depends_on"] == list(spec.depends_on)
+
+
+def test_catalog_dependency_exports_only_project_depends_on():
+    for dependency_map in (
+        catalog.step_dependencies_from_catalog(),
+        catalog.runtime_step_dependencies_from_catalog(),
+    ):
+        assert all(
+            set(projection) == {"depends_on"} for projection in dependency_map.values()
+        )
 
 
 def test_catalog_key_matching_uses_native_static_metadata_and_policy_families():

@@ -11,19 +11,12 @@ from types import SimpleNamespace
 import pytest
 from consist import Artifact, BindingResult
 
-from pilates.workflows.artifact_keys import LINKSTATS, ZARR_SKIMS
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage
-from pilates.workflows.resume import (
-    HistoricalOutputRequest,
-    RestoreExecutionResult,
-    ResumeDecision,
-    ResumeDisposition,
-)
 from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
-    _emit_beam_restart_recovery_readiness_diagnostic,
     _maybe_fail_after_beam_run_for_canary,
 )
 
@@ -473,65 +466,6 @@ def test_rebound_checkpoint_requires_normal_resolver_identity_and_destination(tm
                 artifact_hash="different-hash", resolved_destination=destination
             ),
         )
-
-
-def test_beam_restart_recovery_readiness_diagnostic_uses_existing_restore_result(
-    monkeypatch, tmp_path
-):
-    from pilates.workflows.stages import supply_demand_beam as beam_stage
-
-    run_id = "current-run__beam_run"
-    state = SimpleNamespace(
-        is_restart_run=True,
-        year=2019,
-        forecast_year=2021,
-        current_year=2019,
-    )
-    decision = ResumeDecision(
-        step_name="beam_run",
-        disposition=ResumeDisposition.RESTORE,
-        reason="completed_match",
-        semantic_target={"run_scope": "current-run", "status": "completed"},
-        source_run_id=run_id,
-        outputs=(
-            HistoricalOutputRequest("events_parquet_2021_0", tmp_path / "events", True),
-            HistoricalOutputRequest(LINKSTATS, tmp_path / "linkstats", True),
-        ),
-        rerun_forbidden=True,
-    )
-    execution = RestoreExecutionResult(
-        decision=decision,
-        hydration_result=None,
-        projected_outputs=object(),
-        published_role_keys=(LINKSTATS,),
-        failure_category=None,
-        failed_keys=(),
-    )
-    events_emitted = []
-    monkeypatch.setattr(
-        beam_stage,
-        "_emit_artifact_lifecycle_event",
-        lambda event_type, **fields: events_emitted.append((event_type, fields)),
-    )
-
-    _emit_beam_restart_recovery_readiness_diagnostic(
-        state=state,
-        decision=decision,
-        execution=execution,
-        iteration=0,
-    )
-
-    assert events_emitted
-    event_type, fields = events_emitted[0]
-    assert event_type == "beam_restart_recovery_readiness"
-    assert fields["matchable"] is True
-    assert fields["matched_completed_run_id"] == run_id
-    assert fields["matched_run_id"] == run_id
-    assert fields["required_restored_inputs"] == ["events_parquet_2021_0", LINKSTATS]
-    assert fields["missing_restored_inputs"] == []
-    assert fields["missing_required_keys"] == []
-    assert fields["hydration_api_available"] is True
-    assert fields["drift_classification"] == "complete"
 
 
 def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(

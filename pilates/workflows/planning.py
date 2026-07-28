@@ -54,7 +54,6 @@ class PlannedStepRun:
     atlas_year: Optional[int] = None
     optional: bool = False
     depends_on: List[str] = field(default_factory=list)
-    upstream_step_inputs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)

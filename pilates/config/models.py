@@ -762,27 +762,19 @@ class PostprocessingConfig(BaseModel):
         }
 
 
-# =============================================================================
-# WORKFLOW CONFIGURATION
-# =============================================================================
-
-
-class WorkflowManifestConfig(BaseModel):
-    """Stage-level workflow manifest recovery policy."""
-
-    disabled_stages: List[str] = Field(
-        default_factory=list,
-        description=(
-            "Stage names whose YAML manifest recovery should be disabled. "
-            "Disabled stages use native Consist execution without writing step manifests."
-        ),
-    )
-
-
 class WorkflowConfig(BaseModel):
     """Workflow orchestration configuration."""
 
-    manifests: WorkflowManifestConfig = Field(default_factory=WorkflowManifestConfig)
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_manifest_recovery(cls, value: Any) -> Any:
+        """Reject the removed YAML workflow-recovery configuration explicitly."""
+        if isinstance(value, dict) and "manifests" in value:
+            raise ValueError(
+                "workflow.manifests has been removed; native Consist execution "
+                "does not support YAML manifest recovery."
+            )
+        return value
 
 
 # =============================================================================
