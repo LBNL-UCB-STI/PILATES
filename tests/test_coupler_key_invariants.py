@@ -100,7 +100,10 @@ def test_activitysim_omx_selection_requires_zarr_publication() -> None:
     )
 
     output_paths = activitysim.activitysim_run.output_paths(
-        settings=SimpleNamespace(run=None),
+        settings=SimpleNamespace(
+            run=None,
+            activitysim=SimpleNamespace(output_tables={"tables": []}),
+        ),
         state=SimpleNamespace(year=2030, forecast_year=2030, iteration=0),
         workspace=SimpleNamespace(
             get_asim_output_dir=lambda: "/tmp/activitysim-output"

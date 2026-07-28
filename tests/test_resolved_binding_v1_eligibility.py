@@ -208,7 +208,22 @@ def resolver_environment(
             region_mappings={"region_to_region_id": {"test": "001"}},
         ),
         atlas=SimpleNamespace(),
-        activitysim=SimpleNamespace(),
+        activitysim=SimpleNamespace(
+            output_tables={
+                "tables": [
+                    "accessibility",
+                    "beam_plans",
+                    "disaggregate_accessibility",
+                    "households",
+                    "joint_tour_participants",
+                    "land_use",
+                    "non_mandatory_tour_destination_accessibility",
+                    "persons",
+                    "tours",
+                    "trips",
+                ]
+            }
+        ),
         beam=SimpleNamespace(config="beam.conf", full_skim=None),
         shared=SimpleNamespace(skims=SimpleNamespace(fname="final_skims.omx")),
         write_skims_to_omx=False,

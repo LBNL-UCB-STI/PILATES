@@ -40,7 +40,27 @@ from pilates.workflows.steps import (
 )
 
 
-def _settings(*, activitysim: object | None = object()) -> SimpleNamespace:
+_DEFAULT_ACTIVITYSIM = object()
+
+
+def _settings(*, activitysim: object | None = _DEFAULT_ACTIVITYSIM) -> SimpleNamespace:
+    if activitysim is _DEFAULT_ACTIVITYSIM:
+        activitysim = SimpleNamespace(
+            output_tables={
+                "tables": [
+                    "accessibility",
+                    "beam_plans",
+                    "disaggregate_accessibility",
+                    "households",
+                    "joint_tour_participants",
+                    "land_use",
+                    "non_mandatory_tour_destination_accessibility",
+                    "persons",
+                    "tours",
+                    "trips",
+                ]
+            }
+        )
     return SimpleNamespace(
         run=SimpleNamespace(
             region="test",
@@ -207,7 +227,7 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "atlas_preprocess": {
             "inputs": {USIM_DATASTORE_H5},
-            "optional": set(),
+            "optional": {FINAL_SKIMS_OMX},
             "schema_outputs": {
                 "atlas_mutable_input_dir",
                 "atlas_households_csv",
@@ -254,9 +274,9 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 ASIM_LAND_USE_IN,
                 ASIM_OMX_SKIMS,
                 ZARR_SKIMS,
-                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
             },
             "optional": {
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
                 USIM_POPULATION_SOURCE_H5,
                 USIM_DATASTORE_CURRENT_H5,
                 USIM_DATASTORE_BASE_H5,
