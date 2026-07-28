@@ -242,7 +242,10 @@ def _beam_run_native_output_paths(
         raise RuntimeError("beam_run requires a resolved forecast year.")
     iteration = int(state.iteration)
     keys_and_suffixes = {
-        LINKSTATS: ".csv.gz",
+        # BEAM emits either compressed CSV or Parquet linkstats.  Keep the
+        # durable semantic artifact format-neutral; the launch compiler names
+        # its staged copy from the actual bytes before BEAM selects a reader.
+        LINKSTATS: "",
         BEAM_PLANS_OUT: ".csv.gz",
         f"raw_od_skims_{year}_{iteration}": ".omx",
         f"raw_od_skims_zarr_{year}_{iteration}": ".zarr",
@@ -708,6 +711,19 @@ def _strict_requested_output_cache(
     return CacheOptions(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
+    )
+
+
+def _beam_linkstats_output_cache(
+    *, settings: Any, state: Any, workspace: Any
+) -> CacheOptions:
+    """Partition caches from the historical linkstats filename contract."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-requested",
+        cache_hydration_failure="miss",
+        cache_version=1,
     )
 
 
@@ -1351,7 +1367,7 @@ beam_preprocess = StepDefinition(
     project_outputs=_project_beam_preprocess_outputs,
     output_paths=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    cache_options=_beam_linkstats_output_cache,
 )
 beam_run = StepDefinition(
     name="beam_run",
@@ -1360,7 +1376,7 @@ beam_run = StepDefinition(
     project_outputs=_project_beam_run_outputs,
     output_paths=_beam_run_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    cache_options=_beam_linkstats_output_cache,
 )
 beam_postprocess = StepDefinition(
     name="beam_postprocess",

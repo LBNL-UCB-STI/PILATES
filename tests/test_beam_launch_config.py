@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import gzip
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
 from consist import Tracker
+from pilates.config.models import BeamArtifactFormatsConfig
 
 
 def _settings() -> SimpleNamespace:
@@ -20,6 +23,7 @@ def _settings() -> SimpleNamespace:
             max_plans_memory=4,
             router_directory=None,
             admission=None,
+            artifact_formats=BeamArtifactFormatsConfig(),
         ),
         shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
     )
@@ -39,6 +43,10 @@ def _write_base_config(root: Path) -> Path:
                 '  agentsim.taz.filePath = ""',
                 '  agentsim.taz.tazIdFieldName = "taz"',
                 '  exchange.scenario.folder = ${beam.inputDirectory}"/scenario"',
+                '  exchange.scenario.fileFormat = "csv"',
+                '  router.skim.activity-sim-skimmer.fileOutputFormat = "omx"',
+                '  outputs.events.fileOutputFormats = "csv.gz"',
+                '  physsim.linkStatsOutputFileType = "csv.gz"',
                 '  routing.r5.directory = ${beam.inputDirectory}"/r5/network"',
                 '  physsim.inputNetworkFilePath = ""',
                 "}",
@@ -68,6 +76,10 @@ def _write_shared_config_tree(root: Path) -> Path:
                 '  agentsim.taz.filePath = ""',
                 '  agentsim.taz.tazIdFieldName = "taz"',
                 '  exchange.scenario.folder = ${beam.inputDirectory}"/scenario"',
+                '  exchange.scenario.fileFormat = "csv"',
+                '  router.skim.activity-sim-skimmer.fileOutputFormat = "omx"',
+                '  outputs.events.fileOutputFormats = "csv.gz"',
+                '  physsim.linkStatsOutputFileType = "csv.gz"',
                 '  routing.r5.directory = ${beam.inputDirectory}"/r5/network"',
                 '  physsim.inputNetworkFilePath = ""',
                 "}",
@@ -184,8 +196,11 @@ def test_build_beam_launch_config_rebinds_preprocess_outputs_without_mutating_so
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(key, encoding="utf-8")
         prepared[key] = path
+    # A prior native run before the output-layout migration may have written
+    # Parquet bytes under the historical ``.csv.gz`` destination. The launch
+    # compiler must recover the reader-compatible filename from the bytes.
     warmstart = prepared_root / "warmstart.csv.gz"
-    warmstart.write_text("warmstart", encoding="utf-8")
+    warmstart.write_bytes(b"PAR1simulated-parquet-linkstats")
     prepared["linkstats_warmstart"] = warmstart
     tracker = Tracker(
         run_dir=tmp_path / "runs",
@@ -223,7 +238,129 @@ def test_build_beam_launch_config_rebinds_preprocess_outputs_without_mutating_so
         launch_config.primary_config,
         key="beam.warmStart.initialLinkstatsFilePath",
         env_overrides=env,
-    ) == str(launch_config.root / ".pilates" / "warmstarts" / "warmstart.csv.gz")
+    ) == str(launch_config.root / ".pilates" / "warmstarts" / "warmstart.parquet")
+    assert (
+        launch_config.root / ".pilates" / "warmstarts" / "warmstart.parquet"
+    ).read_bytes() == warmstart.read_bytes()
+
+
+def test_build_beam_launch_config_applies_default_artifact_format_policy(
+    tmp_path: Path, caplog
+) -> None:
+    from pilates.beam.config_hocon import resolve_beam_config_value
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="pilates.beam.launch_config"):
+        launch_config = build_beam_launch_config(
+            settings=settings,
+            source_root=source_root,
+            output_dir=tmp_path / "launch-config",
+            identity=tracker.identity,
+            prepared_inputs={},
+        )
+
+    expected = {
+        "beam.router.skim.activity-sim-skimmer.fileOutputFormat": "zarr",
+        "beam.exchange.scenario.fileFormat": "parquet",
+        "beam.outputs.events.fileOutputFormats": "parquet",
+        "beam.physsim.linkStatsOutputFileType": "parquet",
+    }
+    actual = {
+        key: resolve_beam_config_value(
+            launch_config.primary_config,
+            key=key,
+            env_overrides={},
+        )
+        for key in expected
+    }
+
+    assert actual == expected
+    assert (
+        "PILATES default BEAM artifact-format policy overrides source config"
+        in caplog.text
+    )
+
+
+def test_build_beam_launch_config_keeps_gzip_warmstart_with_parquet_output_policy(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import resolve_beam_config_value
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    warmstart = tmp_path / "preprocess-cache" / "linkstats.csv.gz"
+    warmstart.parent.mkdir(parents=True)
+    warmstart.write_bytes(gzip.compress(b"legacy linkstats"))
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={"linkstats_warmstart": warmstart},
+    )
+
+    assert (
+        resolve_beam_config_value(
+            launch_config.primary_config,
+            key="beam.physsim.linkStatsOutputFileType",
+            env_overrides={},
+        )
+        == "parquet"
+    )
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.warmStart.initialLinkstatsFilePath",
+        env_overrides={},
+    ) == str(launch_config.root / ".pilates" / "warmstarts" / "linkstats.csv.gz")
+    assert (
+        launch_config.root / ".pilates" / "warmstarts" / "linkstats.csv.gz"
+    ).read_bytes() == warmstart.read_bytes()
+
+
+def test_build_beam_launch_config_keeps_non_policy_overrides_strict(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    primary = _write_base_config(source_root)
+    primary.write_text(
+        primary.read_text(encoding="utf-8")
+        .replace('  outputs.baseOutputDirectory = "/app/output"\n', "")
+        .replace('  physsim.linkStatsOutputFileType = "csv.gz"\n', ""),
+        encoding="utf-8",
+    )
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    with pytest.raises(KeyError, match="beam.outputs.baseOutputDirectory"):
+        build_beam_launch_config(
+            settings=settings,
+            source_root=source_root,
+            output_dir=tmp_path / "launch-config",
+            identity=tracker.identity,
+            prepared_inputs={},
+        )
 
 
 def test_build_beam_launch_config_stages_shared_includes_and_canonicalizes_output(
@@ -294,3 +431,19 @@ def test_beam_run_adapter_uses_the_compiled_launch_tree(tmp_path: Path) -> None:
     assert adapter is not None
     assert adapter.primary_config == launch_primary
     assert adapter.root_dirs == [launch_root]
+    assert (
+        adapter.reference_policies["beam.physsim.inputNetworkFilePath"].identity_policy
+        == "output_or_runtime_ignored"
+    )
+    assert (
+        adapter.reference_policies[
+            "matsim.modules.network.inputNetworkFile"
+        ].identity_policy
+        == "output_or_runtime_ignored"
+    )
+    assert (
+        adapter.reference_policies[
+            "beam.agentsim.agents.rideHail.managers[0].initialization.filePath"
+        ].identity_policy
+        == "ignored"
+    )

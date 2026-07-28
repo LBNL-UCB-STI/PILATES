@@ -57,6 +57,13 @@ The config and test suite pin the active Seattle and SF Bay zone sources, CRS va
 - `atlas` describes the vehicle-ownership container paths and command template.
 - `activitysim` describes the demand model folders, sampling, replanning, and output tables.
 - `beam` describes the travel-model config, output directories, memory, and warmstart inputs.
+  Its optional `artifact_formats` policy is applied only to the derived,
+  canonical BEAM launch tree. Defaults are `activitysim_skims: zarr`,
+  `exchange: parquet`, `events: parquet`, and `linkstats: parquet`.
+  Set a legacy value explicitly only when the corresponding BEAM input or
+  downstream consumer requires it. PILATES still derives an OMX skim artifact
+  for UrbanSim or ATLAS when those models require one; OMX is not the primary
+  ActivitySim interchange format.
 - `postprocessing` describes downstream validation and output folders.
 
 ## Consist-Relevant Fields
