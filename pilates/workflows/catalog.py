@@ -14,65 +14,13 @@ from typing import (
     Sequence,
     Set,
     Tuple,
-    Type,
+    TYPE_CHECKING,
 )
 
-from pilates.activitysim.outputs import (
-    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-    ActivitySimPostprocessOutputs,
-    ActivitySimPreprocessOutputs,
-    ActivitySimRunOutputs,
-)
-from pilates.atlas.outputs import (
-    AtlasPostprocessOutputs,
-    AtlasPreprocessOutputs,
-    AtlasRunOutputs,
-)
-from pilates.atlas.inputs import atlas_static_input_keys
-from pilates.atlas.static_inputs import (
-    ATLAS_STATIC_INPUTS_BY_SCENARIO,
-    ATLAS_STATIC_INPUTS_COMMON,
-)
-from pilates.beam.outputs import (
-    BeamFullSkimOutputs,
-    BeamPostprocessOutputs,
-    BeamPreprocessOutputs,
-    BeamRunOutputs,
-)
-from pilates.urbansim.outputs import (
-    UrbanSimPostprocessOutputs,
-    UrbanSimPreprocessOutputs,
-    UrbanSimRunOutputs,
-)
-from pilates.activitysim.outputs import (
-    ASIM_HOUSEHOLDS_IN,
-    ASIM_LAND_USE_IN,
-    ASIM_OMX_SKIMS,
-    ASIM_PERSONS_IN,
-)
-from pilates.workflows.artifact_keys import (
-    BEAM_CONFIG_FILE,
-    BEAM_EXPERIENCED_PLANS_XML,
-    BEAM_FULL_SKIMS,
-    BEAM_HOUSEHOLDS_IN,
-    BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-    BEAM_OUTPUT_PLANS_XML,
-    BEAM_PERSONS_IN,
-    BEAM_PLANS_IN,
-    FINAL_SKIMS_OMX,
-    ATLAS_VEHICLES2_OUTPUT,
-    LINKSTATS_WARMSTART,
-    OMX_SKIMS,
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_DATASTORE_H5,
-    USIM_FORECAST_OUTPUT,
-    USIM_POPULATION_SOURCE_H5,
-    ZARR_SKIMS,
-)
-from pilates.generic.records import sanitize_artifact_key
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
+
+if TYPE_CHECKING:
+    from pilates.workflows.step_definition import StepDefinition
 
 
 @dataclass(frozen=True)
@@ -91,39 +39,23 @@ class WorkflowStepSpec:
     compatibility property is provided below, but the catalog no longer stores
     a second parallel identifier.
 
-    Contract fields are intentionally split by meaning:
-    - ``input_keys`` and ``optional_input_keys`` describe artifact keys
-      consumed by the step during execution, including keys satisfied through
-      holder-fed upstream outputs when those are part of the artifact-level
-      contract.
-    - ``upstream_step_inputs`` describes semantic upstream step dependencies.
-    - ``holder_inputs`` describes the current in-process wiring mechanism.
-    - ``output_keys`` describes stable workflow-facing outputs.
-    - ``optional_output_keys`` describes conditional outputs that may be absent.
-    - ``dynamic_input_families`` documents open-ended inbound namespaces.
-    - ``dynamic_output_families`` documents open-ended output namespaces.
-
-    This metadata is for static inspection/planning only. Runtime execution
-    still uses the step implementations and holder/coupler wiring.
+    The catalog owns PILATES policy only: placement, order, enablement,
+    dependencies, optionality, provenance policy, and open-ended semantic key
+    families. Static Consist input/output/schema metadata belongs to the
+    committed native ``StepDefinition`` and is projected below rather than
+    duplicated here.
     """
 
     step_name: str
     phase: str
     stage_name: str
     order: int
-    outputs_class: Optional[Type[Any]] = None
-    input_keys: Tuple[str, ...] = ()
-    optional_input_keys: Tuple[str, ...] = ()
-    output_keys: Tuple[str, ...] = ()
-    optional_output_keys: Tuple[str, ...] = ()
     dynamic_input_families: Tuple[str, ...] = ()
     dynamic_output_families: Tuple[str, ...] = ()
     optional: bool = False
     tracked: bool = True
     include_in_schema: bool = True
     depends_on: Tuple[str, ...] = ()
-    holder_inputs: Tuple[str, ...] = ()
-    upstream_step_inputs: Tuple[str, ...] = ()
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
@@ -138,6 +70,57 @@ class WorkflowStepSpec:
         ``model_name`` is structurally the same value.
         """
         return self.step_name
+
+    @property
+    def definition(self) -> "StepDefinition[Any]":
+        """Return this catalog policy entry's committed native definition.
+
+        ``steps.shared`` still imports catalog dependency policy while the
+        native definition package initializes. Importing the package here,
+        after that initialization boundary, avoids an import cycle without a
+        second registry or any late registration: ``STEP_DEFINITIONS`` is the
+        committed definition registry established by the native step package.
+        """
+        from pilates.workflows.steps import STEP_DEFINITIONS
+
+        return STEP_DEFINITIONS[self.step_name]
+
+    @property
+    def _consist_metadata(self) -> Any:
+        return self.definition.function.__consist_step__
+
+    @property
+    def input_keys(self) -> Tuple[str, ...]:
+        inputs = self._consist_metadata.inputs or ()
+        if isinstance(inputs, Mapping):
+            return tuple(inputs)
+        return tuple(inputs)
+
+    @property
+    def optional_input_keys(self) -> Tuple[str, ...]:
+        return tuple(self._consist_metadata.optional_input_keys or ())
+
+    @property
+    def schema_output_keys(self) -> Tuple[str, ...]:
+        return tuple(self._consist_metadata.schema_outputs or ())
+
+    @property
+    def output_keys(self) -> Tuple[str, ...]:
+        return self.schema_output_keys
+
+    @property
+    def optional_output_keys(self) -> Tuple[str, ...]:
+        return ()
+
+    @property
+    def holder_inputs(self) -> Tuple[str, ...]:
+        """Legacy holder wiring mirrors the sole dependency relation until deletion."""
+        return self.depends_on
+
+    @property
+    def upstream_step_inputs(self) -> Tuple[str, ...]:
+        """Legacy semantic handoff mirrors the sole dependency relation until deletion."""
+        return self.depends_on
 
 
 @dataclass(frozen=True)
@@ -181,109 +164,13 @@ _ACTIVITYSIM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="activitysim")
 _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
 
 
-def _ordered_unique(*groups: Sequence[str]) -> Tuple[str, ...]:
-    return tuple(dict.fromkeys(key for group in groups for key in group))
-
-
-_ACTIVITYSIM_RUN_OUTPUT_KEYS = ActivitySimRunOutputs.declared_output_keys()
-_BEAM_RUN_OUTPUT_KEYS = BeamRunOutputs.declared_output_keys()
-_URBANSIM_PREPROCESS_PREPARED_KEYS = (
-    USIM_DATASTORE_H5,
-    "omx_skims",
-    "hh_size",
-    "income_rates",
-    "relmap",
-    "geoid_to_zone",
-    "schools",
-    "school_districts",
-)
-_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS = (
-    "atlas_households_csv",
-    "atlas_blocks_csv",
-    "atlas_persons_csv",
-    "atlas_residential_csv",
-    "atlas_jobs_csv",
-)
-_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS = (
-    "atlas_grave_csv",
-    "beam_skims_input",
-    "atlas_rdata_accessibility",
-    "atlas_accessibility_csv",
-)
-
-
-def _atlas_static_input_catalog_keys() -> Tuple[str, ...]:
-    relpaths = [
-        *ATLAS_STATIC_INPUTS_COMMON,
-        *(
-            relpath
-            for relpaths in ATLAS_STATIC_INPUTS_BY_SCENARIO.values()
-            for relpath in relpaths
-        ),
-    ]
-    keys = []
-    for relpath in relpaths:
-        rel_no_ext = relpath.rsplit(".", 1)[0]
-        raw_key = sanitize_artifact_key(rel_no_ext.replace("\\", "/")) or rel_no_ext
-        key = canonical_artifact_key_from_raw_key(raw_key)
-        keys.append(key)
-    return tuple(dict.fromkeys(keys))
-
-
-_ATLAS_STATIC_INPUT_KEYS = _atlas_static_input_catalog_keys()
-_ACTIVITYSIM_BEAM_HANDOFF_INPUT_KEYS = tuple(
-    key
-    for key in _ACTIVITYSIM_RUN_OUTPUT_KEYS
-    if key in {"beam_plans_asim_out", "households_asim_out", "persons_asim_out"}
-)
-_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
-    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-    (USIM_DATASTORE_H5,),
-)
-_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS = (
-    "asim_input_households_csv_archived",
-    "asim_input_persons_csv_archived",
-    "asim_input_land_use_csv_archived",
-    "asim_input_skims_omx_archived",
-    "asim_input_skims_zarr_archived",
-)
-_BEAM_RUN_ARCHIVE_OUTPUT_KEYS = (
-    "beam_input_plans_archived",
-    "beam_input_households_archived",
-    "beam_input_persons_archived",
-    "beam_input_config_archived",
-    "beam_input_config_references_archived",
-    "beam_input_vehicles_archived",
-    "beam_input_linkstats_warmstart_archived",
-    "beam_input_plans_warmstart_archived",
-    "beam_input_experienced_plans_warmstart_archived",
-)
-_BEAM_POSTPROCESS_OUTPUT_KEYS = _ordered_unique(
-    _BEAM_RUN_OUTPUT_KEYS,
-    (
-        BEAM_OUTPUT_PLANS_XML,
-        BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-        BEAM_EXPERIENCED_PLANS_XML,
-        ZARR_SKIMS,
-        FINAL_SKIMS_OMX,
-    ),
-)
-
-
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     WorkflowStepSpec(
         step_name="urbansim_preprocess",
         phase="preprocess",
         stage_name="land_use",
         order=10,
-        outputs_class=UrbanSimPreprocessOutputs,
-        input_keys=(USIM_DATASTORE_BASE_H5,),
-        optional_input_keys=(USIM_DATASTORE_CURRENT_H5, FINAL_SKIMS_OMX, OMX_SKIMS),
-        output_keys=(*_URBANSIM_PREPROCESS_PREPARED_KEYS,),
-        optional_output_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
         depends_on=(),
-        holder_inputs=(),
-        upstream_step_inputs=(),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
         provenance=_URBANSIM_PROVENANCE,
@@ -293,14 +180,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="run",
         stage_name="land_use",
         order=20,
-        outputs_class=UrbanSimRunOutputs,
-        input_keys=_URBANSIM_PREPROCESS_PREPARED_KEYS,
-        optional_input_keys=("usim_skims_input_updated", USIM_DATASTORE_BASE_H5),
-        output_keys=(USIM_DATASTORE_H5,),
-        optional_output_keys=(USIM_FORECAST_OUTPUT,),
         depends_on=("urbansim_preprocess",),
-        holder_inputs=("urbansim_preprocess",),
-        upstream_step_inputs=("urbansim_preprocess",),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
         provenance=_URBANSIM_PROVENANCE,
@@ -310,17 +190,11 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="land_use",
         order=30,
-        outputs_class=UrbanSimPostprocessOutputs,
-        input_keys=(USIM_DATASTORE_H5,),
-        optional_input_keys=(USIM_DATASTORE_BASE_H5,),
-        output_keys=(USIM_DATASTORE_H5,),
         dynamic_output_families=(
             "usim_input_archive_{year}",
             "usim_input_merged_{year}",
         ),
         depends_on=("urbansim_run",),
-        holder_inputs=("urbansim_run",),
-        upstream_step_inputs=("urbansim_run",),
         enabled_flag_attr="land_use_enabled",
         enabled_model_attr="land_use",
         provenance=_URBANSIM_PROVENANCE,
@@ -330,17 +204,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="preprocess",
         stage_name="vehicle_ownership_model",
         order=40,
-        outputs_class=AtlasPreprocessOutputs,
-        input_keys=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
-        optional_input_keys=(FINAL_SKIMS_OMX, OMX_SKIMS),
-        output_keys=_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS,
-        optional_output_keys=_ordered_unique(
-            _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
-            _ATLAS_STATIC_INPUT_KEYS,
-        ),
         depends_on=(),
-        holder_inputs=(),
-        upstream_step_inputs=(),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
         provenance=_ATLAS_PROVENANCE,
@@ -350,21 +214,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="run",
         stage_name="vehicle_ownership_model",
         order=50,
-        outputs_class=AtlasRunOutputs,
-        input_keys=(
-            USIM_DATASTORE_CURRENT_H5,
-            USIM_DATASTORE_BASE_H5,
-            *_ATLAS_PREPROCESS_CORE_OUTPUT_KEYS,
-        ),
-        optional_input_keys=_ordered_unique(
-            _ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS,
-            _ATLAS_STATIC_INPUT_KEYS,
-        ),
-        output_keys=(),
         dynamic_output_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_preprocess",),
-        holder_inputs=("atlas_preprocess",),
-        upstream_step_inputs=("atlas_preprocess",),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
         provenance=_ATLAS_PROVENANCE,
@@ -374,16 +225,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="vehicle_ownership_model",
         order=60,
-        outputs_class=AtlasPostprocessOutputs,
-        input_keys=(USIM_DATASTORE_CURRENT_H5,),
-        output_keys=(
-            USIM_POPULATION_SOURCE_H5,
-            ATLAS_VEHICLES2_OUTPUT,
-        ),
         dynamic_input_families=("householdv_{year}", "vehicles_{year}"),
         depends_on=("atlas_run",),
-        holder_inputs=("atlas_run",),
-        upstream_step_inputs=("atlas_run",),
         enabled_flag_attr="vehicle_ownership_model_enabled",
         enabled_model_attr="vehicle_ownership",
         provenance=_ATLAS_PROVENANCE,
@@ -393,18 +236,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="preprocess",
         stage_name="activity_demand",
         order=70,
-        outputs_class=ActivitySimPreprocessOutputs,
-        input_keys=(USIM_POPULATION_SOURCE_H5,),
-        optional_input_keys=(FINAL_SKIMS_OMX,),
-        output_keys=(
-            ASIM_LAND_USE_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_PERSONS_IN,
-            ASIM_OMX_SKIMS,
-        ),
         depends_on=(),
-        holder_inputs=(),
-        upstream_step_inputs=(),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -414,18 +246,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="run",
         stage_name="activity_demand",
         order=90,
-        outputs_class=ActivitySimRunOutputs,
-        input_keys=(
-            ASIM_LAND_USE_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_PERSONS_IN,
-            ZARR_SKIMS,
-        ),
-        output_keys=(*ASIM_REQUIRED_RUN_OUTPUT_KEYS,),
-        optional_output_keys=(*ASIM_OPTIONAL_RUN_OUTPUT_KEYS, ZARR_SKIMS),
         depends_on=("activitysim_preprocess",),
-        holder_inputs=("activitysim_preprocess",),
-        upstream_step_inputs=("activitysim_preprocess",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -435,29 +256,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="activity_demand",
         order=100,
-        outputs_class=ActivitySimPostprocessOutputs,
-        input_keys=(
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_PERSONS_IN,
-            ASIM_LAND_USE_IN,
-            ASIM_OMX_SKIMS,
-            ZARR_SKIMS,
-            *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
-        ),
-        output_keys=(*_ACTIVITYSIM_POSTPROCESS_OUTPUT_KEYS,),
-        optional_input_keys=(
-            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-            USIM_POPULATION_SOURCE_H5,
-            USIM_DATASTORE_CURRENT_H5,
-            USIM_DATASTORE_BASE_H5,
-        ),
-        optional_output_keys=(
-            *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
-            *_ACTIVITYSIM_POSTPROCESS_ARCHIVE_OUTPUT_KEYS,
-        ),
         depends_on=("activitysim_run",),
-        holder_inputs=("activitysim_run",),
-        upstream_step_inputs=("activitysim_run",),
         enabled_flag_attr="activity_demand_enabled",
         enabled_model_attr="activity_demand",
         provenance=_ACTIVITYSIM_PROVENANCE,
@@ -467,22 +266,7 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="preprocess",
         stage_name="traffic_assignment",
         order=110,
-        outputs_class=BeamPreprocessOutputs,
-        input_keys=(
-            BEAM_CONFIG_FILE,
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        ),
-        optional_input_keys=(LINKSTATS_WARMSTART, ATLAS_VEHICLES2_OUTPUT),
-        output_keys=(*BeamPreprocessOutputs.required_output_keys(),),
-        optional_output_keys=(
-            "vehicles_beam_in",
-            LINKSTATS_WARMSTART,
-        ),
         depends_on=("activitysim_postprocess",),
-        holder_inputs=("activitysim_postprocess",),
-        upstream_step_inputs=("activitysim_postprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -492,22 +276,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="run",
         stage_name="traffic_assignment",
         order=120,
-        outputs_class=BeamRunOutputs,
-        input_keys=(
-            BEAM_CONFIG_FILE,
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        ),
-        optional_input_keys=(LINKSTATS_WARMSTART,),
-        output_keys=(*_BEAM_RUN_OUTPUT_KEYS,),
-        optional_output_keys=(
-            LINKSTATS_WARMSTART,
-            BEAM_OUTPUT_PLANS_XML,
-            BEAM_OUTPUT_EXPERIENCED_PLANS_XML,
-            BEAM_EXPERIENCED_PLANS_XML,
-            *_BEAM_RUN_ARCHIVE_OUTPUT_KEYS,
-        ),
         dynamic_output_families=(
             "linkstats_{year}_{iteration}",
             "linkstats_parquet_{year}_{iteration}",
@@ -522,8 +290,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             "beam_output_*",
         ),
         depends_on=("beam_preprocess",),
-        holder_inputs=("beam_preprocess",),
-        upstream_step_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -533,11 +299,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="traffic_assignment",
         order=130,
-        outputs_class=BeamPostprocessOutputs,
-        input_keys=(),
-        optional_input_keys=(ZARR_SKIMS,),
-        output_keys=(ZARR_SKIMS,),
-        optional_output_keys=(FINAL_SKIMS_OMX,),
         dynamic_input_families=(
             "events_parquet_{year}_{iteration}",
             "raw_od_skims_{year}_{iteration}",
@@ -548,8 +309,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
             "path_traversal_links_{year}_{iteration}",
         ),
         depends_on=("beam_run",),
-        holder_inputs=("beam_run",),
-        upstream_step_inputs=("beam_run",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -559,18 +318,8 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="run",
         stage_name="traffic_assignment",
         order=140,
-        outputs_class=BeamFullSkimOutputs,
-        input_keys=(
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-            LINKSTATS_WARMSTART,
-        ),
-        output_keys=(BEAM_FULL_SKIMS,),
         optional=True,
         depends_on=("beam_preprocess",),
-        holder_inputs=("beam_preprocess",),
-        upstream_step_inputs=("beam_preprocess",),
         enabled_flag_attr="traffic_assignment_enabled",
         enabled_model_attr="travel",
         provenance=_BEAM_PROVENANCE,
@@ -580,7 +329,6 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         phase="postprocess",
         stage_name="postprocessing",
         order=150,
-        outputs_class=None,
         tracked=False,
         include_in_schema=False,
     ),
@@ -607,40 +355,15 @@ def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepS
     return _STEP_SPECS_BY_STEP_NAME.get(model_name)
 
 
-def _specialize_contract_for_settings(
-    spec: WorkflowStepSpec,
-    contract: Dict[str, Any],
-    *,
-    settings: Optional[Any],
-) -> Dict[str, Any]:
-    if settings is None:
-        return contract
-
-    if spec.step_name not in {"atlas_preprocess", "atlas_run"}:
-        return contract
-
-    static_keys = list(atlas_static_input_keys(settings))
-    if spec.step_name == "atlas_preprocess":
-        contract["optional_output_keys"] = list(
-            _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
-        )
-        return contract
-
-    contract["optional_input_keys"] = list(
-        _ordered_unique(_ATLAS_PREPROCESS_OPTIONAL_OUTPUT_KEYS, tuple(static_keys))
-    )
-    return contract
-
-
 def workflow_step_contracts_by_name(
     settings: Optional[Any] = None,
 ) -> Dict[str, Dict[str, Any]]:
     """
     Return a plain serializable catalog view for static inspection tools.
 
-    When ``settings`` are provided, contracts may be narrowed to match
-    configuration-dependent workflow behavior such as ATLAS scenario-specific
-    static inputs.
+    ``settings`` remains accepted for callers that project this view alongside
+    runtime policy. Static inputs and schema outputs themselves are read from
+    the native decorated Consist contract, not specialized from a catalog copy.
     """
     contracts: Dict[str, Dict[str, Any]] = {}
     for spec in WORKFLOW_STEP_SPECS:
@@ -651,18 +374,14 @@ def workflow_step_contracts_by_name(
             "depends_on": list(spec.depends_on),
             "input_keys": list(spec.input_keys),
             "optional_input_keys": list(spec.optional_input_keys),
-            "upstream_step_inputs": list(spec.upstream_step_inputs),
             "output_keys": list(spec.output_keys),
             "optional_output_keys": list(spec.optional_output_keys),
+            "schema_outputs": list(spec.schema_output_keys),
             "dynamic_input_families": list(spec.dynamic_input_families),
             "dynamic_output_families": list(spec.dynamic_output_families),
             "optional": spec.optional,
         }
-        contracts[spec.step_name] = _specialize_contract_for_settings(
-            spec,
-            contract,
-            settings=settings,
-        )
+        contracts[spec.step_name] = contract
     return contracts
 
 
@@ -1007,17 +726,6 @@ def enabled_schema_step_models(
         ):
             enabled_models.add(spec.step_name)
     return enabled_models
-
-
-def step_outputs_classes_from_catalog() -> Dict[str, Type[Any]]:
-    outputs: Dict[str, Type[Any]] = {}
-    for spec in tracked_step_specs():
-        if spec.outputs_class is None:
-            raise RuntimeError(
-                f"Tracked step {spec.step_name!r} is missing outputs_class."
-            )
-        outputs[spec.step_name] = spec.outputs_class
-    return outputs
 
 
 def step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str]]]:

@@ -378,6 +378,8 @@ class DummyPostprocessor:
         raw_outputs: Any,
         workspace: Any,
         model_run_hash: Any = None,
+        population_source_h5_path: Any = None,
+        current_input_h5_path: Any = None,
     ) -> Any:
         return _invoke_record_builder(
             self._record_builder,
@@ -386,6 +388,8 @@ class DummyPostprocessor:
             state=self._state,
             workspace=workspace,
             raw_outputs=raw_outputs,
+            population_source_h5_path=population_source_h5_path,
+            current_input_h5_path=current_input_h5_path,
         )
 
 

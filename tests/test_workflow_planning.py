@@ -8,6 +8,8 @@ from pilates.workflows.lineage_render import (
     render_plan_mermaid,
 )
 from pilates.workflows.planning import (
+    PlannedStepRun,
+    _PlanBuilder,
     _atlas_sub_years,
     build_static_execution_plan,
     build_static_execution_plan_from_file,
@@ -40,16 +42,76 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     ]
     assert plan.step_runs[-1].step_name == "postprocessing"
 
-    run_artifacts = [
+    activitysim_run = plan.step_runs[1]
+    zarr_artifact = next(
         artifact
         for artifact in plan.artifacts
-        if artifact.producer_step_run_id == plan.step_runs[1].id
+        if artifact.instance_key == "external:y2018:i0:zarr_skims"
+    )
+    assert zarr_artifact.external is True
+    assert any(
+        edge.source == zarr_artifact.id
+        and edge.target == activitysim_run.id
+        and edge.kind == "consumes"
+        for edge in plan.edges
+    )
+    produced_zarr = [
+        artifact
+        for artifact in plan.artifacts
+        if artifact.producer_step_run_id == activitysim_run.id
+        and artifact.artifact_key == "zarr_skims"
     ]
-    assert any(artifact.artifact_key == "zarr_skims" for artifact in run_artifacts)
+    assert [artifact.instance_key for artifact in produced_zarr] == [
+        "activitysim_run:y2018:i0:zarr_skims"
+    ]
 
     json_payload = render_plan_json(plan)
     assert '"step_name": "activitysim_run"' in json_payload
     assert '"kind": "depends_on"' in json_payload
+
+
+def test_postprocessing_is_untracked_and_only_reports_its_input_contract_gap():
+    plan = build_static_execution_plan_from_file(SEATTLE_ACTIVITYSIM_BEAM)
+
+    postprocessing_step = next(
+        step for step in plan.step_runs if step.step_name == "postprocessing"
+    )
+    postprocessing_gaps = [
+        gap for gap in plan.contract_gaps if gap.step_run_id == postprocessing_step.id
+    ]
+
+    assert [gap.kind for gap in postprocessing_gaps] == ["underdeclared_inputs"]
+
+
+def test_tracked_step_with_no_outputs_still_reports_underdeclared_output_gap():
+    settings = load_config(SEATTLE_ACTIVITYSIM_BEAM)
+    builder = _PlanBuilder(
+        settings=settings,
+        surface=build_enabled_workflow_surface(settings),
+        config_path=None,
+        include_postprocessing=False,
+    )
+    step_run = PlannedStepRun(
+        id="step_test",
+        sequence=1,
+        step_name="activitysim_run",
+        stage_name="activity_demand",
+        phase="run",
+        label="activitysim_run",
+    )
+    empty_contract = {
+        "input_keys": [],
+        "optional_input_keys": [],
+        "dynamic_input_families": [],
+        "output_keys": [],
+        "optional_output_keys": [],
+        "dynamic_output_families": [],
+        "depends_on": [],
+    }
+
+    builder._add_contract_gaps(step_run, empty_contract)
+
+    assert [gap.kind for gap in builder.plan.contract_gaps] == ["underdeclared_outputs"]
 
 
 def test_static_execution_plan_activitysim_beam_run_excludes_land_use_and_atlas_steps():
@@ -227,7 +289,7 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
     assert "urbansim_preprocess" in consuming_step_names
 
 
-def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
+def test_static_execution_plan_uses_final_skims_omx_not_generic_omx_fallback():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True
     settings.vehicle_ownership_model_enabled = True
@@ -236,27 +298,30 @@ def test_static_execution_plan_exposes_default_omx_skims_fallback_artifact():
 
     plan = _build_plan(settings, include_postprocessing=False)
 
-    omx_artifacts = [
+    generic_omx_artifacts = [
         artifact
         for artifact in plan.artifacts
         if artifact.canonical_key == OMX_SKIMS and artifact.external
     ]
+    assert generic_omx_artifacts == []
 
-    assert len(omx_artifacts) == 1
-    artifact = omx_artifacts[0]
-    assert artifact.instance_key.endswith(f":{OMX_SKIMS}")
-    assert artifact.external is True
+    final_skims_artifact = next(
+        artifact
+        for artifact in plan.artifacts
+        if artifact.canonical_key == FINAL_SKIMS_OMX and artifact.external
+    )
+    assert final_skims_artifact.instance_key == f"external:{FINAL_SKIMS_OMX}"
 
     consuming_edges = [
         edge
         for edge in plan.edges
-        if edge.source == artifact.id and edge.kind == "consumes"
+        if edge.source == final_skims_artifact.id and edge.kind == "consumes"
     ]
     consuming_step_names = {
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
         for edge in consuming_edges
     }
-    assert "urbansim_preprocess" in consuming_step_names
+    assert "activitysim_preprocess" in consuming_step_names
 
 
 def test_static_execution_plan_distinguishes_usim_semantic_roles_from_path_hints():
@@ -382,7 +447,7 @@ def test_planned_artifacts_render_as_distinct_instances_for_reused_canonical_key
         if artifact.canonical_key == "zarr_skims"
     }
 
-    assert "activitysim_run:y2018:i0:zarr_skims" in zarr_instances
+    assert "external:y2018:i0:zarr_skims" in zarr_instances
     assert "beam_postprocess:y2018:i0:zarr_skims" in zarr_instances
 
 

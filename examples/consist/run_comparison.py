@@ -38,7 +38,6 @@ def build_mode_share_comparison(
     filters: Mapping[str, Any],
     mode_column: str = "trip_mode",
 ):
-
     measured_by = _unique([*group_by, compare, mode_column])
     facets = _unique([*measured_by, *filters.keys()])
     table = archive.table(table_name, facets=facets, where=dict(filters))

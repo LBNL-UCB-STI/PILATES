@@ -1,26 +1,14 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
-from pilates.workspace import Workspace
-
-from pilates.workflows.orchestration import (
-    StepRef,
-    manifest_config_for_stage,
-    run_workflow,
-)
-from pilates.workflows.steps import StepOutputsHolder, make_postprocessing_step
+from pilates.workflows.step_execution import execute_step
+from pilates.workflows.steps import postprocessing
 
 logger = logging.getLogger(__name__)
-
-
-def _build_postprocessing_manifest_path(workspace: Workspace, year: int) -> Path:
-    return Path(workspace.full_path) / ".workflow" / f"postprocessing_year_{year}.yaml"
 
 
 def run_postprocessing_stage(
@@ -58,34 +46,16 @@ def run_postprocessing_stage(
     workspace = context.workspace
     logger.info("[postprocessing] year=%s run_id=%s", year, cr.current_run_id())
 
-    outputs_holder = StepOutputsHolder()
-    manifest_config = manifest_config_for_stage(
-        stage_name="postprocessing",
-        settings=settings,
-        manifest_path=_build_postprocessing_manifest_path(
-            workspace=workspace, year=year
-        ),
-    )
-    postprocess_steps = [
-        StepRef(
-            name="postprocessing",
-            step_func=make_postprocessing_step(),
-            year=year,
-            iteration=getattr(state, "iteration", None),
-            phase="postprocess",
-        )
-    ]
-    run_workflow(
-        stage_name="postprocessing",
-        steps=postprocess_steps,
+    _, outputs = execute_step(
         scenario=scenario,
+        definition=postprocessing,
         state=state,
         settings=settings,
         workspace=workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=str(year),
-        iteration=getattr(state, "iteration", 0),
-        manifest_config=manifest_config,
+        stage="postprocessing",
+        year=year,
+        iteration=getattr(state, "iteration", None),
+        phase="postprocess",
     )
+    del outputs
     flush_archive_queue(timeout=300, fail_on_timeout=False)

@@ -25,9 +25,18 @@ The workspace owns model-facing mutable directories such as:
 - BEAM mutable data and output
 - ATLAS mutable input and output directories
 
-Those paths are resolved from the current settings, not from ambient `cwd` assumptions. The ActivitySim and BEAM mutable directories can also be overridden explicitly when restart or replay needs to point at a specific path.
+Those paths are resolved from the current settings, not from ambient `cwd`
+assumptions. The ActivitySim and BEAM mutable directories can also be overridden
+explicitly for controlled operator setup; a restart does not use a workspace
+directory as proof of a completed step.
 
-The archive root is the durable run directory that PILATES uses for the archived Consist store and for replay-aware recovery. On HPC this is the shared-scratch side selected by `run.output_directory`, not the node-local mutable workspace. When the run uses a local Consist DB, `resolve_consist_db_paths()` places the local DB under `workspace/.consist/<filename>` and mirrors the archive copy under `archive/.consist/<filename>`. If local Consist DB tracking is disabled, PILATES uses the configured shared DB path instead.
+The archive root is the durable run directory that PILATES uses for the archived
+Consist store and artifact materialization. On HPC this is the shared-scratch
+side selected by `run.output_directory`, not the node-local mutable workspace.
+When the run uses a local Consist DB, `resolve_consist_db_paths()` places the
+local DB under `workspace/.consist/<filename>` and mirrors the archive copy
+under `archive/.consist/<filename>`. If local Consist DB tracking is disabled,
+PILATES uses the configured shared DB path instead.
 
 Cold recovery roots configured through `run.recovery_archive_roots` are not active execution roots. They are post-run promotion destinations that receive a copy of the full archive run directory plus an updated run-local Consist DB whose artifacts record those promoted locations as `recovery_roots`.
 

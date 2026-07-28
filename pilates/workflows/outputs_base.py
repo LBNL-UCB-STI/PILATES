@@ -71,7 +71,7 @@ class ValidationContext:
     step_name : str, optional
         Canonical step name (for example ``activitysim_preprocess``).
     upstream_outputs : mapping
-        Snapshot view of upstream ``StepOutputsHolder`` entries.
+        Optional typed upstream-output context for semantic validation.
     """
 
     settings: Optional["PilatesConfig"] = None

@@ -77,7 +77,7 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
   - steps: `pilates/workflows/steps/urbansim_atlas.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/urbansim/inputs.py`
+  - input resolver policy: `pilates/workflows/binding.py`, `pilates/urbansim/inputs.py`
   - stage: `pilates/workflows/stages/land_use.py`
 
 ## ATLAS
@@ -122,7 +122,9 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 ### If adjacent models are disabled
 
 - If land use is disabled, ATLAS must start from already available UrbanSim datastore handles.
-- If ActivitySim is disabled, the population-source handoff may not be consumed immediately, but it remains the public vehicle-ownership boundary for downstream inspection and replay.
+- If ActivitySim is disabled, the population-source handoff may not be consumed
+  immediately, but it remains the public vehicle-ownership boundary for
+  downstream inspection.
 - The ATLAS skim boundary also has two sources:
   - default `OMX_SKIMS` for the initial/bootstrap case
   - `FINAL_SKIMS_OMX` when a later BEAM iteration has already produced an updated OMX skim file
@@ -133,7 +135,7 @@ ATLAS refines the current regional state with vehicle-ownership outputs and choo
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
   - steps: `pilates/workflows/steps/urbansim_atlas.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/atlas/inputs.py`
+  - input resolver policy: `pilates/workflows/binding.py`, `pilates/atlas/inputs.py`
   - stage: `pilates/workflows/stages/vehicle_ownership.py`
 
 ## ActivitySim
@@ -178,7 +180,7 @@ ActivitySim converts the current regional state into staged demand-model inputs 
 
 - BEAM preprocess uses the plans/households/persons handoff
 - later land-use / ATLAS stages can consume the updated UrbanSim datastore when writeback is enabled
-- archive/replay logic uses the archived ActivitySim inputs and outputs
+- archive inspection uses the persisted ActivitySim input and output links
 
 ### Restart and archive-relevant artifacts
 
@@ -214,7 +216,7 @@ import-only change.
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
   - steps: `pilates/workflows/steps/activitysim.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/activitysim/inputs.py`
+  - input resolver policy: `pilates/workflows/binding.py`, `pilates/activitysim/inputs.py`
   - stage: `pilates/workflows/stages/supply_demand_activity.py`
 
 ## BEAM
@@ -256,7 +258,8 @@ BEAM turns demand-side plans and traveler inputs into traffic-assignment outputs
 - later supply-demand iterations can reuse warm-start linkstats and plan outputs
 - later years can reuse BEAM-side restart artifacts
 - UrbanSim or downstream analysis can consume `FINAL_SKIMS_OMX`
-- archive/replay tooling can materialize BEAM input and warm-start families back into the workspace
+- Consist can materialize archived BEAM input and warm-start artifacts when a
+  declared native boundary requires them
 
 ### Restart and archive-relevant artifacts
 
@@ -288,7 +291,7 @@ BEAM turns demand-side plans and traveler inputs into traffic-assignment outputs
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
   - steps: `pilates/workflows/steps/beam.py`
-  - binding / input policy: `pilates/workflows/binding.py`, `pilates/beam/preprocessor.py`
+  - input resolver policy: `pilates/workflows/binding.py`, `pilates/beam/preprocessor.py`
   - stage: `pilates/workflows/stages/supply_demand_beam.py`
 
 ## Recommended Reading Path

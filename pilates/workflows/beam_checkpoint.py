@@ -287,13 +287,17 @@ def validate_pinned_closure_snapshot(
             raise RuntimeError(
                 f"Pinned closure producer run is not completed: {run_id}."
             )
-        expected_run_year = scope.get("forecast_year", scope.get("year"))
-        if run.year != expected_run_year or run.iteration != scope.get("iteration"):
-            raise RuntimeError(
-                f"Pinned closure producer run scope does not match: {run_id}."
-            )
         outputs = tracker.get_run_outputs(run_id)
         for member in run_members:
+            if member.role != "zarr_skims":
+                expected_run_year = scope.get("forecast_year", scope.get("year"))
+                if run.year != expected_run_year or run.iteration != scope.get(
+                    "iteration"
+                ):
+                    raise RuntimeError(
+                        "Pinned BEAM closure producer run scope does not match: "
+                        f"{run_id}."
+                    )
             artifact = outputs.get(member.output_key)
             if artifact is None:
                 raise RuntimeError(

@@ -26,7 +26,7 @@ hide:
       </div>
       <div class="home-summary__item">
         <dt>How it runs</dt>
-        <dd>Stages and steps with typed outputs, named artifacts, and Consist-backed replay on restart</dd>
+        <dd>Stages and native Consist steps with typed outputs, named artifacts, and durable restart evidence</dd>
       </div>
     </dl>
   </div>
@@ -74,7 +74,8 @@ The runtime is intentionally small:
 - the enabled workflow surface decides which stages and steps are active for
   the current run
 - stages handle ordering and the inner-iteration loop
-- step factories publish typed outputs that the next step can read by name
+- each stage resolves its inputs once, executes its native Consist step, and
+  projects `RunResult.outputs` into typed outputs for the next step
 
 These docs cover the things that come up day-to-day:
 

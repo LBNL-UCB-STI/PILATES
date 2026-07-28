@@ -10,8 +10,7 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
 )
-from pilates.workflows.binding import build_binding_plan
-from pilates.workflows.input_resolution import resolved_value_for_key
+from pilates.workflows.binding import resolve_artifact_roles
 from pilates.atlas.static_inputs import (
     ATLAS_STATIC_INPUTS_COMMON,
     ATLAS_STATIC_INPUTS_BY_SCENARIO,
@@ -80,26 +79,24 @@ def build_atlas_inputs(
         if usim_datastore_h5_path is not None
         else None
     )
-    atlas_resolution = build_binding_plan(
+    atlas_resolution = resolve_artifact_roles(
         step_name="atlas_preprocess",
         coupler=coupler,
         fallback_inputs=fallback_inputs,
-        required_keys=[USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5],
+        artifact_rules=(),
+        required_roles=(USIM_DATASTORE_CURRENT_H5, USIM_DATASTORE_BASE_H5),
+        optional_roles=(),
+        logical_destinations={},
         settings=settings,
         state=state,
         workspace=workspace,
         year=year,
-        surface=surface,
     )
-    atlas_usim_input = resolved_value_for_key(
-        resolved=atlas_resolution,
-        key=USIM_DATASTORE_CURRENT_H5,
-        coupler=coupler,
+    atlas_usim_input = (atlas_resolution.binding.inputs or {}).get(
+        USIM_DATASTORE_CURRENT_H5
     )
-    atlas_base_input = resolved_value_for_key(
-        resolved=atlas_resolution,
-        key=USIM_DATASTORE_BASE_H5,
-        coupler=coupler,
+    atlas_base_input = (atlas_resolution.binding.inputs or {}).get(
+        USIM_DATASTORE_BASE_H5
     )
     if atlas_base_input is None:
         atlas_base_input = atlas_usim_input

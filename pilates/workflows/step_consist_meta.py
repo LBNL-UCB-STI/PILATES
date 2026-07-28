@@ -272,10 +272,17 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         except Exception:
             return None
 
+        from pilates.beam.launch_config import BeamLaunchConfig
+
         workspace_obj = _workspace(ctx)
+        launch_config = _runtime_value(ctx, "beam_launch_config")
         config_root: Optional[Path] = None
         workspace_root: Optional[Path] = None
-        if workspace_obj is not None and hasattr(
+        primary_config: Optional[Path] = None
+        if isinstance(launch_config, BeamLaunchConfig):
+            config_root = launch_config.root
+            primary_config = launch_config.primary_config
+        elif workspace_obj is not None and hasattr(
             workspace_obj, "get_beam_mutable_data_dir"
         ):
             workspace_root_path = _workspace_path_from_value(workspace_obj)
@@ -296,7 +303,8 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if config_root is None:
             return None
 
-        primary_config = config_root / beam_settings.config
+        if primary_config is None:
+            primary_config = config_root / beam_settings.config
         if not primary_config.exists():
             return None
 

@@ -88,15 +88,15 @@ from pilates.workflows.stages import (
     run_supply_demand_stage,
     run_vehicle_ownership_stage,
 )
-from pilates.workflows.stages.supply_demand_resume import (
-    seed_supply_demand_parent_run_ids_for_resume,
-)
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
+from pilates.workflows.stages.supply_demand_beam import (
+    beam_checkpoint_resume_requested,
+)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
 
-from pilates.workflows.steps import StepOutputsHolder, validate_workflow_step_contracts  # noqa: E402
+from pilates.workflows.steps import validate_workflow_step_contracts  # noqa: E402
 from consist.types import CacheOptions  # noqa: E402
 
 logging.basicConfig(
@@ -400,6 +400,51 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
+def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+    *, state: WorkflowState
+) -> bool:
+    """Re-enter the provider chain when restart lacks a BEAM checkpoint.
+
+    A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
+    Consequently, an ActivitySim rewind cannot begin inside supply-demand on a
+    fresh restart: the required UrbanSim/ATLAS roles have not been republished
+    into the new scenario coupler.  Rewind to the earliest enabled upstream
+    major stage instead, allowing ordinary native steps and Consist cache hits
+    to republish those roles.
+    """
+
+    if (
+        not state.is_restart_run
+        or not state.is_enabled(state.Stage.activity_demand)
+        or state.current_major_stage != state.Stage.supply_demand_loop
+        or beam_checkpoint_resume_requested(state=state)
+    ):
+        return False
+
+    provider_boundary = state.Stage.supply_demand_loop
+    for candidate in state.major_stage_order:
+        if candidate == state.Stage.supply_demand_loop:
+            break
+        if state.is_enabled(candidate):
+            provider_boundary = candidate
+            break
+
+    resumed_iteration = state.iteration
+    state.current_major_stage = provider_boundary
+    state.current_inner_iter = 0
+    state.current_sub_stage = None
+    state.sub_stage_progress = None
+    state.write_state()
+    logger.warning(
+        "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
+        "from supply-demand iteration=%s to provider boundary=%s so native "
+        "steps republish ActivitySim inputs.",
+        resumed_iteration,
+        provider_boundary.name,
+    )
+    return True
+
+
 def _prepare_run_context(
     *,
     settings: Optional[PilatesConfig] = None,
@@ -648,13 +693,17 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
             surface=surface,
         )
         _assert_bootstrap_output_invariant(bootstrap_result)
-        if not state.data_initialized:
-            state.set_data_initialized(True)
     else:
         logger.info("Restarting from a previous state. Skipping bootstrap phase.")
     bootstrap_runtime.log_bootstrap_result_summary(bootstrap_result, log=logger)
 
     if is_restart_run:
+        restart_runtime.hydrate_restart_atlas_continuation_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            workflow_stage=WorkflowState.Stage,
+        )
         restart_missing_artifacts_after_bootstrap = (
             _find_missing_restart_local_artifacts(
                 settings=settings,
@@ -749,7 +798,7 @@ def main(
         # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
         # Initialization runs before entering scenario step execution so bootstrap
         # lifecycle can evolve independently from normal model steps.
-        _run_bootstrap_sequence(prepared)
+        bootstrap_result = _run_bootstrap_sequence(prepared)
 
         # 6. START SCENARIO CONTEXT
         # The scenario context is where all model execution happens. Each step runs inside
@@ -818,19 +867,15 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
-            if is_restart_run:
-                seed_supply_demand_parent_run_ids_for_resume(
-                    scenario=tagged_scenario,
-                    workspace=workspace,
-                    state=state,
-                    tracker=tracker,
-                    settings=settings,
-                )
+            if bootstrap_result is not None and not state.data_initialized:
+                state.set_data_initialized(True)
             if is_restart_run and state.data_initialized:
                 logger.info(
                     "Restart replay mode active: skipping bespoke restart "
                     "hydration and relying on scenario replay plus Consist cache hits."
                 )
+
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:
@@ -852,14 +897,11 @@ def main(
                     cr.current_run_id(),
                 )
                 land_use_handoff = LandUseToSupplyDemandHandoff()
-                outputs_holder_year = StepOutputsHolder()
-
                 if state.should_run(WorkflowState.Stage.land_use):
                     land_use_handoff = run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
                         coupler=coupler,
                         year=year,
-                        outputs_holder_year=outputs_holder_year,
                         context=runtime_context,
                     )
                     state.complete_step(WorkflowState.Stage.land_use)
@@ -889,7 +931,6 @@ def main(
                         coupler=coupler,
                         year=year,
                         handoff=land_use_handoff,
-                        build_manifest_path=build_manifest_path,
                         on_iteration_boundary=(
                             lambda iteration, y=year: (
                                 snapshot_manager.on_outer_iteration_boundary(

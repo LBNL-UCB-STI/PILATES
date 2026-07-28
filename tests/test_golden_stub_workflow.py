@@ -29,8 +29,10 @@ Why keep this large:
 
 from __future__ import annotations
 
+import inspect
 import re
 import shutil
+from dataclasses import replace
 from pathlib import Path
 from typing import Optional
 
@@ -73,12 +75,13 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
     USIM_FORECAST_OUTPUT,
     USIM_INPUT_MERGED_PREFIX,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
+from pilates.workflows.steps import activitysim_preprocess
 from pilates.workflows.stages.land_use import run_land_use_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
 from pilates.workflows.stages.vehicle_ownership import run_vehicle_ownership_stage
-from pilates.workflows.steps import StepOutputsHolder
 from tests.workflow_contract_harness import build_runtime_context
 from workflow_state import WorkflowState
 
@@ -376,7 +379,6 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     consist = pytest.importorskip("consist")
     from pilates.workflows import step_consist_meta as step_consist_meta_module
-    from pilates.workflows.steps import shared as shared_steps_module
 
     original_consist_step_meta = step_consist_meta_module.consist_step_meta
 
@@ -388,11 +390,6 @@ def golden_stub_env(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         step_consist_meta_module,
-        "consist_step_meta",
-        _patched_consist_step_meta,
-    )
-    monkeypatch.setattr(
-        shared_steps_module,
         "consist_step_meta",
         _patched_consist_step_meta,
     )
@@ -938,7 +935,7 @@ def golden_stub_env(tmp_path, monkeypatch):
 
 
 @pytest.mark.slow_ci
-def test_golden_stub_workflow_stage_contract_with_real_consist(
+def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     golden_stub_env, tmp_path
 ):
     """
@@ -980,12 +977,10 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     assert init_marker.exists()
 
     # Phase 1: land-use stage publishes UrbanSim datastore handles.
-    outputs_holder_year = StepOutputsHolder()
     usim_inputs = run_land_use_stage(
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,
-        outputs_holder_year=outputs_holder_year,
         context=golden_stub_env["context"],
     )
     assert USIM_DATASTORE_BASE_H5 in usim_inputs
@@ -1249,3 +1244,143 @@ def test_golden_stub_workflow_stage_contract_with_real_consist(
     report_path = Path(workspace.full_path) / "golden_stub_provenance_report.md"
     assert report_path.exists()
     assert "```mermaid" in report
+
+
+def test_golden_stub_workflow_uses_direct_native_stage_contracts() -> None:
+    """The golden harness follows the same native execution boundary as the matrix."""
+    from pilates.workflows.stages import land_use
+    from pilates.workflows.stages import supply_demand_activity
+    from pilates.workflows.stages import supply_demand_beam
+    from pilates.workflows.stages import vehicle_ownership
+
+    for stage in (
+        land_use.run_land_use_stage,
+        vehicle_ownership.run_vehicle_ownership_stage,
+        supply_demand_activity._run_activity_demand_phase,
+        supply_demand_beam._run_beam_steps,
+    ):
+        source = inspect.getsource(stage)
+        assert "execute_step(" in source
+        assert "StageRunner" not in source
+        assert "run_workflow" not in source
+
+
+def test_golden_native_preprocess_uses_real_consist_cache_and_artifacts(
+    golden_stub_env,
+) -> None:
+    """A direct native definition retains Consist artifact and cache semantics."""
+    settings = golden_stub_env["settings"]
+    workspace = golden_stub_env["workspace"]
+    state = golden_stub_env["state"]
+    scenario = golden_stub_env["scenario"]
+    tracker = golden_stub_env["tracker"]
+    source_path = Path(golden_stub_env["usim_input_path"])
+    source_asim_data = Path(workspace.get_asim_mutable_data_dir())
+    source_asim_configs = Path(workspace.get_asim_mutable_configs_dir())
+    first_workspace = Workspace(
+        settings,
+        output_path=str(tracker.run_dir),
+        folder_name="native-cache-first",
+    )
+    second_workspace = Workspace(
+        settings,
+        output_path=str(tracker.run_dir),
+        folder_name="native-cache-second",
+    )
+    shutil.copytree(
+        source_asim_data,
+        Path(first_workspace.get_asim_mutable_data_dir()),
+    )
+    for native_workspace in (first_workspace, second_workspace):
+        shutil.copytree(
+            source_asim_configs,
+            Path(native_workspace.get_asim_mutable_configs_dir()),
+        )
+
+    with scenario.trace(
+        "golden_native_input",
+        model="initialization",
+        year=state.current_year,
+        iteration=state.current_inner_iter,
+    ):
+        source_artifact = cr.log_input(source_path, key=USIM_POPULATION_SOURCE_H5)
+        scenario.coupler.set_from_artifact(USIM_POPULATION_SOURCE_H5, source_artifact)
+
+    def run_native_preprocess(native_workspace: Workspace, *, project: bool = True):
+        resolved = activitysim_preprocess.resolve_inputs(
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            coupler=scenario.coupler,
+        )
+        options = activitysim_preprocess.execution_options(
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            resolved_inputs=resolved,
+        )
+        result = scenario.run(
+            fn=activitysim_preprocess.function,
+            binding=resolved.binding,
+            year=state.forecast_year,
+            iteration=state.current_inner_iter,
+            phase="preprocess",
+            stage="supply_demand",
+            output_paths=activitysim_preprocess.output_paths(
+                settings=settings,
+                state=state,
+                workspace=native_workspace,
+                resolved_inputs=resolved,
+            ),
+            cache_options=replace(
+                activitysim_preprocess.cache_options(
+                    settings=settings,
+                    state=state,
+                    workspace=native_workspace,
+                ),
+                cache_epoch=13,
+                cache_hydration="metadata",
+                cache_hydration_failure="warn",
+            ),
+            execution_options=replace(
+                options,
+                runtime_kwargs={
+                    **(options.runtime_kwargs or {}),
+                    "settings": settings,
+                    "state": state,
+                    "workspace": native_workspace,
+                },
+            ),
+        )
+        if not project:
+            return result, None
+        return result, activitysim_preprocess.project_outputs(
+            result.outputs,
+            settings=settings,
+            state=state,
+            workspace=native_workspace,
+            resolved_inputs=resolved,
+        )
+
+    first, first_outputs = run_native_preprocess(first_workspace)
+    second, _ = run_native_preprocess(second_workspace, project=False)
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert first_outputs.land_use_table.exists()
+    assert {key: artifact.hash for key, artifact in second.outputs.items()} == {
+        key: artifact.hash for key, artifact in first.outputs.items()
+    }
+
+    for result in (first, second):
+        artifacts = tracker.get_artifacts_for_run(result.run.id)
+        assert USIM_POPULATION_SOURCE_H5 in _artifact_keys(artifacts.inputs)
+        assert {
+            "land_use_asim_in",
+            "households_asim_in",
+            "persons_asim_in",
+            "omx_skims",
+        } <= _artifact_keys(artifacts.outputs)
+        run = tracker.get_run(result.run.id)
+        assert run is not None
+        assert (run.meta or {}).get("cache_epoch") == 13

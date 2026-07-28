@@ -44,5 +44,5 @@ This page does not try to diagnose model-science issues or undocumented region-s
 ## Adjacent Pages
 
 - Use [Getting Started](../start-here/getting_started.md) for the normal path.
-- Use [Restart and Resume](restart_and_resume.md) for replay-specific behavior.
+- Use [Restart and Resume](restart_and_resume.md) for restart policy and checkpoint behavior.
 - Use [SQL and DuckDB](../analysis/sql_and_duckdb.md) for post-run DB inspection.

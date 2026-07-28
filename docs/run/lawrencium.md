@@ -7,7 +7,7 @@ summary: Lawrencium-specific setup, data layout, and Slurm submission path for P
 
 ## Storage Model
 
-For the current replay-first PILATES runtime, the safest Lawrencium layout is:
+For the current Consist-native PILATES runtime, the safest Lawrencium layout is:
 
 - input trees and source checkout: backed-up home or scratch-based source tree, depending on your workflow
 - active archive root during execution: shared scratch via `run.output_directory`
@@ -125,7 +125,7 @@ This split keeps the active run on the fast tiers while still preserving a compl
 
 - scratch remains the durable active archive during execution
 - node-local storage handles high-churn mutable files
-- NFS stores the cold promoted archive and can satisfy historical artifact hydration later through Consist `recovery_roots`
+- NFS stores the cold promoted archive and can supply historical artifacts through Consist `recovery_roots`
 
 This promotion flow preserves the run-local shard DB inside the promoted
 archive. If your project keeps a central main DB, merge the completed run-local

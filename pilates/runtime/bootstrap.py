@@ -14,7 +14,6 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
-from pilates.runtime.cache_recovery import log_cache_miss_explanation
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
@@ -488,16 +487,21 @@ def run_bootstrap_phase(
             resolution_mode="cache_hit_missing_workspace_invariants_fallback_rerun",
         )
 
-    cache_miss_explanation = log_cache_miss_explanation(
-        logger=logger,
-        result=probe_result,
-        info_message=(
-            "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
-            "reason=%s candidate_run_id=%s"
-        ),
-        debug_message="BOOTSTRAP cache miss details: %s",
+    run_meta = getattr(getattr(probe_result, "run", None), "meta", None)
+    cache_miss_explanation = (
+        dict(run_meta["cache_miss_explanation"])
+        if isinstance(run_meta, Mapping)
+        and isinstance(run_meta.get("cache_miss_explanation"), Mapping)
+        else None
     )
-    if cache_miss_explanation is None:
+    if cache_miss_explanation is not None:
+        logger.info(
+            "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
+            "reason=%s candidate_run_id=%s",
+            cache_miss_explanation.get("reason"),
+            cache_miss_explanation.get("candidate_run_id"),
+        )
+    else:
         logger.info("BOOTSTRAP CACHE MISS. Initialization executed for this workspace.")
     return _finalize_bootstrap_result(
         cache_hit=False,
