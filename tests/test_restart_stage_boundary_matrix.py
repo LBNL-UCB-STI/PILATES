@@ -11,7 +11,7 @@ from types import SimpleNamespace
 import pytest
 from consist import Artifact, BindingResult
 
-from pilates.workflows.artifact_keys import LINKSTATS, ZARR_SKIMS
+from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage

@@ -29,6 +29,7 @@ class _Hydration(dict):
 def test_historical_output_request_is_owned_by_beam_checkpoint():
     assert HistoricalOutputRequest.__module__ == "pilates.workflows.beam_checkpoint"
 
+
 def test_beam_checkpoint_is_atomic_and_becomes_nonrestartable(tmp_path):
     checkpoint = publish_beam_run_checkpoint(
         archive_run_dir=tmp_path,
