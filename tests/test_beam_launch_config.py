@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import logging
 from pathlib import Path
 from types import SimpleNamespace
@@ -286,6 +287,49 @@ def test_build_beam_launch_config_applies_default_artifact_format_policy(
         "PILATES default BEAM artifact-format policy overrides source config"
         in caplog.text
     )
+
+
+def test_build_beam_launch_config_keeps_gzip_warmstart_with_parquet_output_policy(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import resolve_beam_config_value
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    warmstart = tmp_path / "preprocess-cache" / "linkstats.csv.gz"
+    warmstart.parent.mkdir(parents=True)
+    warmstart.write_bytes(gzip.compress(b"legacy linkstats"))
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={"linkstats_warmstart": warmstart},
+    )
+
+    assert (
+        resolve_beam_config_value(
+            launch_config.primary_config,
+            key="beam.physsim.linkStatsOutputFileType",
+            env_overrides={},
+        )
+        == "parquet"
+    )
+    assert resolve_beam_config_value(
+        launch_config.primary_config,
+        key="beam.warmStart.initialLinkstatsFilePath",
+        env_overrides={},
+    ) == str(launch_config.root / ".pilates" / "warmstarts" / "linkstats.csv.gz")
+    assert (
+        launch_config.root / ".pilates" / "warmstarts" / "linkstats.csv.gz"
+    ).read_bytes() == warmstart.read_bytes()
 
 
 def test_build_beam_launch_config_keeps_non_policy_overrides_strict(
