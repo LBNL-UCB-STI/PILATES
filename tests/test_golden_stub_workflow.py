@@ -15,8 +15,8 @@ What this test demonstrates:
 - Land use stage publishes UrbanSim datastore handles into coupler state.
 - Vehicle ownership stage consumes datastore inputs and materializes expected
   Atlas side effects.
-- Supply-demand stage executes ActivitySim + BEAM wiring, archives ActivitySim
-  outputs, and writes a manifest.
+- Supply-demand stage executes ActivitySim + BEAM wiring and archives ActivitySim
+  outputs.
 - Provenance plumbing remains healthy: scenario runs/steps exist, artifacts are
   attached, and a markdown provenance report can be produced.
 
@@ -101,12 +101,6 @@ EXPECTED_STAGE_MODELS = (
     "beam_run",
     "beam_postprocess",
 )
-
-EXPECTED_MANIFEST_STEPS = {
-    "activitysim_preprocess",
-    "activitysim_run",
-    "activitysim_postprocess",
-}
 
 EXPECTED_ASIM_TEMP_OUTPUT_KEYS = {
     "accessibility_asim_out_temp",
@@ -944,7 +938,7 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     The assertions are grouped by workflow phase:
     - Phase 1: land use contract and coupler publication.
     - Phase 2: vehicle ownership contract and Atlas/ActivitySim side effects.
-    - Phase 3: supply-demand contract, manifest creation, and archived outputs.
+    - Phase 3: supply-demand contract and archived outputs.
     - Phase 4: Consist run/artifact/report integrity.
     """
     settings = golden_stub_env["settings"]
@@ -1053,17 +1047,11 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     assert int(households["persons"].sum()) == 3
     assert int((persons["worker"] == 1).sum()) == 2
 
-    # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs,
-    # manifest state, and year/iteration archives.
+    # Phase 3: supply-demand loop (ActivitySim + BEAM) writes coupler outputs
+    # and year/iteration archives.
     state.current_major_stage = state.Stage.supply_demand_loop
     state.current_sub_stage = state.Stage.activity_demand
     state.current_inner_iter = 0
-
-    manifest_dir = tmp_path / "workflow_manifests"
-
-    def _build_manifest_path(_workspace, year, iteration):
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        return manifest_dir / f"manifest_{year}_{iteration}.yaml"
 
     asim_archive_year = state.current_year
     asim_archive_iteration = state.current_inner_iter
@@ -1071,8 +1059,7 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
         scenario=scenario,
         coupler=coupler,
         year=state.forecast_year,
-        usim_inputs=usim_inputs,
-        build_manifest_path=_build_manifest_path,
+        handoff=usim_inputs,
         context=golden_stub_env["context"],
     )
 
@@ -1085,23 +1072,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     assert Path(zarr_from_coupler).resolve() == zarr_path.resolve()
     assert Path(linkstats_from_coupler).resolve() == promoted_linkstats.resolve()
     assert Path(plans_from_coupler).resolve() == promoted_plans.resolve()
-
-    manifest_path = manifest_dir / f"manifest_{state.forecast_year}_0.yaml"
-    assert manifest_path.exists()
-    manifest = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
-    assert set(manifest) == EXPECTED_MANIFEST_STEPS
-    for step_name in EXPECTED_MANIFEST_STEPS:
-        step_manifest = manifest[step_name]
-        assert isinstance(step_manifest.get("cache_hit"), bool)
-        assert step_manifest.get("outputs")
-    assert (
-        set(manifest["activitysim_run"]["outputs"]["raw_outputs"])
-        == EXPECTED_ASIM_TEMP_OUTPUT_KEYS
-    )
-    assert (
-        set(manifest["activitysim_postprocess"]["outputs"]["processed_outputs"])
-        == EXPECTED_ASIM_ARCHIVE_OUTPUT_KEYS | EXPECTED_ASIM_ARCHIVED_INPUT_KEYS
-    )
 
     asim_output_dir = Path(workspace.get_asim_output_dir()) / "final_pipeline"
     households_out = pd.read_parquet(asim_output_dir / "households" / "final.parquet")
