@@ -15,13 +15,20 @@ from uuid import uuid4
 import consist
 import yaml
 
-from pilates.workflows.resume import HistoricalOutputRequest
-
 _CHECKPOINT_KEY = "restart_checkpoint"
 _SCHEMA_VERSION = 2
 _BOUNDARY_ID = "beam_run_completed"
 _NEXT_BOUNDARY = "beam_postprocess"
 _IN_PROGRESS = "beam_postprocess_in_progress"
+
+
+@dataclass(frozen=True)
+class HistoricalOutputRequest:
+    """One pinned historical output and its exact current-workspace destination."""
+
+    key: str
+    destination: Path
+    required: bool
 
 
 @dataclass(frozen=True)

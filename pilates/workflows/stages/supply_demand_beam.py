@@ -28,21 +28,12 @@ from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
-from pilates.workflows.resume import (
-    HistoricalOutputRequest,
-    ResumeDecision,
-    ResumeDisposition,
-    ResumePlanningError,
-    ResumeProjectionError,
-    RestoreExecutionResult,
-)
 from pilates.workflows.beam_checkpoint import (
     PinnedClosureMember,
     beam_checkpoint_record_present,
     beam_postprocess_is_in_progress,
     checkpoint_fingerprint_matches,
     hydrate_pinned_closure,
-    is_verified_hydrated_zarr_directory,
     mark_beam_postprocess_in_progress,
     read_beam_run_checkpoint,
     snapshot_and_publish_beam_run_checkpoint,
@@ -116,14 +107,6 @@ class TrafficAssignmentPhaseOutputs:
     """
 
     pass
-
-
-@dataclass(frozen=True)
-class _RecoveredBeamRun:
-    """A historical BEAM projection plus its direct producer identity."""
-
-    outputs: BeamRunOutputs
-    producer_run_id: Optional[str]
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
@@ -460,127 +443,6 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
         return Path(run_info_path).expanduser().resolve().parent
     except Exception:
         return None
-
-
-def _beam_restart_output_requests(
-    linked_output_keys: Iterable[str],
-    workspace: Workspace,
-    year: int,
-    iteration: int,
-) -> tuple[HistoricalOutputRequest, ...]:
-    """Map selected BEAM output keys to their exact current destinations."""
-
-    selected = (
-        _build_beam_postprocess_input_keys(
-            upstream_keys=linked_output_keys,
-            year=year,
-            iteration=iteration,
-            include_zarr_skims=False,
-        )
-        or []
-    )
-    selected.extend(
-        key
-        for key in linked_output_keys
-        if key == LINKSTATS or key.startswith(BEAM_PLANS_OUT)
-    )
-    selected = list(dict.fromkeys(selected))
-    output_dir = Path(workspace.get_beam_output_dir())
-    requests: list[HistoricalOutputRequest] = []
-    for key in selected:
-        if key == LINKSTATS:
-            destination = output_dir / f"{iteration}.linkstats.csv.gz"
-        elif key.startswith("beam_plans_out"):
-            destination = output_dir / "plans.csv.gz"
-        elif key.startswith("events_parquet_"):
-            destination = output_dir / f"{iteration}.events.parquet"
-        elif key.startswith("raw_od_skims_zarr"):
-            destination = output_dir / f"{iteration}.skimsActivitySimOD.zarr"
-        elif key.startswith("raw_od_skims"):
-            destination = output_dir / f"{iteration}.skimsActivitySimOD_current.omx"
-        else:
-            raise ResumePlanningError(
-                "destination_contract_error",
-                f"No deterministic BEAM destination exists for output key={key}.",
-            )
-        requests.append(
-            HistoricalOutputRequest(key=key, destination=destination, required=True)
-        )
-    return tuple(requests)
-
-
-def _project_hydrated_beam_run_outputs(
-    *,
-    hydration_result: Any,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> tuple[BeamRunOutputs, tuple[str, ...]]:
-    """Validate accepted BEAM hydration items and publish current roles only."""
-
-    raw_outputs: Dict[str, Path] = {}
-    published_keys: list[str] = []
-    for key, item in hydration_result.items():
-        if item.path is None:
-            if item.resolvable:
-                raise ResumeProjectionError(
-                    "unsupported_output_representation",
-                    f"BEAM output key={key} has no hydrated destination.",
-                )
-            continue
-        if (
-            item.status == "materialized_from_filesystem"
-            and item.resolvable
-            and item.path.is_dir()
-        ):
-            raise ResumeProjectionError(
-                "unsupported_output_representation",
-                f"BEAM output key={key} is not a file destination.",
-            )
-        is_file = (
-            item.status == "materialized_from_filesystem"
-            and item.resolvable
-            and item.path.is_file()
-        )
-        is_zarr_directory = is_verified_hydrated_zarr_directory(
-            item, destination=item.path
-        )
-        if not is_file and not is_zarr_directory:
-            continue
-        raw_outputs[str(key)] = item.path
-        set_coupler_from_artifact(
-            coupler, str(key), item.artifact, fallback=str(item.path)
-        )
-        published_keys.append(str(key))
-        if key == LINKSTATS:
-            set_coupler_from_artifact(
-                coupler,
-                LINKSTATS_WARMSTART,
-                item.artifact,
-                fallback=str(item.path),
-            )
-            published_keys.append(LINKSTATS_WARMSTART)
-
-    outputs = BeamRunOutputs(
-        beam_output_dir=Path(workspace.get_beam_output_dir()), raw_outputs=raw_outputs
-    )
-    outputs.validate()
-    return outputs, tuple(published_keys)
-
-
-def _restored_beam_parent_years(
-    *,
-    state: WorkflowState,
-    run_year: int,
-) -> list[int]:
-    years: list[int] = []
-    for value in (run_year, getattr(state, "forecast_year", None)):
-        try:
-            year = int(value)
-        except (TypeError, ValueError):
-            continue
-        if year not in years:
-            years.append(year)
-    return years
 
 
 def _beam_checkpoint_scope(
@@ -1047,60 +909,6 @@ def _try_resume_committed_beam_postprocess(
         resolved_inputs=postprocess_inputs,
     )
     return step_output_handoff_mapping(postprocess_outputs, coupler=coupler)
-
-
-def _emit_beam_restart_recovery_readiness_diagnostic(
-    *,
-    state: WorkflowState,
-    decision: ResumeDecision,
-    execution: RestoreExecutionResult,
-    iteration: int,
-) -> None:
-    """Record the existing diagnostic from the planner and hydration result."""
-    required_keys = [request.key for request in decision.outputs]
-    missing_required = sorted(set(execution.failed_keys) & set(required_keys))
-    accepted_keys = (
-        sorted(execution.projected_outputs.raw_outputs)
-        if isinstance(execution.projected_outputs, BeamRunOutputs)
-        else []
-    )
-    readiness_classification = "complete" if execution.succeeded else "restore_failed"
-    logger.info(
-        "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
-        "missing_required=%s required_keys=%s output_keys=%s",
-        decision.disposition is ResumeDisposition.RESTORE,
-        decision.source_run_id,
-        missing_required,
-        required_keys,
-        accepted_keys,
-    )
-    _emit_artifact_lifecycle_event(
-        "beam_restart_recovery_readiness",
-        key="beam_restart_recovery_readiness",
-        artifact_family="beam_restart_diagnostic",
-        diagnostic="beam_restart_recovery_readiness",
-        restart_run=bool(getattr(state, "is_restart_run", False)),
-        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
-        forecast_year=getattr(state, "forecast_year", None),
-        iteration=iteration,
-        run_scope=decision.semantic_target.get("run_scope"),
-        query_status=decision.semantic_target.get("status"),
-        matched_completed_run_id=decision.source_run_id,
-        matched_run_id=decision.source_run_id,
-        matchable=decision.disposition is ResumeDisposition.RESTORE,
-        output_keys=accepted_keys,
-        matched_output_keys=accepted_keys,
-        required_restored_inputs=required_keys,
-        required_postprocess_keys=required_keys,
-        missing_restored_inputs=missing_required,
-        missing_required_keys=missing_required,
-        hydration_api_available=True,
-        identity_summary={},
-        cache_miss_explanation={},
-        identity_drift_components={},
-        drift_classification=readiness_classification,
-        diagnostic_error=execution.failure_category,
-    )
 
 
 def _derive_beam_run_input_keys(
