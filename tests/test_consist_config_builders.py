@@ -209,20 +209,20 @@ def test_catalog_dispatch_parity_for_models_with_provenance(tmp_path):
     beam_root.mkdir(parents=True)
     (beam_root / "main.conf").write_text("x=1")
 
-    models = [
-        spec.model_name
+    step_names = [
+        spec.step_name
         for spec in catalog.WORKFLOW_STEP_SPECS
-        if catalog.provenance_builder_key_for_model_name(spec.model_name) is not None
+        if catalog.provenance_builder_key_for_step_name(spec.step_name) is not None
     ]
-    for model_name in models:
+    for step_name in step_names:
         result = build_step_consist_kwargs(
-            model_name,
+            step_name,
             settings,
             workspace_path=str(tmp_path),
         )
-        legacy_key = model_name.split("_")[0]
+        legacy_key = step_name.split("_")[0]
         expected_schema_version = _CONFIG_BUILDERS[legacy_key].get_facet_schema_version(
-            model_name
+            step_name
         )
         assert result["facet_schema_version"] == expected_schema_version
 
@@ -265,8 +265,8 @@ def test_catalog_dispatch_uses_provenance_builder_key(monkeypatch):
     # Force a non-legacy builder selection for this model.
     monkeypatch.setattr(
         consist_config_module,
-        "provenance_builder_key_for_model_name",
-        lambda model_name: "atlas" if model_name == "urbansim_run" else None,
+        "provenance_builder_key_for_step_name",
+        lambda step_name: "atlas" if step_name == "urbansim_run" else None,
     )
 
     result = build_step_consist_kwargs("urbansim_run", settings)
@@ -280,8 +280,8 @@ def test_invalid_catalog_provenance_builder_key_fails_fast(monkeypatch):
 
     monkeypatch.setattr(
         consist_config_module,
-        "provenance_builder_key_for_model_name",
-        lambda _model_name: "not_registered",
+        "provenance_builder_key_for_step_name",
+        lambda _step_name: "not_registered",
     )
 
     with pytest.raises(ValueError, match="Unknown provenance builder key"):

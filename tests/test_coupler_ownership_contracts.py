@@ -3,12 +3,12 @@ Architecture contracts for coupler ownership boundaries.
 
 These tests document and enforce the ownership split used by the workflow:
 
-1. Stage/step assembly should not call coupler methods directly.
-2. Coupler reads for input resolution should go through
-   ``pilates/workflows/input_resolution.py``.
-3. Coupler writes should go through ``pilates/utils/coupler_helpers.py``.
-4. ``pilates/workflows/orchestration.py`` may inspect coupler keys for
-   diagnostics, but should not mutate coupler state directly.
+1. Native step resolvers select inputs through their committed resolver paths,
+   not direct coupler calls in stage assembly.
+2. ``pilates/workflows/coupler_namespace.py`` owns direct namespace-aware
+   coupler reads.
+3. ``pilates/utils/coupler_helpers.py`` owns direct coupler publication and
+   materialization helpers.
 
 The goal is to prevent drift back to ad hoc coupler access patterns that make
 input precedence and cross-step state harder to reason about.
@@ -45,19 +45,15 @@ COUPLER_METHODS = {
 
 ALLOWED_DIRECT_CALL_FILES = {
     Path("pilates/runtime/bootstrap.py"),
-    Path("pilates/workflows/input_resolution.py"),
     Path("pilates/workflows/coupler_namespace.py"),
     Path("pilates/utils/coupler_helpers.py"),
-    Path("pilates/workflows/orchestration.py"),
 }
 
 
 ALLOWED_DIRECT_CALLS_BY_FILE = {
     Path("pilates/runtime/bootstrap.py"): {"set"},
-    Path("pilates/workflows/input_resolution.py"): {"get", "view"},
     Path("pilates/workflows/coupler_namespace.py"): {"get", "keys", "view"},
     Path("pilates/utils/coupler_helpers.py"): {"set", "set_from_artifact", "view"},
-    Path("pilates/workflows/orchestration.py"): {"keys"},
 }
 
 
@@ -119,9 +115,9 @@ def test_direct_coupler_calls_are_limited_to_gateway_modules():
     Only gateway modules may call coupler methods directly.
 
     This keeps ownership explicit:
-    - input resolution reads
-    - coupler helper writes
-    - orchestration diagnostics
+    - native resolvers select their inputs through committed resolver paths
+    - the namespace helper owns direct reads
+    - the coupler helper owns publication and materialization writes
     """
     violations: List[CouplerCall] = []
     for path in _iter_python_files(PILATES_ROOT):
@@ -147,8 +143,8 @@ def test_stage_modules_do_not_call_coupler_methods_directly():
     """
     Stage modules must resolve coupler values via workflow helpers only.
 
-    Stage assembly should stay declarative (legacy step-reference plus input resolution) and
-    avoid imperative coupler manipulation.
+    Stage assembly should stay declarative and use native resolver results rather
+    than imperative coupler manipulation.
     """
     violations: List[CouplerCall] = []
     stages_dir = PILATES_ROOT / "workflows" / "stages"

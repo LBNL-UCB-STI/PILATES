@@ -14,6 +14,13 @@ summary: Detailed step-by-step lineage reference for the current PILATES workflo
 
 ## Stage Map
 
+## Static Renderer Contract
+
+The static workflow-lineage renderer serializes each planned step's canonical
+`step_name` and `depends_on` relation. It does not emit legacy
+upstream-step-input aliases; consumers should use `depends_on` for planned
+step dependencies.
+
 ### Bootstrap
 
 What PILATES does:

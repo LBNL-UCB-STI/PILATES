@@ -35,9 +35,7 @@ class WorkflowStepSpec:
 
     ``step_name`` is the canonical workflow-step identity in the catalog and
     matches the Consist ``model=...`` value used by the decorated step
-    functions. Older callers may still refer to a catalog "model name", so a
-    compatibility property is provided below, but the catalog no longer stores
-    a second parallel identifier.
+    functions.
 
     The catalog owns PILATES policy only: placement, order, enablement,
     dependencies, optionality, provenance policy, and open-ended semantic key
@@ -59,17 +57,6 @@ class WorkflowStepSpec:
     enabled_flag_attr: Optional[str] = None
     enabled_model_attr: Optional[str] = None
     provenance: Optional[WorkflowStepProvenanceSpec] = None
-
-    @property
-    def model_name(self) -> str:
-        """
-        Compatibility alias for callers that still expect a catalog model key.
-
-        After the narrow generic-builder refactor, tracked catalog steps use
-        ``step_name`` as their canonical Consist identity, so the old catalog
-        ``model_name`` is structurally the same value.
-        """
-        return self.step_name
 
     @property
     def definition(self) -> "StepDefinition[Any]":
@@ -111,16 +98,6 @@ class WorkflowStepSpec:
     @property
     def optional_output_keys(self) -> Tuple[str, ...]:
         return ()
-
-    @property
-    def holder_inputs(self) -> Tuple[str, ...]:
-        """Legacy holder wiring mirrors the sole dependency relation until deletion."""
-        return self.depends_on
-
-    @property
-    def upstream_step_inputs(self) -> Tuple[str, ...]:
-        """Legacy semantic handoff mirrors the sole dependency relation until deletion."""
-        return self.depends_on
 
 
 @dataclass(frozen=True)
@@ -342,17 +319,6 @@ _STEP_SPECS_BY_STEP_NAME: Dict[str, WorkflowStepSpec] = {
 
 def workflow_step_spec_for_step_name(step_name: str) -> Optional[WorkflowStepSpec]:
     return _STEP_SPECS_BY_STEP_NAME.get(step_name)
-
-
-def workflow_step_spec_for_model_name(model_name: str) -> Optional[WorkflowStepSpec]:
-    """
-    Compatibility lookup for callers that still speak in model-name terms.
-
-    Catalog entries now use ``step_name`` as the single stored identifier, so
-    this helper intentionally aliases model-name lookups onto step-name
-    lookups instead of maintaining a second registry.
-    """
-    return _STEP_SPECS_BY_STEP_NAME.get(model_name)
 
 
 def workflow_step_contracts_by_name(
@@ -662,13 +628,6 @@ def provenance_builder_key_for_step_name(step_name: str) -> Optional[str]:
     return spec.provenance.builder_key
 
 
-def provenance_builder_key_for_model_name(model_name: str) -> Optional[str]:
-    spec = workflow_step_spec_for_model_name(model_name)
-    if spec is None or spec.provenance is None:
-        return None
-    return spec.provenance.builder_key
-
-
 def schema_step_names() -> Tuple[str, ...]:
     return tuple(
         spec.step_name
@@ -733,7 +692,6 @@ def step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str]]]:
     for spec in tracked_step_specs():
         dependencies[spec.step_name] = {
             "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
         }
     return dependencies
 
@@ -749,6 +707,5 @@ def runtime_step_dependencies_from_catalog() -> Dict[str, Dict[str, Sequence[str
     for spec in WORKFLOW_STEP_SPECS:
         dependencies[spec.step_name] = {
             "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
         }
     return dependencies
