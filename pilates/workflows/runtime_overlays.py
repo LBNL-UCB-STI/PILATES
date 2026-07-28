@@ -42,7 +42,13 @@ class StepRuntimeOverlayRule:
     remove_optional_inputs: frozenset[str] = field(default_factory=frozenset)
     role_overrides: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
 
-    def applies(self, *, step_name: str, profile: Any, run_mode: Any) -> bool:
+    def applies(
+        self,
+        *,
+        step_name: str,
+        land_use_enabled: bool,
+        run_mode: Any,
+    ) -> bool:
         """Return whether this overlay matches the current runtime shape."""
         if self.step_name != step_name:
             return False
@@ -50,8 +56,7 @@ class StepRuntimeOverlayRule:
             return False
         if (
             self.land_use_enabled is not None
-            and bool(getattr(profile, "land_use_enabled", False))
-            != self.land_use_enabled
+            and land_use_enabled != self.land_use_enabled
         ):
             return False
         return True
@@ -105,7 +110,7 @@ _STEP_RUNTIME_OVERLAY_RULES: Tuple[StepRuntimeOverlayRule, ...] = (
 def resolve_runtime_input_output_overrides(
     *,
     step_name: str,
-    profile: Any,
+    land_use_enabled: bool,
     run_mode: Any,
     required_inputs: Tuple[str, ...],
     optional_inputs: Tuple[str, ...],
@@ -119,7 +124,11 @@ def resolve_runtime_input_output_overrides(
     required = required_inputs
     optional = optional_inputs
     for rule in _STEP_RUNTIME_OVERLAY_RULES:
-        if not rule.applies(step_name=step_name, profile=profile, run_mode=run_mode):
+        if not rule.applies(
+            step_name=step_name,
+            land_use_enabled=land_use_enabled,
+            run_mode=run_mode,
+        ):
             continue
         required = _ordered_unique(required, rule.add_required_inputs)
         optional = tuple(
@@ -133,7 +142,7 @@ def resolve_runtime_input_output_overrides(
 def resolve_runtime_role_policy_overrides(
     *,
     step_name: str,
-    profile: Any,
+    land_use_enabled: bool,
     run_mode: Any,
 ) -> Dict[str, Dict[str, Any]]:
     """Collect role-policy overlays for the current step/runtime shape.
@@ -144,7 +153,11 @@ def resolve_runtime_role_policy_overrides(
     """
     overrides: Dict[str, Dict[str, Any]] = {}
     for rule in _STEP_RUNTIME_OVERLAY_RULES:
-        if not rule.applies(step_name=step_name, profile=profile, run_mode=run_mode):
+        if not rule.applies(
+            step_name=step_name,
+            land_use_enabled=land_use_enabled,
+            run_mode=run_mode,
+        ):
             continue
         for key, policy in rule.role_overrides.items():
             current = overrides.setdefault(key, {})

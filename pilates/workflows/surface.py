@@ -389,7 +389,7 @@ def _build_step_runtime_surface(
     # step-specific conditionals over time.
     required_inputs, optional_inputs = resolve_runtime_input_output_overrides(
         step_name=step_name,
-        profile=profile,
+        land_use_enabled=profile.land_use_enabled,
         run_mode=run_mode,
         required_inputs=required_inputs,
         optional_inputs=optional_inputs,
@@ -397,7 +397,7 @@ def _build_step_runtime_surface(
 
     policy_overrides = resolve_runtime_role_policy_overrides(
         step_name=step_name,
-        profile=profile,
+        land_use_enabled=profile.land_use_enabled,
         run_mode=run_mode,
     )
     input_role_policies: Dict[str, InputRolePolicy] = {}

@@ -47,6 +47,7 @@ from pilates.workflows.binding import (
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.workflows.step_definition import StepDefinition
@@ -463,13 +464,22 @@ def _activitysim_postprocess_resolver(
     coupler: CouplerProtocol,
     step_identity: StepIdentity | None = None,
 ) -> ResolvedStepInputs:
-    resolved = _native_activitysim_resolved_inputs(
+    required_roles, optional_roles = resolve_runtime_input_output_overrides(
         step_name="activitysim_postprocess",
-        required_roles=(
+        land_use_enabled=_land_use_enabled(state),
+        # Postprocess H5 requiredness is mode-independent. Restart-only
+        # preprocess guards remain part of prebootstrap policy.
+        run_mode=None,
+        required_inputs=(
             *_ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES,
             *configured_asim_output_keys(settings),
         ),
-        optional_roles=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
+        optional_inputs=_ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES,
+    )
+    resolved = _native_activitysim_resolved_inputs(
+        step_name="activitysim_postprocess",
+        required_roles=required_roles,
+        optional_roles=optional_roles,
         logical_destinations=ActivitysimPostprocessor.declared_expected_inputs(
             settings, state, workspace
         ),

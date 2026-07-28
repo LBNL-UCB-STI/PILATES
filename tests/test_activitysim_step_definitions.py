@@ -343,6 +343,65 @@ def test_activitysim_postprocess_resolver_requires_only_configured_outputs(
     )
 
 
+def test_activitysim_postprocess_land_use_requires_h5_roles_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing land-use H5 roles must fail at the resolved-input boundary."""
+
+    def _resolve_native(**kwargs: object) -> ResolvedStepInputs:
+        required_roles = kwargs["required_roles"]
+        optional_roles = kwargs["optional_roles"]
+        assert isinstance(required_roles, tuple)
+        assert isinstance(optional_roles, tuple)
+        return ResolvedStepInputs(
+            step_name="activitysim_postprocess",
+            binding=BindingResult(),
+            required_roles=required_roles,
+            optional_roles=optional_roles,
+            source_by_role={
+                role: (
+                    "missing"
+                    if role
+                    in {
+                        USIM_POPULATION_SOURCE_H5,
+                        USIM_DATASTORE_CURRENT_H5,
+                    }
+                    else "coupler"
+                )
+                for role in (*required_roles, *optional_roles)
+            },
+        )
+
+    monkeypatch.setattr(
+        activitysim, "_native_activitysim_resolved_inputs", _resolve_native
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimPostprocessor,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(output_tables={"tables": []})
+    )
+    state = SimpleNamespace(is_enabled=lambda _stage: True)
+
+    resolved = activitysim._activitysim_postprocess_resolver(
+        settings=settings,
+        state=state,
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=(
+            "activitysim_postprocess is missing required input roles: "
+            "usim_datastore_h5, usim_population_source_h5"
+        ),
+    ):
+        resolved.require_complete()
+
+
 def test_activitysim_postprocess_resolver_omits_current_artifact_with_population_key(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
