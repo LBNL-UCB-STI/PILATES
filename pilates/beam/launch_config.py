@@ -9,6 +9,7 @@ the container can mount the same concrete files.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 import shutil
 from typing import Any, Mapping
@@ -29,6 +30,15 @@ from pilates.workflows.artifact_keys import (
 
 
 _BEAM_CONTAINER_OUTPUT_DIR = "/app/output"
+logger = logging.getLogger(__name__)
+
+
+_ARTIFACT_FORMAT_POLICY_KEYS = {
+    "activitysim_skims": "beam.router.skim.activity-sim-skimmer.fileOutputFormat",
+    "exchange": "beam.exchange.scenario.fileFormat",
+    "events": "beam.outputs.events.fileOutputFormats",
+    "linkstats": "beam.physsim.linkStatsOutputFileType",
+}
 
 
 def _warmstart_destination_name(source: Path) -> str:
@@ -101,12 +111,16 @@ def materialize_beam_launch_config(
     identity: IdentityManager,
     overrides: BeamLaunchConfigOverrides,
     staged_inputs: tuple[BeamLaunchInput, ...] = (),
+    allow_missing_override_keys: bool = False,
 ) -> BeamLaunchConfig:
     """Copy ``source_root`` and apply launch-only overrides to the copy.
 
     ``BeamConfigAdapter.materialize`` is deliberately used rather than PILATES
-    HOCON rewriting: it validates the override keys and canonicalizes the
-    resulting config tree as the source of the downstream run identity.
+    HOCON rewriting: it canonicalizes the resulting config tree as the source
+    of the downstream run identity.  Ordinary launch overrides must target an
+    existing HOCON setting.  A first-class PILATES artifact-format policy may
+    introduce a BEAM setting whose legacy source config relied on BEAM's own
+    default instead.
     """
 
     source_root = source_root.resolve()
@@ -125,6 +139,12 @@ def materialize_beam_launch_config(
         "beam.inputDirectory": str(derived_root),
         **dict(overrides.values),
     }
+    if allow_missing_override_keys:
+        _require_declared_non_policy_overrides(
+            settings=settings,
+            source_primary=primary_config,
+            override_keys=tuple(materialized_values),
+        )
     adapter = BeamConfigAdapter(
         root_dirs=[source_root],
         primary_config=primary_config,
@@ -140,7 +160,7 @@ def materialize_beam_launch_config(
         BeamConfigOverrides(values=materialized_values),
         output_dir=output_dir,
         identity=identity,
-        strict=True,
+        strict=not allow_missing_override_keys,
     )
 
     derived_primary_config = derived_root / settings.beam.config
@@ -159,6 +179,30 @@ def materialize_beam_launch_config(
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
+
+
+def _require_declared_non_policy_overrides(
+    *,
+    settings: Any,
+    source_primary: Path,
+    override_keys: tuple[str, ...],
+) -> None:
+    """Preserve strict validation when a legacy format key must be introduced."""
+
+    policy_keys = frozenset(_ARTIFACT_FORMAT_POLICY_KEYS.values())
+    environment = beam_config_env_overrides(settings, config_root=source_primary.parent)
+    for key in override_keys:
+        if key == "beam.inputDirectory" or key in policy_keys:
+            continue
+        if (
+            resolve_beam_config_value(
+                source_primary,
+                key=key,
+                env_overrides=environment,
+            )
+            is None
+        ):
+            raise KeyError(f"Override key not found: {key}")
 
 
 def build_beam_launch_config(
@@ -200,6 +244,12 @@ def build_beam_launch_config(
     overrides: dict[str, Any] = {
         "beam.outputs.baseOutputDirectory": _BEAM_CONTAINER_OUTPUT_DIR,
     }
+    format_overrides, introduces_missing_format_key = _artifact_format_overrides(
+        settings=settings,
+        source_primary=source_primary,
+        env_overrides=env_overrides,
+    )
+    overrides.update(format_overrides)
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -280,7 +330,58 @@ def build_beam_launch_config(
         identity=identity,
         overrides=BeamLaunchConfigOverrides(values=overrides),
         staged_inputs=tuple(staged_inputs),
+        allow_missing_override_keys=introduces_missing_format_key,
     )
+
+
+def _artifact_format_overrides(
+    *,
+    settings: Any,
+    source_primary: Path,
+    env_overrides: Mapping[str, str],
+) -> tuple[dict[str, str], bool]:
+    """Return typed format policy overrides and report legacy missing keys."""
+
+    formats = settings.beam.artifact_formats
+    field_sources = formats.model_fields_set
+    format_values = formats.model_dump()
+    overrides = {
+        config_key: format_values[field_name]
+        for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items()
+    }
+    introduces_missing_format_key = False
+    policy_summary: list[str] = []
+    for field_name, config_key in _ARTIFACT_FORMAT_POLICY_KEYS.items():
+        expected = overrides[config_key]
+        source_value = resolve_beam_config_value(
+            source_primary,
+            key=config_key,
+            env_overrides=dict(env_overrides),
+        )
+        source_kind = "configured" if field_name in field_sources else "default"
+        policy_summary.append(f"{field_name}={expected} ({source_kind})")
+        if source_value is None:
+            introduces_missing_format_key = True
+            logger.warning(
+                "PILATES %s BEAM artifact-format policy adds source config key "
+                "%s=%r; the legacy config relied on BEAM's implicit default.",
+                source_kind,
+                config_key,
+                expected,
+            )
+        elif str(source_value) != expected:
+            logger.warning(
+                "PILATES %s BEAM artifact-format policy overrides source config: "
+                "%s=%r -> %r.",
+                source_kind,
+                config_key,
+                source_value,
+                expected,
+            )
+    logger.info(
+        "[BEAM] Effective artifact-format policy: %s", ", ".join(policy_summary)
+    )
+    return overrides, introduces_missing_format_key
 
 
 def _relative_source_path(*, source_root: Path, path: Path, key: str) -> Path:

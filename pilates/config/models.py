@@ -654,6 +654,23 @@ class BeamAdmissionConfig(BaseModel):
     )
 
 
+class BeamArtifactFormatsConfig(BaseModel):
+    """Preferred interchange formats for artifacts produced by BEAM."""
+
+    activitysim_skims: Literal["zarr", "omx"] = Field(
+        "zarr", description="BEAM activity-sim skimmer output format"
+    )
+    exchange: Literal["parquet", "csv"] = Field(
+        "parquet", description="BEAM exchange-scenario population input format"
+    )
+    events: Literal["parquet", "csv.gz"] = Field(
+        "parquet", description="BEAM events output format"
+    )
+    linkstats: Literal["parquet", "csv.gz"] = Field(
+        "parquet", description="BEAM linkstats output format"
+    )
+
+
 class BeamConfig(BaseModel):
     """BEAM transportation network simulation configuration."""
 
@@ -673,6 +690,13 @@ class BeamConfig(BaseModel):
         description=(
             "Optional path to the initial BEAM warm-start linkstats file. "
             "If relative, it is resolved against the mutable BEAM region input root."
+        ),
+    )
+    artifact_formats: BeamArtifactFormatsConfig = Field(
+        default_factory=BeamArtifactFormatsConfig,
+        description=(
+            "PILATES-owned preferred formats applied to the canonical BEAM launch "
+            "configuration."
         ),
     )
     admission: Optional[BeamAdmissionConfig] = Field(
