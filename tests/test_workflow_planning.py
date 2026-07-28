@@ -68,6 +68,11 @@ def test_static_execution_plan_builds_activitysim_beam_sequence_from_config_file
     json_payload = render_plan_json(plan)
     assert '"step_name": "activitysim_run"' in json_payload
     assert '"kind": "depends_on"' in json_payload
+    removed_alias = "_".join(("upstream", "step", "inputs"))
+    assert removed_alias not in json_payload
+
+    html_payload = render_plan_html(plan)
+    assert removed_alias not in html_payload
 
 
 def test_postprocessing_is_untracked_and_only_reports_its_input_contract_gap():

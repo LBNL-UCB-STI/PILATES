@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from consist.types import HasConsistFacet
 
 from pilates.config.models import PilatesConfig
-from pilates.workflows.catalog import provenance_builder_key_for_model_name
+from pilates.workflows.catalog import provenance_builder_key_for_step_name
 
 
 IdentityInput = Tuple[str, Path]
@@ -230,7 +230,7 @@ def build_step_consist_kwargs(
             "facet_index": True,
         }
 
-    builder_key = provenance_builder_key_for_model_name(model_norm)
+    builder_key = provenance_builder_key_for_step_name(model_norm)
     if builder_key is not None:
         builder = _CONFIG_BUILDERS.get(builder_key)
         if builder is None:

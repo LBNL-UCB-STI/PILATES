@@ -106,13 +106,11 @@ def _seed_minimal_repo(repo_root: Path) -> None:
             @dataclass(frozen=True)
             class WorkflowStepSpec:
                 step_name: str
-                model_name: str
                 phase: str
                 stage_name: str
                 order: int
                 outputs_class: Optional[Type[Any]] = None
                 depends_on: Tuple[str, ...] = ()
-                holder_inputs: Tuple[str, ...] = ()
                 enabled_flag_attr: Optional[str] = None
                 enabled_model_attr: Optional[str] = None
                 provenance: Optional[WorkflowStepProvenanceSpec] = None
@@ -121,7 +119,6 @@ def _seed_minimal_repo(repo_root: Path) -> None:
             WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
                 WorkflowStepSpec(
                     step_name="existing_preprocess",
-                    model_name="existing_preprocess",
                     phase="preprocess",
                     stage_name="land_use",
                     order=10,
