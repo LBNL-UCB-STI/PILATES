@@ -24,7 +24,6 @@ from pilates.utils.coupler_helpers import (
     set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
-from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
