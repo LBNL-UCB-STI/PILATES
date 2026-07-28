@@ -329,6 +329,10 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     cfg = settings.beam
     if cfg is None:
         return {}
+    admission_config = cfg.admission
+    linkstats_admission = (
+        admission_config.linkstats if admission_config is not None else None
+    )
     return {
         "config": cfg.config,
         "sample": cfg.sample,
@@ -338,6 +342,16 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "max_plans_memory": cfg.max_plans_memory,
         "router_directory": cfg.router_directory,
         "scenario_folder": cfg.scenario_folder,
+        "linkstats_admission": (
+            {
+                "mode": linkstats_admission.mode,
+                "expected_run_id": linkstats_admission.expected_run_id,
+                "artifact_key": linkstats_admission.artifact_key,
+                "expected_bytes_path": linkstats_admission.expected_bytes_path,
+            }
+            if linkstats_admission is not None
+            else None
+        ),
     }
 
 
@@ -359,25 +373,39 @@ def build_beam_identity_inputs(
     if cfg is None:
         return []
 
-    root = Path(workspace_path) / cfg.local_mutable_data_folder
-    if not root.exists():
-        return []
-
-    config_name = getattr(cfg, "config", None)
-    if isinstance(config_name, str) and config_name:
-        matches = sorted(root.rglob(config_name))
-        if matches:
-            return [(f"beam_conf/{config_name}", matches[0])]
-
-    conf_files = sorted([p for p in root.rglob("*.conf") if p.is_file()])
-    if not conf_files:
-        # Fallback: hash the root itself so identity still captures "something".
-        return [("beam_conf_dir", root)]
-
     identity_inputs: List[IdentityInput] = []
-    for path in conf_files:
-        rel = path.relative_to(root).as_posix()
-        identity_inputs.append((f"beam_conf/{rel}", path))
+    root = Path(workspace_path) / cfg.local_mutable_data_folder
+    if root.exists():
+        config_name = getattr(cfg, "config", None)
+        if isinstance(config_name, str) and config_name:
+            matches = sorted(root.rglob(config_name))
+            if matches:
+                identity_inputs.append((f"beam_conf/{config_name}", matches[0]))
+        if not identity_inputs:
+            conf_files = sorted([p for p in root.rglob("*.conf") if p.is_file()])
+            if conf_files:
+                for path in conf_files:
+                    rel = path.relative_to(root).as_posix()
+                    identity_inputs.append((f"beam_conf/{rel}", path))
+            else:
+                # Fallback: hash the root itself so identity still captures "something".
+                identity_inputs.append(("beam_conf_dir", root))
+
+    admission_config = cfg.admission
+    linkstats_admission = (
+        admission_config.linkstats if admission_config is not None else None
+    )
+    expected_bytes_path = (
+        linkstats_admission.expected_bytes_path
+        if linkstats_admission is not None
+        else None
+    )
+    if expected_bytes_path:
+        expected_path = Path(expected_bytes_path).expanduser().resolve()
+        if expected_path.is_file():
+            identity_inputs.append(
+                ("beam_admission_linkstats_expected_bytes", expected_path)
+            )
     return identity_inputs
 
 

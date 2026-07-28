@@ -1,97 +1,46 @@
 ---
 title: Stages and Steps
-summary: Execution model for years, stages, substages, and workflow steps in PILATES.
+summary: How stage policy invokes native Consist step definitions.
 ---
 
 # Stages and Steps
 
-## What PILATES Does
+PILATES major stages are `land_use`, `vehicle_ownership_model`,
+`supply_demand_loop`, and `postprocessing`. The supply-demand loop sequences
+ActivitySim and traffic assignment according to `WorkflowState`.
 
-`WorkflowState` is the run-progress object. It stores:
+## One stage-to-step pattern
 
-- `current_year`, `current_major_stage`, `current_sub_stage`, and `current_inner_iter`
-- `forecast_year` and `sub_stage_progress`
-- restart state such as `run_info_path` and `is_restart_run`
-- durable state-file values through `write_stage()` and `read_current_stage()`
+For every model phase, follow the same boundary:
 
-The stage model in `workflow_state.py` separates the simulation into:
+1. Define semantic input and output roles on the native step.
+2. Resolve roles once into `ResolvedStepInputs`.
+3. Call `execute_step(...)` with the `StepDefinition`.
+4. Let Consist run, persist, and materialize the declared artifacts.
+5. Project `RunResult.outputs` into typed PILATES outputs.
+6. Use those typed outputs only for the next sequencing decision.
 
-- `land_use`
-- `vehicle_ownership_model`
-- `supply_demand_loop`
-- `postprocessing`
+The stage owns year/iteration order, enablement-driven sequence, and
+`WorkflowState` progress. It does not add a second input-selection pass,
+reconstruct historical outputs, or maintain an in-memory workflow handoff
+surface.
 
-When activity demand is enabled, the supply-demand loop contains the substages `activity_demand` and `traffic_assignment`. When activity demand is disabled but land use is enabled, the runtime uses the direct-from-land-use activity-demand branch instead.
+## Where to read code
 
-`supply_demand_loop` is a meta-stage, not one flat model call. The top-level
-orchestrator is `pilates/workflows/stages/supply_demand.py`; the ActivitySim
-phase lives in `pilates/workflows/stages/supply_demand_activity.py`, the BEAM
-traffic-assignment phase lives in
-`pilates/workflows/stages/supply_demand_beam.py`, and restart/resume helpers
-live in `pilates/workflows/stages/supply_demand_resume.py`. If you are tracing
-why a run resumed in the middle of the loop, start with `supply_demand.py` for
-the iteration/substage state machine, then follow the phase-specific file.
+- `pilates/workflows/stages/` — sequence and state transitions.
+- `pilates/workflows/steps/` — decorated callable, resolver, projector, and
+  `StepDefinition` for each model phase.
+- `pilates/workflows/catalog.py` — stage placement and dependency policy.
+- `pilates/workflows/step_execution.py` — the common native execution path.
 
-## Stage and Step Boundaries
+## Restart boundary
 
-- A stage owns orchestration across one region of the run lifecycle.
-- A step owns one typed execution boundary and one typed output object.
-- Steps run in year and iteration context, but the step factory still publishes the result through the same shared holder and coupler contract.
+The only committed mid-stage restart is BEAM run completion to BEAM
+postprocess. It uses the pinned successor closure and current-workspace
+destinations, then respects the postprocess mutation gate. Other stages resume
+at their normal durable frontier.
 
-The launcher persists state after progress updates so restart runs can resume from the stored stage, year, iteration, and sub-stage fields.
+## Adjacent pages
 
-## Practical Execution Shape
-
-The major stage modules are called from the launcher year loop:
-
-- `run_land_use_stage(...)`
-- `run_vehicle_ownership_stage(...)`
-- `run_supply_demand_stage(...)`
-- `run_postprocessing_stage(...)`
-
-Inside a stage, the normal pattern is:
-
-1. receive a `WorkflowRuntimeContext` with settings, state, workspace, and enabled surface
-2. resolve inputs with binding or model-local input helpers
-3. create or call a step ref from `pilates/workflows/steps/`
-4. let the step factory run the model component through `ModelFactory`
-5. validate the returned typed outputs
-6. publish outputs into `StepOutputsHolder` and the coupler
-7. update `WorkflowState` at the stage or substage boundary
-
-That separation is what keeps a stage readable. A stage should explain ordering
-and progress. It should not hide a new public artifact contract, and it should
-not duplicate fallback precedence that belongs in binding.
-
-## Holder Versus Coupler
-
-Two handoff surfaces are active during a run:
-
-- `StepOutputsHolder` is in-memory and convenient for adjacent steps in the same Python process.
-- The coupler is the workflow-visible artifact surface used across step boundaries, replay, and archive-aware recovery.
-
-If a later step or restart path needs a value, it should be published through a
-workflow key, not left as an implicit local path. Scratch files can stay inside
-model-local directories only when no later workflow boundary depends on them.
-
-## Practical Reading Rule
-
-If you are reading the code for the first time:
-
-- start in a stage module when you want to know *when* work runs
-- start in a step module when you want to know *what boundary* a step publishes
-- start in the catalog when you want to know *which keys and dependencies* the workflow declares
-- start in a model adapter only after you know which step boundary called it
-
-## Adjacent Pages
-
-- Read [Workflow Primer](workflow_primer.md) first.
-- Then read [Simulation Logic by Stage](simulation_logic_by_stage.md) for the logical meaning of each stage.
-- Read [Step Contracts](step_contracts.md) for the semantic workflow boundary.
-
-## Evidence Basis
-
-- Stage state and persistence: `workflow_state.py`
-- Runtime ordering and orchestration: `pilates/runtime/launcher.py`, `pilates/workflows/orchestration.py`
-- Stage execution code: `pilates/workflows/stages/*.py`
-- Stage and restart behavior: `tests/test_workflow_invariants.py`, `tests/test_golden_stub_workflow.py`
+- Read [Workflow Architecture](architecture.md).
+- Continue to [Step Contracts](step_contracts.md).

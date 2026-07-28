@@ -24,7 +24,7 @@ python run.py -c path/to/settings.yaml
 python run.py -c path/to/settings.yaml -S /path/to/state-file.yaml
 ```
 
-Use the first for a fresh run and the second when you are resuming or replaying from an existing state file.
+Use the first for a fresh run and the second when you are resuming from an existing state file.
 
 ## CLI Versus Config
 

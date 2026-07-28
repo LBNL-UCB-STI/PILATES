@@ -174,6 +174,37 @@ def _mutable_urbansim_input_paths(
     return prepared_inputs
 
 
+def _stage_declared_urbansim_datastore(
+    *,
+    settings: PilatesConfig,
+    workspace: "Workspace",
+    usim_datastore_h5: Path,
+) -> Path:
+    """Stage the bound datastore at UrbanSim's model-visible input path.
+
+    Native execution receives a Consist-managed snapshot.  UrbanSim itself
+    still consumes the conventional mutable-data filename, so this is the one
+    explicit handoff from the immutable binding into that model-visible path.
+    It intentionally overwrites a stale workspace copy rather than treating it
+    as an alternate source.
+    """
+    source = Path(usim_datastore_h5)
+    if not source.is_file():
+        raise RuntimeError(
+            f"UrbanSim preprocess requires the bound datastore H5 to exist: {source}"
+        )
+
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    destination = Path(workspace.get_usim_mutable_data_dir()) / (
+        settings.urbansim.input_file_template.format(region_id=region_id)
+    )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.resolve() != destination.resolve():
+        shutil.copy2(source, destination)
+    return destination
+
+
 def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspace):
     """
     Load raw skims and format for UrbanSim, ensuring canonical zone order.
@@ -518,21 +549,31 @@ class UrbansimPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> UrbanSimPreprocessOutputs:
         """Prepare UrbanSim inputs and return typed outputs."""
+        if usim_datastore_h5 is None:
+            raise TypeError(
+                "UrbansimPreprocessor.preprocess requires usim_datastore_h5"
+            )
         self.state.set_sub_stage_progress("preprocessor")
         return self._preprocess(
             workspace,
             previous_records,
+            usim_datastore_h5=usim_datastore_h5,
             final_skims_omx=final_skims_omx,
+            allow_workspace_skim_fallback=allow_workspace_skim_fallback,
         )
 
     def _preprocess(
         self,
         workspace: "Workspace",
         previous_records: Optional[RecordStore] = None,
+        usim_datastore_h5: Optional[Path] = None,
         final_skims_omx: Optional[Any] = None,
+        allow_workspace_skim_fallback: bool = True,
     ) -> UrbanSimPreprocessOutputs:
         """
         Preprocess UrbanSim data, including copying necessary skims.
@@ -543,6 +584,15 @@ class UrbansimPreprocessor(GenericPreprocessor):
         # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
         usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
         os.makedirs(usim_mutable_data_dir, exist_ok=True)
+        if usim_datastore_h5 is None:
+            raise TypeError(
+                "UrbansimPreprocessor._preprocess requires usim_datastore_h5"
+            )
+        _stage_declared_urbansim_datastore(
+            settings=settings,
+            workspace=workspace,
+            usim_datastore_h5=Path(usim_datastore_h5),
+        )
         _restore_missing_mutable_urbansim_supporting_inputs(
             settings,
             self.state,
@@ -587,6 +637,11 @@ class UrbansimPreprocessor(GenericPreprocessor):
                             source_skims_path,
                         )
                     else:
+                        if not allow_workspace_skim_fallback:
+                            raise FileNotFoundError(
+                                "UrbanSim preprocess requires the resolved "
+                                "final_skims_omx handoff after BEAM has run."
+                            )
                         if final_skims_omx is not None:
                             logger.warning(
                                 "[UrbansimPreprocessor] Explicit final_skims_omx artifact "

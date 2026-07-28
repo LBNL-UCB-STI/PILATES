@@ -7,7 +7,6 @@ from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
 from pilates.urbansim import postprocessor as usim_post
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
@@ -175,10 +174,10 @@ class UrbansimRunner(GenericRunner):
                 working_dir=settings.urbansim.client_base_folder,
                 # 2. PASS INPUTS
                 input_artifacts=input_paths,
-                # Publish the workflow-facing datastore key directly so
-                # restart/cache materialization does not have to reconcile a
-                # basename-derived alias for the same file.
-                output_paths={USIM_DATASTORE_H5: usim_datastore_fpath},
+                # The workflow callback owns the canonical H5 artifact so it
+                # can retain table-level recovery metadata without creating a
+                # second output link from this nested container boundary.
+                output_paths=None,
             )
 
             if not success:

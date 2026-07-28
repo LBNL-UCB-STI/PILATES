@@ -21,11 +21,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.binding import (
     activitysim_population_source_selection_rules,
-    build_binding_plan,
-)
-from pilates.workflows.input_resolution import (
-    resolved_value_for_key,
-    selected_candidate_key,
+    resolve_artifact_roles,
 )
 
 if TYPE_CHECKING:
@@ -125,29 +121,26 @@ def build_activitysim_inputs(
         if population_source is not None:
             explicit_usim_inputs[USIM_POPULATION_SOURCE_H5] = population_source
 
-    usim_resolution = build_binding_plan(
+    usim_resolution = resolve_artifact_roles(
         step_name="activitysim_input_selection",
         coupler=coupler,
         explicit_inputs=explicit_usim_inputs or usim_inputs,
-        artifact_rules=activitysim_population_source_selection_rules(),
-        restrict_to_inline_rules=True,
-        required_keys=[USIM_POPULATION_SOURCE_H5],
         fallback_inputs=usim_inputs,
+        artifact_rules=activitysim_population_source_selection_rules(),
+        required_roles=(USIM_POPULATION_SOURCE_H5,),
+        optional_roles=(),
+        logical_destinations={},
         settings=settings,
         state=state,
         workspace=workspace,
         year=population_year,
-        surface=surface,
     )
-    selected_usim_key = selected_candidate_key(
-        usim_resolution,
-        USIM_POPULATION_SOURCE_H5,
+    selected_usim_key = usim_resolution.selected_key_by_role.get(
+        USIM_POPULATION_SOURCE_H5
     )
     if selected_usim_key is not None:
-        usim_value = resolved_value_for_key(
-            resolved=usim_resolution,
-            key=USIM_POPULATION_SOURCE_H5,
-            coupler=coupler,
+        usim_value = (usim_resolution.binding.inputs or {}).get(
+            USIM_POPULATION_SOURCE_H5
         )
         if usim_value is not None:
             inputs[USIM_POPULATION_SOURCE_H5] = usim_value

@@ -10,16 +10,16 @@ summary: High-level shape of a PILATES run from bootstrap through archive and re
 The runtime is easiest to understand as a sequence of ownership handoffs:
 
 1. The CLI loads a settings file and optional state file.
-2. The launcher prepares a run context with settings, `WorkflowState`, enabled surface, storage roots, tracker, workspace, and failure-recovery hints.
+2. The launcher prepares a run context with settings, `WorkflowState`, enabled surface, storage roots, tracker, and workspace.
 3. Restart preflight checks whether required local workspace artifacts are present or can be deferred to bootstrap.
-4. Bootstrap establishes or rehydrates workspace invariants before the main scenario context.
+4. Bootstrap establishes the workspace invariants before the main scenario context.
 5. The launcher enters the Consist scenario context, declares the coupler schema, and seeds bootstrap-safe artifacts.
 6. The year loop calls stage modules in order.
-7. Stages call tracked step factories; step factories call model components and publish typed outputs.
+7. Stages resolve their inputs once, execute native Consist steps, and project `RunResult.outputs` into typed outputs.
 8. Snapshot and archive cleanup run at boundaries and shutdown.
 
 The important boundary is that the launcher coordinates lifecycle, but stages
-and step factories own workflow execution. Model packages own model mechanics.
+and stages own workflow execution. Model packages own model mechanics.
 
 ## What Happens At Startup
 
@@ -39,11 +39,10 @@ In practice, this is the first important distinction to keep in mind:
 ## Bootstrap
 
 - Fresh runs execute the bootstrap phase before the main scenario context.
-- Restart runs can also execute bootstrap pre-scenario so workspace invariants are rehydrated through the normal cached path.
-- Restart preflight runs before bootstrap when `data_initialized` is already true. It logs missing local artifacts as either blocking or bootstrap-deferred based on the enabled workflow surface.
+- Restart runs run bootstrap pre-scenario when it is needed to establish workspace invariants.
+- Restart preflight runs before bootstrap when `data_initialized` is already true. It identifies missing local artifacts before the enabled workflow surface starts.
 - Bootstrap seeds the coupler with bootstrap-safe artifacts needed by later stages.
-- If bootstrap replay hydration does not restore the required workspace invariants, the runtime can fall back to an uncached rerun for those invariants.
-- After bootstrap, strict restart mode can fail fast if required restart artifacts are still missing.
+- After bootstrap, strict restart mode fails fast if required restart artifacts are still missing.
 
 Bootstrap is intentionally outside the normal model-science loop. It prepares
 the local workspace and workflow-visible starting handles; it should not be read
@@ -67,7 +66,7 @@ as a fifth model stage.
 
 The year loop itself should stay thin. If you need to understand why a model
 ran, inspect the relevant stage module. If you need to understand what a model
-published, inspect the step factory and typed outputs class.
+published, inspect the step definition and typed output class.
 
 ## Shutdown
 
@@ -79,8 +78,11 @@ published, inspect the step factory and typed outputs class.
 
 - Fresh runs create a new run name and then build both archive and local run directories.
 - Restart runs reuse the archived state path from the previous run.
-- If the run is already initialized, the launcher can skip bespoke restart hydration and rely on replay plus cache hits.
-- Restart does not mean the runtime manually reconstructs every intermediate file. The current path prefers declared outputs, bootstrap replay, and Consist cache hits.
+- A restart resumes the normal stage frontier. The one supported mid-stage boundary
+  is `beam_run_completed -> beam_postprocess`.
+- Restart does not manually reconstruct intermediate files. Fresh execution,
+  cache hits, and the supported checkpoint all converge through
+  `RunResult.outputs` and typed output projection.
 
 If you are new to PILATES, this page is the bridge between “the CLI loaded my config” and “the workflow is now running stages inside the scenario context.”
 

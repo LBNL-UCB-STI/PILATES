@@ -1,541 +1,129 @@
-"""
-Coupler key-set invariants for stage boundaries.
+"""Semantic artifact-key invariants for the direct native step contracts.
 
-These tests pin a stable subset of coupler keys that each major workflow
-boundary must publish. The goal is to catch silent regressions in downstream
-artifact publication during the simplification refactor, especially where
-typed outputs currently bridge through RecordStore updates.
+StageRunner-era tests asserted mutable coupler state after broad stage execution.
+The native surface instead declares the semantic keys at each Consist step
+boundary, with bootstrap owning initial datastore publication.
 """
 
-from pathlib import Path
 from types import SimpleNamespace
 
-from pilates.activitysim.outputs import (
-    ActivitySimPostprocessOutputs,
-    ActivitySimPreprocessOutputs,
-    ActivitySimRunOutputs,
-)
-from pilates.beam.outputs import (
-    BeamPostprocessOutputs,
-    BeamPreprocessOutputs,
-    BeamRunOutputs,
-)
-from pilates.generic.model_factory import ModelFactory
+from consist import BindingResult
+
+from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
     BEAM_PERSONS_IN,
     LINKSTATS,
     LINKSTATS_WARMSTART,
-    USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_INPUT_MERGED_PREFIX,
+    USIM_FORECAST_OUTPUT,
+    USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.orchestration import ManifestConfig
-from pilates.workflows.stages.land_use import run_land_use_stage as _run_land_use_stage
-from pilates.workflows.stages.supply_demand import (
-    ActivityDemandPhaseInputs,
-    TrafficAssignmentPhaseInputs,
-    _run_activity_demand_phase,
-    _run_traffic_assignment_phase,
-)
-from pilates.workflows.stages.vehicle_ownership import (
-    run_vehicle_ownership_stage as _run_vehicle_ownership_stage,
-)
-from pilates.workflows.steps import StepOutputsHolder
-from tests.test_stage_contracts import _write_file
-from tests.workflow_contract_harness import build_runtime_context
-
-pytest_plugins = ("tests.test_stage_contracts",)
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.steps import STEP_DEFINITIONS, activitysim
 
 
-def run_land_use_stage(
-    *, context=None, settings=None, state=None, workspace=None, **kwargs
-):
-    context = context or build_runtime_context(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    return _run_land_use_stage(context=context, **kwargs)
+def _declared_inputs(step_name: str) -> set[str]:
+    metadata = STEP_DEFINITIONS[step_name].function.__consist_step__
+    return set(metadata.inputs or ()) | set(metadata.input_keys or ())
 
 
-def run_vehicle_ownership_stage(
-    *, context=None, settings=None, state=None, workspace=None, **kwargs
-):
-    context = context or build_runtime_context(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    return _run_vehicle_ownership_stage(context=context, **kwargs)
-
-
-def _coupler_keys(coupler) -> set[str]:
-    return set(coupler.keys())
-
-
-def _assert_coupler_contains(coupler, expected_keys: set[str]) -> None:
-    observed = _coupler_keys(coupler)
-    missing = expected_keys - observed
-    assert not missing, (
-        f"Missing coupler keys: {sorted(missing)}; observed={sorted(observed)}"
+def _declared_optional_inputs(step_name: str) -> set[str]:
+    return set(
+        STEP_DEFINITIONS[step_name].function.__consist_step__.optional_input_keys or ()
     )
 
 
-def test_land_use_boundary_publishes_urbansim_datastore_family(stage_env):
-    outputs_holder = StepOutputsHolder()
-
-    run_land_use_stage(
-        scenario=stage_env["scenario"],
-        coupler=stage_env["coupler"],
-        year=stage_env["state"].forecast_year,
-        outputs_holder_year=outputs_holder,
-        context=stage_env["context"],
-    )
-
-    _assert_coupler_contains(
-        stage_env["coupler"],
-        {USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5},
+def _declared_outputs(step_name: str) -> set[str]:
+    return set(
+        STEP_DEFINITIONS[step_name].function.__consist_step__.schema_outputs or ()
     )
 
 
-def test_vehicle_ownership_boundary_preserves_urbansim_datastore_family(stage_env):
-    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
-    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+def test_land_use_native_contract_publishes_urbansim_datastore_family() -> None:
+    """Land use owns the current and forecast datastore artifacts, not a stage cache."""
 
-    run_vehicle_ownership_stage(
-        scenario=stage_env["scenario"],
-        coupler=stage_env["coupler"],
-        year=stage_env["state"].forecast_year,
-        build_atlas_static_inputs_fallback=lambda _workspace: {},
-        context=stage_env["context"],
+    assert {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT} <= _declared_outputs(
+        "urbansim_run"
+    )
+    assert USIM_DATASTORE_H5 in _declared_inputs("urbansim_postprocess")
+
+
+def test_vehicle_ownership_native_contract_carries_the_current_datastore() -> None:
+    """ATLAS consumes the current datastore and publishes its typed follow-on roles."""
+
+    assert USIM_DATASTORE_H5 in _declared_inputs("atlas_preprocess")
+    assert {USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT} <= _declared_outputs(
+        "atlas_postprocess"
     )
 
-    _assert_coupler_contains(
-        stage_env["coupler"],
-        {USIM_DATASTORE_H5, USIM_DATASTORE_BASE_H5},
+
+def test_activity_demand_native_contract_declares_activitysim_key_family() -> None:
+    """The three direct ActivitySim steps expose their typed exchange keys."""
+
+    assert {
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        ASIM_OMX_SKIMS,
+    } <= _declared_outputs("activitysim_preprocess")
+    assert {
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+    } <= _declared_inputs("activitysim_run")
+    assert ZARR_SKIMS in _declared_outputs("activitysim_run")
+    assert {USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS} <= _declared_outputs(
+        "activitysim_postprocess"
     )
 
 
-def test_activity_demand_boundary_publishes_activitysim_key_family(
-    stage_env, monkeypatch, tmp_path
-):
-    stage_env["coupler"].set(USIM_DATASTORE_CURRENT_H5, stage_env["usim_input_path"])
-    stage_env["coupler"].set(USIM_DATASTORE_BASE_H5, stage_env["usim_input_path"])
+def test_activitysim_omx_selection_requires_zarr_publication() -> None:
+    """A first-run OMX selection is frozen as a native invocation that emits Zarr."""
 
-    state = stage_env["state"]
-    state.current_major_stage = state.Stage.supply_demand_loop
-    state.current_sub_stage = state.Stage.activity_demand
-    state.current_inner_iter = 0
-
-    original_get_preprocessor = ModelFactory.get_preprocessor
-    original_get_runner = ModelFactory.get_runner
-    original_get_postprocessor = ModelFactory.get_postprocessor
-
-    class _ActivitySimPreprocessor:
-        def preprocess(self, workspace):
-            input_dir = Path(workspace.get_asim_mutable_data_dir())
-            outputs = {
-                ASIM_LAND_USE_IN: input_dir / "land_use.csv",
-                ASIM_HOUSEHOLDS_IN: input_dir / "households.csv",
-                ASIM_PERSONS_IN: input_dir / "persons.csv",
-                ASIM_OMX_SKIMS: input_dir / "skims.omx",
-            }
-            for path in outputs.values():
-                _write_file(path)
-            return ActivitySimPreprocessOutputs(
-                mutable_data_dir=input_dir,
-                land_use_table=outputs[ASIM_LAND_USE_IN],
-                households_table=outputs[ASIM_HOUSEHOLDS_IN],
-                persons_table=outputs[ASIM_PERSONS_IN],
-                omx_skims=outputs[ASIM_OMX_SKIMS],
-            )
-
-    class _ActivitySimRunner:
-        def run(
-            self,
-            input_store,
-            workspace,
-            *,
-            extra_inputs=None,
-            skim_mode="zarr",
-            skip_numba_warmup=False,
-        ):
-            assert skim_mode == "omx"
-            assert not skip_numba_warmup
-            output_dir = Path(workspace.get_asim_output_dir())
-            raw_outputs = {
-                "beam_plans_asim_out": output_dir / "beam_plans.csv",
-                "households_asim_out": output_dir / "households.csv",
-                "persons_asim_out": output_dir / "persons.csv",
-            }
-            for path in raw_outputs.values():
-                _write_file(path)
-            zarr_skims = Path(workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
-            if not zarr_skims.exists():
-                zarr_skims.mkdir(parents=True)
-            return ActivitySimRunOutputs(
-                output_dir=output_dir,
-                zarr_skims=zarr_skims,
-                raw_outputs=raw_outputs,
-            )
-
-    class _ActivitySimPostprocessor:
-        def postprocess(self, raw_outputs, workspace):
-            output_dir = Path(workspace.get_asim_output_dir()) / "postprocess"
-            processed_outputs = {
-                "beam_plans_asim_out": output_dir / "beam_plans.parquet",
-                "households_asim_out": output_dir / "households.parquet",
-                "persons_asim_out": output_dir / "persons.parquet",
-            }
-            updated_usim = (
-                Path(workspace.get_usim_mutable_data_dir())
-                / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
-            )
-            for path in (*processed_outputs.values(), updated_usim):
-                _write_file(path)
-            return ActivitySimPostprocessOutputs(
-                usim_datastore_h5=updated_usim,
-                asim_output_dir=output_dir,
-                processed_outputs=processed_outputs,
-                usim_datastore_key=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-            )
-
-    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            return _ActivitySimPreprocessor()
-        return original_get_preprocessor(self, model_name, state)
-
-    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            return _ActivitySimRunner()
-        return original_get_runner(self, model_name, state)
-
-    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            return _ActivitySimPostprocessor()
-        return original_get_postprocessor(self, model_name, state)
-
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
-
-    outputs_holder = StepOutputsHolder()
-    original_scenario_run = stage_env["scenario"].run
-
-    def _scenario_run_with_activitysim_upstream(**kwargs):
-        input_keys = kwargs.get("input_keys") or []
-        if (
-            "beam_plans_asim_out" in input_keys
-            and outputs_holder.activitysim_run is not None
-        ):
-            for key, value in (
-                outputs_holder.activitysim_run.to_record_store().to_mapping().items()
-            ):
-                stage_env["coupler"].set(key, value)
-        return original_scenario_run(**kwargs)
-
-    monkeypatch.setattr(
-        stage_env["scenario"], "run", _scenario_run_with_activitysim_upstream
-    )
-
-    _run_activity_demand_phase(
-        scenario=stage_env["scenario"],
-        state=state,
-        settings=stage_env["settings"],
-        workspace=stage_env["workspace"],
-        coupler=stage_env["coupler"],
-        inputs=ActivityDemandPhaseInputs(
-            year=state.forecast_year,
-            iteration=0,
-            usim_inputs={
-                USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
-                USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
-            },
-        ),
-        outputs_holder=outputs_holder,
-        manifest_config=ManifestConfig(path=tmp_path / "activity_demand_manifest.yaml"),
-    )
-
-    _assert_coupler_contains(
-        stage_env["coupler"],
-        {
-            USIM_DATASTORE_H5,
-            USIM_DATASTORE_BASE_H5,
-            ASIM_LAND_USE_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_PERSONS_IN,
-            ASIM_OMX_SKIMS,
-            ZARR_SKIMS,
+    resolved = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs={ASIM_OMX_SKIMS: object()}),
+        optional_roles=(ASIM_OMX_SKIMS,),
+        metadata={
+            "activitysim_skim_mode": "omx",
+            "activitysim_produces_zarr": True,
         },
     )
 
-
-def test_activity_demand_exact_rewind_skips_preprocess_runs_from_omx_and_publishes_zarr(
-    stage_env, monkeypatch, tmp_path
-):
-    state = stage_env["state"]
-    state.current_major_stage = state.Stage.supply_demand_loop
-    state.current_sub_stage = state.Stage.activity_demand
-    state.current_inner_iter = 0
-
-    data_dir = tmp_path / "rewind" / "data"
-    cache_dir = tmp_path / "rewind" / "cache"
-    for rel in ("land_use.csv", "households.csv", "persons.csv", "skims.omx"):
-        _write_file(data_dir / rel)
-    stage_env["workspace"].set_asim_mutable_data_dir_override(str(data_dir))
-    stage_env["workspace"].set_asim_runtime_cache_dir_override(str(cache_dir))
-    setattr(
-        stage_env["workspace"],
-        "_activitysim_exact_rewind_restore",
-        {
-            "overlay_root": str(tmp_path / "rewind"),
-            "mutable_data_dir": str(data_dir),
-            "runtime_cache_dir": str(cache_dir),
-            "zarr_available": False,
-            "omx_path": str(data_dir / "skims.omx"),
-            "year": state.forecast_year,
-            "iteration": 0,
-        },
-    )
-
-    original_get_preprocessor = ModelFactory.get_preprocessor
-    original_get_runner = ModelFactory.get_runner
-    original_get_postprocessor = ModelFactory.get_postprocessor
-
-    class _ActivitySimRunner:
-        def run(
-            self,
-            input_store,
-            workspace,
-            *,
-            extra_inputs=None,
-            skim_mode="zarr",
-            skip_numba_warmup=False,
-        ):
-            assert input_store.omx_skims == data_dir / "skims.omx"
-            assert extra_inputs == {}
-            assert skim_mode == "omx"
-            assert skip_numba_warmup
-            output_dir = Path(workspace.get_asim_output_dir())
-            raw_outputs = {
-                "beam_plans_asim_out": output_dir / "beam_plans.csv",
-                "households_asim_out": output_dir / "households.csv",
-                "persons_asim_out": output_dir / "persons.csv",
-            }
-            for path in raw_outputs.values():
-                _write_file(path)
-            zarr_skims = Path(workspace.get_asim_runtime_cache_dir()) / "skims.zarr"
-            if not zarr_skims.exists():
-                zarr_skims.mkdir(parents=True)
-            return ActivitySimRunOutputs(
-                output_dir=output_dir,
-                zarr_skims=zarr_skims,
-                raw_outputs=raw_outputs,
-            )
-
-    class _ActivitySimPostprocessor:
-        def postprocess(self, raw_outputs, workspace):
-            output_dir = Path(workspace.get_asim_output_dir()) / "postprocess"
-            processed_outputs = {
-                "beam_plans_asim_out": output_dir / "beam_plans.parquet",
-                "households_asim_out": output_dir / "households.parquet",
-                "persons_asim_out": output_dir / "persons.parquet",
-            }
-            updated_usim = (
-                Path(workspace.get_usim_mutable_data_dir())
-                / f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}.h5"
-            )
-            for path in (*processed_outputs.values(), updated_usim):
-                _write_file(path)
-            return ActivitySimPostprocessOutputs(
-                usim_datastore_h5=updated_usim,
-                asim_output_dir=output_dir,
-                processed_outputs=processed_outputs,
-                usim_datastore_key=f"{USIM_INPUT_MERGED_PREFIX}{state.forecast_year}",
-            )
-
-    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            raise AssertionError(
-                "activitysim_preprocess should be skipped on exact rewind"
-            )
-        return original_get_preprocessor(self, model_name, state)
-
-    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            return _ActivitySimRunner()
-        return original_get_runner(self, model_name, state)
-
-    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "activitysim":
-            return _ActivitySimPostprocessor()
-        return original_get_postprocessor(self, model_name, state)
-
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
-
-    outputs_holder = StepOutputsHolder()
-
-    _run_activity_demand_phase(
-        scenario=stage_env["scenario"],
-        state=state,
-        settings=stage_env["settings"],
-        workspace=stage_env["workspace"],
-        coupler=stage_env["coupler"],
-        inputs=ActivityDemandPhaseInputs(
-            year=state.forecast_year,
-            iteration=0,
-            usim_inputs={
-                USIM_DATASTORE_CURRENT_H5: stage_env["usim_input_path"],
-                USIM_DATASTORE_BASE_H5: stage_env["usim_input_path"],
-            },
+    output_paths = activitysim.activitysim_run.output_paths(
+        settings=SimpleNamespace(
+            run=None,
+            activitysim=SimpleNamespace(output_tables={"tables": []}),
         ),
-        outputs_holder=outputs_holder,
-        manifest_config=ManifestConfig(path=tmp_path / "activity_demand_manifest.yaml"),
-    )
-
-    assert outputs_holder.activitysim_preprocess is not None
-    assert (
-        outputs_holder.activitysim_preprocess.households_table
-        == data_dir / "households.csv"
-    )
-    assert ZARR_SKIMS in _coupler_keys(stage_env["coupler"])
-
-
-def test_traffic_assignment_boundary_publishes_beam_key_family(
-    stage_env, monkeypatch, tmp_path
-):
-    state = stage_env["state"]
-    state.current_major_stage = state.Stage.supply_demand_loop
-    state.current_sub_stage = state.Stage.traffic_assignment
-    state.current_inner_iter = 0
-
-    zarr_path = (
-        Path(stage_env["workspace"].get_asim_output_dir()) / "cache" / "skims.zarr"
-    )
-    _write_file(zarr_path)
-    stage_env["coupler"].set(ZARR_SKIMS, str(zarr_path))
-
-    activity_outputs = {
-        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
-        "households_asim_out": tmp_path / "households.parquet",
-        "persons_asim_out": tmp_path / "persons.parquet",
-    }
-    for path in activity_outputs.values():
-        _write_file(path)
-    activity_demand_outputs = {
-        short_name: str(path) for short_name, path in activity_outputs.items()
-    }
-
-    original_get_preprocessor = ModelFactory.get_preprocessor
-    original_get_runner = ModelFactory.get_runner
-    original_get_postprocessor = ModelFactory.get_postprocessor
-
-    class _BeamPreprocessor:
-        def preprocess(
-            self,
-            workspace,
-            *,
-            activity_demand_outputs=None,
-            previous_beam_outputs=None,
-            beam_preprocess_inputs=None,
-        ):
-            prepared_inputs = {
-                BEAM_PLANS_IN: Path(activity_demand_outputs["beam_plans_asim_out"]),
-                BEAM_HOUSEHOLDS_IN: Path(
-                    activity_demand_outputs["households_asim_out"]
-                ),
-                BEAM_PERSONS_IN: Path(activity_demand_outputs["persons_asim_out"]),
-            }
-            return BeamPreprocessOutputs(
-                beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
-                prepared_inputs=prepared_inputs,
-            )
-
-    class _BeamRunner:
-        def run(self, input_store, workspace, *, extra_inputs=None):
-            output_dir = Path(workspace.get_beam_output_dir())
-            run_outputs = {
-                f"linkstats_parquet_{state.forecast_year}_0": output_dir
-                / "linkstats.parquet",
-                f"beam_plans_out_{state.forecast_year}_0": output_dir / "plans.xml",
-                f"events_parquet_{state.forecast_year}_0": output_dir
-                / "events.parquet",
-                f"raw_od_skims_zarr_{state.forecast_year}_0": output_dir
-                / "od_skims.zarr",
-            }
-            for path in run_outputs.values():
-                _write_file(path)
-            return BeamRunOutputs(
-                beam_output_dir=output_dir,
-                raw_outputs=run_outputs,
-            )
-
-    class _BeamPostprocessor:
-        def postprocess(self, raw_outputs, workspace):
-            _write_file(zarr_path)
-            final_skims_omx = Path(workspace.get_beam_output_dir()) / "final_skims.omx"
-            _write_file(final_skims_omx)
-            return BeamPostprocessOutputs(
-                zarr_skims=zarr_path,
-                final_skims_omx=final_skims_omx,
-            )
-
-    def _patched_get_preprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "beam":
-            return _BeamPreprocessor()
-        return original_get_preprocessor(self, model_name, state)
-
-    def _patched_get_runner(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "beam":
-            return _BeamRunner()
-        return original_get_runner(self, model_name, state)
-
-    def _patched_get_postprocessor(self, model_name, state=None, *_args, **_kwargs):
-        if model_name == "beam":
-            return _BeamPostprocessor()
-        return original_get_postprocessor(self, model_name, state)
-
-    monkeypatch.setattr(ModelFactory, "get_preprocessor", _patched_get_preprocessor)
-    monkeypatch.setattr(ModelFactory, "get_runner", _patched_get_runner)
-    monkeypatch.setattr(ModelFactory, "get_postprocessor", _patched_get_postprocessor)
-
-    outputs_holder = StepOutputsHolder()
-    outputs_holder.activitysim_postprocess = SimpleNamespace()
-    _run_traffic_assignment_phase(
-        scenario=stage_env["scenario"],
-        state=state,
-        settings=stage_env["settings"],
-        workspace=stage_env["workspace"],
-        coupler=stage_env["coupler"],
-        inputs=TrafficAssignmentPhaseInputs(
-            year=state.forecast_year,
-            iteration=0,
-            activity_demand_outputs=activity_demand_outputs,
-            previous_beam_outputs=None,
+        state=SimpleNamespace(year=2030, forecast_year=2030, iteration=0),
+        workspace=SimpleNamespace(
+            get_asim_output_dir=lambda: "/tmp/activitysim-output"
         ),
-        outputs_holder=outputs_holder,
+        resolved_inputs=resolved,
     )
 
-    _assert_coupler_contains(
-        stage_env["coupler"],
-        {
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-            BEAM_PLANS_OUT,
-            LINKSTATS,
-            LINKSTATS_WARMSTART,
-            ZARR_SKIMS,
-        },
-    )
+    assert activitysim._activitysim_run_produces_zarr(resolved) is True
+    assert ZARR_SKIMS in output_paths
+
+
+def test_traffic_assignment_native_contract_declares_beam_key_family() -> None:
+    """The direct BEAM chain replaces stage-local output-holder publication."""
+
+    assert {
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+    } <= _declared_outputs("beam_preprocess")
+    assert {LINKSTATS, BEAM_PLANS_OUT} <= _declared_outputs("beam_run")
+    assert ZARR_SKIMS in _declared_optional_inputs("beam_postprocess")
+    assert ZARR_SKIMS in _declared_outputs("beam_postprocess")

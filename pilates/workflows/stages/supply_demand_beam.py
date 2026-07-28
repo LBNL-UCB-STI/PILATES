@@ -2,54 +2,68 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+import shutil
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
+from consist import Artifact
+
 from pilates.config.models import PilatesConfig
-from pilates.runtime.context import (
-    WorkflowRuntimeContext,
-    ensure_workflow_runtime_context,
-)
-from pilates.runtime.restart import restart_target_for_step
+from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import (
     CouplerProtocol,
-    RunLike,
-    ScenarioRestorationLike,
     ScenarioWithCoupler,
 )
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
+    archive_copy_now,
     artifact_to_existing_path,
+    flush_archive_queue,
     set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.outputs import BeamRunOutputs
-from pilates.workflows.tracker_outputs import load_tracker_run_outputs
-from pilates.workflows.binding import (
-    BindingPlan,
-    beam_preprocess_binding_plan,
-    build_binding_plan,
-    build_key_only_binding_plan,
+from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
+from pilates.beam.config_hocon import beam_config_root
+from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+from pilates.workflows.resume import (
+    HistoricalOutputRequest,
+    ResumeDecision,
+    ResumeDisposition,
+    ResumePlanningError,
+    ResumeProjectionError,
+    RestoreExecutionResult,
 )
-from pilates.workflows.orchestration import StepRef, run_workflow
-from pilates.workflows.orchestration import StageRunner
+from pilates.workflows.beam_checkpoint import (
+    PinnedClosureMember,
+    beam_checkpoint_record_present,
+    beam_postprocess_is_in_progress,
+    checkpoint_fingerprint_matches,
+    hydrate_pinned_closure,
+    is_verified_hydrated_zarr_directory,
+    mark_beam_postprocess_in_progress,
+    read_beam_run_checkpoint,
+    snapshot_and_publish_beam_run_checkpoint,
+    validate_pinned_closure_snapshot,
+    verify_archive_visible_pinned_closure_bytes,
+)
 from pilates.workflows.outputs_base import step_output_handoff_mapping
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import (
-    StepOutputsHolder,
-    make_beam_full_skim_step,
-    make_beam_postprocess_step,
-    make_beam_preprocess_step,
-    make_beam_run_step,
+    beam_full_skim,
+    beam_postprocess,
+    beam_preprocess,
+    beam_run,
 )
+from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
     BEAM_PLANS_OUT,
-    ATLAS_VEHICLES2_OUTPUT,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -60,7 +74,7 @@ from workflow_state import WorkflowState
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from pilates.workflows.surface import EnabledWorkflowSurface
+    pass
 
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
@@ -86,8 +100,6 @@ class TrafficAssignmentPhaseInputs:
 
     year: int
     iteration: int
-    activity_demand_outputs: Optional[Dict[str, Any]]
-    previous_beam_outputs: Optional[Dict[str, Any]]
 
 
 @dataclass
@@ -98,11 +110,20 @@ class TrafficAssignmentPhaseOutputs:
     Parameters
     ----------
     previous_beam_outputs : Optional[dict[str, Any]]
-        Combined BEAM run + postprocess outputs for warm-starting the
-        next iteration, if available.
+        BEAM postprocess outputs for warm-starting the next iteration, if
+        available. BEAM-run artifacts remain in the pinned postprocess closure
+        and coupler rather than this public handoff.
     """
 
-    previous_beam_outputs: Optional[Dict[str, Any]]
+    pass
+
+
+@dataclass(frozen=True)
+class _RecoveredBeamRun:
+    """A historical BEAM projection plus its direct producer identity."""
+
+    outputs: BeamRunOutputs
+    producer_run_id: Optional[str]
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
@@ -168,7 +189,7 @@ def _beam_restart_identity_context(
 
 def beam_preprocess_binding_diagnostic_payload(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -201,9 +222,11 @@ def beam_preprocess_binding_diagnostic_payload(
         for key, path in required_local_inputs.items()
         if path and not os.path.exists(path)
     )
-    missing_required = (
-        binding.missing_required if binding.missing_required is not None else []
-    )
+    missing_required = [
+        role
+        for role in binding.required_roles
+        if binding.source_by_role.get(role) in {None, "missing"}
+    ]
     missing_restart_inputs = sorted(set(missing_required) | set(missing_local_inputs))
     resolved_identity_context = dict(
         identity_context
@@ -249,35 +272,13 @@ def beam_preprocess_binding_diagnostic_payload(
             "iteration",
             getattr(state, "current_inner_iter", None),
         ),
-        "input_keys": sorted(
-            binding.input_keys if binding.input_keys is not None else []
-        ),
-        "optional_input_keys": sorted(
-            binding.optional_input_keys
-            if binding.optional_input_keys is not None
-            else []
-        ),
-        "bound_input_keys": sorted(
-            (binding.inputs if binding.inputs is not None else {}).keys()
-        ),
+        "input_keys": sorted(binding.required_roles),
+        "optional_input_keys": sorted(binding.optional_roles),
+        "bound_input_keys": sorted((binding.binding.inputs or {}).keys()),
         "missing_required": sorted(missing_required),
         "missing_restart_inputs": missing_restart_inputs,
-        "source_by_key": dict(
-            sorted(
-                (
-                    binding.source_by_key if binding.source_by_key is not None else {}
-                ).items()
-            )
-        ),
-        "coupler_key_by_key": dict(
-            sorted(
-                (
-                    binding.coupler_key_by_key
-                    if binding.coupler_key_by_key is not None
-                    else {}
-                ).items()
-            )
-        ),
+        "source_by_key": dict(sorted((binding.source_by_role).items())),
+        "coupler_key_by_key": dict(sorted((binding.selected_key_by_role).items())),
         "required_local_inputs": _stringify_mapping_values(required_local_inputs),
         "missing_local_inputs": missing_local_inputs,
         "identity_summary": dict(identity_summary or {}),
@@ -292,7 +293,7 @@ def beam_preprocess_binding_diagnostic_payload(
 
 def _emit_beam_preprocess_binding_diagnostic(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -318,7 +319,7 @@ def _emit_beam_preprocess_binding_diagnostic(
 
 def _raise_if_restart_beam_config_missing(
     *,
-    binding: BindingPlan,
+    binding: ResolvedStepInputs,
     state: WorkflowState,
     settings: PilatesConfig,
     workspace: Workspace,
@@ -337,7 +338,7 @@ def _raise_if_restart_beam_config_missing(
     if expected_path is not None and expected_path.exists():
         return
 
-    binding_inputs = binding.inputs if binding.inputs is not None else {}
+    binding_inputs = binding.binding.inputs or {}
     config_value = binding_inputs.get(BEAM_CONFIG_FILE)
     config_hint = f" Resolved binding value: {config_value}." if config_value else ""
     raise RuntimeError(
@@ -412,6 +413,10 @@ def _build_beam_postprocess_input_keys(
         selected.append(ZARR_SKIMS)
 
     deduped = list(dict.fromkeys(selected))
+    for prefix in ("events_parquet", "raw_od_skims", "raw_od_skims_zarr"):
+        final_key = f"{prefix}_{year}_{iteration}"
+        if final_key in deduped:
+            deduped = [key for key in deduped if not key.startswith(f"{final_key}_sub")]
     return deduped or None
 
 
@@ -457,198 +462,109 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
         return None
 
 
-def _find_completed_beam_run_for_restart(
-    *,
-    tracker: Any,
-    settings: PilatesConfig,
-    state: WorkflowState,
+def _beam_restart_output_requests(
+    linked_output_keys: Iterable[str],
     workspace: Workspace,
     year: int,
     iteration: int,
-) -> Optional[Any]:
-    find_matching_run = getattr(tracker, "find_matching_run", None)
-    if not callable(find_matching_run):
-        raise AttributeError("tracker does not support find_matching_run")
+) -> tuple[HistoricalOutputRequest, ...]:
+    """Map selected BEAM output keys to their exact current destinations."""
 
-    target = restart_target_for_step(
-        settings=settings,
-        step_name="beam_run",
-        year=year,
-        iteration=iteration,
-        state=state,
-        workspace=workspace,
+    selected = (
+        _build_beam_postprocess_input_keys(
+            upstream_keys=linked_output_keys,
+            year=year,
+            iteration=iteration,
+            include_zarr_skims=False,
+        )
+        or []
     )
-    return find_matching_run(**target)
+    selected.extend(
+        key
+        for key in linked_output_keys
+        if key == LINKSTATS or key.startswith(BEAM_PLANS_OUT)
+    )
+    selected = list(dict.fromkeys(selected))
+    output_dir = Path(workspace.get_beam_output_dir())
+    requests: list[HistoricalOutputRequest] = []
+    for key in selected:
+        if key == LINKSTATS:
+            destination = output_dir / f"{iteration}.linkstats.csv.gz"
+        elif key.startswith("beam_plans_out"):
+            destination = output_dir / "plans.csv.gz"
+        elif key.startswith("events_parquet_"):
+            destination = output_dir / f"{iteration}.events.parquet"
+        elif key.startswith("raw_od_skims_zarr"):
+            destination = output_dir / f"{iteration}.skimsActivitySimOD.zarr"
+        elif key.startswith("raw_od_skims"):
+            destination = output_dir / f"{iteration}.skimsActivitySimOD_current.omx"
+        else:
+            raise ResumePlanningError(
+                "destination_contract_error",
+                f"No deterministic BEAM destination exists for output key={key}.",
+            )
+        requests.append(
+            HistoricalOutputRequest(key=key, destination=destination, required=True)
+        )
+    return tuple(requests)
 
 
-def _output_path_from_hydration_item(item: Any) -> Optional[Path]:
-    path = getattr(item, "path", None)
-    if path is not None and bool(getattr(item, "resolvable", True)):
-        return Path(path)
-    artifact = getattr(item, "artifact", None)
-    as_path = getattr(artifact, "as_path", None)
-    if callable(as_path):
-        try:
-            resolved = as_path()
-        except Exception:
-            resolved = None
-        if resolved is not None:
-            return Path(resolved)
-    return None
-
-
-def _hydrate_completed_beam_run_outputs(
+def _project_hydrated_beam_run_outputs(
     *,
-    tracker: Any,
-    run_id: str,
+    hydration_result: Any,
     workspace: Workspace,
-    state: WorkflowState,
-    year: int,
-    iteration: int,
-) -> Optional[BeamRunOutputs]:
-    tracker_outputs = load_tracker_run_outputs(
-        run_id,
-        tracker=tracker,
-        logger=logger,
-        log_context="completed BEAM run restart recovery",
-    )
-    keys = list(tracker_outputs.keys())
-    if not keys:
-        logger.info(
-            "[BEAM][restart] completed beam_run run_id=%s has no linked outputs to hydrate",
-            run_id,
-        )
-        return None
-
-    critical_keys = _build_beam_postprocess_input_keys(
-        upstream_keys=keys,
-        year=year,
-        iteration=iteration,
-        include_zarr_skims=False,
-    )
-    if not critical_keys:
-        logger.info(
-            "[BEAM][restart] completed beam_run run_id=%s has no postprocess-critical outputs to hydrate",
-            run_id,
-        )
-        return None
-    publication_keys = [
-        key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in tracker_outputs
-    ]
-    required_keys = list(dict.fromkeys([*critical_keys, *publication_keys]))
-
-    target_root = os.path.realpath(str(workspace.full_path))
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    source_root = os.path.realpath(str(archive_run_dir)) if archive_run_dir else None
-    raw_outputs: Dict[str, Path] = {}
-    hydration_complete: Optional[bool] = None
-    hydration_summary: Optional[str] = None
-
-    hydrate_run_outputs = getattr(tracker, "hydrate_run_outputs", None)
-    if callable(hydrate_run_outputs):
-        try:
-            hydrated = hydrate_run_outputs(
-                run_id=run_id,
-                target_root=target_root,
-                source_root=source_root,
-                preserve_existing=True,
-                keys=keys,
-            )
-        except Exception:
-            logger.debug(
-                "[BEAM][restart] hydrate_run_outputs failed for run_id=%s",
-                run_id,
-                exc_info=True,
-            )
-            hydrated = None
-        if hydrated is not None:
-            hydration_complete = bool(getattr(hydrated, "complete", True))
-            hydration_summary = str(getattr(hydrated, "summary", ""))
-            for key, item in hydrated.items():
-                path = _output_path_from_hydration_item(item)
-                if path is not None and path.exists():
-                    raw_outputs[str(key)] = path
-
-    for key, value in tracker_outputs.items():
-        if str(key) in raw_outputs:
-            continue
-        path = artifact_to_existing_path(
-            value,
-            workspace=workspace,
-        )
-        if path is not None:
-            raw_outputs[str(key)] = Path(path)
-
-    if not raw_outputs:
-        materialize_run_outputs = getattr(tracker, "materialize_run_outputs", None)
-        if callable(materialize_run_outputs):
-            try:
-                materialize_run_outputs(
-                    run_id=run_id,
-                    target_root=target_root,
-                    source_root=source_root,
-                    preserve_existing=True,
-                    keys=keys,
-                )
-            except Exception:
-                logger.debug(
-                    "[BEAM][restart] materialize_run_outputs failed for run_id=%s",
-                    run_id,
-                    exc_info=True,
-                )
-        for key, value in tracker_outputs.items():
-            if str(key) in raw_outputs:
-                continue
-            path = artifact_to_existing_path(
-                value,
-                workspace=workspace,
-            )
-            if path is not None:
-                raw_outputs[str(key)] = Path(path)
-
-    if not raw_outputs:
-        logger.info(
-            "[BEAM][restart] completed beam_run run_id=%s could not hydrate usable output paths",
-            run_id,
-        )
-        return None
-
-    missing_required = [key for key in required_keys if key not in raw_outputs]
-    if missing_required:
-        logger.warning(
-            "[BEAM][restart] completed beam_run run_id=%s hydration missing required keys=%s summary=%s",
-            run_id,
-            missing_required,
-            hydration_summary,
-        )
-        return None
-    if hydration_complete is False:
-        logger.warning(
-            "[BEAM][restart] completed beam_run run_id=%s hydration was partial but all postprocess-critical keys resolved summary=%s",
-            run_id,
-            hydration_summary,
-        )
-
-    return BeamRunOutputs(
-        beam_output_dir=Path(workspace.get_beam_output_dir()),
-        raw_outputs=raw_outputs,
-    )
-
-
-def _publish_recovered_beam_run_outputs(
-    *,
-    outputs: BeamRunOutputs,
     coupler: CouplerProtocol,
-) -> None:
-    for key, path, _description in outputs._iter_record_items():
-        set_coupler_from_artifact(coupler, key, None, fallback=str(path))
+) -> tuple[BeamRunOutputs, tuple[str, ...]]:
+    """Validate accepted BEAM hydration items and publish current roles only."""
+
+    raw_outputs: Dict[str, Path] = {}
+    published_keys: list[str] = []
+    for key, item in hydration_result.items():
+        if item.path is None:
+            if item.resolvable:
+                raise ResumeProjectionError(
+                    "unsupported_output_representation",
+                    f"BEAM output key={key} has no hydrated destination.",
+                )
+            continue
+        if (
+            item.status == "materialized_from_filesystem"
+            and item.resolvable
+            and item.path.is_dir()
+        ):
+            raise ResumeProjectionError(
+                "unsupported_output_representation",
+                f"BEAM output key={key} is not a file destination.",
+            )
+        is_file = (
+            item.status == "materialized_from_filesystem"
+            and item.resolvable
+            and item.path.is_file()
+        )
+        is_zarr_directory = is_verified_hydrated_zarr_directory(
+            item, destination=item.path
+        )
+        if not is_file and not is_zarr_directory:
+            continue
+        raw_outputs[str(key)] = item.path
+        set_coupler_from_artifact(
+            coupler, str(key), item.artifact, fallback=str(item.path)
+        )
+        published_keys.append(str(key))
         if key == LINKSTATS:
             set_coupler_from_artifact(
                 coupler,
                 LINKSTATS_WARMSTART,
-                None,
-                fallback=str(path),
+                item.artifact,
+                fallback=str(item.path),
             )
+            published_keys.append(LINKSTATS_WARMSTART)
+
+    outputs = BeamRunOutputs(
+        beam_output_dir=Path(workspace.get_beam_output_dir()), raw_outputs=raw_outputs
+    )
+    outputs.validate()
+    return outputs, tuple(published_keys)
 
 
 def _restored_beam_parent_years(
@@ -667,249 +583,496 @@ def _restored_beam_parent_years(
     return years
 
 
-def _try_restore_completed_beam_run_for_restart(
+def _beam_checkpoint_scope(
+    *, state: WorkflowState, year: int, iteration: int
+) -> dict[str, int]:
+    return {
+        "year": int(state.year),
+        "forecast_year": int(year),
+        "iteration": int(iteration),
+    }
+
+
+def _beam_checkpoint_skim_variant(settings: PilatesConfig) -> str:
+    full_skim = settings.beam.full_skim
+    return str(full_skim.run_schedule) if full_skim is not None else "disabled"
+
+
+def beam_checkpoint_resume_requested(*, state: WorkflowState) -> bool:
+    """Whether restart state contains an authoritative BEAM checkpoint record."""
+
+    if not state.is_restart_run:
+        return False
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    return archive_run_dir is not None and beam_checkpoint_record_present(
+        archive_run_dir
+    )
+
+
+def _closure_artifact_kind(artifact: Any) -> str:
+    meta = artifact.meta
+    if not isinstance(meta, dict):
+        raise RuntimeError(
+            f"BEAM checkpoint artifact {artifact.key!r} has invalid metadata."
+        )
+    if meta.get("directory_artifact") is True:
+        return "directory"
+    if meta.get("file_bundle_artifact") is True:
+        return "file_bundle"
+    return "file"
+
+
+def _beam_postprocess_destination(
     *,
-    scenario: ScenarioRestorationLike,
+    role: str,
+    output_key: str,
+    workspace: Workspace,
+    year: int,
+    iteration: int,
+) -> Path:
+    """Return the native resolver's exact postprocess input destination."""
+
+    if role == ZARR_SKIMS:
+        return Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
+    del year, iteration
+    input_root = Path(workspace.get_beam_output_dir()) / ".pilates-consist-inputs"
+    if output_key.startswith("events_parquet_"):
+        return input_root / f"{output_key}.parquet"
+    if output_key.startswith("raw_od_skims_zarr"):
+        return input_root / f"{output_key}.zarr"
+    if output_key.startswith("raw_od_skims"):
+        return input_root / f"{output_key}.omx"
+    raise RuntimeError(
+        f"BEAM postprocess role has no exact native destination: {role}."
+    )
+
+
+def _rebind_beam_postprocess_closure_destinations(
+    *,
+    members: tuple[PinnedClosureMember, ...],
+    workspace: Workspace,
+    archive_run_dir: Path,
+    year: int,
+    iteration: int,
+) -> tuple[PinnedClosureMember, ...]:
+    """Bind a prior job's logical destinations to this job's workspace root."""
+
+    workspace_root = Path(workspace.full_path).expanduser().resolve()
+    run_name = archive_run_dir.name
+    rebound: list[PinnedClosureMember] = []
+    for member in members:
+        destination = (
+            _beam_postprocess_destination(
+                role=member.role,
+                output_key=member.output_key,
+                workspace=workspace,
+                year=year,
+                iteration=iteration,
+            )
+            .expanduser()
+            .resolve()
+        )
+        try:
+            workspace_relative = destination.relative_to(workspace_root)
+        except ValueError as error:
+            raise RuntimeError(
+                "BEAM checkpoint destination resolver escaped the current workspace: "
+                f"{destination}."
+            ) from error
+
+        expected_suffix = (run_name, *workspace_relative.parts)
+        if member.destination.parts[-len(expected_suffix) :] != expected_suffix:
+            raise RuntimeError(
+                "Committed BEAM checkpoint has a wrong logical destination for "
+                f"{member.output_key}: {member.destination}."
+            )
+        rebound.append(replace(member, destination=destination))
+    return tuple(rebound)
+
+
+def _resolve_beam_postprocess_closure(
+    *,
+    tracker: Any,
+    resolved_inputs: ResolvedStepInputs,
+    workspace: Workspace,
+    year: int,
+    iteration: int,
+    beam_run_id: str,
+) -> tuple[PinnedClosureMember, ...]:
+    """Freeze exactly one resolved native postprocess input closure."""
+
+    outputs_by_run: dict[str, Mapping[str, Any]] = {}
+    members: list[PinnedClosureMember] = []
+    destinations_seen: dict[Path, tuple[str, str]] = {}
+    selected_roles = tuple(
+        role
+        for role in (*resolved_inputs.required_roles, *resolved_inputs.optional_roles)
+        if resolved_inputs.source_by_role.get(role) != "missing"
+    )
+    if not selected_roles:
+        raise RuntimeError("Cannot commit an empty BEAM postprocess input closure.")
+
+    for role in selected_roles:
+        if role not in (resolved_inputs.binding.inputs or {}):
+            raise RuntimeError(
+                f"BEAM postprocess resolved role {role!r} is not a concrete input."
+            )
+        selected_artifact = (resolved_inputs.binding.inputs or {})[role]
+        if not isinstance(selected_artifact, Artifact):
+            raise RuntimeError(
+                "Cannot commit BEAM postprocess input without tracked artifact "
+                f"provenance for {role!r}."
+            )
+        producer_run_id = (
+            selected_artifact.run_id if role == ZARR_SKIMS else beam_run_id
+        )
+        output_key = selected_artifact.key
+        artifact_identity = selected_artifact.hash
+        driver = selected_artifact.driver
+        if not producer_run_id or not output_key:
+            raise RuntimeError(
+                "Cannot commit BEAM postprocess input without producer/output "
+                f"provenance for {role!r}."
+            )
+        if not artifact_identity:
+            raise RuntimeError(
+                f"Cannot commit BEAM postprocess input without identity {output_key}."
+            )
+        destination = resolved_inputs.logical_destinations.get(role)
+        if destination is None:
+            raise RuntimeError(
+                f"BEAM postprocess input {role!r} has no logical destination."
+            )
+        destination = Path(destination).expanduser().resolve()
+        producer_output = (producer_run_id, output_key)
+        prior_producer_output = destinations_seen.get(destination)
+        if prior_producer_output is not None:
+            if prior_producer_output == producer_output:
+                continue
+            raise RuntimeError(
+                "BEAM postprocess closure has conflicting artifacts for "
+                f"destination {destination}: {prior_producer_output!r} and "
+                f"{producer_output!r}."
+            )
+        destinations_seen[destination] = producer_output
+        outputs = outputs_by_run.get(producer_run_id)
+        if outputs is None:
+            outputs = tracker.get_run_outputs(producer_run_id)
+            outputs_by_run[producer_run_id] = outputs
+        artifact = outputs.get(output_key)
+        if artifact is None:
+            raise RuntimeError(
+                f"Cannot commit BEAM postprocess input without output link {output_key}."
+            )
+        if artifact.hash != artifact_identity:
+            raise RuntimeError(
+                f"BEAM postprocess input identity does not match output link {output_key}."
+            )
+        if artifact.driver != driver:
+            raise RuntimeError(
+                f"BEAM postprocess input driver does not match output link {output_key}."
+            )
+        artifact_kind = _closure_artifact_kind(selected_artifact)
+        if _closure_artifact_kind(artifact) != artifact_kind:
+            raise RuntimeError(
+                f"BEAM postprocess input kind does not match output link {output_key}."
+            )
+        members.append(
+            PinnedClosureMember(
+                member_id=f"{producer_run_id}:{output_key}",
+                role=role,
+                producer_run_id=producer_run_id,
+                output_key=output_key,
+                artifact_identity=str(artifact_identity),
+                artifact_kind=artifact_kind,
+                driver=(str(driver) if driver is not None else None),
+                destination=destination,
+                required=role in resolved_inputs.required_roles,
+            )
+        )
+    return tuple(members)
+
+
+def _open_beam_checkpoint_tracker(snapshot_path: Path, archive_run_dir: Path) -> Any:
+    """Open only the pinned archive-local DB for committed BEAM restoration."""
+
+    return cr.consist.Tracker(
+        run_dir=archive_run_dir,
+        db_path=snapshot_path,
+        allow_external_paths=True,
+        access_mode="read_only",
+    )
+
+
+def _publish_completed_beam_run_checkpoint(
+    *,
+    scenario: ScenarioWithCoupler,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
+    postprocess_inputs: ResolvedStepInputs,
     year: int,
     iteration: int,
-) -> Optional[BeamRunOutputs]:
-    if not bool(getattr(state, "is_restart_run", False)):
-        return None
-    if outputs_holder.beam_run is not None:
-        return outputs_holder.beam_run
+    producer_run_id: Optional[str] = None,
+) -> None:
+    """Commit a BEAM-only overlay without advancing traffic-assignment state."""
 
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is None:
+        return
     tracker = cr.current_tracker()
     if tracker is None:
-        return None
-    run: Optional[RunLike] = _find_completed_beam_run_for_restart(
-        tracker=tracker,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=year,
-        iteration=iteration,
-    )
-    if run is None:
-        return None
-
-    run_id = str(run.id).strip() if isinstance(run, RunLike) else ""
-    if not run_id:
-        return None
-    run_year, run_iteration = year, iteration
-    if isinstance(run, RunLike):
-        try:
-            run_year = int(getattr(run, "year", year))
-        except (TypeError, ValueError):
-            run_year = year
-        try:
-            run_iteration = int(getattr(run, "iteration", iteration))
-        except (TypeError, ValueError):
-            run_iteration = iteration
-    outputs = _hydrate_completed_beam_run_outputs(
-        tracker=tracker,
-        run_id=run_id,
-        workspace=workspace,
-        state=state,
-        year=year,
-        iteration=iteration,
-    )
-    if outputs is None:
         raise RuntimeError(
-            "BEAM restart found a completed same-run beam_run but could not "
-            "hydrate the required outputs for postprocess. Refusing to rerun "
-            f"BEAM from restart because the completed run is authoritative. "
-            f"run_id={run_id}"
+            "Cannot commit completed BEAM run without an active tracker."
         )
-
-    outputs_holder.beam_run = outputs
-    _publish_recovered_beam_run_outputs(outputs=outputs, coupler=coupler)
-    for parent_year in _restored_beam_parent_years(
-        state=state,
-        run_year=run_year if run_year is not None else year,
-    ):
-        scenario.remember_restored_run_id(
-            model_name="beam_run",
-            year=parent_year,
-            iteration=run_iteration,
-            run_id=run_id,
-        )
-    restored_keys = sorted(outputs.raw_outputs.keys())
-    logger.info(
-        "[BEAM][restart] restored completed beam_run from Consist run_id=%s hydrated_keys=%s",
-        run_id,
-        restored_keys,
-    )
-    _emit_artifact_lifecycle_event(
-        "beam_restart_binding",
-        key="beam_restart_binding",
-        artifact_family="beam_restart_diagnostic",
-        diagnostic="beam_restart_binding",
-        restart_run=True,
-        workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
-        forecast_year=getattr(state, "forecast_year", None),
+    if producer_run_id is None:
+        try:
+            run_id = scenario._beam_run_ids[(year, iteration)]  # type: ignore[attr-defined]
+        except (AttributeError, KeyError) as error:
+            raise RuntimeError(
+                "Cannot commit completed BEAM run without its direct run ID."
+            ) from error
+    else:
+        run_id = producer_run_id
+    closure_members = _resolve_beam_postprocess_closure(
+        tracker=tracker,
+        resolved_inputs=postprocess_inputs,
+        workspace=workspace,
+        year=year,
         iteration=iteration,
-        recovery_mode="consist_completed_run_hydration",
-        recovered_run_id=run_id,
-        hydrated_output_keys=restored_keys,
-        drift_classification="completed_beam_run_recovered",
+        beam_run_id=run_id,
     )
-    return outputs
+    flush_archive_queue(fail_on_timeout=True)
+    selected_inputs = postprocess_inputs.binding.inputs or {}
+    for member in closure_members:
+        selected_artifact = selected_inputs.get(member.role)
+        if not isinstance(selected_artifact, Artifact):
+            raise RuntimeError(
+                "Cannot archive BEAM checkpoint closure member without a tracked "
+                f"artifact: {member.role!r}."
+            )
+        source_path = artifact_to_existing_path(selected_artifact, workspace)
+        if source_path is None:
+            raise RuntimeError(
+                "Cannot archive BEAM checkpoint closure member because its selected "
+                f"artifact is unavailable: {member.role!r}."
+            )
+        if not archive_copy_now(
+            key=member.output_key,
+            path=source_path,
+            workspace=workspace,
+        ):
+            raise RuntimeError(
+                f"Cannot archive BEAM checkpoint closure member: {member.output_key!r}."
+            )
+    verify_archive_visible_pinned_closure_bytes(
+        tracker=tracker,
+        archive_run_dir=archive_run_dir,
+        members=closure_members,
+    )
+    snapshot_and_publish_beam_run_checkpoint(
+        tracker=tracker,
+        open_snapshot=lambda snapshot_path: _open_beam_checkpoint_tracker(
+            snapshot_path, archive_run_dir
+        ),
+        archive_run_dir=archive_run_dir,
+        producer_run_id=run_id,
+        scope=_beam_checkpoint_scope(state=state, year=year, iteration=iteration),
+        skim_variant=_beam_checkpoint_skim_variant(settings),
+        output_requests=(),
+        closure_members=closure_members,
+    )
 
 
-def _beam_run_output_keys(outputs: BeamRunOutputs) -> list[str]:
-    raw_outputs = getattr(outputs, "raw_outputs", None)
-    if isinstance(raw_outputs, Mapping):
-        return sorted(str(key) for key in raw_outputs.keys())
-    iter_record_items = getattr(outputs, "_iter_record_items", None)
-    if callable(iter_record_items):
-        return sorted(
-            str(short_name) for short_name, _path, _desc in iter_record_items()
+def _validate_rebound_postprocess_inputs(
+    *,
+    checkpoint: Any,
+    members: tuple[PinnedClosureMember, ...],
+    resolved_inputs: ResolvedStepInputs,
+) -> None:
+    """Fail closed unless the normal resolver exactly reproduces the closure."""
+
+    closure_by_role = {member.role: member for member in members}
+    if len(closure_by_role) != len(members):
+        raise RuntimeError("Committed BEAM checkpoint closure has duplicate roles.")
+    resolved_roles = {
+        role
+        for role in (*resolved_inputs.required_roles, *resolved_inputs.optional_roles)
+        if resolved_inputs.source_by_role.get(role) != "missing"
+    }
+    if resolved_roles != set(closure_by_role):
+        raise RuntimeError(
+            "Committed BEAM checkpoint closure does not match normal postprocess "
+            "resolver roles."
         )
-    return []
+
+    inputs = resolved_inputs.binding.inputs or {}
+    for role, member in closure_by_role.items():
+        if member.required != (role in resolved_inputs.required_roles):
+            raise RuntimeError(
+                f"Committed BEAM checkpoint requiredness drifted for {role!r}."
+            )
+        if resolved_inputs.selected_key_by_role.get(role, role) != member.output_key:
+            raise RuntimeError(
+                f"Committed BEAM checkpoint selected key drifted for {role!r}."
+            )
+        destination = resolved_inputs.logical_destinations.get(role)
+        if (
+            destination is None
+            or Path(destination).expanduser().resolve() != member.destination
+        ):
+            raise RuntimeError(
+                f"Committed BEAM checkpoint destination drifted for {role!r}."
+            )
+        artifact = inputs.get(role)
+        if getattr(artifact, "hash", None) != member.artifact_identity:
+            raise RuntimeError(
+                f"Committed BEAM checkpoint hydrated identity drifted for {role!r}."
+            )
+    if checkpoint.producer_run_id not in {member.producer_run_id for member in members}:
+        raise RuntimeError("Committed BEAM checkpoint producer is absent from closure.")
+
+
+def _try_resume_committed_beam_postprocess(
+    *,
+    scenario: ScenarioWithCoupler,
+    coupler: CouplerProtocol,
+    year: int,
+    iteration: int,
+    context: WorkflowRuntimeContext,
+) -> Optional[Dict[str, Any]]:
+    """Hydrate one committed successor closure and invoke postprocess only."""
+
+    state = context.state
+    if not state.is_restart_run:
+        return None
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is None or not beam_checkpoint_record_present(archive_run_dir):
+        return None
+    if beam_postprocess_is_in_progress(archive_run_dir):
+        raise RuntimeError(
+            "BEAM checkpoint is non-restartable: beam_postprocess_in_progress."
+        )
+    checkpoint = read_beam_run_checkpoint(archive_run_dir)
+    if checkpoint is None or not checkpoint.closure_members:
+        raise RuntimeError("Committed BEAM checkpoint is invalid or incomplete.")
+    snapshot_path = (archive_run_dir / checkpoint.snapshot_ref).resolve()
+    if (
+        not snapshot_path.is_relative_to(archive_run_dir.resolve())
+        or not snapshot_path.is_file()
+    ):
+        raise RuntimeError(
+            "Committed BEAM checkpoint snapshot is missing or outside archive."
+        )
+    expected_scope = _beam_checkpoint_scope(
+        state=state,
+        year=year,
+        iteration=iteration,
+    )
+    if not checkpoint_fingerprint_matches(
+        checkpoint,
+        scope=expected_scope,
+        skim_variant=_beam_checkpoint_skim_variant(context.settings),
+        output_requests=(),
+        closure_members=checkpoint.closure_members,
+    ):
+        raise RuntimeError(
+            "Committed BEAM checkpoint recovery fingerprint does not match."
+        )
+
+    snapshot_tracker = _open_beam_checkpoint_tracker(
+        snapshot_path,
+        archive_run_dir,
+    )
+    validate_pinned_closure_snapshot(
+        tracker=snapshot_tracker,
+        members=checkpoint.closure_members,
+        scope=expected_scope,
+    )
+    closure_members = _rebind_beam_postprocess_closure_destinations(
+        members=checkpoint.closure_members,
+        workspace=context.workspace,
+        archive_run_dir=archive_run_dir,
+        year=year,
+        iteration=iteration,
+    )
+    restored = hydrate_pinned_closure(
+        tracker=snapshot_tracker,
+        source_root=archive_run_dir,
+        members=closure_members,
+    )
+
+    for member in closure_members:
+        item = restored[member.member_id]
+        if item.path is None:
+            raise RuntimeError(
+                f"Committed BEAM checkpoint restored no path for {member.output_key}."
+            )
+        set_coupler_from_artifact(
+            coupler,
+            member.output_key,
+            item.artifact,
+            fallback=str(item.path),
+        )
+        if member.role != member.output_key:
+            set_coupler_from_artifact(
+                coupler,
+                member.role,
+                item.artifact,
+                fallback=str(item.path),
+            )
+    postprocess_inputs = beam_postprocess.resolve_inputs(
+        settings=context.settings,
+        state=state,
+        workspace=context.workspace,
+        coupler=coupler,
+    )
+    postprocess_inputs.require_complete()
+    _validate_rebound_postprocess_inputs(
+        checkpoint=checkpoint,
+        members=closure_members,
+        resolved_inputs=postprocess_inputs,
+    )
+    mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
+    _, postprocess_outputs = execute_step(
+        scenario=scenario,
+        definition=beam_postprocess,
+        settings=context.settings,
+        state=state,
+        workspace=context.workspace,
+        stage="supply_demand",
+        year=year,
+        iteration=iteration,
+        phase="postprocess",
+        resolved_inputs=postprocess_inputs,
+    )
+    return step_output_handoff_mapping(postprocess_outputs, coupler=coupler)
 
 
 def _emit_beam_restart_recovery_readiness_diagnostic(
     *,
-    settings: PilatesConfig,
     state: WorkflowState,
-    workspace: Workspace,
-    outputs: BeamRunOutputs,
-    year: int,
+    decision: ResumeDecision,
+    execution: RestoreExecutionResult,
     iteration: int,
-    include_zarr_skims: bool,
 ) -> None:
-    """Log whether a completed BEAM run is ready for restart-side recovery."""
-    output_keys = _beam_run_output_keys(outputs)
-    postprocess_keys = (
-        _build_beam_postprocess_input_keys(
-            upstream_keys=output_keys,
-            year=year,
-            iteration=iteration,
-            include_zarr_skims=include_zarr_skims,
-        )
-        or []
+    """Record the existing diagnostic from the planner and hydration result."""
+    required_keys = [request.key for request in decision.outputs]
+    missing_required = sorted(set(execution.failed_keys) & set(required_keys))
+    accepted_keys = (
+        sorted(execution.projected_outputs.raw_outputs)
+        if isinstance(execution.projected_outputs, BeamRunOutputs)
+        else []
     )
-    publication_keys = [
-        key for key in (LINKSTATS, BEAM_PLANS_OUT) if key in output_keys
-    ]
-    required_keys = list(dict.fromkeys([*postprocess_keys, *publication_keys]))
-
-    matched_run_id: Optional[str] = None
-    matched_output_keys: list[str] = []
-    error: Optional[str] = None
-    target: Dict[str, Any] = {}
-    hydration_api_available = False
-    cache_identity_drift = False
-
-    try:
-        tracker = cr.current_tracker()
-        hydrate_run_outputs = getattr(tracker, "hydrate_run_outputs", None)
-        hydration_api_available = callable(hydrate_run_outputs)
-        find_matching_run = getattr(tracker, "find_matching_run", None)
-        if not callable(find_matching_run):
-            raise AttributeError("tracker does not support find_matching_run")
-        target = dict(
-            restart_target_for_step(
-                settings=settings,
-                step_name="beam_run",
-                year=year,
-                iteration=iteration,
-                state=state,
-                workspace=workspace,
-            )
-        )
-        run = find_matching_run(**target)
-        matched_run_id = str(run.id).strip() if isinstance(run, RunLike) else None
-        if matched_run_id:
-            try:
-                matched_outputs = load_tracker_run_outputs(
-                    matched_run_id,
-                    tracker=tracker,
-                    logger=logger,
-                    log_context="BEAM restart readiness diagnostic",
-                )
-                matched_output_keys = sorted(str(key) for key in matched_outputs.keys())
-            except Exception as exc:
-                error = f"get_run_outputs_failed:{type(exc).__name__}:{exc}"
-    except Exception as exc:
-        error = f"{type(exc).__name__}:{exc}"
-
-    identity_context = _beam_restart_identity_context(state=state)
-    cache_miss_explanation = identity_context.get("cache_miss_explanation")
-    identity_summary = identity_context.get("identity_summary")
-    drift_components: Dict[str, Any] = {}
-    if isinstance(cache_miss_explanation, Mapping):
-        cache_identity_drift = bool(
-            cache_miss_explanation.get("reason")
-            or cache_miss_explanation.get("mismatched_components")
-            or cache_miss_explanation.get("config_keys_changed")
-            or cache_miss_explanation.get("adapter_identity_changed")
-            or cache_miss_explanation.get("identity_inputs_changed")
-            or cache_miss_explanation.get("input_keys_changed")
-            or cache_miss_explanation.get("missing_input_keys")
-        )
-        for key in (
-            "mismatched_components",
-            "config_keys_changed",
-            "adapter_identity_changed",
-            "identity_inputs_changed",
-            "input_keys_changed",
-            "missing_input_keys",
-        ):
-            value = cache_miss_explanation.get(key)
-            if value:
-                drift_components[key] = value
-    if not cache_identity_drift and isinstance(identity_summary, Mapping):
-        cache_identity_drift = bool(
-            identity_summary.get("reason")
-            or identity_summary.get("mismatched_components")
-            or identity_summary.get("config_keys_changed")
-            or identity_summary.get("adapter_identity_changed")
-            or identity_summary.get("identity_inputs_changed")
-            or identity_summary.get("input_keys_changed")
-            or identity_summary.get("missing_input_keys")
-        )
-        if not drift_components:
-            for key in (
-                "mismatched_components",
-                "config_keys_changed",
-                "adapter_identity_changed",
-                "identity_inputs_changed",
-                "input_keys_changed",
-                "missing_input_keys",
-            ):
-                value = identity_summary.get(key)
-                if value:
-                    drift_components[key] = value
-
-    output_key_source = matched_output_keys or output_keys
-    missing_required = [
-        key for key in required_keys if key not in set(output_key_source)
-    ]
-    matchable = bool(matched_run_id)
-    if not matchable:
-        readiness_classification = "no_completed_run"
-    elif missing_required:
-        readiness_classification = "missing_inputs"
-    elif cache_identity_drift:
-        readiness_classification = "cache_identity_drift"
-    elif error is not None:
-        readiness_classification = "unknown"
-    else:
-        readiness_classification = "complete"
+    readiness_classification = "complete" if execution.succeeded else "restore_failed"
     logger.info(
         "[BEAM][restart] recovery readiness diagnostic: matchable=%s run_id=%s "
         "missing_required=%s required_keys=%s output_keys=%s",
-        matchable,
-        matched_run_id,
+        decision.disposition is ResumeDisposition.RESTORE,
+        decision.source_run_id,
         missing_required,
         required_keys,
-        output_key_source,
+        accepted_keys,
     )
     _emit_artifact_lifecycle_event(
         "beam_restart_recovery_readiness",
@@ -920,23 +1083,23 @@ def _emit_beam_restart_recovery_readiness_diagnostic(
         workflow_year=getattr(state, "year", getattr(state, "current_year", None)),
         forecast_year=getattr(state, "forecast_year", None),
         iteration=iteration,
-        run_scope=str(target.get("run_scope")) if target else None,
-        query_status=target.get("status") if target else None,
-        matched_completed_run_id=matched_run_id,
-        matched_run_id=matched_run_id,
-        matchable=matchable,
-        output_keys=output_keys,
-        matched_output_keys=matched_output_keys,
+        run_scope=decision.semantic_target.get("run_scope"),
+        query_status=decision.semantic_target.get("status"),
+        matched_completed_run_id=decision.source_run_id,
+        matched_run_id=decision.source_run_id,
+        matchable=decision.disposition is ResumeDisposition.RESTORE,
+        output_keys=accepted_keys,
+        matched_output_keys=accepted_keys,
         required_restored_inputs=required_keys,
         required_postprocess_keys=required_keys,
         missing_restored_inputs=missing_required,
         missing_required_keys=missing_required,
-        hydration_api_available=hydration_api_available,
-        identity_summary=dict(identity_summary or {}),
-        cache_miss_explanation=dict(cache_miss_explanation or {}),
-        identity_drift_components=drift_components,
+        hydration_api_available=True,
+        identity_summary={},
+        cache_miss_explanation={},
+        identity_drift_components={},
         drift_classification=readiness_classification,
-        diagnostic_error=error,
+        diagnostic_error=execution.failure_category,
     )
 
 
@@ -974,67 +1137,6 @@ def _derive_beam_run_input_keys(
     return run_input_keys
 
 
-def _finalize_beam_run_input_keys(
-    *,
-    beam_run_input_keys: Optional[list[str]],
-    outputs_holder: StepOutputsHolder,
-) -> list[str]:
-    """
-    Reconcile BEAM run inputs with the artifacts actually published by preprocess.
-
-    The pre-run key derivation happens before BEAM preprocess executes, but
-    preprocess may decide to publish ``linkstats_warmstart`` after resolving
-    previous outputs. Use the realized preprocess outputs as the final contract.
-    """
-    finalized_keys = list(
-        beam_run_input_keys
-        or [
-            BEAM_PLANS_IN,
-            BEAM_HOUSEHOLDS_IN,
-            BEAM_PERSONS_IN,
-        ]
-    )
-    preprocess_outputs = outputs_holder.beam_preprocess
-    prepared_inputs = (
-        preprocess_outputs.prepared_inputs if preprocess_outputs is not None else {}
-    )
-    has_warmstart = LINKSTATS_WARMSTART in prepared_inputs
-    has_vehicles = _BEAM_VEHICLES_IN in prepared_inputs
-    if has_warmstart and LINKSTATS_WARMSTART not in finalized_keys:
-        finalized_keys.append(LINKSTATS_WARMSTART)
-    if not has_warmstart and LINKSTATS_WARMSTART in finalized_keys:
-        finalized_keys = [key for key in finalized_keys if key != LINKSTATS_WARMSTART]
-    if has_vehicles and _BEAM_VEHICLES_IN not in finalized_keys:
-        finalized_keys.append(_BEAM_VEHICLES_IN)
-    return finalized_keys
-
-
-def _make_beam_stage_runner(
-    *,
-    scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
-    year: int,
-    iteration: int,
-    runtime_kwargs_extra: Optional[Mapping[str, Any]] = None,
-    context: WorkflowRuntimeContext,
-) -> StageRunner:
-    """Build the execution context shared by BEAM stage slices."""
-    return StageRunner(
-        stage_name="beam",
-        scenario=scenario,
-        state=context.state,
-        settings=context.settings,
-        workspace=context.workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        name_suffix=f"{year}_iter{iteration}",
-        iteration=iteration,
-        runtime_kwargs_extra=runtime_kwargs_extra,
-        run_workflow_fn=run_workflow,
-    )
-
-
 def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
     """Inject a controlled restart-canary failure after BEAM run completion."""
     if os.environ.get(_FAIL_AFTER_BEAM_RUN_ENV) != "1":
@@ -1051,266 +1153,221 @@ def _maybe_fail_after_beam_run_for_canary(*, year: int, iteration: int) -> None:
 
 def _run_beam_preprocess_step(
     *,
-    stage_runner: StageRunner,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
     year: int,
-    beam_preprocess_binding: BindingPlan,
-) -> None:
-    """
-    Execute BEAM preprocess with explicit resolved inputs.
-    """
-    stage_runner.run_step(
-        step=StepRef(
-            name="beam_preprocess",
-            step_func=make_beam_preprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            binding=beam_preprocess_binding,
-            year=year,
-        )
+    iteration: int,
+) -> Any:
+    """Execute the native BEAM preprocess definition exactly once."""
+
+    _, outputs = execute_step(
+        scenario=scenario,
+        definition=beam_preprocess,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=year,
+        iteration=iteration,
+        phase="preprocess",
     )
+    return outputs
+
+
+def _compile_beam_launch_config(
+    *,
+    scenario: ScenarioWithCoupler,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    year: int,
+    iteration: int,
+    preprocess_outputs: Any,
+) -> BeamLaunchConfig:
+    """Create the one derived config tree consumed by the next BEAM process."""
+
+    source_root = beam_config_root(settings, workspace=workspace)
+    output_dir = (
+        Path(workspace.full_path)
+        / ".pilates-beam-launch-config"
+        / f"y{year}"
+        / f"i{iteration}"
+    )
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=output_dir,
+        identity=scenario.tracker.identity,
+        prepared_inputs=preprocess_outputs.prepared_inputs,
+    )
+    prepare_r5_raw_rebuild(
+        settings=settings,
+        workspace=workspace,
+        config_root=launch_config.root,
+    )
+    return launch_config
 
 
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    beam_preprocess_binding: BindingPlan,
-    beam_run_input_keys: Optional[list[str]],
-    include_zarr_skims: bool,
-    runtime_kwargs_extra: Mapping[str, Any],
     context: WorkflowRuntimeContext,
-    surface: Optional["EnabledWorkflowSurface"] = None,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Execute BEAM preprocess/run/postprocess and return combined outputs.
-    """
-    surface = surface or context.surface
-    stage_runner = _make_beam_stage_runner(
-        scenario=scenario,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        year=year,
-        iteration=iteration,
-        runtime_kwargs_extra=runtime_kwargs_extra,
-        context=context,
-    )
-    recovered_run = _try_restore_completed_beam_run_for_restart(
-        scenario=scenario,
-        settings=context.settings,
-        state=context.state,
-        workspace=context.workspace,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
-        year=year,
-        iteration=iteration,
-    )
-    if recovered_run is None:
-        _raise_if_restart_beam_config_missing(
-            binding=beam_preprocess_binding,
-            state=context.state,
-            settings=context.settings,
-            workspace=context.workspace,
-        )
-        _run_beam_preprocess_step(
-            stage_runner=stage_runner,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
-            year=year,
-            beam_preprocess_binding=beam_preprocess_binding,
-        )
-        beam_preprocess_inputs = (
-            beam_preprocess_binding.inputs
-            if beam_preprocess_binding.inputs is not None
-            else {}
-        )
-        config_value = beam_preprocess_inputs.get(BEAM_CONFIG_FILE)
-        if config_value is not None:
-            set_coupler_from_artifact(
-                coupler,
-                BEAM_CONFIG_FILE,
-                None,
-                fallback=str(config_value),
-            )
-        vehicles_value = beam_preprocess_inputs.get(ATLAS_VEHICLES2_OUTPUT)
-        if vehicles_value is not None:
-            set_coupler_from_artifact(
-                coupler,
-                _BEAM_VEHICLES_IN,
-                None,
-                fallback=str(vehicles_value),
-            )
-            set_coupler_from_artifact(
-                coupler,
-                ATLAS_VEHICLES2_OUTPUT,
-                None,
-                fallback=str(vehicles_value),
-            )
-        beam_run_input_keys = _finalize_beam_run_input_keys(
-            beam_run_input_keys=beam_run_input_keys,
-            outputs_holder=outputs_holder,
-        )
+    """Dispatch the single public BEAM run/postprocess checkpoint boundary."""
 
-        stage_runner.run_step(
-            step=StepRef(
-                name="beam_run",
-                step_func=make_beam_run_step(
-                    coupler=coupler,
-                    outputs_holder=outputs_holder,
-                ),
-                binding=build_key_only_binding_plan(
-                    step_name="beam_run",
-                    input_keys=beam_run_input_keys,
-                    optional_input_keys=[LINKSTATS_WARMSTART, _BEAM_VEHICLES_IN],
-                    coupler=coupler,
-                    settings=context.settings,
-                    state=context.state,
-                    workspace=context.workspace,
-                    year=year,
-                ),
-                inject_context="_consist_ctx",
-                year=year,
-            )
-        )
-
-    upstream_run = outputs_holder.beam_run
-    if upstream_run is None:
-        raise RuntimeError("BEAM run must complete first")
-    if recovered_run is None:
-        _emit_beam_restart_recovery_readiness_diagnostic(
-            settings=context.settings,
-            state=context.state,
-            workspace=context.workspace,
-            outputs=upstream_run,
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
+    if beam_checkpoint_resume_requested(state=state):
+        return _try_resume_committed_beam_postprocess(
+            scenario=scenario,
+            coupler=scenario.coupler,
             year=year,
             iteration=iteration,
-            include_zarr_skims=include_zarr_skims,
+            context=context,
         )
-        _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
-    beam_postprocess_input_keys = _build_beam_postprocess_input_keys(
-        upstream_keys=[
-            short_name for short_name, _, _ in upstream_run._iter_record_items()
-        ],
+    _, preprocess_outputs = execute_step(
+        scenario=scenario,
+        definition=beam_preprocess,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
         year=year,
         iteration=iteration,
-        include_zarr_skims=include_zarr_skims,
+        phase="preprocess",
     )
-    beam_postprocess_binding = None
-    if beam_postprocess_input_keys:
-        optional_keys = (
-            [ZARR_SKIMS] if ZARR_SKIMS in beam_postprocess_input_keys else []
-        )
-        required_keys = [
-            key for key in beam_postprocess_input_keys if key not in optional_keys
-        ]
-        beam_postprocess_binding = build_binding_plan(
-            step_name="beam_postprocess",
-            coupler=coupler,
-            explicit_inputs=step_output_handoff_mapping(upstream_run, coupler=coupler),
-            required_keys=required_keys,
-            optional_keys=optional_keys,
-            settings=context.settings,
-            state=context.state,
-            workspace=context.workspace,
-            year=year,
-            surface=surface,
-        )
-
-    stage_runner.run_step(
-        step=StepRef(
-            name="beam_postprocess",
-            step_func=make_beam_postprocess_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            binding=beam_postprocess_binding,
-            year=year,
-        )
+    launch_config = _compile_beam_launch_config(
+        scenario=scenario,
+        settings=settings,
+        workspace=workspace,
+        year=year,
+        iteration=iteration,
+        preprocess_outputs=preprocess_outputs,
     )
-
-    if outputs_holder.beam_run is None and outputs_holder.beam_postprocess is None:
-        return None
-
-    combined_beam_outputs: Dict[str, Any] = {}
-    if outputs_holder.beam_run is not None:
-        combined_beam_outputs.update(
-            step_output_handoff_mapping(outputs_holder.beam_run, coupler=coupler)
-        )
-    if outputs_holder.beam_postprocess is not None:
-        combined_beam_outputs.update(
-            step_output_handoff_mapping(
-                outputs_holder.beam_postprocess,
-                coupler=coupler,
+    run_inputs = beam_run.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=scenario.coupler,
+        launch_config=launch_config,
+    )
+    run_result, _ = execute_step(
+        scenario=scenario,
+        definition=beam_run,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=year,
+        iteration=iteration,
+        phase="run",
+        runtime_kwargs={"beam_launch_config": launch_config},
+        resolved_inputs=run_inputs,
+    )
+    postprocess_inputs = beam_postprocess.resolve_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        coupler=scenario.coupler,
+    )
+    postprocess_inputs.require_complete()
+    _publish_completed_beam_run_checkpoint(
+        scenario=scenario,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        postprocess_inputs=postprocess_inputs,
+        year=year,
+        iteration=iteration,
+        producer_run_id=run_result.run.id,
+    )
+    logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
+    _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is not None:
+        checkpoint = read_beam_run_checkpoint(archive_run_dir)
+        if checkpoint is None:
+            raise RuntimeError(
+                "BEAM checkpoint publication did not commit before postprocess."
             )
+        mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
+    _, postprocess_outputs = execute_step(
+        scenario=scenario,
+        definition=beam_postprocess,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="supply_demand",
+        year=year,
+        iteration=iteration,
+        phase="postprocess",
+        resolved_inputs=postprocess_inputs,
+    )
+    combined_outputs = step_output_handoff_mapping(
+        postprocess_outputs, coupler=scenario.coupler
+    )
+    if _should_run_full_skim(settings, iteration):
+        full_skim_outputs = _run_beam_full_skim_step(
+            scenario=scenario,
+            year=year,
+            iteration=iteration,
+            context=context,
+            launch_config=launch_config,
         )
-    return combined_beam_outputs
+        if full_skim_outputs is not None:
+            combined_outputs.update(full_skim_outputs)
+    return combined_outputs
 
 
 def _run_beam_full_skim_step(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
-    outputs_holder: StepOutputsHolder,
     year: int,
     iteration: int,
-    previous_beam_outputs: Optional[Dict[str, Any]],
-    runtime_kwargs_extra: Mapping[str, Any],
     context: WorkflowRuntimeContext,
+    launch_config: BeamLaunchConfig,
 ) -> Optional[Dict[str, Any]]:
-    """
-    Execute dedicated BEAM full-skim step and return its outputs.
-    """
-    runtime_kwargs = dict(runtime_kwargs_extra)
-    runtime_kwargs["previous_beam_outputs"] = previous_beam_outputs
-    stage_runner = _make_beam_stage_runner(
+    """Execute full skims through its native definition."""
+
+    full_skim_inputs = beam_full_skim.resolve_inputs(
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        coupler=scenario.coupler,
+        launch_config=launch_config,
+    )
+    _, outputs = execute_step(
         scenario=scenario,
-        coupler=coupler,
-        outputs_holder=outputs_holder,
+        definition=beam_full_skim,
+        settings=context.settings,
+        state=context.state,
+        workspace=context.workspace,
+        stage="supply_demand",
         year=year,
         iteration=iteration,
-        runtime_kwargs_extra=runtime_kwargs,
-        context=context,
+        phase="full_skim",
+        runtime_kwargs={"beam_launch_config": launch_config},
+        resolved_inputs=full_skim_inputs,
     )
-    stage_runner.run_step(
-        step=StepRef(
-            name="beam_full_skim",
-            step_func=make_beam_full_skim_step(
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-            ),
-            binding=BindingPlan(),
-            year=context.state.forecast_year,
-        )
-    )
-
-    if outputs_holder.beam_full_skim is None:
-        return None
-    return step_output_handoff_mapping(outputs_holder.beam_full_skim, coupler=coupler)
+    return {key: path for key, path, _description in outputs._iter_record_items()}
 
 
 def _run_traffic_assignment_phase(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     inputs: TrafficAssignmentPhaseInputs,
-    outputs_holder: StepOutputsHolder,
-    context: Optional[WorkflowRuntimeContext] = None,
-    state: Optional[WorkflowState] = None,
-    settings: Optional[PilatesConfig] = None,
-    workspace: Optional[Workspace] = None,
-    surface: Optional["EnabledWorkflowSurface"] = None,
+    context: WorkflowRuntimeContext,
 ) -> TrafficAssignmentPhaseOutputs:
     """
     Run BEAM for a single supply-demand iteration.
 
-    This prepares BEAM inputs from ActivitySim outputs, warm-starts
-    linkstats when available, executes preprocess/run/postprocess,
-    and updates the coupler with BEAM artifacts for subsequent steps.
+    This sequences native BEAM definitions for one supply-demand iteration.
 
     Parameters
     ----------
@@ -1326,130 +1383,49 @@ def _run_traffic_assignment_phase(
         Coupler used to read/write artifacts across steps.
     inputs : TrafficAssignmentPhaseInputs
         Inputs required for this iteration.
-    outputs_holder : StepOutputsHolder
-        Accumulator for step outputs within the iteration.
-
     Returns
     -------
     TrafficAssignmentPhaseOutputs
         Combined BEAM outputs for warm-starting the next iteration.
     """
-    runtime_context = ensure_workflow_runtime_context(
-        context=context,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        surface=surface,
-    )
-    settings = runtime_context.settings
-    state = runtime_context.state
-    workspace = runtime_context.workspace
-    surface = runtime_context.surface
+    settings = context.settings
+    state = context.state
+    workspace = context.workspace
 
     formatted_print("TRAFFIC ASSIGNMENT MODEL")
 
-    previous_beam_outputs = _collect_previous_beam_outputs(
-        coupler=coupler,
-        workspace=workspace,
-        state=state,
-        iteration=inputs.iteration,
-        previous_beam_outputs=inputs.previous_beam_outputs,
-    )
-    beam_preprocess_binding = beam_preprocess_binding_plan(
-        coupler=coupler,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        year=inputs.year,
-        activity_demand_outputs=inputs.activity_demand_outputs,
-        previous_beam_outputs=previous_beam_outputs,
-        surface=surface,
-    )
-    _emit_beam_preprocess_binding_diagnostic(
-        binding=beam_preprocess_binding,
-        state=state,
-        settings=settings,
-        workspace=workspace,
-        scenario=scenario,
-    )
-    beam_preprocess_inputs = (
-        dict(beam_preprocess_binding.inputs)
-        if beam_preprocess_binding.inputs is not None
-        else {}
-    )
-    beam_run_input_keys = _derive_beam_run_input_keys(
-        beam_preprocess_inputs=beam_preprocess_inputs,
-        activity_demand_outputs=inputs.activity_demand_outputs,
-    )
-
-    traffic_runtime_kwargs = {
-        "activity_demand_outputs": inputs.activity_demand_outputs,
-        "previous_beam_outputs": previous_beam_outputs,
-        "beam_preprocess_inputs": beam_preprocess_inputs,
-    }
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
-        _raise_if_restart_beam_config_missing(
-            binding=beam_preprocess_binding,
-            state=state,
-            settings=settings,
-            workspace=workspace,
-        )
-        standalone_runner = _make_beam_stage_runner(
+        preprocess_outputs = _run_beam_preprocess_step(
             scenario=scenario,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
+            settings=settings,
+            state=state,
+            workspace=workspace,
             year=inputs.year,
             iteration=inputs.iteration,
-            runtime_kwargs_extra=traffic_runtime_kwargs,
-            context=runtime_context,
         )
-        _run_beam_preprocess_step(
-            stage_runner=standalone_runner,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
+        launch_config = _compile_beam_launch_config(
+            scenario=scenario,
+            settings=settings,
+            workspace=workspace,
             year=inputs.year,
-            beam_preprocess_binding=beam_preprocess_binding,
+            iteration=inputs.iteration,
+            preprocess_outputs=preprocess_outputs,
         )
         combined_beam_outputs = _run_beam_full_skim_step(
             scenario=scenario,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
             year=inputs.year,
             iteration=inputs.iteration,
-            previous_beam_outputs=previous_beam_outputs,
-            runtime_kwargs_extra=traffic_runtime_kwargs,
-            context=runtime_context,
+            context=context,
+            launch_config=launch_config,
         )
     else:
         combined_beam_outputs = _run_beam_steps(
             scenario=scenario,
-            coupler=coupler,
-            outputs_holder=outputs_holder,
             year=inputs.year,
             iteration=inputs.iteration,
-            beam_preprocess_binding=beam_preprocess_binding,
-            beam_run_input_keys=beam_run_input_keys,
-            include_zarr_skims=bool(inputs.activity_demand_outputs),
-            runtime_kwargs_extra=traffic_runtime_kwargs,
-            context=runtime_context,
-            surface=surface,
+            context=context,
         )
-        if _should_run_full_skim(settings, inputs.iteration):
-            full_skim_outputs = _run_beam_full_skim_step(
-                scenario=scenario,
-                coupler=coupler,
-                outputs_holder=outputs_holder,
-                year=inputs.year,
-                iteration=inputs.iteration,
-                previous_beam_outputs=combined_beam_outputs,
-                runtime_kwargs_extra=traffic_runtime_kwargs,
-                context=runtime_context,
-            )
-            if full_skim_outputs is not None:
-                if combined_beam_outputs is None:
-                    combined_beam_outputs = {}
-                combined_beam_outputs.update(full_skim_outputs)
 
     state.complete_step(
         state.Stage.supply_demand_loop,
@@ -1457,4 +1433,4 @@ def _run_traffic_assignment_phase(
         state.Stage.traffic_assignment,
     )
 
-    return TrafficAssignmentPhaseOutputs(previous_beam_outputs=combined_beam_outputs)
+    return TrafficAssignmentPhaseOutputs()

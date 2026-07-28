@@ -28,7 +28,9 @@ versus policy comparisons.
 ```python
 from pilates_consist_analysis import delta, difference, open_archive
 
-archive = open_archive("/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES")
+archive = open_archive(
+    "/path/to/archive/run", project_root="/Users/zaneedell/git/PILATES"
+)
 
 trips = archive.table(
     "activitysim.trips",

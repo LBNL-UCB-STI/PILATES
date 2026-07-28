@@ -244,6 +244,51 @@ def test_configure_staged_linkstats_reference_rewrites_final_hocon(
     ) == str(staged_linkstats)
 
 
+def test_validate_staged_linkstats_reference_matches_canonicalization(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.launch_paths import validate_staged_linkstats_reference
+
+    beam_input_dir = tmp_path / "beam" / "input"
+    region_dir = beam_input_dir / "seattle"
+    r5_dir = region_dir / "r5" / "network"
+    r5_dir.mkdir(parents=True)
+    (r5_dir / "network.osm.pbf").write_bytes(b"osm source")
+    staged_linkstats = region_dir / "_pilates" / "linkstats" / "warmstart.csv.gz"
+    staged_linkstats.parent.mkdir(parents=True)
+    staged_linkstats.write_bytes(b"linkstats")
+    _write_config(
+        region_dir / "beam.conf",
+        directory='${beam.inputDirectory}"/r5/network"',
+    )
+    from pilates.beam.launch_paths import configure_staged_linkstats_reference
+
+    configure_staged_linkstats_reference(
+        settings=_settings(),
+        workspace=_Workspace(beam_input_dir),
+        staged_path=staged_linkstats,
+    )
+    snapshot_reference = SimpleNamespace(
+        reference=SimpleNamespace(
+            config_key="beam.warmStart.initialLinkstatsFilePath",
+            delegated_artifact_keys=("linkstats_warmstart",),
+        ),
+        resolved_path=staged_linkstats.resolve(),
+    )
+    context = SimpleNamespace(
+        canonicalization=SimpleNamespace(references=(snapshot_reference,))
+    )
+
+    reference = validate_staged_linkstats_reference(
+        settings=_settings(),
+        workspace=_Workspace(beam_input_dir),
+        run_context=context,
+    )
+
+    assert reference is not None
+    assert reference.execution_path == staged_linkstats
+
+
 def test_validate_r5_execution_reference_matches_consist_member(tmp_path: Path) -> None:
     from pilates.beam.launch_paths import validate_r5_execution_reference
 

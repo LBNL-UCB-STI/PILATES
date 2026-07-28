@@ -49,7 +49,8 @@ Main published boundary roles:
 
 - `activitysim_preprocess` reads the population-source datastore and the currently selected skims input, then stages the land-use, households, and persons tables that the ActivitySim run consumes.
 - `activitysim_run` consumes the staged ActivitySim inputs and an existing `ZARR_SKIMS` handoff when one is available. Otherwise it consumes `ASIM_OMX_SKIMS` and produces the durable `ZARR_SKIMS` handoff alongside its standard run outputs.
-- Numba/Sharrow warming is private node-local preparation for a multiprocessing cache miss, not an archived or replayed workflow artifact.
+- Numba/Sharrow warming is private node-local preparation for a multiprocessing
+  cache miss, not an archived workflow artifact.
 - `activitysim_postprocess` archives ActivitySim inputs and outputs, and republishes the UrbanSim-side datastore state that later workflow logic or archive inspection needs.
 
 Main published boundary roles:
@@ -88,7 +89,8 @@ Main published boundary roles:
 ## What Moves Across The Public Boundary
 
 - Published coupler keys and typed step outputs form the workflow-visible surface.
-- Archive snapshots and restart-specific families are public when replay logic needs an explicit producer for them.
+- Archive snapshots and restart-specific families are public when a declared
+  boundary needs a durable producer identity.
 - Scratch files inside a model run directory stay internal unless a tracked step republishes them under a workflow key.
 
 ## Why Similar Files Can Have Different Keys

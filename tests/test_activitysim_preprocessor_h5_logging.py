@@ -40,6 +40,33 @@ def test_activitysim_preprocess_h5_input_key_uses_start_year_suffix() -> None:
         )
         == "activitysim_preprocess_usim_households_table_input"
     )
+
+
+def test_activitysim_preprocess_skips_omx_work_when_zarr_is_authoritative(
+    monkeypatch,
+) -> None:
+    preprocessor = asim_preprocessor.ActivitysimPreprocessor(
+        "activitysim_preprocess",
+        SimpleNamespace(full_settings=SimpleNamespace()),
+    )
+    monkeypatch.setattr(
+        asim_preprocessor,
+        "find_project_root",
+        lambda: pytest.fail("Zarr-mode preprocessing must not locate production OMX"),
+    )
+    monkeypatch.setattr(
+        asim_preprocessor,
+        "create_asim_data_from_h5",
+        lambda *_args, **_kwargs: [],
+    )
+
+    records = preprocessor._preprocess(
+        workspace=SimpleNamespace(),
+        population_source_h5_path="/bound/population.h5",
+        prepare_omx_skims=False,
+    )
+
+    assert records.to_mapping() == {}
     assert (
         asim_preprocessor._activitysim_preprocess_h5_input_key(
             "households",

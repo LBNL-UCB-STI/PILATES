@@ -28,7 +28,8 @@ These fields appear repeatedly across published artifact families:
 - PILATES uses artifact families to distinguish workflow role, not just file type.
 - The same path type can appear under different families when the workflow role changes.
 - Families that participate in restart or archive inspection are usually the ones that get the clearest year and iteration metadata.
-- If a field is not needed for cross-run querying or replay, it may remain internal to the step instead of becoming a public facet.
+- If a field is not needed for cross-run querying or a declared boundary, it may
+  remain internal to the step instead of becoming a public facet.
 
 ## Family Groups
 
@@ -42,7 +43,7 @@ These families distinguish the current mutable datastore from archived snapshots
 | `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` | Canonical current mutable UrbanSim datastore handle used at stage boundaries. |
 | `USIM_POPULATION_SOURCE_H5` | UrbanSim datastore selected for ActivitySim preprocess. |
 | `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) | Archived year-specific UrbanSim input snapshot family. |
-| `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) | Year-specific merged UrbanSim datastore snapshot family published for later inspection or replay. |
+| `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) | Year-specific merged UrbanSim datastore snapshot family published for later inspection. |
 
 What to notice:
 
@@ -80,7 +81,8 @@ What to notice:
 
 - The input-table keys describe what PILATES stages into the ActivitySim run, not what ActivitySim conceptually represents.
 - `ZARR_SKIMS` is a cross-model handoff key. An ActivitySim run consumes it when available; otherwise the run consumes OMX skims and produces the first durable Zarr handoff.
-- Numba/Sharrow caches are node-local runtime preparation, not archived or replayed artifact families.
+- Numba/Sharrow caches are node-local runtime preparation, not archived workflow
+  artifact families.
 
 ### BEAM families
 
@@ -93,14 +95,15 @@ BEAM publishes the densest facet set because PILATES needs to distinguish staged
 | `linkstats_*` / `linkstats_parquet_*` families | Linkstats variants with year, iteration, and phys-sim metadata for querying. |
 | `LINKSTATS_WARMSTART` | Warm-start linkstats input family for BEAM preprocess. |
 | `BEAM_PLANS_OUT` | Published BEAM plans output from the run boundary. |
-| `BEAM_INPUT_*_ARCHIVED` | Archived BEAM inputs and warm-start artifacts used for replay or inspection. |
+| `BEAM_INPUT_*_ARCHIVED` | Archived BEAM inputs and warm-start artifacts retained for inspection and declared materialization. |
 | `FINAL_SKIMS_OMX` | Final OMX skims publication from BEAM postprocess. |
 | `BEAM_FULL_SKIMS` | Separate full-skim tracked output family. |
 
 What to notice:
 
 - The BEAM phys-sim publications carry the richest facet metadata in current tests: year, iteration, phys-sim iteration, and optional sub-iteration identifiers.
-- Archived BEAM input families are distinct from live staged-input keys because replay logic needs an explicit archived producer role.
+- Archived BEAM input families are distinct from live staged-input keys so
+  provenance and artifact materialization retain an explicit producer role.
 
 ## Where Facets Come From
 

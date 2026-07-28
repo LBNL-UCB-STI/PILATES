@@ -1,133 +1,129 @@
 ---
 title: Consist in PILATES
-summary: What Consist owns in PILATES and how replay, caching, staging, and analysis fit together.
+summary: Ownership and native step execution at the PILATES–Consist boundary.
 ---
 
 # Consist in PILATES
 
-## What Consist Is
+[Consist](https://lbnl-ucb-sti.github.io/consist/latest/) is PILATES's
+execution substrate for declared model boundaries. It gives scenarios, runs,
+and artifacts durable identity; binds and materializes inputs; persists output
+links and provenance; admits cache hits; and returns `RunResult.outputs`.
 
-[Consist](https://lbnl-ucb-sti.github.io/consist/latest/) is an open-source,
-cache-aware run tracker for scientific workflows. It assigns durable identity to
-scenarios, steps, and artifacts; records inputs, outputs, and lineage; and
-detects when a previously executed step can be reused instead of rerun.
+PILATES remains a stage-oriented model. It decides which semantic roles matter,
+when a model phase runs, what typed output is valid, and which restart policy is
+safe. Consist does not own PILATES stage semantics or restart policy.
 
-PILATES uses Consist as its execution substrate. The practical consequences for
-day-to-day use are:
+## Native Step Path
 
-- **Replay-first restart.** When a run resumes, PILATES re-enters the scenario
-  and lets Consist short-circuit any step whose declared inputs match a prior
-  execution, instead of rebuilding state by hand.
-- **Cache hits across runs.** A new run that shares identity with an earlier
-  step (same code, same config that contributes to identity, same input
-  digests) reuses the earlier output rather than recomputing it. This matters
-  most for long multi-year scenarios.
-- **Queryable run history.** Each run, step, and artifact is persisted to a
-  Consist database, which downstream analysis tooling reads to compare
-  scenarios, audit lineage, and open archived outputs.
+Every enabled model phase follows one path:
 
-If you have not used Consist before, the [Consist
-documentation](https://lbnl-ucb-sti.github.io/consist/latest/) is the
-authoritative reference. The rest of this page is the PILATES-side boundary:
-what PILATES owns, what Consist owns, and where the two meet.
+```text
+semantic roles
+-> resolver produces ResolvedStepInputs once
+-> execute_step(..., StepDefinition)
+-> Consist scenario.run(...)
+-> RunResult.outputs
+-> TypedOutputProjector
+-> typed PILATES outputs
+```
 
-## What Consist Owns
+A `StepDefinition` packages a decorated Consist callable, resolver, typed
+projector, and any boundary-local output-path, execution, or cache options.
+`WorkflowStepSpec` is only the PILATES policy catalog for stage placement,
+order, enablement, dependency, provenance, and dynamic semantic families.
 
-- Scenario and step contexts created in `run.py` / `pilates/runtime/launcher.py`.
-- Cache identity and queryable facets built by `pilates/utils/consist_config.py`.
-- Step metadata, parent run linkage, tags, and artifact records.
-- Step-level cache hits, replay results, and archive-friendly run outputs.
+Resolvers select values from the current scenario coupler once, freeze the
+selected artifacts and destinations, and require completeness before execution.
+The projector validates persisted outputs at their declared destinations.
+Consequently fresh runs, admitted cache hits, and the committed restart path
+produce the same typed handoff from `RunResult.outputs`.
 
-## What PILATES Owns
+## Advanced immutable bindings
 
-- The run/storage topology: archive run directory versus mutable local workspace.
-- Bootstrap hydration, restart preflight, and stage orchestration.
-- Coupler seeding for bootstrap artifacts and replay-restored paths.
-- The choice to treat some recovery helpers as legacy/manual tools rather than the normal launcher path.
+Ordinary `BindingResult`/Coupler binding remains the default. A small set of
+native definitions uses Consist `ResolvedBinding` only when every selected
+execution input is a locally tracked artifact, maps to a named callable
+parameter, and can be consumed from the strict run-owned snapshot.
 
-## Current Runtime Shape
+For those definitions, `execute_step()` asks Consist to preflight the final
+decorated identity once, the resolver freezes the selected inputs with that
+identity, and the same identity is reused for `scenario.run()`. Strict binding
+identity contains the step contract, typed artifact identities, and relative
+destinations; selection diagnostics and admission explanation remain in
+invocation evidence and do not alter cache reuse.
 
-`pilates/runtime/launcher.py` initializes runtime flags, restores `WorkflowState`, builds the enabled workflow surface, declares the scenario contract, seeds bootstrap artifacts into the coupler, and then runs the year loop inside Consist scenario/step contexts.
+Dynamic workspace-only inputs remain on ordinary binding. This includes BEAM
+postprocess/restart closure inputs, raw BEAM configuration inputs, the BEAM
+full-skim runner's workspace mount, ActivitySim population-source fallback and
+runner workspace inputs, and model adapters that read a workspace path instead
+of their callable parameter.
+Strict BEAM linkstats admission is also deferred; it does not change ordinary
+BEAM warm-start behavior.
 
-`pilates/utils/consist_config.py` keeps the Consist inputs narrow and explicit:
+## Ownership
 
-- `config` carries the cache identity.
-- `facet` carries queryable run metadata.
-- `identity_inputs` are only added for steps that need file or directory digests.
+| Concern | Owner |
+| --- | --- |
+| Generic input binding and materialization | Consist |
+| Run and artifact identity, provenance, output links, cache admission | Consist |
+| Current semantic-role map | PILATES scenario coupler |
+| Semantic selection, typed validation, stage ordering, restart policy | PILATES |
+| Model-local preparation, execution, and postprocessing | Model adapter |
+| Historical committed boundary fact | Snapshot artifact |
 
-If you want one file that demonstrates the intended Consist integration
-pattern, start there. `pilates/utils/consist_config.py` is the reference for:
+`WorkflowState` is durable workflow control state. `Workspace` is mutable
+run-local layout. The coupler describes current roles, not historical evidence;
+archive roots tell Consist where an existing artifact may be materialized, not
+what the next workflow operation should be.
 
-- which config fields become cache identity
-- which fields become queryable run facets
-- which boundaries need `identity_inputs` instead of broad config hashing
+## Cache and Materialization
 
-For runtime-local code that needs to report the active run, use
-`pilates.current_run_id()` or `pilates.utils.consist_runtime.current_run_id()`
-instead of probing `consist.current_run()` directly.
+Consist calculates cache identity from the declared callable, configuration,
+and resolved inputs. Its cache policy controls requested-output hydration and
+admission. PILATES consumes the result through the same projector regardless
+of whether Consist executed the callable or admitted a cache hit.
 
-The launcher also records run context metadata such as `scenario_id`, `seed`, `archive_run_dir`, `local_run_dir`, and `restart_run`.
+This distinction matters operationally: cache behavior is generic Consist
+behavior, while a restart decision remains PILATES policy. No cache result
+creates a second stage sequence or permits a stage to select a historical
+artifact outside its declared roles.
 
-The key ownership boundary is:
+## Restart Boundary
 
-- the enabled workflow surface decides which stages, step contracts, and restart requirements are active
-- Consist executes those declared boundaries, records lineage, and provides replay / cache behavior for them
+The sole committed mid-stage checkpoint is `beam_run_completed` to
+`beam_postprocess`. PILATES pins the immediate successor input closure,
+validates every producer/output identity, and asks Consist to hydrate the
+closure to exact current destinations. It then re-resolves and runs native
+`beam_postprocess`. The in-progress postprocess mutation gate remains
+non-restartable.
+
+All other restart behavior follows the normal durable stage/year frontier. In
+particular, an interrupted ActivitySim mid-stage operation fails closed.
 
 ## Public Artifact Surface
 
-Consist records the tracked workflow publications, but the semantic public surface still comes from PILATES workflow keys and families. The most important current examples are:
+The coupler keys and typed outputs remain PILATES's public semantic surface.
+Important examples include `USIM_DATASTORE_CURRENT_H5`, `ZARR_SKIMS`,
+`FINAL_SKIMS_OMX`, `BEAM_FULL_SKIMS`, and year-scoped UrbanSim input snapshot
+families. Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.md), and [Lineage Map](lineage_map.md) for their contract meanings.
 
-- `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5` for the canonical current mutable UrbanSim datastore handle
-- `USIM_POPULATION_SOURCE_H5` for the datastore selected for ActivitySim preprocess
-- `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`) and `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`) for year-scoped UrbanSim snapshot families
-- `ZARR_SKIMS` for the shared skims handoff used by ActivitySim and BEAM
-- `FINAL_SKIMS_OMX` and `BEAM_FULL_SKIMS` for BEAM-side skim outputs
-- `BEAM_INPUT_*_ARCHIVED` for replay-relevant archived BEAM inputs
+## Optional BEAM Linkstats Admission
 
-Use [Artifact Semantics](artifact_semantics.md), [Artifact Flow](artifact_flow.md), and [Lineage Map](lineage_map.md) for the contract-level meaning of those publications.
-
-## ActivitySim Boundary
-
-`activitysim_run` is the single tracked ActivitySim execution boundary. It
-consumes `ZARR_SKIMS` when a valid shared skim artifact is available. Otherwise
-it consumes the staged OMX skims input and publishes finalized `ZARR_SKIMS` as
-an output for later ActivitySim and BEAM work.
-
-Numba/Sharrow compilation is deliberately outside that artifact contract. It
-is workspace-local execution preparation, not an archived or recovered
-artifact and not part of Consist cache identity. PILATES warms it only when a
-primary ActivitySim execution actually occurs and the local cache is empty;
-a primary cache hit invokes neither production ActivitySim nor warmup.
-
-The historical root-level `workflow_state.py` remains in place for now. Its
-legacy `asim_compiled` value is still parsed for persisted-state compatibility,
-but it no longer controls ActivitySim execution. Relocating that module is an
-explicitly deferred, import-only follow-up.
-
-## Replay, Restart, and Hydration
-
-- Fresh runs execute bootstrap first, then enter the scenario context.
-- Restart runs can still run bootstrap pre-scenario so the workspace invariants are rehydrated through the normal cached path.
-- When `state.data_initialized` is already true on restart, the launcher skips bespoke restart hydration and relies on scenario replay plus Consist cache hits.
-- The launcher emits a `restart_hydration` audit event with `fallback_reason="replay_mode"` in that replay-first case.
-- The older hydration helpers in `pilates/runtime/restart.py` remain available for manual tooling and focused tests, but the normal launcher path does not call them.
-
-Restart and exact-rewind recovery queries use Consist semantic run matching.
-PILATES passes a `run_scope` derived from the restart archive run directory when
-one is available, otherwise from the current workspace run directory name.
-Consist matches that scope against a run whose `Run.id` or `Run.description`
-equals the scope or starts with `f"{run_scope}__"`. Restartable PILATES run
-names must preserve that prefix convention so same-scenario recovery cannot
-accidentally select a completed step from another archive.
+PILATES can verify a configured staged BEAM warm-start linkstats artifact
+against a declared completed Consist-run input before the BEAM container starts.
+This optional, model-specific admission is separate from generic cache
+admission and restart policy. See the BEAM configuration reference for the
+`beam.admission.linkstats` options and report.
 
 ## Analysis Surface
 
-PILATES keeps the archive-side Consist database and run outputs available for post-run analysis. The analysis helpers read the archived run metadata, run outputs, and artifact facets rather than rebuilding workflow state from scratch.
-
-For a concrete walkthrough, use [Consist in Action](../analysis/consist_in_action.md).
+PILATES retains the archive-side Consist database, run metadata, output links,
+and artifacts for analysis. Analysis reads that persisted evidence; it does not
+reconstruct workflow state. See [Consist in Action](../analysis/consist_in_action.md).
 
 ## Adjacent Pages
 
-- Read [Scenario Lifecycle](../run/scenario_lifecycle.md) next.
-- Continue to [Artifact Semantics](artifact_semantics.md) and [Lineage Map](lineage_map.md).
-- For the analysis-facing view of archived runs, go to [Opening Archives](../analysis/opening_archives.md).
+- Read [Workflow Architecture](architecture.md) for the layer map.
+- Read [Step Contracts](step_contracts.md) for the executable boundary.
+- Read [Restart and Resume](../run/restart_and_resume.md) for checkpoint policy.

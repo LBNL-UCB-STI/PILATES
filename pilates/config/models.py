@@ -626,6 +626,34 @@ class FullSkimsCreatorConfig(BaseModel):
     )
 
 
+class BeamLinkstatsAdmissionConfig(BaseModel):
+    """Explicit prior-run expectation for one staged BEAM warm-start file."""
+
+    mode: Literal["warn", "strict"] = Field(
+        "warn",
+        description="Warn or stop before BEAM when the configured baseline differs.",
+    )
+    expected_run_id: str = Field(
+        ..., description="Completed Consist run supplying the expected linkstats input."
+    )
+    artifact_key: str = Field(
+        ..., description="Exact persisted input artifact key on expected_run_id."
+    )
+    expected_bytes_path: Optional[str] = Field(
+        None,
+        description="Distinct immutable historical bytes for legacy hash re-verification.",
+    )
+
+
+class BeamAdmissionConfig(BaseModel):
+    """Optional inbound-admission settings for BEAM runtime roles."""
+
+    linkstats: Optional[BeamLinkstatsAdmissionConfig] = Field(
+        None,
+        description="Optional prior-run admission for staged warm-start linkstats.",
+    )
+
+
 class BeamConfig(BaseModel):
     """BEAM transportation network simulation configuration."""
 
@@ -646,6 +674,10 @@ class BeamConfig(BaseModel):
             "Optional path to the initial BEAM warm-start linkstats file. "
             "If relative, it is resolved against the mutable BEAM region input root."
         ),
+    )
+    admission: Optional[BeamAdmissionConfig] = Field(
+        None,
+        description="Optional inbound-admission policy; omitted means disabled.",
     )
     skims_shapefile: str
     skim_zone_source_id_col: str

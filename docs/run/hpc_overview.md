@@ -35,7 +35,7 @@ Local and HPC runs go through the same launcher and workflow logic. The main dif
 
 ## Recommended HPC Storage Split
 
-For the replay-first archive model, treat the three tiers differently:
+For the native Consist archive model, treat the three tiers differently:
 
 - shared scratch: active archive root during the run via `run.output_directory`
 - node-local scratch: mutable workspace via `run.local_workspace_root`
@@ -97,4 +97,4 @@ small setup block that loads compiler, PROJ, and Python modules.
 
 - Read [Scenario Lifecycle](scenario_lifecycle.md) first.
 - Use [Lawrencium](lawrencium.md) for the concrete LBNL path.
-- Use [Restart and Resume](restart_and_resume.md) for replay-first recovery behavior.
+- Use [Restart and Resume](restart_and_resume.md) for restart behavior.

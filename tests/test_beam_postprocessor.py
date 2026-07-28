@@ -460,6 +460,33 @@ def test_beam_postprocessor_expected_outputs_uses_omx_name_for_zarr_shared_skims
     }
 
 
+def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
+    tmp_path, mock_settings
+):
+    """ActivitySim Zarr and UrbanSim/ATLAS OMX consumers need both artifacts."""
+    mock_settings.shared.skims.fname = "skims.zarr"
+    mock_settings.run.models.activity_demand = "activitysim"
+    mock_settings.run.models.land_use = "urbansim"
+    mock_settings.run.models.vehicle_ownership = "atlas"
+
+    workspace = MagicMock()
+    workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
+    workspace.get_asim_output_dir.return_value = str(
+        tmp_path / "activitysim" / "output"
+    )
+
+    outputs = BeamPostprocessor.expected_outputs(
+        mock_settings,
+        state=MagicMock(),
+        workspace=workspace,
+    )
+
+    assert outputs == {
+        "zarr_skims": str(tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"),
+        "final_skims_omx": str(tmp_path / "beam" / "input" / "seattle" / "skims.omx"),
+    }
+
+
 @pytest.fixture
 def beam_iteration_zarr_missing_attr(beam_iteration_zarr_base):
     """Creates a BEAM Zarr without the original_zone_ids attribute."""

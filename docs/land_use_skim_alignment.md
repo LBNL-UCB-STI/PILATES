@@ -21,8 +21,10 @@ The explanation references the relevant source files:
 ```python
 # activitysim/core/input.py
 
+
 def canonical_table_index_name(table_name):
     from activitysim.abm.models.util import canonical_ids
+
     table_index_names = canonical_ids.CANONICAL_TABLE_INDEX_NAMES
     return table_index_names and table_index_names.get(table_name, None)
 ```
@@ -45,7 +47,7 @@ if index_col is not None:
 ### 1.3 Optional Recoding (Zero‑Based Contiguous IDs)
 If the configuration asks for recoding (`recode_columns` contains `land_use.TAZ`), the following block runs:
 ```python
-remapper = {j: i for i, j in enumerate(sorted(set(df[colname]))) }
+remapper = {j: i for i, j in enumerate(sorted(set(df[colname])))}
 df[f"_original_{colname}"] = df[colname]
 df[colname] = df[colname].apply(remapper.get)
 ```

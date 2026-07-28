@@ -1,20 +1,16 @@
 """
 Workflow step public surface.
 
-Shared step infrastructure lives in ``shared.py`` and model-specific factory
-implementations live in sibling modules.
+The public surface exposes only committed native ``StepDefinition`` objects.
 """
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict
+from typing import Any
 
-from pilates.generic.model_factory import ModelFactory as ModelFactory
+from pilates.workflows.step_definition import StepDefinition
 
 from .shared import (
-    STEP_OUTPUTS_CLASSES as STEP_OUTPUTS_CLASSES,
-    StepOutputsHolder as StepOutputsHolder,
-    validate_step_ready as validate_step_ready,
     validate_workflow_step_contracts as validate_workflow_step_contracts,
     _activitysim_output_facet_meta as _activitysim_output_facet_meta,
     _atlas_artifact_facet_meta as _atlas_artifact_facet_meta,
@@ -24,27 +20,26 @@ from .shared import (
     _urbansim_output_facet_meta as _urbansim_output_facet_meta,
 )
 from .activitysim import (
-    make_activitysim_postprocess_step as make_activitysim_postprocess_step,
-    make_activitysim_preprocess_step as make_activitysim_preprocess_step,
-    make_activitysim_run_step as make_activitysim_run_step,
+    activitysim_postprocess as activitysim_postprocess,
+    activitysim_preprocess as activitysim_preprocess,
+    activitysim_run as activitysim_run,
 )
 from .beam import (
-    make_beam_full_skim_step as make_beam_full_skim_step,
-    make_beam_postprocess_step as make_beam_postprocess_step,
-    make_beam_preprocess_step as make_beam_preprocess_step,
-    make_beam_run_step as make_beam_run_step,
+    beam_full_skim as beam_full_skim,
+    beam_postprocess as beam_postprocess,
+    beam_preprocess as beam_preprocess,
+    beam_run as beam_run,
 )
 from .postprocessing import (
-    make_postprocessing_step as make_postprocessing_step,
+    postprocessing as postprocessing_definition,
 )
 from .urbansim_atlas import (
-    make_atlas_postprocess_step as make_atlas_postprocess_step,
-    make_atlas_preprocess_step as make_atlas_preprocess_step,
-    make_atlas_run_step as make_atlas_run_step,
-    make_urbansim_postprocess_step as make_urbansim_postprocess_step,
-    make_urbansim_preprocess_step as make_urbansim_preprocess_step,
-    make_urbansim_run_step as make_urbansim_run_step,
-    urbansim_run_output_paths as urbansim_run_output_paths,
+    atlas_postprocess as atlas_postprocess,
+    atlas_preprocess as atlas_preprocess,
+    atlas_run as atlas_run,
+    urbansim_postprocess as urbansim_postprocess,
+    urbansim_preprocess as urbansim_preprocess,
+    urbansim_run as urbansim_run,
 )
 
 # Re-export modules for callers/tests that monkeypatch module-level symbols.
@@ -57,32 +52,22 @@ from . import (
 )
 
 
-SCHEMA_STEP_BUILDERS: Dict[str, Callable[..., Any]] = {
-    "urbansim_preprocess": make_urbansim_preprocess_step,
-    "urbansim_run": make_urbansim_run_step,
-    "urbansim_postprocess": make_urbansim_postprocess_step,
-    "atlas_preprocess": make_atlas_preprocess_step,
-    "atlas_run": make_atlas_run_step,
-    "atlas_postprocess": make_atlas_postprocess_step,
-    "activitysim_preprocess": make_activitysim_preprocess_step,
-    "activitysim_run": make_activitysim_run_step,
-    "activitysim_postprocess": make_activitysim_postprocess_step,
-    "beam_preprocess": make_beam_preprocess_step,
-    "beam_run": make_beam_run_step,
-    "beam_postprocess": make_beam_postprocess_step,
-    "beam_full_skim": make_beam_full_skim_step,
+STEP_DEFINITIONS: dict[str, StepDefinition[Any]] = {
+    definition.name: definition
+    for definition in (
+        urbansim_preprocess,
+        urbansim_run,
+        urbansim_postprocess,
+        atlas_preprocess,
+        atlas_run,
+        atlas_postprocess,
+        activitysim_preprocess,
+        activitysim_run,
+        activitysim_postprocess,
+        beam_preprocess,
+        beam_run,
+        beam_postprocess,
+        beam_full_skim,
+        postprocessing_definition,
+    )
 }
-
-
-def schema_step_builder_registry() -> Dict[str, Callable[..., Any]]:
-    """
-    Return the canonical schema-step builder registry keyed by step name.
-
-    The returned mapping is a shallow copy so callers can inspect or filter it
-    without mutating the shared registration surface.
-
-    This registry intentionally stays separate from the workflow catalog: the
-    catalog is static contract metadata, while this module owns the executable
-    builder functions that close over model-local runtime behavior.
-    """
-    return dict(SCHEMA_STEP_BUILDERS)
