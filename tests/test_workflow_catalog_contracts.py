@@ -39,7 +39,9 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
         assert spec.output_keys == spec.schema_output_keys
         assert spec.optional_output_keys == ()
         assert not hasattr(spec, "model_name")
-        assert all(not hasattr(spec, field_name) for field_name in removed_dependency_aliases)
+        assert all(
+            not hasattr(spec, field_name) for field_name in removed_dependency_aliases
+        )
 
 
 def test_native_schema_steps_allow_shared_consist_model_metadata():
@@ -72,7 +74,9 @@ def test_catalog_dependency_exports_only_project_depends_on():
         catalog.step_dependencies_from_catalog(),
         catalog.runtime_step_dependencies_from_catalog(),
     ):
-        assert all(set(projection) == {"depends_on"} for projection in dependency_map.values())
+        assert all(
+            set(projection) == {"depends_on"} for projection in dependency_map.values()
+        )
 
 
 def test_catalog_key_matching_uses_native_static_metadata_and_policy_families():
