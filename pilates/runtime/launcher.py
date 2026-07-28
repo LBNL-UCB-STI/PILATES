@@ -81,7 +81,6 @@ from pilates.workflows.surface import (
     EnabledWorkflowSurface,
     build_enabled_workflow_surface,
 )
-from pilates.workflows.boundary_audit import preflight_recovery_boundary_audit
 from pilates.workflows.stages import (
     run_land_use_stage,
     run_postprocessing_stage,
@@ -608,8 +607,6 @@ def _prepare_run_context(
         workspace=workspace,
         surface=surface,
     )
-    preflight_recovery_boundary_audit(state=state, workspace=workspace)
-
     return PreparedRunContext(
         settings=settings,
         state=state,
