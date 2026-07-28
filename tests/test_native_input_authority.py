@@ -276,3 +276,21 @@ def test_direct_beam_vehicle_staging_requires_an_explicit_atlas_artifact() -> No
             state=object(),
             resolve_beam_exchange_scenario_folder_fn=lambda _workspace: ".",
         )
+
+
+def test_direct_beam_vehicle_staging_rejects_wrong_forecast_year(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "vehicles2_2018.csv"
+    source_path.write_text("vehicle_id\n1\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="forecast_year=2019.*parsed_source_year=2018"):
+        copy_vehicles_from_atlas(
+            workspace=SimpleNamespace(full_path=str(tmp_path)),
+            state=SimpleNamespace(forecast_year=2019),
+            resolve_beam_exchange_scenario_folder_fn=lambda _workspace: str(
+                tmp_path / "beam-input"
+            ),
+            source_path=str(source_path),
+            require_exact_year=True,
+        )

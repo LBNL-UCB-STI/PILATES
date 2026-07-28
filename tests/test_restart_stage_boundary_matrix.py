@@ -181,6 +181,110 @@ def test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache(
     assert closure[0].artifact_identity == "zarr-identity"
 
 
+def test_checkpoint_archives_selected_closure_sources_before_verification(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Checkpoint publication mirrors producer bytes, not successor input paths."""
+
+    output_key = "events_parquet_2018_0"
+    artifact = Artifact(
+        key=output_key,
+        container_uri=(
+            "workspace://beam/beam_output/.pilates-consist-outputs/beam_run/"
+            f"{output_key}.parquet"
+        ),
+        run_id="beam-run-id",
+        hash="events-identity",
+        driver="parquet",
+        meta={},
+    )
+    successor_destination = tmp_path / ".pilates-consist-inputs" / output_key
+    producer_source = tmp_path / ".pilates-consist-outputs" / f"{output_key}.parquet"
+    member = PinnedClosureMember(
+        member_id=f"beam-run-id:{output_key}",
+        role=output_key,
+        producer_run_id="beam-run-id",
+        output_key=output_key,
+        artifact_identity="events-identity",
+        artifact_kind="file",
+        driver="parquet",
+        destination=successor_destination,
+        required=True,
+    )
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_postprocess",
+        binding=BindingResult(inputs={output_key: artifact}),
+        required_roles=(output_key,),
+        source_by_role={output_key: "coupler"},
+        logical_destinations={output_key: successor_destination},
+    )
+    calls: list[tuple[str, object]] = []
+    tracker = object()
+
+    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
+    monkeypatch.setattr(
+        beam_stage,
+        "_resolve_beam_postprocess_closure",
+        lambda **_kwargs: (member,),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "flush_archive_queue",
+        lambda **kwargs: calls.append(("flush", kwargs)),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "artifact_to_existing_path",
+        lambda value, _workspace: producer_source if value is artifact else None,
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "archive_copy_now",
+        lambda **kwargs: calls.append(("copy", kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "verify_archive_visible_pinned_closure_bytes",
+        lambda **kwargs: calls.append(("verify", kwargs)),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "snapshot_and_publish_beam_run_checkpoint",
+        lambda **kwargs: calls.append(("publish", kwargs)),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "_beam_checkpoint_scope",
+        lambda **_kwargs: {"year": 2017, "forecast_year": 2018, "iteration": 0},
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "_beam_checkpoint_skim_variant",
+        lambda _settings: "raw",
+    )
+
+    beam_stage._publish_completed_beam_run_checkpoint(
+        scenario=SimpleNamespace(),
+        settings=object(),
+        state=SimpleNamespace(
+            run_info_path=tmp_path / "run_state.yaml",
+            year=2017,
+        ),
+        workspace=SimpleNamespace(),
+        postprocess_inputs=resolved_inputs,
+        year=2018,
+        iteration=0,
+        producer_run_id="beam-run-id",
+    )
+
+    assert [name for name, _ in calls] == ["flush", "copy", "verify", "publish"]
+    assert calls[0][1] == {"fail_on_timeout": True}
+    copy_kwargs = calls[1][1]
+    assert copy_kwargs["key"] == output_key
+    assert copy_kwargs["path"] == producer_source
+    assert copy_kwargs["path"] != successor_destination
+
+
 def test_beam_checkpoint_closure_keeps_requested_beam_run_on_cache_hit(
     tmp_path: Path,
 ) -> None:

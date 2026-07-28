@@ -18,7 +18,9 @@ from pilates.utils.consist_types import (
 )
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
+    archive_copy_now,
     artifact_to_existing_path,
+    flush_archive_queue,
     set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
@@ -840,6 +842,29 @@ def _publish_completed_beam_run_checkpoint(
         iteration=iteration,
         beam_run_id=run_id,
     )
+    flush_archive_queue(fail_on_timeout=True)
+    selected_inputs = postprocess_inputs.binding.inputs or {}
+    for member in closure_members:
+        selected_artifact = selected_inputs.get(member.role)
+        if not isinstance(selected_artifact, Artifact):
+            raise RuntimeError(
+                "Cannot archive BEAM checkpoint closure member without a tracked "
+                f"artifact: {member.role!r}."
+            )
+        source_path = artifact_to_existing_path(selected_artifact, workspace)
+        if source_path is None:
+            raise RuntimeError(
+                "Cannot archive BEAM checkpoint closure member because its selected "
+                f"artifact is unavailable: {member.role!r}."
+            )
+        if not archive_copy_now(
+            key=member.output_key,
+            path=source_path,
+            workspace=workspace,
+        ):
+            raise RuntimeError(
+                f"Cannot archive BEAM checkpoint closure member: {member.output_key!r}."
+            )
     verify_archive_visible_pinned_closure_bytes(
         tracker=tracker,
         archive_run_dir=archive_run_dir,

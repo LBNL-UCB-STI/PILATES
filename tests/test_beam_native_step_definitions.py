@@ -11,6 +11,7 @@ from consist import (
 )
 
 from pilates.workflows.artifact_keys import (
+    ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
@@ -385,6 +386,69 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
     }
+
+
+def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "beam.conf"
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    inputs = {
+        "beam_plans_asim_out": tmp_path / "beam_plans.parquet",
+        "households_asim_out": tmp_path / "households.parquet",
+        "persons_asim_out": tmp_path / "persons.parquet",
+        ATLAS_VEHICLES2_OUTPUT: tmp_path / "vehicles2_2019.csv",
+    }
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_require_primary_beam_config",
+        lambda _settings, _workspace: config_path,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=True)
+        ),
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2017, forecast_year=2019, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+
+    assert resolved.logical_destinations[ATLAS_VEHICLES2_OUTPUT] == (
+        tmp_path / "beam-input" / ".consist-inputs" / "vehicles2_2019.csv"
+    )
+    assert resolved.logical_destinations[BEAM_PLANS_IN] == (
+        tmp_path / "beam-input" / ".consist-inputs" / "plans_beam_in.parquet"
+    )
+
+
+def test_beam_preprocess_rejects_unqualified_atlas_vehicles_basename(
+    tmp_path: Path,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+
+    with pytest.raises(ValueError, match="year-qualified ATLAS vehicles2"):
+        beam_steps._input_destination(
+            workspace=workspace,
+            key=ATLAS_VEHICLES2_OUTPUT,
+            source=tmp_path / "atlas_vehicles2_output.csv",
+        )
 
 
 def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabled(

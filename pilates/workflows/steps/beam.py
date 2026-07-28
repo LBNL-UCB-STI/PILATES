@@ -79,6 +79,7 @@ logger = logging.getLogger(__name__)
 
 _BEAM_INCLUDE_RE = re.compile(r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))')
 _BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
+_ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
 
 
 def _primary_beam_config_path(
@@ -580,11 +581,21 @@ def _project_beam_full_skim_outputs(
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
     source_path = artifact_to_path(source, workspace=workspace)
-    suffixes = "".join(Path(source_path).suffixes) if source_path is not None else ""
+    if key == ATLAS_VEHICLES2_OUTPUT:
+        source_name = Path(source_path).name if source_path is not None else ""
+        if not _ATLAS_VEHICLES2_BASENAME_RE.fullmatch(source_name):
+            raise ValueError(
+                "BEAM preprocess requires a year-qualified ATLAS vehicles2 "
+                f"source filename, got {source_path!r}."
+            )
+        destination_name = source_name
+    else:
+        suffixes = "".join(Path(source_path).suffixes) if source_path else ""
+        destination_name = f"{key}{suffixes}"
     return (
         Path(workspace.get_beam_mutable_data_dir())
         / ".consist-inputs"
-        / f"{key}{suffixes}"
+        / destination_name
     )
 
 
