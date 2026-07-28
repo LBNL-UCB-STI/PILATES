@@ -741,6 +741,17 @@ class PostprocessingConfig(BaseModel):
 class WorkflowConfig(BaseModel):
     """Workflow orchestration configuration."""
 
+    @model_validator(mode="before")
+    @classmethod
+    def reject_retired_manifest_recovery(cls, value: Any) -> Any:
+        """Reject the removed YAML workflow-recovery configuration explicitly."""
+        if isinstance(value, dict) and "manifests" in value:
+            raise ValueError(
+                "workflow.manifests has been removed; native Consist execution "
+                "does not support YAML manifest recovery."
+            )
+        return value
+
 
 # =============================================================================
 # TOP-LEVEL PILATES CONFIGURATION
