@@ -31,6 +31,29 @@ from pilates.workflows.artifact_keys import (
 _BEAM_CONTAINER_OUTPUT_DIR = "/app/output"
 
 
+def _warmstart_destination_name(source: Path) -> str:
+    """Return a BEAM reader-compatible warm-start name for ``source`` bytes.
+
+    Native runs written before the format-neutral linkstats output migration can
+    carry Parquet bytes at the legacy ``.csv.gz`` path.  BEAM chooses its reader
+    from the filename, so retain the stem but correct a recognizable format
+    suffix before the launch tree is compiled.
+    """
+
+    with source.open("rb") as stream:
+        magic = stream.read(4)
+    if magic == b"PAR1":
+        format_suffix = ".parquet"
+    elif magic.startswith(b"\x1f\x8b"):
+        format_suffix = ".csv.gz"
+    else:
+        format_suffix = "".join(source.suffixes)
+
+    source_suffix = "".join(source.suffixes)
+    stem = source.name[: -len(source_suffix)] if source_suffix else source.name
+    return f"{stem}{format_suffix}"
+
+
 @dataclass(frozen=True)
 class BeamLaunchConfig:
     """A fresh BEAM input tree and the primary config within that tree."""
@@ -195,7 +218,11 @@ def build_beam_launch_config(
     warmstart = prepared_inputs.get(LINKSTATS_WARMSTART)
     if warmstart is not None:
         warmstart_source = Path(warmstart)
-        warmstart_destination = Path(".pilates") / "warmstarts" / warmstart_source.name
+        warmstart_destination = (
+            Path(".pilates")
+            / "warmstarts"
+            / _warmstart_destination_name(warmstart_source)
+        )
         staged_inputs.append(
             BeamLaunchInput(
                 key=LINKSTATS_WARMSTART,

@@ -21,6 +21,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.steps.beam import (
     _beam_preprocess_native_output_paths,
+    _beam_run_native_output_paths,
     _materialize_native_outputs,
     _resolve_beam_preprocess_inputs,
     _resolved_beam_inputs,
@@ -93,6 +94,33 @@ def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
         / "beam_preprocess"
         / "linkstats_warmstart.parquet"
     )
+
+
+def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    outputs = _beam_run_native_output_paths(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(forecast_year=2030, iteration=1),
+        workspace=workspace,
+    )
+
+    assert outputs["linkstats"] == (
+        tmp_path / "beam-output" / ".pilates-consist-outputs" / "beam_run" / "linkstats"
+    )
+
+
+def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> None:
+    options_kwargs = {
+        "settings": SimpleNamespace(),
+        "state": SimpleNamespace(),
+        "workspace": SimpleNamespace(),
+    }
+
+    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 1
+    assert beam_run.cache_options(**options_kwargs).cache_version == 1
 
 
 def test_native_beam_definitions_resolve_consist_contracts(

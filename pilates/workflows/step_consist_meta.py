@@ -382,13 +382,24 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 required=False,
                 reason="dormant_matsim_example_config",
             )
-        reference_policies[
-            "beam.agentsim.agents.rideHail.managers[1].initialization.filePath"
-        ] = BeamReferencePolicy(
-            identity_policy="ignored",
-            required=False,
-            reason="optional_ridehail_fleet_ignored_in_pilates",
-        )
+        for key in (
+            "beam.agentsim.agents.rideHail.managers[0].initialization.filePath",
+            "beam.agentsim.agents.rideHail.managers[1].initialization.filePath",
+        ):
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="ignored",
+                required=False,
+                reason="procedural_ridehail_fleet_path_not_read_by_pilates",
+            )
+        for key in (
+            "beam.physsim.inputNetworkFilePath",
+            "matsim.modules.network.inputNetworkFile",
+        ):
+            reference_policies[key] = BeamReferencePolicy(
+                identity_policy="output_or_runtime_ignored",
+                required=False,
+                reason="generated_from_declared_r5_input_before_beam_execution",
+            )
         runtime_output_keys = (
             "beam.router.skim.activity-sim-skimmer.fileBaseName",
             "beam.router.skim.drive-time-skimmer.fileBaseName",
