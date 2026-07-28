@@ -1,53 +1,21 @@
 from pilates.workflows import catalog
-from pilates.workflows.steps import schema_step_builder_registry
-from pilates.workflows.steps import shared as step_shared
+from pilates.workflows.steps import STEP_DEFINITIONS
 from pilates.runtime.launcher import _build_schema_steps
 from types import SimpleNamespace
 
 
-def test_step_outputs_classes_are_catalog_derived():
-    expected = {
-        spec.step_name: spec.outputs_class for spec in catalog.tracked_step_specs()
-    }
-    assert step_shared.STEP_OUTPUTS_CLASSES == expected
-
-
-def test_step_dependencies_are_catalog_derived():
-    expected = {
-        spec.step_name: {
-            "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
-        }
-        for spec in catalog.tracked_step_specs()
-    }
-    assert step_shared.STEP_DEPENDENCIES == expected
-
-
-def test_runtime_step_dependencies_match_catalog_steps():
-    expected = {
-        spec.step_name: {
-            "depends_on": list(spec.depends_on),
-            "holder_inputs": list(spec.holder_inputs),
-        }
-        for spec in catalog.WORKFLOW_STEP_SPECS
-    }
-    assert step_shared.STEP_RUNTIME_DEPENDENCIES == expected
-
-
 def test_schema_steps_follow_catalog_order():
     schema_steps = _build_schema_steps()
-    models = [step.__consist_step__.model for step in schema_steps]
-    assert models == list(catalog.schema_step_names())
+    expected = [
+        STEP_DEFINITIONS[spec.step_name].function
+        for spec in catalog.schema_step_specs()
+    ]
+    assert schema_steps == expected
 
 
-def test_schema_step_builder_registry_covers_catalog_schema_steps():
-    registry = schema_step_builder_registry()
-    assert set(catalog.schema_step_names()) <= set(registry)
-
-
-def test_tracked_catalog_steps_define_outputs_class():
+def test_tracked_catalog_steps_do_not_own_typed_output_classes():
     for spec in catalog.tracked_step_specs():
-        assert spec.outputs_class is not None
+        assert not hasattr(spec, "outputs_class")
 
 
 def test_catalog_step_names_are_unique():

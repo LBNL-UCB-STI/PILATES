@@ -29,18 +29,22 @@ root, workspace root, and enabled model choice in your copied file.
 - It loads the YAML file with Pydantic validation.
 - It initializes the runtime flags that define the active run shape.
 - It creates or restores `WorkflowState` for durable year / stage / iteration progress.
-- It builds the enabled workflow surface that planning, binding, restart preflight, and runtime validation consume.
+- It builds the enabled workflow surface that stage policy, input resolution,
+  restart preflight, and runtime validation consume.
 - It resolves a run-specific archive directory under `run.output_directory`.
 - It uses `run.local_workspace_root` as the mutable workspace parent when that field is set; otherwise it uses the archive side.
 - It creates the run-specific archive directory and mutable workspace, then starts the scenario lifecycle.
 
-Bootstrap happens once before the year loop. On restart, bootstrap-owned
-invariants are replayed through the same cached path where possible, so later
-stages do not need a special "manual rebuild" path just because the run resumed.
+Bootstrap happens once before the year loop. On restart it establishes any
+bootstrap-owned workspace invariants required before the normal durable
+stage/year frontier begins; later stages do not use a special rebuild path.
 
 ## What Counts As Success
 
-A successful first run reaches the scenario lifecycle and leaves behind a run-specific archive directory plus the restart state needed for later replay or resume. If the run fails early, the launcher logs a restart command that reuses the same config file and, when available, the existing state file.
+A successful first run reaches the scenario lifecycle and leaves behind a
+run-specific archive directory plus durable restart state. If the run fails
+early, the launcher logs a restart command that reuses the same config file
+and, when available, the existing state file.
 
 ## When To Stop And Switch Pages
 

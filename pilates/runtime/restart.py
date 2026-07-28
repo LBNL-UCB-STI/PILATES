@@ -131,6 +131,58 @@ def find_missing_restart_local_artifacts(
     return missing
 
 
+def hydrate_restart_atlas_continuation_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    workflow_stage: Any,
+) -> None:
+    """Restore later-interval ATLAS continuation inputs before strict checks.
+
+    Vehicle ownership always restarts at its major-stage boundary. The initial
+    interval can recreate its own seed CSVs, but a later interval starts after
+    its predecessor and therefore needs the archived start-year/prior-subyear
+    inputs before ATLAS preprocess executes.
+    """
+
+    model_cfg = getattr(getattr(settings, "run", None), "models", None)
+    if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
+        return
+    if (
+        getattr(state, "current_major_stage", None)
+        != workflow_stage.vehicle_ownership_model
+    ):
+        return
+
+    start_year = _coerce_int(getattr(state, "start_year", None))
+    atlas_year = _coerce_int(
+        getattr(state, "year", getattr(state, "current_year", None))
+    )
+    run_info_path = getattr(state, "run_info_path", None)
+    if (
+        start_year is None
+        or atlas_year is None
+        or atlas_year <= start_year
+        or not run_info_path
+    ):
+        return
+
+    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
+    if not callable(get_atlas_input_dir):
+        return
+
+    from pilates.atlas.preprocessor import _restore_restart_atlas_year_inputs
+
+    _restore_restart_atlas_year_inputs(
+        previous_run_dir=os.path.dirname(os.fspath(run_info_path)),
+        workspace=workspace,
+        start_year=start_year,
+        atlas_year=atlas_year,
+        force=True,
+    )
+
+
 def format_missing_artifact_summary(
     artifacts: Sequence[RestartArtifactDiagnostic],
 ) -> str:

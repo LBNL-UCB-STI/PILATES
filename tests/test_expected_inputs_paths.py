@@ -29,7 +29,9 @@ class DummyWorkspace:
 def test_activitysim_postprocessor_expected_inputs_skip_missing(tmp_path) -> None:
     workspace = DummyWorkspace(tmp_path)
     inputs = ActivitysimPostprocessor.expected_inputs(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            activitysim=SimpleNamespace(output_tables={"tables": []})
+        ),
         state=SimpleNamespace(),
         workspace=workspace,
     )

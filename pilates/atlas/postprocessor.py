@@ -448,6 +448,7 @@ class AtlasPostprocessor(GenericPostprocessor):
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         """
         Postprocess ATLAS outputs: update UrbanSim HDF5 with new vehicle ownership,
@@ -483,9 +484,11 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
 
         # --- HDF5 Update and Provenance ---
-        usim_h5_file = resolve_atlas_usim_datastore_path(
-            settings, self.state, workspace
-        )
+        if usim_datastore_h5 is None:
+            raise TypeError(
+                "AtlasPostprocessor._postprocess requires usim_datastore_h5"
+            )
+        usim_h5_file = Path(usim_datastore_h5)
         if not usim_h5_file.exists():
             raise RuntimeError(
                 "ATLAS postprocess requires the UrbanSim datastore H5 selected for "
@@ -571,11 +574,19 @@ class AtlasPostprocessor(GenericPostprocessor):
         raw_outputs: AtlasRunOutputs,
         workspace: Workspace,
         model_run_hash: Optional[str] = None,
+        usim_datastore_h5: Optional[Path] = None,
     ) -> AtlasPostprocessOutputs:
         if not isinstance(raw_outputs, AtlasRunOutputs):
             raise TypeError("AtlasPostprocessor.postprocess expects AtlasRunOutputs")
+        if usim_datastore_h5 is None:
+            raise TypeError("AtlasPostprocessor.postprocess requires usim_datastore_h5")
         self.state.set_sub_stage_progress("postprocessor")
-        return self._postprocess(raw_outputs, workspace, model_run_hash)
+        return self._postprocess(
+            raw_outputs,
+            workspace,
+            model_run_hash,
+            usim_datastore_h5=usim_datastore_h5,
+        )
 
     def atlas_update_h5_vehicle(
         self,

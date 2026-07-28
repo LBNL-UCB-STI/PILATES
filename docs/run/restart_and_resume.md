@@ -1,71 +1,77 @@
 ---
 title: Restart and Resume
-summary: Replay-first restart model, cache-hit behavior, and operator expectations.
+summary: PILATES restart policy and the single committed BEAM checkpoint.
 ---
 
 # Restart and Resume
 
-## Two Words To Get Straight First
+## What Restart Means
 
-- **Replay** means re-entering the scenario from the archived state. It is not
-  re-running the same code blindly; the launcher reconstructs `WorkflowState`,
-  rebuilds the enabled workflow surface, and lets each step decide whether it
-  needs to do work.
-- **Cache hit** means Consist sees that a step's declared identity (code,
-  configured inputs, input digests) matches an earlier execution and returns
-  the recorded outputs instead of recomputing them. A cache hit is what makes
-  replay cheap; without one, the step runs.
+PILATES owns restart policy; Consist owns generic artifact identity,
+materialization, provenance, run identity, cache admission, and output links.
+A restart is therefore a stage/year-frontier decision made from durable
+`WorkflowState`, except for one committed mid-stage boundary described below.
 
-The combination — "replay-first restart with cache hits where the identity
-matches" — is what the rest of this page describes.
+Fresh execution, a cache hit, and restart execution all converge on the same
+native step result:
 
-## What Restart Means Now
+```text
+resolved semantic inputs -> Consist RunResult.outputs -> TypedOutputProjector
+```
 
-- The launcher treats a run with `state.run_info_path` as a restart run.
-- It reuses the archived state path and checks whether the current state is behind the archive state.
-- It can pre-run bootstrap on restart so the workspace invariants are rehydrated through the normal cached path.
-- If the run is already initialized, the launcher skips bespoke restart hydration and relies on scenario replay plus Consist cache hits.
+A Consist cache hit is admitted only when the step identity and requested
+outputs satisfy its configured cache policy. It is not a PILATES restart
+decision and does not let the stage select an alternate historical source.
 
-For most users, the practical meaning is simple: restart is no longer “rebuild everything by hand.” It is “re-enter the scenario with the archived state, then let declared inputs, bootstrap, and cache hits restore what the workflow still needs.”
+## Normal Frontier Resume
 
-## Preflight Checks
+Outside the committed BEAM boundary, a restart resumes the normal durable
+stage/year frontier. The launcher initializes the scenario and the stage
+sequence resolves current semantic roles in the usual way. There is no other
+mid-stage recovery contract.
 
-- The runtime checks for required local artifacts before and after restart bootstrap against the current enabled workflow surface.
-- Some missing artifacts are treated as blocking; others are deferred until bootstrap hydration.
-- If `restart_strict` is enabled and required artifacts are still missing after bootstrap, the launcher raises.
-- The current code logs these conditions explicitly so operators can see whether a missing path is a restart blocker or a deferred bootstrap-owned artifact.
+In particular, an interrupted ActivitySim mid-stage region fails closed rather
+than being treated as a generally resumable checkpoint. The next execution is
+the normal stage-policy path selected by its durable frontier.
 
-## Input Staging And Replay
+## The Sole Mid-Stage Boundary
 
-- Bootstrap seeds the coupler with workspace artifacts that later stages expect to find.
-- Restart hydration can materialize archived outputs back into the local workspace when the runtime needs them.
-- The legacy exact-rewind helpers can restore ActivitySim or BEAM overlay directories for explicit rewind cases.
-- Those helpers are narrow tooling, not the normal launcher path.
+`beam_run_completed -> beam_postprocess` is the sole committed mid-stage
+restart boundary. At BEAM run completion, PILATES records a pinned successor
+closure: completed producer run IDs, output keys, artifact identities and
+forms, and the exact absolute destinations required by `beam_postprocess`.
 
-## Legacy Helpers
+On restart PILATES:
 
-- `hydrate_missing_restart_artifacts` remains available for frontier hydration and focused tests.
-- `hydrate_rewind_runner_inputs` remains available for exact-rewind overlays when `allow_rewind_resume` is set.
-- The launcher does not call these helpers in the normal replay-first path.
+1. validates the pinned snapshot and every linked completed producer output;
+2. verifies the closure can be hydrated from the archive;
+3. hydrates it to the successor resolver's exact current destinations;
+4. re-resolves `beam_postprocess` and executes its native `StepDefinition`.
 
-## Operator Expectations
+The closure must be complete, non-overlapping, and cleanly materialized. An
+ambiguous producer, absent output link, identity/form mismatch, unavailable
+archive bytes, or wrong destination rejects the checkpoint. PILATES does not
+accept a leftover workspace file or a coupler value as evidence.
 
-- A restart may still execute bootstrap work if the run was not fully initialized.
-- A cache hit does not mean the runtime skips all work; it means Consist can reuse matching outputs where the declared identity matches.
-- If local workspace state is lost, the runtime can materialize archived outputs back into place when the archive contains what the restart needs.
-- If the archive does not contain the required declared outputs, restart hydration fails rather than inventing missing inputs.
+`beam_postprocess_in_progress` is a mutation gate, not a checkpoint. Once that
+gate has begun, the operation remains non-restartable.
 
-## Practical Rule
+## Operator Checks
 
-If you are deciding whether a restart is safe, check these in order:
+When validating a restart, check:
 
-1. the state file you are resuming from
-2. the archive run directory it points at
-3. whether bootstrap-owned files can be restored through the normal path
-4. whether the missing files are declared workflow outputs or only local scratch
+1. the durable state and its normal stage/year frontier;
+2. for the BEAM boundary only, the pinned checkpoint scope and successor
+   closure;
+3. the archive-visible artifacts and exact current destinations;
+4. the native step's typed projected outputs after execution or cache admission.
+
+If the pinned BEAM closure cannot be proven, stop and investigate the archive
+or checkpoint. Do not attempt to reconstruct a missing boundary from local
+scratch files.
 
 ## Adjacent Pages
 
-- Read [Scenario Lifecycle](scenario_lifecycle.md) first.
-- Use [HPC Overview](hpc_overview.md) for the local-versus-archive storage topology on clusters.
-- Use [Consist in PILATES](../workflow/consist_in_pilates.md) for the ownership model behind replay.
+- Read [Scenario Lifecycle](scenario_lifecycle.md) for launch lifecycle.
+- Read [Step Contracts](../workflow/step_contracts.md) for resolve-once native execution.
+- Read [Consist in PILATES](../workflow/consist_in_pilates.md) for ownership and cache behavior.

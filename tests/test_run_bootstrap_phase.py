@@ -9,10 +9,15 @@ import pytest
 from consist.types import CacheOptions
 
 from pilates.runtime import bootstrap as bootstrap_runtime
-from pilates.runtime import cache_recovery as cache_recovery_module
 from pilates.runtime import launcher as run_module
 from pilates.atlas.inputs import build_atlas_static_inputs_fallback
 from pilates.generic.records import FileRecord, RecordStore
+from pilates.workflows.artifact_keys import (
+    BEAM_HOUSEHOLDS_IN,
+    BEAM_PERSONS_IN,
+    BEAM_PLANS_IN,
+    LINKSTATS_WARMSTART,
+)
 from pilates.utils import consist_db_snapshot as snapshot_module
 from workflow_state import WorkflowState
 
@@ -41,6 +46,108 @@ class DummyWorkspace:
 
     def get_beam_mutable_data_dir(self):
         return os.path.join(self.full_path, "beam", "input")
+
+
+def test_fresh_bootstrap_sequence_defers_initialized_marker_until_coupler_seed(
+    monkeypatch,
+):
+    """Initial UrbanSim roles must be seeded while the state is still fresh."""
+    state = SimpleNamespace(data_initialized=False)
+    state.set_data_initialized = lambda value: setattr(state, "data_initialized", value)
+    prepared = SimpleNamespace(
+        settings=SimpleNamespace(),
+        state=state,
+        surface=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        tracker=SimpleNamespace(),
+        scenario_id="base",
+        seed=None,
+        is_restart_run=False,
+    )
+    bootstrap_result = {"staged_artifact_summary": {"copied_records_total": 1}}
+
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module, "run_bootstrap_phase", lambda **_kwargs: bootstrap_result
+    )
+    monkeypatch.setattr(
+        run_module, "_assert_bootstrap_output_invariant", lambda _result: None
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "log_bootstrap_result_summary",
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert run_module._run_bootstrap_sequence(prepared) is bootstrap_result
+    assert state.data_initialized is False
+
+
+def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
+    tmp_path, monkeypatch
+):
+    previous_run_dir = tmp_path / "previous-run"
+    previous_file = (
+        previous_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
+    )
+    previous_file.parent.mkdir(parents=True)
+    previous_file.write_text("seed\n", encoding="utf-8")
+    current_atlas_input = tmp_path / "current-run" / "atlas" / "atlas_input"
+    state = SimpleNamespace(
+        data_initialized=True,
+        start_year=2017,
+        year=2023,
+        current_year=2023,
+        run_info_path=str(previous_run_dir / "run_state.yaml"),
+        current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            restart_strict=True,
+            models=SimpleNamespace(vehicle_ownership="atlas"),
+        )
+    )
+    prepared = SimpleNamespace(
+        settings=settings,
+        state=state,
+        surface=SimpleNamespace(
+            is_restart_prebootstrap_deferred_artifact_key=lambda _key: False
+        ),
+        workspace=SimpleNamespace(
+            get_atlas_mutable_input_dir=lambda: str(current_atlas_input)
+        ),
+        tracker=SimpleNamespace(),
+        scenario_id="base",
+        seed=None,
+        is_restart_run=True,
+    )
+    observed_paths: list[bool] = []
+
+    def find_missing(**_kwargs):
+        observed_paths.append(
+            (current_atlas_input / "year2017" / "households.csv").exists()
+        )
+        return []
+
+    monkeypatch.setattr(run_module.cr, "set_tracker", lambda _tracker: None)
+    monkeypatch.setattr(
+        run_module, "run_bootstrap_phase", lambda **_kwargs: {"bootstrap": "ok"}
+    )
+    monkeypatch.setattr(
+        run_module, "_assert_bootstrap_output_invariant", lambda _result: None
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "log_bootstrap_result_summary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        run_module, "_find_missing_restart_local_artifacts", find_missing
+    )
+
+    run_module._run_bootstrap_sequence(prepared)
+
+    assert observed_paths == [False, True]
 
 
 class DummyInitialization:
@@ -191,7 +298,12 @@ def _settings(cache_enabled=True, code_identity=None):
 
 
 def _state():
-    return SimpleNamespace(start_year=2017)
+    return SimpleNamespace(
+        start_year=2017,
+        current_year=2017,
+        forecast_year=2017,
+        data_initialized=False,
+    )
 
 
 def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
@@ -377,7 +489,7 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation(monkeypatch, tmp_path, 
                 "cache_hit": False,
                 "execute_fn": True,
                 "run_id": "bootstrap_probe",
-                "meta": {"cache_miss_explplanation": explanation},
+                "meta": {"cache_miss_explanation": explanation},
             }
         ]
     )
@@ -398,9 +510,6 @@ def test_run_bootstrap_phase_cache_miss_logs_explanation(monkeypatch, tmp_path, 
         "BOOTSTRAP CACHE MISS. Initialization executed for this workspace. "
         "reason=config_changed candidate_run_id=bootstrap_prior"
     ) in caplog.text
-    assert "BOOTSTRAP cache miss details:" in caplog.text
-    assert "config_keys_changed" in caplog.text
-    assert "fallbacks_used" in caplog.text
 
 
 def test_run_bootstrap_phase_cache_hit_replays_without_fallback_rerun(monkeypatch):
@@ -549,53 +658,6 @@ def test_run_bootstrap_phase_cache_hit_missing_workspace_invariants_triggers_fal
         "probe_run_id": "bootstrap_probe",
         "materialization_run_id": "bootstrap_fallback",
     }
-
-
-def test_run_with_cache_recovery_logs_cache_miss_explanation(caplog):
-    explanation = {
-        "reason": "inputs_changed",
-        "candidate_run_id": "step_prior",
-        "confidence": "medium",
-        "matched_components": ["config_hash"],
-        "mismatched_components": ["input_hash"],
-        "details": {
-            "input_keys_added": ["beam_skims_input"],
-            "input_artifact_changes": {
-                "beam_skims_input": {"change": "upstream_run_drift"}
-            },
-        },
-    }
-    outputs = object()
-
-    def _run_step(_cache_options):
-        return SimpleNamespace(
-            cache_hit=False,
-            run=SimpleNamespace(
-                id="step_run", meta={"cache_miss_explanation": explanation}
-            ),
-        )
-
-    with caplog.at_level(logging.DEBUG):
-        result, recovered_outputs, metadata = (
-            cache_recovery_module.run_with_cache_recovery(
-                stage_name="atlas",
-                step_name="atlas_run",
-                run_step=_run_step,
-                read_outputs=lambda: outputs,
-                recover_outputs=lambda _result: None,
-            )
-        )
-
-    assert result.run.id == "step_run"
-    assert recovered_outputs is outputs
-    assert metadata["initial_cache_hit"] is False
-    assert metadata["cache_miss_explanation"] == explanation
-    assert (
-        "[atlas] Cache miss for atlas_run. reason=inputs_changed "
-        "candidate_run_id=step_prior"
-    ) in caplog.text
-    assert "[atlas] Cache miss details for atlas_run:" in caplog.text
-    assert "input_keys_added" in caplog.text
 
 
 def test_run_bootstrap_phase_reports_cache_hit_replay_metadata(monkeypatch, tmp_path):
@@ -812,6 +874,164 @@ def test_seed_bootstrap_artifacts_to_coupler_publishes_beam_defaults(tmp_path):
     assert isinstance(coupler.get("plans_beam_in"), str)
     assert isinstance(coupler.get("households_beam_in"), str)
     assert isinstance(coupler.get("persons_beam_in"), str)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_publishes_initial_urbansim_roles(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    assert coupler.get("usim_datastore_h5") == str(staged_h5)
+
+
+def test_seed_bootstrap_artifacts_to_coupler_preserves_current_urbansim_role(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {"usim_datastore_h5": "/existing/current.h5"}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    assert coupler.get("usim_datastore_h5") == "/existing/current.h5"
+
+
+@pytest.mark.parametrize(
+    ("state", "expected_current"),
+    [
+        (
+            SimpleNamespace(
+                start_year=2017,
+                current_year=2023,
+                forecast_year=2028,
+                data_initialized=False,
+            ),
+            None,
+        ),
+        (
+            SimpleNamespace(
+                start_year=2017,
+                current_year=2017,
+                forecast_year=2017,
+                data_initialized=True,
+            ),
+            "bootstrap datastore",
+        ),
+    ],
+    ids=["later_year", "restart_at_initial_year"],
+)
+def test_seed_bootstrap_artifacts_to_coupler_publishes_current_urbansim_role_only_at_initial_frontier(
+    tmp_path,
+    state,
+    expected_current,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    coupler = DummyCoupler()
+    coupler.set("usim_datastore_base_h5", str(staged_h5))
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=_settings(),
+        state=state,
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") == str(staged_h5)
+    current = coupler.get("usim_datastore_h5")
+    if expected_current is None:
+        assert current is None
+    else:
+        assert Path(current).read_text(encoding="utf-8") == expected_current
+
+
+def test_seed_bootstrap_artifacts_to_coupler_skips_urbansim_roles_without_consumer(
+    tmp_path,
+):
+    class DummyCoupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    workspace = DummyWorkspace(full_path=str(tmp_path))
+    staged_h5 = Path(workspace.get_usim_mutable_data_dir()) / "usim_000.h5"
+    staged_h5.parent.mkdir(parents=True, exist_ok=True)
+    staged_h5.write_text("bootstrap datastore", encoding="utf-8")
+    settings = _settings()
+    settings.run.models = SimpleNamespace(
+        land_use=None,
+        activity_demand=None,
+        vehicle_ownership=None,
+        traffic_assignment=None,
+    )
+    coupler = DummyCoupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=_state(),
+        workspace=workspace,
+        coupler=coupler,
+    )
+
+    assert coupler.get("usim_datastore_base_h5") is None
+    assert coupler.get("usim_datastore_h5") is None
 
 
 def test_seed_bootstrap_artifacts_to_coupler_falls_back_to_config_exchange_folder(
@@ -1223,6 +1443,104 @@ def test_seed_bootstrap_artifacts_to_coupler_consumes_stage_boundary_policy(
     assert coupler.get("custom_bootstrap_artifact") == str(artifact_path)
 
 
+def test_seed_bootstrap_artifacts_publishes_beam_only_exchange_and_warmstart(
+    tmp_path,
+):
+    class Coupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    exchange_paths = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in exchange_paths.values():
+        path.write_text(path.stem, encoding="utf-8")
+
+    warmstart_path = tmp_path / "beam" / "input" / "test" / "warmstart.parquet"
+    warmstart_path.parent.mkdir(parents=True)
+    warmstart_path.write_text("linkstats", encoding="utf-8")
+
+    class ModelFactory:
+        def get_preprocessor(self, model_name, _state):
+            assert model_name == "beam"
+            return SimpleNamespace(
+                existing_beam_exchange_inputs=lambda _workspace: RecordStore(
+                    recordList=[
+                        FileRecord(file_path=str(path), short_name=key)
+                        for key, path in exchange_paths.items()
+                    ]
+                )
+            )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test",
+            models=SimpleNamespace(traffic_assignment="beam", activity_demand=None),
+        ),
+        beam=SimpleNamespace(warmstart_linkstats_path="warmstart.parquet"),
+    )
+    coupler = Coupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=DummyWorkspace(full_path=str(tmp_path)),
+        coupler=coupler,
+        model_factory_cls=ModelFactory,
+    )
+
+    assert coupler.values == {
+        **{key: str(path) for key, path in exchange_paths.items()},
+        LINKSTATS_WARMSTART: str(warmstart_path),
+    }
+
+
+def test_seed_bootstrap_artifacts_publishes_warmstart_with_activitysim(
+    tmp_path,
+):
+    class Coupler:
+        def __init__(self):
+            self.values = {}
+
+        def get(self, key):
+            return self.values.get(key)
+
+        def set(self, key, value):
+            self.values[key] = value
+
+    warmstart_path = tmp_path / "beam" / "input" / "test" / "warmstart.parquet"
+    warmstart_path.parent.mkdir(parents=True)
+    warmstart_path.write_text("linkstats", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test",
+            models=SimpleNamespace(
+                traffic_assignment="beam",
+                activity_demand="activitysim",
+            ),
+        ),
+        beam=SimpleNamespace(warmstart_linkstats_path="warmstart.parquet"),
+    )
+    coupler = Coupler()
+
+    bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=DummyWorkspace(full_path=str(tmp_path)),
+        coupler=coupler,
+    )
+
+    assert coupler.values == {LINKSTATS_WARMSTART: str(warmstart_path)}
+
+
 def test_seed_bootstrap_artifacts_to_coupler_does_not_publish_activitysim_runtime_caches(
     tmp_path,
 ):
@@ -1520,6 +1838,78 @@ def test_prepare_run_context_resolves_storage_tracker_and_state_paths(
             "tags": [f"scenario_id:{prepared.scenario_id}"],
         }
     ]
+
+
+def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
+    monkeypatch,
+) -> None:
+    class _StageValue(str):
+        @property
+        def name(self) -> str:
+            return str(self)
+
+    class _Stage:
+        land_use = _StageValue("land_use")
+        vehicle_ownership_model = _StageValue("vehicle_ownership_model")
+        supply_demand_loop = _StageValue("supply_demand_loop")
+        activity_demand = _StageValue("activity_demand")
+        traffic_assignment = _StageValue("traffic_assignment")
+
+    class _State:
+        Stage = _Stage
+        is_restart_run = True
+        current_major_stage = _Stage.supply_demand_loop
+        current_sub_stage = _Stage.activity_demand
+        current_inner_iter = 0
+        sub_stage_progress = "runner"
+        write_count = 0
+        major_stage_order = (
+            _Stage.land_use,
+            _Stage.vehicle_ownership_model,
+            _Stage.supply_demand_loop,
+        )
+
+        def is_enabled(self, stage):
+            return stage in {
+                self.Stage.land_use,
+                self.Stage.vehicle_ownership_model,
+                self.Stage.activity_demand,
+                self.Stage.traffic_assignment,
+            }
+
+        @property
+        def iteration(self):
+            return self.current_inner_iter
+
+        @iteration.setter
+        def iteration(self, value):
+            self.current_inner_iter = value
+
+        def should_run(self, major_stage, iteration=0, sub_stage=None):
+            return (
+                major_stage == self.Stage.supply_demand_loop
+                and iteration == self.current_inner_iter
+                and sub_stage == self.Stage.activity_demand
+            )
+
+        def write_state(self):
+            self.write_count += 1
+
+    state = _State()
+    monkeypatch.setattr(
+        run_module,
+        "beam_checkpoint_resume_requested",
+        lambda **_kwargs: False,
+    )
+
+    assert run_module._rewind_uncommitted_activitysim_restart_to_provider_boundary(
+        state=state
+    )
+    assert state.current_major_stage == state.Stage.land_use
+    assert state.current_sub_stage is None
+    assert state.current_inner_iter == 0
+    assert state.sub_stage_progress is None
+    assert state.write_count == 1
 
 
 def test_main_logs_restart_instructions_on_failure(tmp_path, monkeypatch, caplog):
@@ -2270,7 +2660,6 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
 
 
 def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypatch):
-
     class SnapshotStub:
         def final_snapshot(self):
             return True
@@ -2330,8 +2719,9 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypa
     )
     state = SimpleNamespace(
         Stage=WorkflowState.Stage,
-        run_info_path=str(run_state_path),
+        run_info_path=str(archive_run_dir / "missing-continuation" / "run_state.yaml"),
         data_initialized=True,
+        is_restart_run=True,
         file_loc=None,
         mirror_file_loc=None,
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model,

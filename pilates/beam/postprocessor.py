@@ -11,7 +11,11 @@ import openmatrix as omx
 import pandas as pd
 
 from pilates.config import PilatesConfig
-from pilates.beam.outputs import BeamPostprocessOutputs, BeamRunOutputs
+from pilates.beam.outputs import (
+    BeamPostprocessOutputs,
+    BeamRunOutputs,
+    requires_omx_skim_output,
+)
 import pilates.utils.zone_utils as zone_utils
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
@@ -3740,28 +3744,24 @@ class BeamPostprocessor(GenericPostprocessor):
             - ``final_skims_omx``: Final OMX skims written to the BEAM
               mutable data directory when OMX output is enabled.
             - ``zarr_skims``: Updated Zarr skims after BEAM postprocessing
-              when OMX output is disabled.
+              whenever ActivitySim is enabled.
         Related docs
             - See `pilates/beam/inputs.py` for the corresponding input
               descriptions used by BEAM and downstream models.
         """
-        write_omx = get_setting(settings, "write_skims_to_omx", False) or (
-            get_setting(settings, "run.models.land_use") == "urbansim"
-        )
-        if write_omx:
-            region = settings.run.region
-            omx_name = get_beam_omx_skims_name(settings)
-            final_omx_path = os.path.join(
-                workspace.get_beam_mutable_data_dir(), region, omx_name
-            )
-            return {"final_skims_omx": final_omx_path}
-
+        outputs: Dict[str, Any] = {}
         if _activitysim_skims_target_enabled(settings):
-            zarr_path = os.path.join(
+            outputs["zarr_skims"] = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
-            return {"zarr_skims": zarr_path}
-        return {}
+
+        if requires_omx_skim_output(settings):
+            region = settings.run.region
+            omx_name = get_beam_omx_skims_name(settings)
+            outputs["final_skims_omx"] = os.path.join(
+                workspace.get_beam_mutable_data_dir(), region, omx_name
+            )
+        return outputs
 
     def __init__(
         self,
@@ -3951,12 +3951,9 @@ class BeamPostprocessor(GenericPostprocessor):
                     )
                 )
 
-        if (
-            get_setting(settings, "write_skims_to_omx", False)
-            or get_setting(settings, "run.models.land_use") == "urbansim"
-        ):
+        if requires_omx_skim_output(settings):
             logger.info(
-                "Writing skims to OMX file for UrbanSim or other downstream models..."
+                "Writing skims to OMX file for UrbanSim, ATLAS, or other downstream models..."
             )
             if all_skims_path is None or not os.path.exists(all_skims_path):
                 logger.error(
@@ -3990,7 +3987,7 @@ class BeamPostprocessor(GenericPostprocessor):
                                 short_name="final_skims_omx",
                                 description=(
                                     "Final skims converted to OMX format for "
-                                    "ActivitySim/UrbanSim."
+                                    "UrbanSim, ATLAS, or other downstream consumers."
                                 ),
                             )
                         )

@@ -74,4 +74,4 @@ These settings affect cache identity or run persistence, not the model science i
 
 - Start with [Configuration Basics](../start-here/configuration_basics.md) if you are new.
 - Pair this with [CLI](cli.md) for invocation behavior.
-- Use [Restart and Resume](restart_and_resume.md) for replay-specific behavior.
+- Use [Restart and Resume](restart_and_resume.md) for restart policy and checkpoint behavior.

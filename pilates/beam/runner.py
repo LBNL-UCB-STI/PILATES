@@ -11,6 +11,7 @@ from pilates.beam.outputs import (
     BeamPreprocessOutputs,
     BeamRunOutputs,
 )
+from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.generic.runner import GenericRunner
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.beam.postprocessor import (
@@ -96,6 +97,27 @@ def _map_host_path_to_container(
         rel = os.path.relpath(host_path, abs_beam_input)
         return os.path.join("/app/input", rel)
     return host_path
+
+
+def _beam_container_volumes(
+    *,
+    input_root: Path,
+    output_root: Path,
+    launch_config: BeamLaunchConfig | None,
+) -> dict[str, dict[str, str]]:
+    """Mount the launch snapshot at its container and configured host paths."""
+
+    volumes = {
+        str(input_root): {"bind": "/app/input", "mode": "rw"},
+        str(output_root): {"bind": "/app/output", "mode": "rw"},
+    }
+    if launch_config is not None:
+        host_path_root = input_root.parent
+        volumes[str(host_path_root)] = {
+            "bind": str(host_path_root),
+            "mode": "rw",
+        }
+    return volumes
 
 
 def _select_latest_linkstats_path(
@@ -474,6 +496,7 @@ class BeamRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
+        launch_config: BeamLaunchConfig | None = None,
     ) -> RecordStore:
         settings = self.state.full_settings
         region = settings.run.region
@@ -484,10 +507,16 @@ class BeamRunner(GenericRunner):
         travel_model, travel_model_image = self.get_model_and_image(
             settings, "travel_model"
         )
-        beam_config = settings.beam.config
-        path_to_beam_config = f"/app/input/{region}/{beam_config}"
-
-        abs_beam_input = workspace.get_beam_mutable_data_dir()
+        if launch_config is None:
+            beam_config = settings.beam.config
+            path_to_beam_config = f"/app/input/{region}/{beam_config}"
+            abs_beam_input = workspace.get_beam_mutable_data_dir()
+        else:
+            config_relative_path = launch_config.primary_config.relative_to(
+                launch_config.root
+            )
+            path_to_beam_config = str(Path("/app/input") / config_relative_path)
+            abs_beam_input = str(launch_config.root)
         abs_beam_output = workspace.get_beam_output_dir()
 
         # Make sure there's a temp dir for the JVM to use
@@ -497,7 +526,7 @@ class BeamRunner(GenericRunner):
             "[BEAM Runner] Starting BEAM container, input: %s, output: %s, config: %s",
             abs_beam_input,
             abs_beam_output,
-            beam_config,
+            path_to_beam_config,
         )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
@@ -542,10 +571,11 @@ class BeamRunner(GenericRunner):
             client=client,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=f"--config={path_to_beam_config}",
             model_name=self.model_name,
             working_dir="/app",
@@ -599,6 +629,7 @@ class BeamRunner(GenericRunner):
         inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         *,
+        launch_config: BeamLaunchConfig,
         extra_inputs: Optional[Mapping[str, Any]] = None,
     ) -> BeamRunOutputs:
         """
@@ -622,7 +653,7 @@ class BeamRunner(GenericRunner):
             extra_inputs,
             description_prefix="BEAM run extra input",
         )
-        output_store = self._run(input_store, workspace)
+        output_store = self._run(input_store, workspace, launch_config)
         raw_outputs: Dict[str, Path] = {}
         for key, value in output_store.to_mapping().items():
             path = artifact_to_path(value, workspace)
@@ -692,6 +723,7 @@ class BeamFullSkimRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
+        launch_config: BeamLaunchConfig | None = None,
     ) -> RecordStore:
         settings = self.state.full_settings
         region = settings.run.region
@@ -708,7 +740,15 @@ class BeamFullSkimRunner(GenericRunner):
                 "BEAM full skim requested but beam.full_skim.run_schedule is disabled."
             )
 
-        abs_beam_input = workspace.get_beam_mutable_data_dir()
+        if launch_config is None:
+            abs_beam_input = workspace.get_beam_mutable_data_dir()
+            path_to_beam_config = f"/app/input/{region}/{settings.beam.config}"
+        else:
+            abs_beam_input = str(launch_config.root)
+            path_to_beam_config = str(
+                Path("/app/input")
+                / launch_config.primary_config.relative_to(launch_config.root)
+            )
         abs_beam_output = workspace.get_beam_output_dir()
 
         output_dir = os.path.join(
@@ -720,9 +760,6 @@ class BeamFullSkimRunner(GenericRunner):
         os.makedirs(os.path.join(abs_beam_output, "tmp"), exist_ok=True)
 
         _, travel_model_image = self.get_model_and_image(settings, "travel_model")
-        beam_config = settings.beam.config
-        path_to_beam_config = f"/app/input/{region}/{beam_config}"
-
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         java_opts = (
             f"-Xms{beam_memory} "
@@ -811,10 +848,11 @@ class BeamFullSkimRunner(GenericRunner):
             client=None,
             settings=settings,
             image=travel_model_image,
-            volumes={
-                abs_beam_input: {"bind": "/app/input", "mode": "rw"},
-                abs_beam_output: {"bind": "/app/output", "mode": "rw"},
-            },
+            volumes=_beam_container_volumes(
+                input_root=Path(abs_beam_input),
+                output_root=Path(abs_beam_output),
+                launch_config=launch_config,
+            ),
             command=" ".join(cmd_parts),
             model_name=self.model_name,
             working_dir="/app",
@@ -849,6 +887,7 @@ class BeamFullSkimRunner(GenericRunner):
         inputs: BeamPreprocessOutputs,
         workspace: Workspace,
         *,
+        launch_config: BeamLaunchConfig,
         previous_beam_outputs: Optional[Mapping[str, Any]] = None,
     ) -> BeamFullSkimOutputs:
         """
@@ -872,7 +911,7 @@ class BeamFullSkimRunner(GenericRunner):
             previous_beam_outputs,
             description_prefix="BEAM full-skim warm-start input",
         )
-        output_store = self._run(input_store, workspace)
+        output_store = self._run(input_store, workspace, launch_config)
         full_skims_path = artifact_to_path(
             output_store.to_mapping().get(BEAM_FULL_SKIMS), workspace
         )

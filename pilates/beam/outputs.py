@@ -6,6 +6,7 @@ from typing import Any, ClassVar, Dict, Iterable, Optional, Tuple, TYPE_CHECKING
 
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.outputs_base import (
     OutputValidator,
     StepOutputsBase,
@@ -45,6 +46,15 @@ def _resolve_model_name(settings: Any, model_name: str) -> Optional[str]:
     return getattr(model_cfg, model_name, None)
 
 
+def requires_omx_skim_output(settings: Any) -> bool:
+    """Return whether a configured downstream model requires BEAM OMX skims."""
+    return (
+        bool(get_setting(settings, "write_skims_to_omx", False))
+        or (_resolve_model_name(settings, "land_use") == "urbansim")
+        or (_resolve_model_name(settings, "vehicle_ownership") == "atlas")
+    )
+
+
 class _BeamPostprocessExpectedOutputsValidator:
     """
     Require BEAM postprocess skims only when downstream consumers need them.
@@ -64,7 +74,8 @@ class _BeamPostprocessExpectedOutputsValidator:
 
         activity_demand_model = _resolve_model_name(settings, "activity_demand")
         land_use_model = _resolve_model_name(settings, "land_use")
-        write_omx = bool(getattr(settings, "write_skims_to_omx", False))
+        vehicle_ownership_model = _resolve_model_name(settings, "vehicle_ownership")
+        write_omx = bool(get_setting(settings, "write_skims_to_omx", False))
 
         results: list[ValidationResult] = []
         if activity_demand_model == "activitysim" and outputs.zarr_skims is None:
@@ -77,18 +88,17 @@ class _BeamPostprocessExpectedOutputsValidator:
                     metadata={"activity_demand_model": activity_demand_model},
                 )
             )
-        if (
-            write_omx or land_use_model == "urbansim"
-        ) and outputs.final_skims_omx is None:
+        if requires_omx_skim_output(settings) and outputs.final_skims_omx is None:
             results.append(
                 ValidationResult(
                     message=(
                         "final_skims_omx is required when OMX export is enabled or "
-                        "UrbanSim is active."
+                        "UrbanSim or ATLAS is active."
                     ),
                     metadata={
                         "write_skims_to_omx": write_omx,
                         "land_use_model": land_use_model,
+                        "vehicle_ownership_model": vehicle_ownership_model,
                     },
                 )
             )

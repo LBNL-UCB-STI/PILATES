@@ -63,6 +63,12 @@ class AtlasSubState:
         self.atlas_usim_datastore_base_h5: Optional[Any] = None
         self._parent_state = parent_state
 
+    @property
+    def iteration(self) -> int:
+        """Expose the parent workflow's current supply-demand iteration."""
+
+        return self._parent_state.iteration
+
     def set_sub_stage_progress(self, sub_stage_progress: str) -> None:
         """
         Update parent state's sub-stage progress tracking.

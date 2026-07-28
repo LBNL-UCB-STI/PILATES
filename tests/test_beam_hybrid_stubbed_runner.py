@@ -9,12 +9,12 @@ selects the right runner artifacts and emits expected output records.
 """
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
 from pilates.beam.outputs import BeamRunOutputs
 from pilates.beam.postprocessor import BeamPostprocessor
-from pilates.utils.settings_helper import get as real_get_setting
 from pilates.workspace import Workspace
 from tests.workflow_contract_harness import build_settings as _build_settings
 from workflow_state import WorkflowState
@@ -35,7 +35,7 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     - chooses latest events parquet sub-iteration
     - accepts fallback skim short name (raw_od_skims_zarr_*)
     - calls merge helper with expected paths
-    - emits split events, links table, and zarr output records
+    - publishes updated Zarr plus OMX artifacts for their independent consumers
     """
     settings = _build_settings(tmp_path)
     settings.state_file_loc = str(tmp_path / "state.yaml")
@@ -102,12 +102,11 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         )
         return all_skims_path
 
-    def _fake_get_setting(settings_obj, key, default=None):
-        if key == "write_skims_to_omx":
-            return False
-        if key == "run.models.land_use":
-            return "not_urbansim"
-        return real_get_setting(settings_obj, key, default)
+    final_omx = Path(workspace.get_beam_mutable_data_dir()) / "test" / "skims.omx"
+
+    def _fake_write_zarr_skim_as_omx_new(*_args, **_kwargs):
+        _write_file(final_omx)
+        return str(final_omx)
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.split_events_parquet_by_type",
@@ -118,8 +117,14 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         _fake_merge_beam_skims_to_zarr,
     )
     monkeypatch.setattr(
-        "pilates.beam.postprocessor.get_setting",
-        _fake_get_setting,
+        "pilates.beam.postprocessor.write_zarr_skim_as_omx_new",
+        _fake_write_zarr_skim_as_omx_new,
+    )
+    skims_dataset = MagicMock()
+    skims_dataset.__enter__.return_value.data_vars = []
+    monkeypatch.setattr(
+        "pilates.beam.postprocessor.xr.open_zarr",
+        lambda *_args, **_kwargs: skims_dataset,
     )
 
     raw_outputs = BeamRunOutputs(
@@ -161,7 +166,9 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         f"path_traversal_links_{state.forecast_year}_{state.iteration}" in output_keys
     )
     assert "zarr_skims" in output_keys
-    assert "final_skims_omx" not in output_keys
+    assert "final_skims_omx" in output_keys
+    assert outputs.zarr_skims == zarr_skims_target
+    assert outputs.final_skims_omx == final_omx
     assert state.sub_stage_progress == "postprocessor"
 
 
@@ -236,6 +243,8 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
     monkeypatch, tmp_path: Path
 ) -> None:
     settings = _build_settings(tmp_path)
+    settings.run.models.land_use = None
+    settings.run.models.vehicle_ownership = None
     settings.state_file_loc = str(tmp_path / "state.yaml")
     workspace = Workspace(settings, output_path=str(tmp_path), folder_name="run")
     state = WorkflowState.from_settings(settings)
@@ -284,13 +293,6 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         )
         return all_skims_path
 
-    def _fake_get_setting(settings_obj, key, default=None):
-        if key == "write_skims_to_omx":
-            return False
-        if key == "run.models.land_use":
-            return "not_urbansim"
-        return real_get_setting(settings_obj, key, default)
-
     monkeypatch.setattr(
         "pilates.beam.postprocessor.split_events_parquet_by_type",
         _fake_split_events_parquet_by_type,
@@ -299,11 +301,6 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         "pilates.beam.postprocessor._merge_beam_skims_to_zarr",
         _fake_merge_beam_skims_to_zarr,
     )
-    monkeypatch.setattr(
-        "pilates.beam.postprocessor.get_setting",
-        _fake_get_setting,
-    )
-
     raw_outputs = BeamRunOutputs(
         beam_output_dir=beam_output_dir,
         raw_outputs={

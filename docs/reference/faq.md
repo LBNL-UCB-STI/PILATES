@@ -13,11 +13,13 @@ Start with [Getting Started](../start-here/getting_started.md), then read [First
 
 ### What does Consist do in PILATES?
 
-Consist owns the scenario and step contexts, cache identity, provenance records, and published artifacts. PILATES owns the workspace topology, restart bootstrap, and the stage loop that runs inside those Consist contexts.
+Consist owns scenario and step contexts, generic input binding and
+materialization, cache identity, provenance records, and output links. PILATES
+owns workspace topology, stage semantics, restart policy, and the stage loop.
 
-### How do I reason about restart or replay?
+### How do I reason about restart?
 
-Read [Restart and Resume](../run/restart_and_resume.md) and [Consist in PILATES](../workflow/consist_in_pilates.md). Those pages explain the replay-first path, cache-hit reuse, and the current relationship between archive state and the mutable workspace.
+Read [Restart and Resume](../run/restart_and_resume.md) and [Consist in PILATES](../workflow/consist_in_pilates.md). Those pages explain cache-hit reuse, the sole `beam_run_completed -> beam_postprocess` checkpoint, and the relationship between archive state and the mutable workspace.
 
 ### Where do I inspect archived runs?
 

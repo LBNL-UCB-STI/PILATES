@@ -125,15 +125,20 @@ def configure_staged_linkstats_reference(
 
 
 def resolve_staged_linkstats_reference(
-    *, settings: PilatesConfig, workspace: Workspace
+    *,
+    settings: PilatesConfig,
+    workspace: Workspace,
+    config_root: Path | None = None,
 ) -> BeamLaunchPathReference | None:
     """Resolve the final staged-HOCON warm-start path used by BEAM at launch."""
     config_key = "beam.warmStart.initialLinkstatsFilePath"
-    config_path = beam_primary_config_path(settings, workspace=workspace)
+    config_path = _config_path(settings, workspace=workspace, config_root=config_root)
     resolved_value = resolve_beam_config_value(
         config_path,
         key=config_key,
-        env_overrides=beam_config_env_overrides(settings, workspace=workspace),
+        env_overrides=beam_config_env_overrides(settings, config_root=config_root)
+        if config_root is not None
+        else beam_config_env_overrides(settings, workspace=workspace),
     )
     if resolved_value is None or not str(resolved_value).strip():
         return None
@@ -144,7 +149,7 @@ def resolve_staged_linkstats_reference(
             f"Final BEAM HOCON key '{config_key}' did not resolve to an absolute host path: "
             f"{resolved_value!r}"
         )
-    mutable_root = _mutable_input_root(workspace)
+    mutable_root = _mutable_input_root(workspace, config_root=config_root)
     physical_target_path = _physical_target(
         configured_path,
         mutable_root=mutable_root,
@@ -171,11 +176,13 @@ def validate_staged_linkstats_reference(
     settings: PilatesConfig,
     workspace: Workspace,
     run_context: RunContext,
+    config_root: Path | None = None,
 ) -> BeamLaunchPathReference | None:
     """Prove canonicalization and final staged HOCON select the same linkstats."""
     execution_reference = resolve_staged_linkstats_reference(
         settings=settings,
         workspace=workspace,
+        config_root=config_root,
     )
     if execution_reference is None:
         return None
@@ -216,7 +223,7 @@ def validate_staged_linkstats_reference(
 
 
 def resolve_r5_network_reference(
-    *, settings: Any, workspace: Any
+    *, settings: Any, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Resolve R5's raw-directory selection from final staged HOCON.
 
@@ -228,6 +235,7 @@ def resolve_r5_network_reference(
     network_directory = _resolve_hocon_path_reference(
         settings=settings,
         workspace=workspace,
+        config_root=config_root,
         config_key="beam.routing.r5.directory",
         required=True,
     )
@@ -235,6 +243,7 @@ def resolve_r5_network_reference(
     secondary_network_directory = _resolve_hocon_path_reference(
         settings=settings,
         workspace=workspace,
+        config_root=config_root,
         config_key="beam.routing.r5.directory2",
         required=False,
     )
@@ -248,12 +257,12 @@ def resolve_r5_network_reference(
         selected_osm_path=selected_osm_path,
         selected_osm_physical_target_path=_physical_target(
             selected_osm_path,
-            mutable_root=_mutable_input_root(workspace),
+            mutable_root=_mutable_input_root(workspace, config_root=config_root),
             config_key="beam.routing.r5.directory",
         ),
         selected_osm_container_path=_container_path(
             selected_osm_path,
-            mutable_root=_mutable_input_root(workspace),
+            mutable_root=_mutable_input_root(workspace, config_root=config_root),
         ),
         gtfs_paths=gtfs_paths,
         ignored_osm_paths=ignored_osm_paths,
@@ -261,7 +270,11 @@ def resolve_r5_network_reference(
 
 
 def validate_r5_execution_reference(
-    *, settings: Any, workspace: Any, run_context: Any
+    *,
+    settings: Any,
+    workspace: Any,
+    run_context: Any,
+    config_root: Path | None = None,
 ) -> R5NetworkLaunchReference:
     """Verify Consist's selected R5 OSM member is the file BEAM will read."""
 
@@ -297,7 +310,7 @@ def validate_r5_execution_reference(
             "Consist r5_osm_source member key is absent from its R5 directory reference."
         )
     execution_reference = resolve_r5_network_reference(
-        settings=settings, workspace=workspace
+        settings=settings, workspace=workspace, config_root=config_root
     )
     if (
         member.resolved_path.resolve()
@@ -311,7 +324,7 @@ def validate_r5_execution_reference(
 
 
 def prepare_r5_raw_rebuild(
-    *, settings: Any, workspace: Any
+    *, settings: Any, workspace: Any, config_root: Path | None = None
 ) -> R5NetworkLaunchReference:
     """Remove derived R5 and PhysSim caches from the mutable launch tree.
 
@@ -321,9 +334,14 @@ def prepare_r5_raw_rebuild(
     deliberately never removed.
     """
 
-    _align_generated_network_paths(settings=settings, workspace=workspace)
-    reference = resolve_r5_network_reference(settings=settings, workspace=workspace)
-    mutable_root = _mutable_input_root(workspace)
+    if config_root is None:
+        _align_generated_network_paths(settings=settings, workspace=workspace)
+    reference = resolve_r5_network_reference(
+        settings=settings,
+        workspace=workspace,
+        config_root=config_root,
+    )
+    mutable_root = _mutable_input_root(workspace, config_root=config_root)
     _remove_r5_derived_caches(reference.network_directory, mutable_root=mutable_root)
     if reference.secondary_network_directory is not None:
         _remove_r5_derived_caches(
@@ -395,12 +413,15 @@ def _resolve_hocon_path_reference(
     workspace: Any,
     config_key: str,
     required: bool,
+    config_root: Path | None = None,
 ) -> Optional[BeamLaunchPathReference]:
-    config_path = beam_primary_config_path(settings, workspace=workspace)
+    config_path = _config_path(settings, workspace=workspace, config_root=config_root)
     resolved_value = resolve_beam_config_value(
         config_path,
         key=config_key,
-        env_overrides=beam_config_env_overrides(settings, workspace=workspace),
+        env_overrides=beam_config_env_overrides(settings, config_root=config_root)
+        if config_root is not None
+        else beam_config_env_overrides(settings, workspace=workspace),
     )
     if resolved_value is None or not str(resolved_value).strip():
         if required:
@@ -415,7 +436,7 @@ def _resolve_hocon_path_reference(
             f"Final BEAM HOCON key '{config_key}' did not resolve to an absolute host path: "
             f"{resolved_value!r}"
         )
-    mutable_root = _mutable_input_root(workspace)
+    mutable_root = _mutable_input_root(workspace, config_root=config_root)
     physical_target_path = _physical_target(
         configured_path,
         mutable_root=mutable_root,
@@ -474,7 +495,15 @@ def _is_gtfs_zip(path: Path) -> bool:
         return False
 
 
-def _mutable_input_root(workspace: Any) -> Path:
+def _config_path(settings: Any, *, workspace: Any, config_root: Path | None) -> Path:
+    if config_root is not None:
+        return config_root / settings.beam.config
+    return beam_primary_config_path(settings, workspace=workspace)
+
+
+def _mutable_input_root(workspace: Any, *, config_root: Path | None = None) -> Path:
+    if config_root is not None:
+        return config_root.resolve()
     return Path(workspace.get_beam_mutable_data_dir()).resolve()
 
 
