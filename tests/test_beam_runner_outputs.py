@@ -275,3 +275,34 @@ def test_beam_postprocess_outputs_validate_requires_zarr_when_activitysim_enable
                 step_name="beam_postprocess",
             )
         )
+
+
+def test_beam_postprocess_outputs_validate_requires_omx_when_atlas_enabled(
+    tmp_path: Path,
+) -> None:
+    split_event = tmp_path / "events.parquet"
+    zarr_skims = tmp_path / "skims.zarr"
+    _touch(split_event)
+    zarr_skims.mkdir()
+
+    outputs = BeamPostprocessOutputs(
+        zarr_skims=zarr_skims,
+        split_events={"events_parquet_2030_2_type_PathTraversal": split_event},
+    )
+
+    with pytest.raises(AssertionError, match="final_skims_omx is required"):
+        outputs.validate(
+            context=ValidationContext(
+                settings=SimpleNamespace(
+                    run=SimpleNamespace(
+                        models=SimpleNamespace(
+                            activity_demand="activitysim",
+                            land_use=None,
+                            vehicle_ownership="atlas",
+                        )
+                    ),
+                    write_skims_to_omx=False,
+                ),
+                step_name="beam_postprocess",
+            )
+        )

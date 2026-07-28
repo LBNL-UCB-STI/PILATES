@@ -6,7 +6,12 @@ from pathlib import Path
 import pytest
 from consist import BindingResult
 
-from pilates.workflows.artifact_keys import FINAL_SKIMS_OMX, USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
+    USIM_DATASTORE_H5,
+    USIM_POPULATION_SOURCE_H5,
+    ZARR_SKIMS,
+)
 from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -161,9 +166,133 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
         coupler=object(),
     )
 
-    assert FINAL_SKIMS_OMX in captured["activitysim"]
+    assert FINAL_SKIMS_OMX not in captured["activitysim"]
     assert FINAL_SKIMS_OMX in captured["urbansim"]
     assert FINAL_SKIMS_OMX in captured["atlas"]
+
+
+def test_activitysim_uses_zarr_only_after_beam_bootstrap(monkeypatch) -> None:
+    """Later ActivitySim iterations must not select an OMX skim handoff."""
+
+    captured: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
+    zarr = object()
+    run_inputs = {
+        "land_use_asim_in": object(),
+        "households_asim_in": object(),
+        "persons_asim_in": object(),
+        ZARR_SKIMS: zarr,
+    }
+
+    def resolve_native(**kwargs):
+        step_name = kwargs["step_name"]
+        captured[step_name] = (
+            kwargs["required_roles"],
+            kwargs["optional_roles"],
+        )
+        if step_name == "activitysim_run":
+            return ResolvedStepInputs(
+                step_name=step_name,
+                binding=BindingResult(inputs=run_inputs),
+                required_roles=kwargs["required_roles"],
+                optional_roles=kwargs["optional_roles"],
+                source_by_role={ZARR_SKIMS: "coupler"},
+                selected_key_by_role={ZARR_SKIMS: ZARR_SKIMS},
+                logical_destinations={ZARR_SKIMS: "activitysim/cache/skims.zarr"},
+            )
+        return ResolvedStepInputs(
+            step_name=step_name,
+            binding=BindingResult(inputs={}),
+        )
+
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        resolve_native,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {}),
+    )
+    state = _state(current_year=2020, iteration=1)
+
+    activitysim._activitysim_preprocess_resolver(
+        settings=_settings(),
+        state=state,
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+    resolved_run = activitysim._activitysim_run_resolver(
+        settings=_settings(),
+        state=state,
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+
+    assert captured["activitysim_preprocess"] == (
+        (USIM_POPULATION_SOURCE_H5,),
+        (),
+    )
+    assert captured["activitysim_run"] == (
+        (
+            "land_use_asim_in",
+            "households_asim_in",
+            "persons_asim_in",
+            ZARR_SKIMS,
+        ),
+        (),
+    )
+    assert dict(resolved_run.binding.inputs or {}) == run_inputs
+
+
+def test_activitysim_preprocess_skips_omx_preparation_after_beam_bootstrap(
+    monkeypatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    class _Preprocessor:
+        def preprocess(self, _workspace, **kwargs):
+            captured.update(kwargs)
+
+    class _Factory:
+        def get_preprocessor(self, _model, _state):
+            return _Preprocessor()
+
+    monkeypatch.setattr(activitysim, "ModelFactory", _Factory)
+    activitysim._activitysim_preprocess_callable(
+        Path("/bound/population.h5"),
+        settings=_settings(),
+        state=_state(current_year=2020, iteration=1),
+        workspace=SimpleNamespace(),
+    )
+
+    assert captured["prepare_omx_skims"] is False
+    assert "final_skims_omx" not in captured
+
+
+def test_activitysim_preprocess_does_not_declare_stale_omx_after_bootstrap(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        activitysim.ActivitysimPreprocessor,
+        "expected_outputs",
+        staticmethod(
+            lambda *_args: {
+                "land_use_asim_in": "activitysim/data/land_use.csv",
+                "households_asim_in": "activitysim/data/households.csv",
+                "persons_asim_in": "activitysim/data/persons.csv",
+                "omx_skims": "activitysim/data/skims.omx",
+            }
+        ),
+    )
+
+    declared = activitysim.activitysim_preprocess_output_paths(
+        settings=_settings(),
+        state=_state(current_year=2020, iteration=1),
+        workspace=SimpleNamespace(),
+    )
+
+    assert "omx_skims" not in declared
 
 
 def test_activitysim_population_source_cannot_fall_back_after_land_use(
@@ -261,10 +390,13 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         workspace=workspace,
     )
 
+    assert captured["activitysim"]["prepare_omx_skims"] is False
+    assert "final_skims_omx" not in captured["activitysim"]
     assert all(
-        values["allow_workspace_skim_fallback"] is False for values in captured.values()
+        values["allow_workspace_skim_fallback"] is False
+        for name, values in captured.items()
+        if name != "activitysim"
     )
-    assert captured["activitysim"]["final_skims_omx"] == skims
     assert captured["urbansim"]["final_skims_omx"] == skims
     assert captured["atlas"]["final_skims_omx"] == skims
 

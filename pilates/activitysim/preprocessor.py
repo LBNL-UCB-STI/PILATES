@@ -2220,6 +2220,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         previous_records: Optional[RecordStore] = None,
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
+        prepare_omx_skims: bool = True,
         population_source_h5_path: Optional[str] = None,
         usim_population_households_table: Optional[str] = None,
         usim_population_persons_table: Optional[str] = None,
@@ -2234,6 +2235,8 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             preprocess_kwargs["final_skims_omx"] = final_skims_omx
         if not allow_workspace_skim_fallback:
             preprocess_kwargs["allow_workspace_skim_fallback"] = False
+        if not prepare_omx_skims:
+            preprocess_kwargs["prepare_omx_skims"] = False
         if population_source_h5_path is None:
             population_source_h5_path = (
                 str(usim_datastore_h5)
@@ -2294,6 +2297,7 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         previous_records: RecordStore = RecordStore(),
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
+        prepare_omx_skims: bool = True,
         population_source_h5_path: Optional[str] = None,
         resolved_h5_table_paths: Optional[Dict[str, str]] = None,
     ) -> RecordStore:
@@ -2309,105 +2313,113 @@ class ActivitysimPreprocessor(GenericPreprocessor):
         # Collect any extra outputs created during preprocessing (e.g., on-demand copies)
         output_records = RecordStore()
 
-        # Record inputs to preprocessor
-        # Raw BEAM skims are an input.
-        skims_fname = settings.shared.skims.fname
-        explicit_skims_path = (
-            str(Path(final_skims_omx))
-            if final_skims_omx is not None and Path(final_skims_omx).exists()
-            else None
-        )
-        path_to_beam_skims_in_current_run_workspace = (
-            explicit_skims_path
-            if explicit_skims_path is not None
-            else os.path.join(
-                workspace.get_beam_mutable_data_dir(),
-                settings.run.region,
-                skims_fname,
+        skim_record: Optional[FileRecord] = None
+        if prepare_omx_skims:
+            # Record inputs to preprocessor. Raw BEAM skims are a bootstrap input.
+            skims_fname = settings.shared.skims.fname
+            explicit_skims_path = (
+                str(Path(final_skims_omx))
+                if final_skims_omx is not None and Path(final_skims_omx).exists()
+                else None
             )
-        )
-
-        if explicit_skims_path is not None:
-            logger.info(
-                "[ActivitysimPreprocessor] Using explicit final_skims_omx artifact: %s",
-                explicit_skims_path,
-            )
-        elif final_skims_omx is not None:
-            logger.warning(
-                "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
-                "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
-                final_skims_omx,
-            )
-
-        if explicit_skims_path is None and not allow_workspace_skim_fallback:
-            raise FileNotFoundError(
-                "ActivitySim preprocess requires the resolved final_skims_omx "
-                "handoff after BEAM has run."
-            )
-
-        # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
-        if explicit_skims_path is None and not os.path.exists(
-            path_to_beam_skims_in_current_run_workspace
-        ):
-            logger.info(
-                "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
-            )
-            beam_production_path = os.path.abspath(
-                os.path.join(
-                    find_project_root(),  # Assuming find_project_root is available
-                    "pilates",
-                    "beam",
-                    "production",
+            path_to_beam_skims_in_current_run_workspace = (
+                explicit_skims_path
+                if explicit_skims_path is not None
+                else os.path.join(
+                    workspace.get_beam_mutable_data_dir(),
                     settings.run.region,
-                )
-            )
-            dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
-            os.makedirs(dest_dir, exist_ok=True)
-            shutil.copyfile(
-                os.path.join(beam_production_path, skims_fname),
-                path_to_beam_skims_in_current_run_workspace,
-            )
-            output_records.add_record(
-                FileRecord(
-                    file_path=path_to_beam_skims_in_current_run_workspace,
-                    description="BEAM skims copied to current workspace",
-                    short_name="omx_skims_current_workspace",
+                    skims_fname,
                 )
             )
 
-        if os.path.exists(
-            path_to_beam_skims_in_current_run_workspace
-        ):  # <--- This condition should now be true
-            skims_loc = os.path.join(workspace.get_asim_mutable_data_dir(), "skims.omx")
-            os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
-            if _should_refresh_skims_copy(
-                path_to_beam_skims_in_current_run_workspace, skims_loc
-            ):
-                shutil.copyfile(path_to_beam_skims_in_current_run_workspace, skims_loc)
+            if explicit_skims_path is not None:
                 logger.info(
-                    "Refreshed ActivitySim skims OMX from BEAM source: %s -> %s",
-                    path_to_beam_skims_in_current_run_workspace,
-                    skims_loc,
+                    "[ActivitysimPreprocessor] Using explicit final_skims_omx artifact: %s",
+                    explicit_skims_path,
                 )
-            else:
-                logger.debug(
-                    "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
-                    skims_loc,
+            elif final_skims_omx is not None:
+                logger.warning(
+                    "[ActivitysimPreprocessor] Explicit final_skims_omx artifact did not "
+                    "resolve to an existing path: %s. Falling back to legacy BEAM skims discovery.",
+                    final_skims_omx,
                 )
-        else:
-            os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
-            skims_loc = create_skims_from_beam(
-                settings,
-                self.state,
-                workspace,
-                output_dir=workspace.get_asim_mutable_data_dir(),
-            )
 
-        skim_record = FileRecord(
-            file_path=skims_loc,
-            short_name="omx_skims",
-            description="OD Skims copied over to ASim data directory",
-        )
+            if explicit_skims_path is None and not allow_workspace_skim_fallback:
+                raise FileNotFoundError(
+                    "ActivitySim preprocess requires the resolved final_skims_omx "
+                    "handoff after BEAM has run."
+                )
+
+            # Ensure BEAM input data is present, even if Initialization was skipped or incomplete
+            if explicit_skims_path is None and not os.path.exists(
+                path_to_beam_skims_in_current_run_workspace
+            ):
+                logger.info(
+                    "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
+                )
+                beam_production_path = os.path.abspath(
+                    os.path.join(
+                        find_project_root(),  # Assuming find_project_root is available
+                        "pilates",
+                        "beam",
+                        "production",
+                        settings.run.region,
+                    )
+                )
+                dest_dir = os.path.dirname(path_to_beam_skims_in_current_run_workspace)
+                os.makedirs(dest_dir, exist_ok=True)
+                shutil.copyfile(
+                    os.path.join(beam_production_path, skims_fname),
+                    path_to_beam_skims_in_current_run_workspace,
+                )
+                output_records.add_record(
+                    FileRecord(
+                        file_path=path_to_beam_skims_in_current_run_workspace,
+                        description="BEAM skims copied to current workspace",
+                        short_name="omx_skims_current_workspace",
+                    )
+                )
+
+            if os.path.exists(path_to_beam_skims_in_current_run_workspace):
+                skims_loc = os.path.join(
+                    workspace.get_asim_mutable_data_dir(), "skims.omx"
+                )
+                os.makedirs(os.path.dirname(skims_loc), exist_ok=True)
+                if _should_refresh_skims_copy(
+                    path_to_beam_skims_in_current_run_workspace, skims_loc
+                ):
+                    shutil.copyfile(
+                        path_to_beam_skims_in_current_run_workspace, skims_loc
+                    )
+                    logger.info(
+                        "Refreshed ActivitySim skims OMX from BEAM source: %s -> %s",
+                        path_to_beam_skims_in_current_run_workspace,
+                        skims_loc,
+                    )
+                else:
+                    logger.debug(
+                        "Reusing existing ActivitySim skims OMX (no BEAM source change): %s",
+                        skims_loc,
+                    )
+            else:
+                os.makedirs(workspace.get_asim_mutable_data_dir(), exist_ok=True)
+                skims_loc = create_skims_from_beam(
+                    settings,
+                    self.state,
+                    workspace,
+                    output_dir=workspace.get_asim_mutable_data_dir(),
+                )
+
+            skim_record = FileRecord(
+                file_path=skims_loc,
+                short_name="omx_skims",
+                description="OD Skims copied over to ASim data directory",
+            )
+        else:
+            logger.info(
+                "[ActivitysimPreprocessor] Skipping OMX skim preparation; "
+                "ActivitySim will consume the prior BEAM-updated Zarr skims."
+            )
 
         # 2. Create ActivitySim input data from UrbanSim H5
         logger.info("Using H5 input mode for ActivitySim")

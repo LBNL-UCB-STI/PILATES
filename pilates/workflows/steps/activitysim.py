@@ -151,16 +151,21 @@ def activitysim_preprocess_output_paths(
         settings, state, workspace
     )
     profiled_keys = {ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN, ASIM_LAND_USE_IN}
+    output_keys = (
+        ASIM_LAND_USE_IN,
+        ASIM_HOUSEHOLDS_IN,
+        ASIM_PERSONS_IN,
+        *(
+            ()
+            if requires_prior_beam_skim_handoff(settings=settings, state=state)
+            else (ASIM_OMX_SKIMS,)
+        ),
+    )
     return {
         key: OutputArtifactSpec(
             path=expected_outputs[key], profile_file_schema=key in profiled_keys
         )
-        for key in (
-            ASIM_LAND_USE_IN,
-            ASIM_HOUSEHOLDS_IN,
-            ASIM_PERSONS_IN,
-            ASIM_OMX_SKIMS,
-        )
+        for key in output_keys
         if expected_outputs.get(key) is not None
     }
 
@@ -340,10 +345,7 @@ def _activitysim_preprocess_resolver(
     )
     return _native_activitysim_resolved_inputs(
         step_name="activitysim_preprocess",
-        required_roles=(
-            *_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
-            *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
-        ),
+        required_roles=_ACTIVITYSIM_PREPROCESS_REQUIRED_ROLES,
         optional_roles=(
             () if requires_beam_skim else _ACTIVITYSIM_PREPROCESS_OPTIONAL_ROLES
         ),
@@ -364,10 +366,19 @@ def _activitysim_run_resolver(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
+    requires_beam_skim = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
+    required_roles = (
+        *_ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        *((ZARR_SKIMS,) if requires_beam_skim else ()),
+    )
+    optional_roles = () if requires_beam_skim else _ACTIVITYSIM_RUN_SKIM_ROLES
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_run",
-        required_roles=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=_ACTIVITYSIM_RUN_SKIM_ROLES,
+        required_roles=required_roles,
+        optional_roles=optional_roles,
         logical_destinations=ActivitysimRunner.declared_expected_inputs(
             settings, state, workspace
         ),
@@ -385,14 +396,18 @@ def _activitysim_run_resolver(
         selected_skim_role = ZARR_SKIMS
         skim_mode: ActivitysimSkimMode = "zarr"
         produces_zarr = False
-    elif resolved.source_by_role.get(ASIM_OMX_SKIMS) != "missing":
+    elif not requires_beam_skim and (
+        resolved.source_by_role.get(ASIM_OMX_SKIMS) != "missing"
+    ):
         selected_skim_role = ASIM_OMX_SKIMS
         skim_mode = "omx"
         produces_zarr = True
     else:
+        expected = (
+            ZARR_SKIMS if requires_beam_skim else f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+        )
         raise RuntimeError(
-            "activitysim_run requires one published skim role: "
-            f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+            f"activitysim_run requires one published skim role: {expected}"
         )
 
     selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, selected_skim_role)
@@ -863,14 +878,17 @@ def _activitysim_preprocess_callable(
 ) -> None:
     """Run ActivitySim preprocessing from the resolved semantic input paths."""
 
+    prepare_omx_skims = not requires_prior_beam_skim_handoff(
+        settings=settings, state=state
+    )
+    preprocess_kwargs: dict[str, Any] = {
+        "population_source_h5_path": str(usim_population_source_h5),
+        "prepare_omx_skims": prepare_omx_skims,
+    }
+    if prepare_omx_skims and final_skims_omx is not None:
+        preprocess_kwargs["final_skims_omx"] = final_skims_omx
     ModelFactory().get_preprocessor("activitysim", state).preprocess(
-        workspace,
-        final_skims_omx=final_skims_omx,
-        population_source_h5_path=str(usim_population_source_h5),
-        allow_workspace_skim_fallback=not requires_prior_beam_skim_handoff(
-            settings=settings,
-            state=state,
-        ),
+        workspace, **preprocess_kwargs
     )
 
 
