@@ -12,14 +12,14 @@ summary: Detailed step-by-step lineage reference for the current PILATES workflo
 - The emphasis is on workflow-visible lineage: what later tracked steps can resolve through published keys, not every internal temporary file.
 - For key meanings and query facets, use [Artifact Semantics](artifact_semantics.md) and [Artifact Facet Catalog](artifact_facet_catalog.md). This page focuses on where those roles move through the workflow.
 
-## Stage Map
-
 ## Static Renderer Contract
 
 The static workflow-lineage renderer serializes each planned step's canonical
 `step_name` and `depends_on` relation. It does not emit legacy
 upstream-step-input aliases; consumers should use `depends_on` for planned
 step dependencies.
+
+## Stage Map
 
 ### Bootstrap
 

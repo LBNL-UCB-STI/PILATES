@@ -8,7 +8,6 @@ def test_workflow_code_uses_lossy_step_output_mapping_only_in_replay_paths() -> 
     workflow_root = repo_root / "pilates" / "workflows"
     allowed_files = {
         workflow_root / "outputs_base.py",
-        workflow_root / "orchestration.py",
     }
 
     offending_uses = []
