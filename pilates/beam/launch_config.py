@@ -39,6 +39,9 @@ _ARTIFACT_FORMAT_POLICY_KEYS = {
     "events": "beam.outputs.events.fileOutputFormats",
     "linkstats": "beam.physsim.linkStatsOutputFileType",
 }
+_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY = (
+    "beam.router.skim.activity-sim-skimmer.fileBaseName"
+)
 
 
 def _warmstart_destination_name(source: Path) -> str:
@@ -250,6 +253,12 @@ def build_beam_launch_config(
         env_overrides=env_overrides,
     )
     overrides.update(format_overrides)
+    skim_name_overrides = _activitysim_skims_file_base_name_override(
+        settings=settings,
+        source_primary=source_primary,
+        env_overrides=env_overrides,
+    )
+    overrides.update(skim_name_overrides)
     population_stems = {
         BEAM_PLANS_IN: "plans",
         BEAM_HOUSEHOLDS_IN: "households",
@@ -332,6 +341,37 @@ def build_beam_launch_config(
         staged_inputs=tuple(staged_inputs),
         allow_missing_override_keys=introduces_missing_format_key,
     )
+
+
+def _activitysim_skims_file_base_name_override(
+    *,
+    settings: Any,
+    source_primary: Path,
+    env_overrides: Mapping[str, str],
+) -> dict[str, str]:
+    """Return the configured BEAM activity-sim skimmer writer base name."""
+
+    expected = settings.beam.activitysim_skims_file_base_name
+    source_value = resolve_beam_config_value(
+        source_primary,
+        key=_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+        env_overrides=dict(env_overrides),
+    )
+    if source_value is None:
+        raise KeyError(
+            "PILATES requires BEAM config key "
+            f"{_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY!r} to make activity-sim "
+            "skim output naming deterministic."
+        )
+    elif str(source_value) != expected:
+        logger.warning(
+            "PILATES activity-sim skim filename policy overrides source config: "
+            "%s=%r -> %r.",
+            _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+            source_value,
+            expected,
+        )
+    return {_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY: expected}
 
 
 def _artifact_format_overrides(

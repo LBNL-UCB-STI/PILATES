@@ -313,7 +313,17 @@ class BeamRunner(GenericRunner):
         self,
         beam_local_output_folder: str,
         skimFormat: str = "omx",
+        activitysim_skims_file_base_name: str = "skimsActivitySimOD",
     ) -> List[FileRecord]:
+        activitysim_skim_base_names = tuple(
+            dict.fromkeys(
+                (
+                    activitysim_skims_file_base_name,
+                    "skimsActivitySimOD",
+                    "activitySimODSkims",
+                )
+            )
+        )
         files_to_get = {
             "raw_od_skims": ("skimsActivitySimOD_current", ".omx"),
             # BEAM OD skims naming differs across builds/configs:
@@ -388,16 +398,30 @@ class BeamRunner(GenericRunner):
         for it, path in paths.items():
             for short_name, (file_name, extension) in files_to_get.items():
                 if short_name == "raw_od_skims":
-                    full_path = find_iteration_file(
-                        path, it, "skimsActivitySimOD_current", ".omx"
-                    ) or find_iteration_file(
-                        path, it, "activitySimODSkims_current", ".omx"
+                    full_path = next(
+                        (
+                            candidate
+                            for base_name in activitysim_skim_base_names
+                            if (
+                                candidate := find_iteration_file(
+                                    path, it, f"{base_name}_current", ".omx"
+                                )
+                            )
+                        ),
+                        None,
                     )
                 elif short_name == "raw_od_skims_zarr":
-                    full_path = find_iteration_file(
-                        path, it, "skimsActivitySimOD_current", ".zarr"
-                    ) or find_iteration_file(
-                        path, it, "activitySimODSkims_current", ".zarr"
+                    full_path = next(
+                        (
+                            candidate
+                            for base_name in activitysim_skim_base_names
+                            if (
+                                candidate := find_iteration_file(
+                                    path, it, f"{base_name}_current", ".zarr"
+                                )
+                            )
+                        ),
+                        None,
                     )
                 else:
                     full_path = find_iteration_file(path, it, file_name, extension)
@@ -615,7 +639,11 @@ class BeamRunner(GenericRunner):
                 "[BEAM Runner] Defaulting to 'omx' skim format for finding BEAM outputs."
             )
 
-        output_records = self.gather_outputs(output_path_for_gather, skimFormat)
+        output_records = self.gather_outputs(
+            output_path_for_gather,
+            skimFormat,
+            settings.beam.activitysim_skims_file_base_name,
+        )
         output_store = RecordStore(recordList=output_records)
 
         logger.info(

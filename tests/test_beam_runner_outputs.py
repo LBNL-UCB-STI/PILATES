@@ -91,6 +91,24 @@ def test_gather_outputs_discovers_activitysim_omx_basename(tmp_path):
     assert by_name["raw_od_skims_2030_2"].file_path == str(skim_path)
 
 
+def test_gather_outputs_prefers_configured_activitysim_zarr_basename(tmp_path):
+    beam_output_dir = tmp_path / "beam-output"
+    iteration_dir = beam_output_dir / "seattle" / "run" / "ITERS" / "it.2"
+    legacy_path = iteration_dir / "2.skimsActivitySimOD_current.zarr"
+    configured_path = iteration_dir / "2.regionalActivitySimOD_current.zarr"
+    _touch(legacy_path)
+    _touch(configured_path)
+
+    runner = BeamRunner("beam_runner", _StubState())
+    outputs = runner.gather_outputs(
+        str(beam_output_dir),
+        activitysim_skims_file_base_name="regionalActivitySimOD",
+    )
+
+    by_name = {record.short_name: record for record in outputs}
+    assert by_name["raw_od_skims_zarr_2030_2"].file_path == str(configured_path)
+
+
 def test_beam_runner_run_returns_typed_outputs(tmp_path, monkeypatch) -> None:
     state = _StubState()
     runner = BeamRunner("beam_runner", state)
@@ -160,7 +178,11 @@ def test_beam_runner_mounts_the_bound_launch_tree(
     state.current_inner_iter = 2
     state.full_settings = SimpleNamespace(
         run=SimpleNamespace(region="seattle"),
-        beam=SimpleNamespace(config="beam.conf", memory="4g"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
         shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
     )
     runner = BeamRunner("beam_runner", state)

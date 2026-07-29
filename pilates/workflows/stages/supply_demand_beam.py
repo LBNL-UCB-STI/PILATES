@@ -1082,6 +1082,7 @@ def _run_beam_steps(
         state=state,
         workspace=workspace,
         coupler=scenario.coupler,
+        beam_run_outputs=run_result.outputs,
     )
     postprocess_inputs.require_complete()
     _publish_completed_beam_run_checkpoint(

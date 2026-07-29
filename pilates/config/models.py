@@ -692,6 +692,14 @@ class BeamConfig(BaseModel):
             "If relative, it is resolved against the mutable BEAM region input root."
         ),
     )
+    activitysim_skims_file_base_name: str = Field(
+        "skimsActivitySimOD",
+        min_length=1,
+        description=(
+            "BEAM activity-sim skimmer fileBaseName. BEAM appends its current "
+            "marker and the configured artifact-format extension."
+        ),
+    )
     artifact_formats: BeamArtifactFormatsConfig = Field(
         default_factory=BeamArtifactFormatsConfig,
         description=(
