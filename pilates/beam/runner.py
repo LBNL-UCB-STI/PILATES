@@ -642,7 +642,11 @@ class BeamRunner(GenericRunner):
         output_records = self.gather_outputs(
             output_path_for_gather,
             skimFormat,
-            settings.beam.activitysim_skims_file_base_name,
+            get_setting(
+                settings,
+                "beam.activitysim_skims_file_base_name",
+                "skimsActivitySimOD",
+            ),
         )
         output_store = RecordStore(recordList=output_records)
 

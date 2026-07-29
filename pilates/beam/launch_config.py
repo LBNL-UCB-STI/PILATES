@@ -192,7 +192,12 @@ def _require_declared_non_policy_overrides(
 ) -> None:
     """Preserve strict validation when a legacy format key must be introduced."""
 
-    policy_keys = frozenset(_ARTIFACT_FORMAT_POLICY_KEYS.values())
+    policy_keys = frozenset(
+        (
+            _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+            *_ARTIFACT_FORMAT_POLICY_KEYS.values(),
+        )
+    )
     environment = beam_config_env_overrides(settings, config_root=source_primary.parent)
     for key in override_keys:
         if key == "beam.inputDirectory" or key in policy_keys:
@@ -253,10 +258,12 @@ def build_beam_launch_config(
         env_overrides=env_overrides,
     )
     overrides.update(format_overrides)
-    skim_name_overrides = _activitysim_skims_file_base_name_override(
-        settings=settings,
-        source_primary=source_primary,
-        env_overrides=env_overrides,
+    skim_name_overrides, introduces_missing_skim_name_key = (
+        _activitysim_skims_file_base_name_override(
+            settings=settings,
+            source_primary=source_primary,
+            env_overrides=env_overrides,
+        )
     )
     overrides.update(skim_name_overrides)
     population_stems = {
@@ -339,7 +346,9 @@ def build_beam_launch_config(
         identity=identity,
         overrides=BeamLaunchConfigOverrides(values=overrides),
         staged_inputs=tuple(staged_inputs),
-        allow_missing_override_keys=introduces_missing_format_key,
+        allow_missing_override_keys=(
+            introduces_missing_format_key or introduces_missing_skim_name_key
+        ),
     )
 
 
@@ -348,7 +357,7 @@ def _activitysim_skims_file_base_name_override(
     settings: Any,
     source_primary: Path,
     env_overrides: Mapping[str, str],
-) -> dict[str, str]:
+) -> tuple[dict[str, str], bool]:
     """Return the configured BEAM activity-sim skimmer writer base name."""
 
     expected = settings.beam.activitysim_skims_file_base_name
@@ -358,10 +367,11 @@ def _activitysim_skims_file_base_name_override(
         env_overrides=dict(env_overrides),
     )
     if source_value is None:
-        raise KeyError(
-            "PILATES requires BEAM config key "
-            f"{_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY!r} to make activity-sim "
-            "skim output naming deterministic."
+        logger.warning(
+            "PILATES activity-sim skim filename policy adds source config key "
+            "%s=%r; the legacy config relied on BEAM's implicit default.",
+            _ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY,
+            expected,
         )
     elif str(source_value) != expected:
         logger.warning(
@@ -371,7 +381,7 @@ def _activitysim_skims_file_base_name_override(
             source_value,
             expected,
         )
-    return {_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY: expected}
+    return {_ACTIVITYSIM_SKIMS_FILE_BASE_NAME_KEY: expected}, source_value is None
 
 
 def _artifact_format_overrides(

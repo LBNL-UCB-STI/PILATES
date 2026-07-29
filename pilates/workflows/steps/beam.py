@@ -977,7 +977,7 @@ def _resolve_beam_postprocess_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
-    beam_run_outputs: Mapping[str, Any] | None = None,
+    beam_run_outputs: Mapping[str, Any] | BeamRunOutputs | None = None,
 ) -> ResolvedStepInputs:
     """Resolve one BEAM postprocess closure.
 
@@ -990,9 +990,14 @@ def _resolve_beam_postprocess_inputs(
     if year is None:
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")
     iteration = state.iteration
+    fresh_outputs = (
+        beam_run_outputs.raw_outputs
+        if isinstance(beam_run_outputs, BeamRunOutputs)
+        else beam_run_outputs
+    )
     storage_keys = (
-        beam_run_outputs.keys()
-        if beam_run_outputs is not None
+        fresh_outputs.keys()
+        if fresh_outputs is not None
         else coupler_storage_keys(coupler)
     )
     dynamic_keys = _postprocess_dynamic_keys(
@@ -1024,8 +1029,8 @@ def _resolve_beam_postprocess_inputs(
         required_roles=dynamic_keys,
         optional_roles=optional_roles,
         explicit_inputs=(
-            {key: beam_run_outputs[key] for key in dynamic_keys}
-            if beam_run_outputs is not None
+            {key: fresh_outputs[key] for key in dynamic_keys}
+            if fresh_outputs is not None
             else None
         ),
         logical_destinations=destinations,
