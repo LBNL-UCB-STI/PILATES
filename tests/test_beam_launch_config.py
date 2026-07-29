@@ -24,6 +24,7 @@ def _settings() -> SimpleNamespace:
             router_directory=None,
             admission=None,
             artifact_formats=BeamArtifactFormatsConfig(),
+            activitysim_skims_file_base_name="skimsActivitySimOD",
         ),
         shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
     )
@@ -44,6 +45,7 @@ def _write_base_config(root: Path) -> Path:
                 '  agentsim.taz.tazIdFieldName = "taz"',
                 '  exchange.scenario.folder = ${beam.inputDirectory}"/scenario"',
                 '  exchange.scenario.fileFormat = "csv"',
+                '  router.skim.activity-sim-skimmer.fileBaseName = "activitySimODSkims"',
                 '  router.skim.activity-sim-skimmer.fileOutputFormat = "omx"',
                 '  outputs.events.fileOutputFormats = "csv.gz"',
                 '  physsim.linkStatsOutputFileType = "csv.gz"',
@@ -77,6 +79,7 @@ def _write_shared_config_tree(root: Path) -> Path:
                 '  agentsim.taz.tazIdFieldName = "taz"',
                 '  exchange.scenario.folder = ${beam.inputDirectory}"/scenario"',
                 '  exchange.scenario.fileFormat = "csv"',
+                '  router.skim.activity-sim-skimmer.fileBaseName = "activitySimODSkims"',
                 '  router.skim.activity-sim-skimmer.fileOutputFormat = "omx"',
                 '  outputs.events.fileOutputFormats = "csv.gz"',
                 '  physsim.linkStatsOutputFileType = "csv.gz"',
@@ -268,6 +271,7 @@ def test_build_beam_launch_config_applies_default_artifact_format_policy(
         )
 
     expected = {
+        "beam.router.skim.activity-sim-skimmer.fileBaseName": "skimsActivitySimOD",
         "beam.router.skim.activity-sim-skimmer.fileOutputFormat": "zarr",
         "beam.exchange.scenario.fileFormat": "parquet",
         "beam.outputs.events.fileOutputFormats": "parquet",

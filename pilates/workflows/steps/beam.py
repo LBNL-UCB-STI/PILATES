@@ -825,18 +825,27 @@ def _resolve_beam_run_inputs(
 def _postprocess_dynamic_keys(
     *, storage_keys: Iterable[str], year: int, iteration: int
 ) -> tuple[str, ...]:
-    keys = tuple(storage_keys)
-    selected = [
-        key
-        for key in keys
-        if key.startswith(
-            (f"events_parquet_{year}_{iteration}", f"raw_od_skims_{year}_{iteration}")
-        )
-    ]
-    if not any(key.startswith("events_parquet_") for key in selected):
-        selected.extend(key for key in keys if key.startswith("events_parquet_"))
-    if not any(key.startswith("raw_od_skims") for key in selected):
-        selected.extend(key for key in keys if key.startswith("raw_od_skims"))
+    """Select only dynamic BEAM outputs for this exact workflow scope.
+
+    A scenario coupler accumulates prior iterations, so a postprocess invocation
+    must never recover its immediate BEAM inputs from a different iteration.
+    """
+
+    prefixes = (
+        f"events_parquet_{year}_{iteration}",
+        f"raw_od_skims_{year}_{iteration}",
+        f"raw_od_skims_zarr_{year}_{iteration}",
+    )
+    selected: list[str] = []
+    for key in storage_keys:
+        for prefix in prefixes:
+            if key == prefix:
+                selected.append(key)
+                break
+            sub_iteration = key.removeprefix(f"{prefix}_sub")
+            if key != sub_iteration and sub_iteration.isdecimal():
+                selected.append(key)
+                break
     return tuple(dict.fromkeys(selected))
 
 
@@ -963,13 +972,34 @@ def _postprocess_destination(*, key: str, workspace: Any, iteration: int) -> Pat
 
 
 def _resolve_beam_postprocess_inputs(
-    *, settings: Any, state: Any, workspace: Any, coupler: Any
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    coupler: Any,
+    beam_run_outputs: Mapping[str, Any] | BeamRunOutputs | None = None,
 ) -> ResolvedStepInputs:
+    """Resolve one BEAM postprocess closure.
+
+    A fresh successor consumes the exact outputs of the BEAM run that just
+    completed.  Coupler discovery remains only for standalone resolution and
+    the separate upstream ActivitySim skim role.
+    """
+
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_postprocess requires a resolved forecast year.")
     iteration = state.iteration
-    storage_keys = coupler_storage_keys(coupler)
+    fresh_outputs = (
+        beam_run_outputs.raw_outputs
+        if isinstance(beam_run_outputs, BeamRunOutputs)
+        else beam_run_outputs
+    )
+    storage_keys = (
+        fresh_outputs.keys()
+        if fresh_outputs is not None
+        else coupler_storage_keys(coupler)
+    )
     dynamic_keys = _postprocess_dynamic_keys(
         storage_keys=storage_keys,
         year=int(year),
@@ -998,6 +1028,11 @@ def _resolve_beam_postprocess_inputs(
         workspace=workspace,
         required_roles=dynamic_keys,
         optional_roles=optional_roles,
+        explicit_inputs=(
+            {key: fresh_outputs[key] for key in dynamic_keys}
+            if fresh_outputs is not None
+            else None
+        ),
         logical_destinations=destinations,
         metadata={"beam_postprocess_dynamic_paths": dynamic_paths},
     )

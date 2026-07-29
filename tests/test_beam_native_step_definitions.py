@@ -644,6 +644,72 @@ def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(
     }
 
 
+def test_beam_postprocess_dynamic_keys_exclude_prior_iteration_zarr() -> None:
+    keys = (
+        "events_parquet_2018_1",
+        "raw_od_skims_zarr_2018_0",
+        "raw_od_skims_zarr_2018_1",
+    )
+
+    assert beam_steps._postprocess_dynamic_keys(
+        storage_keys=keys,
+        year=2018,
+        iteration=1,
+    ) == (
+        "events_parquet_2018_1",
+        "raw_od_skims_zarr_2018_1",
+    )
+
+
+def test_beam_postprocess_resolver_uses_completed_beam_outputs_over_coupler_history(
+    tmp_path: Path,
+) -> None:
+    events_path = tmp_path / "events.parquet"
+    _write_event_types(events_path, ["PathTraversal"])
+    prior_skims = tmp_path / "prior.zarr"
+    current_skims = tmp_path / "current.zarr"
+    prior_skims.mkdir()
+    current_skims.mkdir()
+
+    class Coupler:
+        def __init__(self) -> None:
+            self.values = {
+                "events_parquet_2018_0": tmp_path / "prior-events.parquet",
+                "raw_od_skims_zarr_2018_0": prior_skims,
+                ZARR_SKIMS: tmp_path / "asim-skims.zarr",
+            }
+
+        def get(self, key: str, default: object = None) -> object:
+            return self.values.get(key, default)
+
+        def keys(self):
+            return self.values.keys()
+
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        get_asim_output_dir=lambda: str(tmp_path / "asim-output"),
+    )
+    resolved = beam_steps._resolve_beam_postprocess_inputs(
+        settings=SimpleNamespace(activitysim=object()),
+        state=SimpleNamespace(year=2018, iteration=1),
+        workspace=workspace,
+        coupler=Coupler(),
+        beam_run_outputs={
+            "events_parquet_2018_1": events_path,
+            "raw_od_skims_zarr_2018_1": current_skims,
+        },
+    )
+
+    assert set(resolved.binding.inputs or {}) == {
+        "events_parquet_2018_1",
+        "raw_od_skims_zarr_2018_1",
+        ZARR_SKIMS,
+    }
+    assert resolved.source_by_role["events_parquet_2018_1"] == "explicit"
+    assert resolved.source_by_role["raw_od_skims_zarr_2018_1"] == "explicit"
+
+
 def test_beam_required_roles_do_not_resolve_from_a_namespace_view(
     tmp_path: Path,
 ) -> None:
@@ -1082,7 +1148,7 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
     )
 
 
-def test_beam_postprocess_dynamic_closure_destinations_do_not_collide(
+def test_beam_postprocess_dynamic_closure_excludes_non_numeric_suffixes(
     tmp_path: Path,
 ) -> None:
     selected_events = tmp_path / "source-events_parquet_2030_2.parquet"
@@ -1115,7 +1181,6 @@ def test_beam_postprocess_dynamic_closure_destinations_do_not_collide(
 
     assert set(closure) == {
         "events_parquet_2030_2",
-        "events_parquet_2030_2_retry",
         "raw_od_skims_2030_2",
     }
     assert len(set(closure.values())) == len(closure)
