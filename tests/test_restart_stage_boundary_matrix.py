@@ -15,6 +15,7 @@ from pilates.workflows.artifact_keys import ZARR_SKIMS
 from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage
+from pilates.workflows.steps import beam as beam_steps
 from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
     _maybe_fail_after_beam_run_for_canary,
@@ -77,15 +78,26 @@ def test_fresh_checkpoint_is_published_before_canary_failpoint(monkeypatch):
         workspace=object(),
     )
     calls: list[str] = []
-    postprocess_definition = SimpleNamespace(
-        resolve_inputs=lambda **_kwargs: resolved_inputs
-    )
+    tracked_run_outputs = {"raw_od_skims_zarr_2021_0": object()}
+    observed: dict[str, object] = {}
+
+    def resolve_postprocess_inputs(**kwargs):
+        observed["beam_run_outputs"] = kwargs["beam_run_outputs"]
+        return resolved_inputs
+
+    postprocess_definition = SimpleNamespace(resolve_inputs=resolve_postprocess_inputs)
     run_outputs = SimpleNamespace(_iter_record_items=lambda: ())
 
     def fake_execute_step(*, definition, phase, **_kwargs):
         calls.append(phase)
         if phase == "run":
-            return SimpleNamespace(run=SimpleNamespace(id="beam-run-1")), run_outputs
+            return (
+                SimpleNamespace(
+                    run=SimpleNamespace(id="beam-run-1"),
+                    outputs=tracked_run_outputs,
+                ),
+                run_outputs,
+            )
         if phase == "preprocess":
             return SimpleNamespace(), SimpleNamespace()
         pytest.fail("canary failure must happen before native postprocess")
@@ -132,6 +144,7 @@ def test_fresh_checkpoint_is_published_before_canary_failpoint(monkeypatch):
         )
 
     assert calls == ["preprocess", "run", "published"]
+    assert observed["beam_run_outputs"] is tracked_run_outputs
 
 
 def test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache(
@@ -172,6 +185,83 @@ def test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache(
     assert closure[0].producer_run_id == "activitysim-run-id"
     assert closure[0].output_key == ZARR_SKIMS
     assert closure[0].artifact_identity == "zarr-identity"
+
+
+def test_fresh_zarr_postprocess_closure_keeps_current_run_artifact_provenance(
+    tmp_path: Path,
+) -> None:
+    """A fresh Zarr handoff binds the completed run's artifact, never history."""
+
+    current_skim_key = "raw_od_skims_zarr_2018_1"
+    stale_skim = Artifact(
+        key="raw_od_skims_zarr_2018_0",
+        container_uri="workspace://beam-output/stale.zarr",
+        run_id="prior-beam-run-id",
+        hash="stale-zarr-identity",
+        driver="zarr",
+        meta={"directory_artifact": True},
+    )
+    current_skim = Artifact(
+        key=current_skim_key,
+        container_uri="workspace://beam-output/current.zarr",
+        run_id="beam-run-id",
+        hash="current-zarr-identity",
+        driver="zarr",
+        meta={"directory_artifact": True},
+    )
+    activitysim_skim = Artifact(
+        key=ZARR_SKIMS,
+        container_uri="workspace://activitysim-output/skims.zarr",
+        run_id="activitysim-run-id",
+        hash="activitysim-zarr-identity",
+        driver="zarr",
+        meta={"directory_artifact": True},
+    )
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return {ZARR_SKIMS: activitysim_skim}.get(key, default)
+
+        def keys(self) -> tuple[str, ...]:
+            return (stale_skim.key, ZARR_SKIMS)
+
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim-output"),
+    )
+    resolved_inputs = beam_steps._resolve_beam_postprocess_inputs(
+        settings=SimpleNamespace(activitysim=object()),
+        state=SimpleNamespace(year=2018, iteration=1),
+        workspace=workspace,
+        coupler=Coupler(),
+        beam_run_outputs={current_skim_key: current_skim},
+    )
+    tracker = SimpleNamespace(
+        get_run_outputs=lambda run_id: {
+            "beam-run-id": {current_skim_key: current_skim},
+            "activitysim-run-id": {ZARR_SKIMS: activitysim_skim},
+        }.get(run_id, {})
+    )
+
+    closure = beam_stage._resolve_beam_postprocess_closure(
+        tracker=tracker,
+        resolved_inputs=resolved_inputs,
+        workspace=workspace,
+        year=2018,
+        iteration=1,
+        beam_run_id="beam-run-id",
+    )
+
+    assert resolved_inputs.binding.inputs == {
+        current_skim_key: current_skim,
+        ZARR_SKIMS: activitysim_skim,
+    }
+    assert {(member.producer_run_id, member.output_key) for member in closure} == {
+        ("beam-run-id", current_skim_key),
+        ("activitysim-run-id", ZARR_SKIMS),
+    }
 
 
 def test_checkpoint_archives_selected_closure_sources_before_verification(
@@ -358,6 +448,7 @@ def test_public_beam_handoff_is_postprocess_owned_across_run_modes_and_resume(
                 SimpleNamespace(
                     run=SimpleNamespace(id=f"beam-run-{run_mode}"),
                     cache_hit=run_mode == "cache",
+                    outputs={},
                 ),
                 run_outputs,
             )
@@ -513,7 +604,10 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         if phase == "run":
             observed["runtime"] = runtime_kwargs
             observed["resolved"] = resolved_inputs
-            return SimpleNamespace(run=SimpleNamespace(id="run-1")), SimpleNamespace()
+            return (
+                SimpleNamespace(run=SimpleNamespace(id="run-1"), outputs={}),
+                SimpleNamespace(),
+            )
         if phase == "postprocess":
             return SimpleNamespace(), SimpleNamespace()
         pytest.fail(f"unexpected phase {phase}")

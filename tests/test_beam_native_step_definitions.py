@@ -9,6 +9,7 @@ from consist import (
     Tracker,
     resolve_step_contract,
 )
+from pilates.config.models import BeamArtifactFormatsConfig
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -41,6 +42,14 @@ def _empty_resolved_inputs() -> ResolvedStepInputs:
     return ResolvedStepInputs(
         step_name="test",
         binding=BindingResult(inputs={}),
+    )
+
+
+def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
+    return SimpleNamespace(
+        beam=SimpleNamespace(
+            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format)
+        )
     )
 
 
@@ -102,7 +111,7 @@ def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> 
     )
 
     outputs = _beam_run_native_output_paths(
-        settings=SimpleNamespace(),
+        settings=_beam_settings(),
         state=SimpleNamespace(forecast_year=2030, iteration=1),
         workspace=workspace,
     )
@@ -110,6 +119,34 @@ def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> 
     assert outputs["linkstats"] == (
         tmp_path / "beam-output" / ".pilates-consist-outputs" / "beam_run" / "linkstats"
     )
+
+
+@pytest.mark.parametrize(
+    ("skim_format", "expected_key", "expected_suffix"),
+    (
+        ("zarr", "raw_od_skims_zarr_2030_2", ".zarr"),
+        ("omx", "raw_od_skims_2030_2", ".omx"),
+    ),
+)
+def test_beam_run_output_paths_declare_only_configured_activitysim_skim_format(
+    tmp_path: Path,
+    skim_format: str,
+    expected_key: str,
+    expected_suffix: str,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    outputs = _beam_run_native_output_paths(
+        settings=_beam_settings(skim_format=skim_format),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+    )
+
+    skim_keys = {key for key in outputs if key.startswith("raw_od_skims")}
+    assert skim_keys == {expected_key}
+    assert outputs[expected_key].suffix == expected_suffix
 
 
 def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> None:
@@ -145,7 +182,11 @@ def test_native_beam_definitions_resolve_consist_contracts(
     )
     settings = SimpleNamespace(
         activitysim=None,
-        beam=SimpleNamespace(config="beam.conf", full_skim=None),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            full_skim=None,
+            artifact_formats=BeamArtifactFormatsConfig(),
+        ),
         run=SimpleNamespace(
             region="test-region",
             models=SimpleNamespace(land_use=None),
@@ -278,7 +319,7 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
-        settings=object(),
+        settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=1),
         workspace=workspace,
         beam_launch_config=launch_config,
@@ -1128,7 +1169,7 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output")
     )
     paths = beam_run.output_paths(
-        settings=object(),
+        settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
         resolved_inputs=None,
@@ -1138,7 +1179,6 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
     assert set(paths) == {
         "linkstats",
         "beam_plans_out",
-        "raw_od_skims_2030_2",
         "raw_od_skims_zarr_2030_2",
         "events_parquet_2030_2",
     }

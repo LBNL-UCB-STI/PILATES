@@ -236,7 +236,7 @@ def _beam_run_native_output_paths(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
-    del settings, resolved_inputs
+    del resolved_inputs
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_run requires a resolved forecast year.")
@@ -247,10 +247,12 @@ def _beam_run_native_output_paths(
         # its staged copy from the actual bytes before BEAM selects a reader.
         LINKSTATS: "",
         BEAM_PLANS_OUT: ".csv.gz",
-        f"raw_od_skims_{year}_{iteration}": ".omx",
-        f"raw_od_skims_zarr_{year}_{iteration}": ".zarr",
         f"events_parquet_{year}_{iteration}": ".parquet",
     }
+    if settings.beam.artifact_formats.activitysim_skims == "zarr":
+        keys_and_suffixes[f"raw_od_skims_zarr_{year}_{iteration}"] = ".zarr"
+    else:
+        keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
     root = Path(workspace.get_beam_output_dir())
     return {
         key: _native_output_destination(
