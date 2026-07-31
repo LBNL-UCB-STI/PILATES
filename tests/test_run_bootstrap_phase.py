@@ -6,6 +6,8 @@ import os
 from pathlib import Path
 
 import pytest
+from consist import RunResult
+from consist.models.run import Run
 from consist.types import CacheOptions
 
 from pilates.runtime import bootstrap as bootstrap_runtime
@@ -217,6 +219,31 @@ class DummyTracker:
         )
 
 
+class ArchiveAwareTracker(DummyTracker):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.archive_calls: list[tuple[str, str]] = []
+
+    def archive_run_outputs(self, run_id, archive_root, *, mode):
+        assert mode == "copy"
+        self.archive_calls.append((run_id, archive_root))
+        return SimpleNamespace(outputs={})
+
+    def run(self, **kwargs):
+        result = super().run(**kwargs)
+        return RunResult(
+            run=Run(
+                id=result.run.id,
+                model_name="initialization",
+                config_hash=None,
+                git_hash=None,
+                meta=result.run.meta or {},
+            ),
+            outputs={},
+            cache_hit=result.cache_hit,
+        )
+
+
 class DummySnapshotTracker:
     def __init__(self, *, fail: bool = False):
         self.fail = fail
@@ -344,6 +371,100 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     cache_options = first_call["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_hydration == "outputs-requested"
+
+
+def test_bootstrap_archives_cache_disabled_execution(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=False),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=None,
+    )
+
+    assert tracker.archive_calls == [
+        ("bootstrap_off", str(archive_root / "consist-recovery" / "bootstrap_off"))
+    ]
+
+
+def test_bootstrap_archives_the_executed_probe_before_return(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert tracker.archive_calls == [
+        (
+            "bootstrap_probe",
+            str(archive_root / "consist-recovery" / "bootstrap_probe"),
+        )
+    ]
+
+
+def test_bootstrap_archives_fallback_rerun_not_only_cache_probe(monkeypatch, tmp_path):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+            {
+                "cache_hit": False,
+                "execute_fn": True,
+                "run_id": "bootstrap_fallback",
+            },
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=DummyWorkspace(str(tmp_path / "bootstrap-run")),
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert tracker.archive_calls == [
+        (
+            "bootstrap_probe",
+            str(archive_root / "consist-recovery" / "bootstrap_probe"),
+        ),
+        (
+            "bootstrap_fallback",
+            str(archive_root / "consist-recovery" / "bootstrap_fallback"),
+        ),
+    ]
 
 
 def test_log_bootstrap_result_summary_includes_cache_miss_fields(caplog):

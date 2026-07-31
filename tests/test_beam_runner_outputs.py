@@ -216,6 +216,46 @@ def test_beam_runner_mounts_the_bound_launch_tree(
     }
 
 
+def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.current_inner_iter = 2
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+    )
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = launch_root / "configs" / "beam.conf"
+    launch_primary.parent.mkdir(parents=True)
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(root=launch_root, primary_config=launch_primary)
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args: ("beam", "image"))
+    monkeypatch.setattr(runner, "run_container", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        "pilates.beam.runner.rename_beam_output_directory",
+        lambda *_args: (_ for _ in ()).throw(OSError("rename failed")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "gather_outputs",
+        lambda *_args: pytest.fail("must not gather from the broad output root"),
+    )
+
+    with pytest.raises(RuntimeError, match="rename BEAM output directory"):
+        runner._run(RecordStore(), workspace, launch_config)
+
+
 def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(
     tmp_path: Path,
 ) -> None:

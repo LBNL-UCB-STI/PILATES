@@ -71,13 +71,6 @@ def resolve_workspace_uri_path(
 ) -> Optional[str]:
     if not isinstance(path, str):
         return None
-    if path.startswith("beam_input://"):
-        beam_root = "beam/input/"
-        if workspace and workspace.settings.beam:
-            beam_root = workspace.settings.beam.local_mutable_data_folder or "beam/input/"
-            if not beam_root.endswith("/"):
-                beam_root += "/"
-        path = path.replace("beam_input://", f"workspace://{beam_root}", 1)
     prefix = "workspace://"
     if not path.startswith(prefix):
         return path

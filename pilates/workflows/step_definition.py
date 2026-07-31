@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Generic, Mapping, TypeVar
 
-from consist import CacheOptions, ExecutionOptions
+from consist import CacheOptions, ExecutionOptions, OutputSet
 
 from pilates.workflows.output_projection import TypedOutputProjector
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -22,6 +22,7 @@ class StepDefinition(Generic[OutputT]):
     resolve_inputs: Callable[..., ResolvedStepInputs]
     project_outputs: TypedOutputProjector[OutputT]
     output_paths: Callable[..., Mapping[str, Any]] | None = None
+    output_sets: Callable[..., Mapping[str, OutputSet]] | None = None
     execution_options: Callable[..., ExecutionOptions] | None = None
     cache_options: Callable[..., CacheOptions] | None = None
     preflight_identity: bool = False

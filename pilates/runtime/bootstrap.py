@@ -14,6 +14,7 @@ from pilates.generic.initialization import (
     Initialization,
     build_bootstrap_artifact_summary,
 )
+from pilates.runtime.run_output_archive import archive_completed_run
 from pilates.utils.consist_types import CouplerProtocol
 from pilates.utils.io import get_activity_demand_model, get_traffic_assignment_model
 from pilates.workflows.binding import bootstrap_stage_boundary_durability_policy
@@ -419,6 +420,7 @@ def run_bootstrap_phase(
                 cache_mode="off",
             ),
         )
+        run_result = archive_completed_run(tracker=tracker, result=run_result)
         return _finalize_bootstrap_result(
             cache_hit=False,
             probe_run_id=getattr(getattr(run_result, "run", None), "id", None),
@@ -434,6 +436,7 @@ def run_bootstrap_phase(
         probe_result = tracker.run(**run_kwargs, cache_options=cache_options)
     else:
         probe_result = tracker.run(**run_kwargs)
+    probe_result = archive_completed_run(tracker=tracker, result=probe_result)
     probe_run_id = getattr(getattr(probe_result, "run", None), "id", None)
     cache_hit = bool(getattr(probe_result, "cache_hit", False))
 
@@ -478,6 +481,7 @@ def run_bootstrap_phase(
             **run_kwargs,
             cache_options=fallback_cache_options,
         )
+        fallback_result = archive_completed_run(tracker=tracker, result=fallback_result)
         return _finalize_bootstrap_result(
             cache_hit=True,
             probe_run_id=probe_run_id,

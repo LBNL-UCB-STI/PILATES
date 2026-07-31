@@ -22,6 +22,7 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
+    OutputSet,
     define_step,
 )
 
@@ -254,7 +255,7 @@ def _beam_run_native_output_paths(
         keys_and_suffixes[f"raw_od_skims_zarr_{year}_{iteration}"] = ".zarr"
     else:
         keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
-    root = Path(workspace.get_beam_output_dir())
+    root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
     return {
         key: _native_output_destination(
             root=root,
@@ -263,6 +264,42 @@ def _beam_run_native_output_paths(
             suffix=suffix,
         )
         for key, suffix in keys_and_suffixes.items()
+    }
+
+
+def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
+    """Return the one BEAM run tree owned by this region/year/iteration."""
+
+    year = resolve_forecast_year(state)
+    if year is None:
+        raise RuntimeError("beam_run requires a resolved forecast year.")
+    return (
+        Path(workspace.get_beam_output_dir())
+        / settings.run.region
+        / f"year-{year}-iteration-{int(state.iteration)}"
+    )
+
+
+def _beam_run_output_sets(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> Mapping[str, OutputSet]:
+    """Declare the exact renamed BEAM run tree as one logical artifact."""
+
+    del resolved_inputs
+    return {
+        "beam_run_outputs": OutputSet(
+            root=_beam_run_output_root(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ),
+            include="**/*",
+            recursive=True,
+        )
     }
 
 
@@ -1263,8 +1300,6 @@ def _native_beam_run(
             settings=settings, state=state, workspace=workspace
         ),
     )
-    for key, path in _beam_run_native_sources(produced).items():
-        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1408,7 +1443,7 @@ def _native_beam_full_skim(
             root=Path(workspace.get_beam_output_dir()),
             step_name="beam_full_skim",
             key="beam_full_skims",
-            suffix=".omx" if not Path(full_skims_path).suffix == ".zarr" else ".zarr"
+            suffix=".omx" if not Path(full_skims_path).suffix == ".zarr" else ".zarr",
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
         if Path(full_skims_path).is_dir():
@@ -1436,6 +1471,7 @@ beam_run = StepDefinition(
     resolve_inputs=_resolve_beam_run_inputs,
     project_outputs=_project_beam_run_outputs,
     output_paths=_beam_run_native_output_paths,
+    output_sets=_beam_run_output_sets,
     execution_options=_native_execution_options,
     cache_options=_beam_linkstats_output_cache,
 )

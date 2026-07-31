@@ -11,6 +11,7 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
+    OutputSet,
     StepIdentity,
     define_step,
     require_runtime_kwargs,
@@ -628,6 +629,74 @@ def _activitysim_run_native_output_paths(
     )
 
 
+def _activitysim_preprocess_output_sets(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> Mapping[str, OutputSet]:
+    """Declare the mutable input files owned by ActivitySim preprocessing."""
+
+    del resolved_inputs
+    root = Path(workspace.get_asim_mutable_data_dir())
+    scalar_outputs = activitysim_preprocess_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    members = tuple(
+        str(Path(output.path).relative_to(root))
+        for output in scalar_outputs.values()
+        if isinstance(output, OutputArtifactSpec)
+    )
+    return {
+        "activitysim_inputs": OutputSet(
+            root=root,
+            include=members,
+            expected_members=members,
+        )
+    }
+
+
+def _activitysim_run_output_sets(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs,
+) -> Mapping[str, OutputSet]:
+    """Declare only the immutable outputs owned by this ActivitySim invocation."""
+
+    root = Path(workspace.get_asim_output_dir())
+    scalar_outputs = _activitysim_run_native_output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=resolved_inputs,
+    )
+    expected_members = tuple(
+        str(
+            Path(
+                output.path if isinstance(output, OutputArtifactSpec) else output
+            ).relative_to(root)
+        )
+        for key, output in scalar_outputs.items()
+        if key != ZARR_SKIMS
+    )
+    includes = expected_members
+    if _activitysim_run_produces_zarr(resolved_inputs):
+        includes = (*includes, "cache/skims.zarr/**/*")
+    return {
+        "activitysim_outputs": OutputSet(
+            root=root,
+            include=includes,
+            expected_members=expected_members,
+            recursive=True,
+        )
+    }
+
+
 def _persisted_output_path(
     outputs: Mapping[str, Any],
     *,
@@ -1054,6 +1123,7 @@ activitysim_preprocess = StepDefinition(
     resolve_inputs=_activitysim_preprocess_resolver,
     project_outputs=_project_activitysim_preprocess_outputs,
     output_paths=activitysim_preprocess_output_paths,
+    output_sets=_activitysim_preprocess_output_sets,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
 )
@@ -1063,6 +1133,7 @@ activitysim_run = StepDefinition(
     resolve_inputs=_activitysim_run_resolver,
     project_outputs=_project_activitysim_run_outputs,
     output_paths=_activitysim_run_native_output_paths,
+    output_sets=_activitysim_run_output_sets,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
 )

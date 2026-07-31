@@ -612,20 +612,19 @@ class BeamRunner(GenericRunner):
         if not success:
             raise RuntimeError("BEAM run failed after container execution.")
 
-        output_path_for_gather: str
         try:
-            old_path, new_path = rename_beam_output_directory(
+            _, output_path_for_gather = rename_beam_output_directory(
                 workspace.get_beam_output_dir(),
                 settings,
                 self.state.current_year,
                 self.state.current_inner_iter,
             )
-            output_path_for_gather = new_path
-        except Exception as e:
-            logger.error(
-                f"Failed to rename BEAM output directory: {e}. Proceeding without rename."
-            )
-            output_path_for_gather = workspace.get_beam_output_dir()
+        except OSError as exc:
+            raise RuntimeError(
+                "Failed to rename BEAM output directory to its declared "
+                "region/year/iteration root; refusing to gather from the "
+                "broad BEAM output root."
+            ) from exc
 
         # ASSEMBLE OUTPUTS
         skims_fname = get_setting(settings, "shared.skims.fname")

@@ -10,6 +10,7 @@ from consist import (
     resolve_step_contract,
 )
 from pilates.config.models import BeamArtifactFormatsConfig
+from pilates.runtime.archive_paths import resolve_workspace_uri_path
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -47,9 +48,10 @@ def _empty_resolved_inputs() -> ResolvedStepInputs:
 
 def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
     return SimpleNamespace(
+        run=SimpleNamespace(region="test-region"),
         beam=SimpleNamespace(
             artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format)
-        )
+        ),
     )
 
 
@@ -117,7 +119,13 @@ def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> 
     )
 
     assert outputs["linkstats"] == (
-        tmp_path / "beam-output" / ".pilates-consist-outputs" / "beam_run" / "linkstats"
+        tmp_path
+        / "beam-output"
+        / "test-region"
+        / "year-2030-iteration-1"
+        / ".pilates-consist-outputs"
+        / "beam_run"
+        / "linkstats"
     )
 
 
@@ -147,6 +155,46 @@ def test_beam_run_output_paths_declare_only_configured_activitysim_skim_format(
     skim_keys = {key for key in outputs if key.startswith("raw_od_skims")}
     assert skim_keys == {expected_key}
     assert outputs[expected_key].suffix == expected_suffix
+
+
+def test_beam_run_declares_only_exact_region_year_iteration_output_set(
+    tmp_path: Path,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    output_set = beam_run.output_sets(
+        settings=_beam_settings(),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+    )["beam_run_outputs"]
+    scalar_paths = beam_run.output_paths(
+        settings=_beam_settings(),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+        resolved_inputs=None,
+    )
+
+    assert output_set.root == (
+        tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
+    )
+    assert output_set.include == "**/*"
+    assert output_set.recursive is True
+    assert all(
+        Path(path).is_relative_to(Path(output_set.root))
+        for path in scalar_paths.values()
+    )
+
+
+def test_native_beam_run_does_not_enqueue_declared_tree_members() -> None:
+    assert "enqueue_archive_copy" not in inspect.getsource(beam_steps._native_beam_run)
+
+
+def test_archive_paths_leaves_legacy_beam_input_uri_unrewritten() -> None:
+    assert resolve_workspace_uri_path("beam_input://test-region/beam.conf") == (
+        "beam_input://test-region/beam.conf"
+    )
 
 
 def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> None:
