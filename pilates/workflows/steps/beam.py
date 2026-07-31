@@ -37,6 +37,7 @@ from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_path,
+    enqueue_archive_copy,
 )
 from pilates.workflows.coupler_namespace import (
     coupler_storage_keys,
@@ -1180,6 +1181,8 @@ def _native_beam_preprocess(
             ),
         ),
     )
+    for key, path in produced.prepared_inputs.items():
+        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1260,6 +1263,8 @@ def _native_beam_run(
             settings=settings, state=state, workspace=workspace
         ),
     )
+    for key, path in _beam_run_native_sources(produced).items():
+        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1334,6 +1339,8 @@ def _native_beam_postprocess(
         source_paths=produced_sources,
         declared_outputs=declared_outputs,
     )
+    for key, path in produced_sources.items():
+        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1394,6 +1401,23 @@ def _native_beam_full_skim(
         state=state,
         workspace=workspace,
     )
+    # Materialize and enqueue full skims
+    full_skims_path = getattr(produced, "full_skims", None)
+    if full_skims_path:
+        dest = _native_output_destination(
+            root=Path(workspace.get_beam_output_dir()),
+            step_name="beam_full_skim",
+            key="beam_full_skims",
+            suffix=".omx" if not Path(full_skims_path).suffix == ".zarr" else ".zarr"
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if Path(full_skims_path).is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(full_skims_path, dest)
+        else:
+            shutil.copy2(full_skims_path, dest)
+        enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
     del _consist_ctx
 
 
