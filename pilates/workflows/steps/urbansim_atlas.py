@@ -748,7 +748,7 @@ def _native_atlas_preprocess(
         "atlas_grave_csv": None,
         "atlas_accessibility_csv": None,
     },
-    schema_outputs=["householdv_{year}", "vehicles_{year}"],
+    schema_outputs=[],
     output_paths=_native_contract_output_paths(_atlas_run_native_output_paths),
     input_binding="paths",
     **consist_step_meta("atlas_run"),

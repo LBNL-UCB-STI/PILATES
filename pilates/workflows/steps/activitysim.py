@@ -629,36 +629,6 @@ def _activitysim_run_native_output_paths(
     )
 
 
-def _activitysim_preprocess_output_sets(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
-) -> Mapping[str, OutputSet]:
-    """Declare the mutable input files owned by ActivitySim preprocessing."""
-
-    del resolved_inputs
-    root = Path(workspace.get_asim_mutable_data_dir())
-    scalar_outputs = activitysim_preprocess_output_paths(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    members = tuple(
-        str(Path(output.path).relative_to(root))
-        for output in scalar_outputs.values()
-        if isinstance(output, OutputArtifactSpec)
-    )
-    return {
-        "activitysim_inputs": OutputSet(
-            root=root,
-            include=members,
-            expected_members=members,
-        )
-    }
-
-
 def _activitysim_run_output_sets(
     *,
     settings: PilatesConfig,
@@ -1123,7 +1093,6 @@ activitysim_preprocess = StepDefinition(
     resolve_inputs=_activitysim_preprocess_resolver,
     project_outputs=_project_activitysim_preprocess_outputs,
     output_paths=activitysim_preprocess_output_paths,
-    output_sets=_activitysim_preprocess_output_sets,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
 )

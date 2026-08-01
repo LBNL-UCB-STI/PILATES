@@ -184,10 +184,10 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
         assert contract.input_binding == "paths"
 
 
-def test_activitysim_native_steps_declare_input_and_persistent_output_sets(
+def test_activitysim_native_steps_declare_only_persistent_output_sets(
     tmp_path: Path,
 ) -> None:
-    """The producer-owned data and output trees are archived as logical sets."""
+    """Only the logical ActivitySim run output tree is an OutputSet."""
 
     workspace = SimpleNamespace(
         get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
@@ -196,11 +196,8 @@ def test_activitysim_native_steps_declare_input_and_persistent_output_sets(
     state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
     settings = _activitysim_test_settings()
 
-    input_set = activitysim.activitysim_preprocess.output_sets(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )["activitysim_inputs"]
+    assert activitysim.activitysim_preprocess.output_sets is None
+
     zarr_input_output_set = activitysim.activitysim_run.output_sets(
         settings=settings,
         state=state,
@@ -223,14 +220,6 @@ def test_activitysim_native_steps_declare_input_and_persistent_output_sets(
         ).values()
     )
 
-    assert input_set.root == tmp_path / "activitysim" / "data"
-    assert set(input_set.include) == {
-        "households.csv",
-        "land_use.csv",
-        "persons.csv",
-        "skims.omx",
-    }
-    assert input_set.expected_members == input_set.include
     assert zarr_input_output_set.root == tmp_path / "activitysim" / "output"
     assert zarr_input_output_set.include == expected_run_members
     assert zarr_input_output_set.expected_members == expected_run_members

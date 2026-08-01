@@ -249,7 +249,7 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 "atlas_accessibility_csv",
             },
             "optional": set(),
-            "schema_outputs": {"householdv_{year}", "vehicles_{year}"},
+            "schema_outputs": set(),
         },
         "atlas_postprocess": {
             "inputs": {

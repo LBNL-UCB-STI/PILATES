@@ -8,6 +8,7 @@ from pilates.atlas.inputs import (
     atlas_static_input_relpaths,
 )
 from pilates.workflows.coupler_schema import build_coupler_schema
+from pilates.workflows.steps.urbansim_atlas import ATLAS_RUN
 
 
 def _settings(
@@ -107,6 +108,18 @@ def test_build_coupler_schema_expands_runtime_year_scoped_keys():
     assert "vehicles_2019" in schema
     assert "usim_input_archive_2019" in schema
     assert "usim_input_merged_2019" in schema
+
+
+def test_atlas_run_does_not_leak_dynamic_key_templates_into_consist_schema():
+    schema = build_coupler_schema(
+        [ATLAS_RUN.function],
+        settings=_settings(start=2017, end=2018, freq=1),
+    )
+
+    assert "householdv_2017" in schema
+    assert "vehicles_2018" in schema
+    assert "householdv_{year}" not in schema
+    assert "vehicles_{year}" not in schema
 
 
 def test_build_coupler_schema_declares_beam_plans_handoff_alias():
