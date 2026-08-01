@@ -13,11 +13,6 @@ from consist import (
     Tracker,
     resolve_step_contract,
 )
-from consist.core.output_sets import (
-    discover_output_set_members,
-    resolve_output_set_expected_members,
-)
-
 from pilates.activitysim.outputs import (
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_tables,
@@ -184,10 +179,10 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
         assert contract.input_binding == "paths"
 
 
-def test_activitysim_native_steps_declare_only_persistent_output_sets(
+def test_activitysim_native_steps_declare_zarr_directly_without_output_set(
     tmp_path: Path,
 ) -> None:
-    """Only the logical ActivitySim run output tree is an OutputSet."""
+    """Zarr uses its native directory-artifact contract, not an OutputSet."""
 
     workspace = SimpleNamespace(
         get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
@@ -197,72 +192,26 @@ def test_activitysim_native_steps_declare_only_persistent_output_sets(
     settings = _activitysim_test_settings()
 
     assert activitysim.activitysim_preprocess.output_sets is None
+    assert activitysim.activitysim_run.output_sets is None
 
-    zarr_input_output_set = activitysim.activitysim_run.output_sets(
+    zarr_input_paths = activitysim.activitysim_run.output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
         resolved_inputs=_activitysim_run_resolution(produces_zarr=False),
-    )["activitysim_outputs"]
-    zarr_output_set = activitysim.activitysim_run.output_sets(
+    )
+    zarr_output_paths = activitysim.activitysim_run.output_paths(
         settings=settings,
         state=state,
         workspace=workspace,
         resolved_inputs=_activitysim_run_resolution(produces_zarr=True),
-    )["activitysim_outputs"]
-    expected_run_members = tuple(
-        str(Path(output.path).relative_to(tmp_path / "activitysim" / "output"))
-        for output in activitysim.activitysim_run_output_paths(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            produces_zarr=False,
-        ).values()
     )
 
-    assert zarr_input_output_set.root == tmp_path / "activitysim" / "output"
-    assert zarr_input_output_set.include == expected_run_members
-    assert zarr_input_output_set.expected_members == expected_run_members
-    assert zarr_input_output_set.recursive is True
-    assert zarr_output_set.include == (*expected_run_members, "cache/skims.zarr/**/*")
-    assert zarr_output_set.expected_members == expected_run_members
-    assert "**/*" not in zarr_input_output_set.include
-    assert "cache/skims.zarr/**/*" not in zarr_input_output_set.include
-
-
-def test_activitysim_zarr_input_output_set_discovers_nested_final_pipeline_files(
-    tmp_path: Path,
-) -> None:
-    """Zarr-input runs discover the nested final-pipeline output members."""
-
-    workspace = SimpleNamespace(
-        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+    assert ZARR_SKIMS not in zarr_input_paths
+    assert ZARR_SKIMS in zarr_output_paths
+    assert Path(zarr_output_paths[ZARR_SKIMS].path) == (
+        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     )
-    state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
-    output_set = activitysim.activitysim_run.output_sets(
-        settings=_activitysim_test_settings(),
-        state=state,
-        workspace=workspace,
-        resolved_inputs=_activitysim_run_resolution(produces_zarr=False),
-    )["activitysim_outputs"]
-
-    for member in output_set.expected_members:
-        path = output_set.root / member
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("output\n", encoding="utf-8")
-
-    members = discover_output_set_members(output_set)
-    resolve_output_set_expected_members(
-        key="activitysim_outputs",
-        output_set=output_set,
-        members=members,
-        config=None,
-    )
-
-    assert {member.relative_path for member in members} == set(
-        output_set.expected_members
-    )
-    assert any(member.relative_path.startswith("final_pipeline/") for member in members)
 
 
 def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
