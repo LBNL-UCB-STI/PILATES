@@ -39,9 +39,7 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(
-    monkeypatch, tmp_path
-):
+def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tmp_path):
     workspace = _workspace(tmp_path)
     settings = _settings()
     state = SimpleNamespace(

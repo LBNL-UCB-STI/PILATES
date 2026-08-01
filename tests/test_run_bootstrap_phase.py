@@ -2208,9 +2208,7 @@ def test_restart_preflight_does_not_require_atlas_static_inputs_in_vehicle_stage
     )
 
     paths = {item["path"] for item in missing}
-    assert not any(
-        path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths
-    )
+    assert not any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
     assert not any(
         path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths
     )
@@ -2789,7 +2787,9 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         run_module.main()
 
 
-def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(tmp_path, monkeypatch):
+def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
+    tmp_path, monkeypatch
+):
     class SnapshotStub:
         def final_snapshot(self):
             return True

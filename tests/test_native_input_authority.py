@@ -124,9 +124,7 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
 
     def resolve_urbansim(**kwargs):
         captured["urbansim"] = kwargs["required_roles"]
-        return ResolvedStepInputs(
-            step_name="urbansim_run", binding=BindingResult()
-        )
+        return ResolvedStepInputs(step_name="urbansim_run", binding=BindingResult())
 
     def resolve_atlas(**kwargs):
         captured["atlas"] = kwargs["required_roles"]

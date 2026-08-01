@@ -9,7 +9,7 @@ from pilates.beam.outputs import (
     BeamRunOutputs,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
-from pilates.beam.runner import BeamRunner
+from pilates.beam.runner import BeamRunner, rename_beam_output_directory
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.outputs_base import ValidationContext
 
@@ -37,6 +37,26 @@ class _StubState:
 def _touch(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("stub")
+
+
+def test_rename_beam_output_directory_creates_declared_region_parent(
+    tmp_path: Path,
+) -> None:
+    beam_output_dir = tmp_path / "beam-output"
+    beam_run_dir = beam_output_dir / "beam-generated-run"
+    _touch(beam_run_dir / "ITERS" / "it.0" / "events.csv.gz")
+
+    _, renamed_output_dir = rename_beam_output_directory(
+        str(beam_output_dir),
+        SimpleNamespace(run=SimpleNamespace(region="seattle")),
+        year=2030,
+        replanning_iteration_number=2,
+    )
+
+    renamed_root = beam_output_dir / "seattle" / "year-2030-iteration-2"
+    assert Path(renamed_output_dir) == renamed_root
+    assert (renamed_root / "ITERS" / "it.0" / "events.csv.gz").exists()
+    assert not beam_run_dir.exists()
 
 
 def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):

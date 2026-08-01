@@ -48,8 +48,10 @@ def _is_direct_zarr_snapshot(artifact: Artifact) -> bool:
     """Return whether an output needs PILATES's durable Zarr snapshot."""
 
     metadata = artifact.meta if isinstance(artifact.meta, dict) else {}
-    return artifact.key == ZARR_SKIMS and artifact.driver == "zarr" and bool(
-        metadata.get("directory_artifact")
+    return (
+        artifact.key == ZARR_SKIMS
+        and artifact.driver == "zarr"
+        and bool(metadata.get("directory_artifact"))
     )
 
 
@@ -61,7 +63,9 @@ def _snapshot_directory_artifact(
     metadata = artifact.meta if isinstance(artifact.meta, dict) else {}
     manifest = metadata.get("directory_manifest")
     if not isinstance(manifest, Mapping):
-        raise ValueError(f"directory artifact {artifact.key!r} has no persisted manifest")
+        raise ValueError(
+            f"directory artifact {artifact.key!r} has no persisted manifest"
+        )
     normalized_manifest = validate_directory_manifest(manifest)
     if artifact.hash != normalized_manifest["tree_hash"]:
         raise ValueError(
@@ -127,9 +131,7 @@ def archive_completed_run(*, tracker: Tracker | None, result: RunResult) -> RunR
         )
         archived_outputs.update(archived.outputs)
     refreshed_outputs = tracker.get_run_outputs(str(result.run.id))
-    archived_outputs.update(
-        {key: refreshed_outputs[key] for key in snapshotted_keys}
-    )
+    archived_outputs.update({key: refreshed_outputs[key] for key in snapshotted_keys})
     return RunResult(
         run=result.run,
         outputs={key: archived_outputs[key] for key in result.outputs},
