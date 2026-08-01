@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from consist import RunResult
 from consist.models.run import Run
-from consist.types import CacheOptions
+from consist.types import CacheOptions, OutputArtifactSpec
 
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import launcher as run_module
@@ -191,7 +191,8 @@ class DummyTracker:
 
     @staticmethod
     def _realize_output_paths(output_paths):
-        for path in (output_paths or {}).values():
+        for output in (output_paths or {}).values():
+            path = output.path if isinstance(output, OutputArtifactSpec) else output
             target = Path(path)
             if target.suffix:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +204,22 @@ class DummyTracker:
                         "usim",
                         encoding="utf-8",
                     )
+                if target.parts[-2:] == ("activitysim", "configs"):
+                    for dirname in (
+                        "configs",
+                        "configs_extended",
+                        "configs_mp",
+                        "configs_sh_compile",
+                    ):
+                        settings_path = target / dirname / "settings.yaml"
+                        settings_path.parent.mkdir(parents=True, exist_ok=True)
+                        settings_path.write_text(
+                            "settings: hydrated\n", encoding="utf-8"
+                        )
+                if target.parts[-2:] == ("beam", "input"):
+                    beam_config = target / "test" / "beam.conf"
+                    beam_config.parent.mkdir(parents=True, exist_ok=True)
+                    beam_config.write_text("beam: hydrated\n", encoding="utf-8")
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
@@ -374,7 +391,9 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     assert cache_options.cache_hydration == "outputs-requested"
 
 
-def test_bootstrap_archives_cache_disabled_execution(monkeypatch, tmp_path):
+def test_bootstrap_cache_disabled_execution_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
     archive_root = tmp_path / "archive"
@@ -394,12 +413,12 @@ def test_bootstrap_archives_cache_disabled_execution(monkeypatch, tmp_path):
         seed=None,
     )
 
-    assert tracker.archive_calls == [
-        ("bootstrap_off", str(archive_root / "consist-recovery" / "bootstrap_off"))
-    ]
+    assert tracker.archive_calls == []
 
 
-def test_bootstrap_archives_the_executed_probe_before_return(monkeypatch, tmp_path):
+def test_bootstrap_executed_probe_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
     archive_root = tmp_path / "archive"
@@ -421,15 +440,12 @@ def test_bootstrap_archives_the_executed_probe_before_return(monkeypatch, tmp_pa
         seed=12345,
     )
 
-    assert tracker.archive_calls == [
-        (
-            "bootstrap_probe",
-            str(archive_root / "consist-recovery" / "bootstrap_probe"),
-        )
-    ]
+    assert tracker.archive_calls == []
 
 
-def test_bootstrap_archives_fallback_rerun_not_only_cache_probe(monkeypatch, tmp_path):
+def test_bootstrap_fallback_rerun_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
     monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
     monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
     archive_root = tmp_path / "archive"
@@ -456,16 +472,7 @@ def test_bootstrap_archives_fallback_rerun_not_only_cache_probe(monkeypatch, tmp
         seed=12345,
     )
 
-    assert tracker.archive_calls == [
-        (
-            "bootstrap_probe",
-            str(archive_root / "consist-recovery" / "bootstrap_probe"),
-        ),
-        (
-            "bootstrap_fallback",
-            str(archive_root / "consist-recovery" / "bootstrap_fallback"),
-        ),
-    ]
+    assert tracker.archive_calls == []
 
 
 def test_log_bootstrap_result_summary_includes_cache_miss_fields(caplog):
@@ -721,20 +728,17 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
     assert result["bootstrap_cache_hit"] is True
     assert result["replay_hydration_complete"] is True
     output_paths = tracker.calls[0]["output_paths"]
-    assert output_paths["activitysim_config_settings_yaml_configs"].endswith(
-        "activitysim/configs/configs/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_extended"].endswith(
-        "activitysim/configs/configs_extended/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_mp"].endswith(
-        "activitysim/configs/configs_mp/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_sh_compile"].endswith(
-        "activitysim/configs/configs_sh_compile/settings.yaml"
-    )
-    assert output_paths["beam_primary_config_file"].endswith(
-        "beam/input/test/beam.conf"
+    assert set(output_paths) == {
+        "urbansim_mutable_data_dir",
+        "activitysim_mutable_data_dir",
+        "activitysim_mutable_configs_dir",
+        "atlas_mutable_input_dir",
+        "beam_mutable_data_dir",
+    }
+    assert all(
+        isinstance(output, OutputArtifactSpec)
+        and output.meta == {"directory_artifact": True}
+        for output in output_paths.values()
     )
 
 
