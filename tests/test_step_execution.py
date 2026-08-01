@@ -186,6 +186,68 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
     assert projected == outputs
 
 
+def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A staging step can retain its local handoff without archive-copying it."""
+
+    class Tracker:
+        def archive_run_outputs(self, *_args, **_kwargs) -> SimpleNamespace:
+            raise AssertionError("staging outputs must not enter recovery archival")
+
+    @define_step(model="example", outputs=["staging_root"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    result = RunResult(
+        run=Run(
+            id="staging-run",
+            model_name="example",
+            config_hash=None,
+            git_hash=None,
+        ),
+        outputs={
+            "staging_root": Artifact(
+                key="staging_root",
+                container_uri="workspace://staging",
+                driver="unknown",
+            )
+        },
+    )
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=Tracker(),
+    )
+    scenario.run = lambda **_: result
+    definition = StepDefinition(
+        name="staging",
+        function=example,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="staging", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda received_outputs, **_: received_outputs,
+        archive_outputs=False,
+    )
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(tmp_path / "archive"))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+
+    received_result, projected = execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings="settings",
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+    )
+
+    assert received_result is result
+    assert projected == result.outputs
+
+
 def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

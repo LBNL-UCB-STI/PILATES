@@ -26,3 +26,4 @@ class StepDefinition(Generic[OutputT]):
     execution_options: Callable[..., ExecutionOptions] | None = None
     cache_options: Callable[..., CacheOptions] | None = None
     preflight_identity: bool = False
+    archive_outputs: bool = True

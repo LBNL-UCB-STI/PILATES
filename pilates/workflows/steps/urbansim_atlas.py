@@ -1100,6 +1100,7 @@ URBANSIM_PREPROCESS = StepDefinition(
     output_paths=_urbansim_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
+    archive_outputs=False,
 )
 
 URBANSIM_RUN = StepDefinition(

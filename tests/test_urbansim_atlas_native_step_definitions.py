@@ -129,6 +129,7 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         USIM_MUTABLE_DATA_DIR,
         USIM_DATASTORE_H5,
     }
+    assert URBANSIM_PREPROCESS.archive_outputs is False
     assert set(urbansim_run_paths) == {USIM_DATASTORE_H5}
     assert set(atlas_postprocess_paths) == {
         USIM_POPULATION_SOURCE_H5,

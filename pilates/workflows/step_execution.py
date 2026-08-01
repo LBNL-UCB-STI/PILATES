@@ -119,10 +119,11 @@ def execute_step(
         execution_options=options,
         step_identity=step_identity,
     )
-    archived_result = archive_completed_run(tracker=scenario.tracker, result=result)
-    if archived_result is not result:
-        scenario.coupler.update(archived_result.outputs)
-        result = archived_result
+    if definition.archive_outputs:
+        archived_result = archive_completed_run(tracker=scenario.tracker, result=result)
+        if archived_result is not result:
+            scenario.coupler.update(archived_result.outputs)
+            result = archived_result
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,
