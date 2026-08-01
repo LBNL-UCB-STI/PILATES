@@ -473,7 +473,7 @@ def test_beam_preprocess_adapter_defers_generated_vehicles_destination(
     (launch_root / "scenario").mkdir()
     with launch_primary.open("a", encoding="utf-8") as config_file:
         config_file.write(
-            '\nbeam.agentsim.agents.vehicles.vehiclesFilePath = '
+            "\nbeam.agentsim.agents.vehicles.vehiclesFilePath = "
             '${beam.inputDirectory}"/urbansim/vehicles.parquet"\n'
         )
 
