@@ -326,6 +326,22 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 )
         path_aliases["beam_region_input"] = config_root
 
+        vehicle_file_policy = BeamReferencePolicy(
+            identity_policy=(
+                "output_or_runtime_ignored"
+                if model == "beam_preprocess"
+                else "delegated_to_artifacts"
+            ),
+            role="beam_vehicle_input",
+            required=model != "beam_preprocess",
+            reason=(
+                "generated_by_beam_preprocess_from_declared_atlas_vehicle_input"
+                if model == "beam_preprocess"
+                else "vehicles_declared_as_step_artifact"
+            ),
+            delegated_artifact_keys=(BEAM_VEHICLES_IN,),
+        )
+
         reference_policies = {
             "beam.routing.r5.directory": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
@@ -355,13 +371,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                     BEAM_VEHICLES_IN,
                 ),
             ),
-            "beam.agentsim.agents.vehicles.vehiclesFilePath": BeamReferencePolicy(
-                identity_policy="delegated_to_artifacts",
-                role="beam_vehicle_input",
-                required=True,
-                reason="vehicles_declared_as_step_artifact",
-                delegated_artifact_keys=(BEAM_VEHICLES_IN,),
-            ),
+            "beam.agentsim.agents.vehicles.vehiclesFilePath": vehicle_file_policy,
             "beam.warmStart.initialLinkstatsFilePath": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
                 role="beam_linkstats_warmstart",

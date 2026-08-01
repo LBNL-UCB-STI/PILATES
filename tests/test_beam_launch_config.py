@@ -451,3 +451,85 @@ def test_beam_run_adapter_uses_the_compiled_launch_tree(tmp_path: Path) -> None:
         ].identity_policy
         == "ignored"
     )
+
+
+def test_beam_preprocess_adapter_defers_generated_vehicles_destination(
+    tmp_path: Path,
+) -> None:
+    import pytest
+
+    from consist.core.step_context import StepContext
+
+    from pilates.beam.launch_config import BeamLaunchConfig
+    from pilates.workflows.step_consist_meta import consist_step_meta
+
+    settings = _settings()
+    workspace = SimpleNamespace(
+        full_path=tmp_path / "workspace",
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "workspace" / "beam-input"),
+    )
+    launch_root = Path(workspace.get_beam_mutable_data_dir()) / "seattle"
+    launch_primary = _write_base_config(launch_root)
+    (launch_root / "scenario").mkdir()
+    with launch_primary.open("a", encoding="utf-8") as config_file:
+        config_file.write(
+            '\nbeam.agentsim.agents.vehicles.vehiclesFilePath = '
+            '${beam.inputDirectory}"/urbansim/vehicles.parquet"\n'
+        )
+
+    preprocess_adapter = consist_step_meta("beam_preprocess")["adapter"](
+        StepContext(
+            func_name="beam_preprocess",
+            model="beam_preprocess",
+            runtime_kwargs={"settings": settings, "workspace": workspace},
+        )
+    )
+    run_adapter = consist_step_meta("beam_run")["adapter"](
+        StepContext(
+            func_name="beam_run",
+            model="beam_run",
+            runtime_kwargs={
+                "settings": settings,
+                "workspace": workspace,
+                "beam_launch_config": BeamLaunchConfig(
+                    root=launch_root,
+                    primary_config=launch_primary,
+                ),
+            },
+        )
+    )
+
+    assert preprocess_adapter is not None
+    assert run_adapter is not None
+    preprocess_policy = preprocess_adapter.reference_policies[
+        "beam.agentsim.agents.vehicles.vehiclesFilePath"
+    ]
+    assert preprocess_policy.identity_policy == "output_or_runtime_ignored"
+    assert not preprocess_policy.required
+    run_policy = run_adapter.reference_policies[
+        "beam.agentsim.agents.vehicles.vehiclesFilePath"
+    ]
+    assert run_policy.identity_policy == "delegated_to_artifacts"
+    assert run_policy.required
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    preprocess_config = preprocess_adapter.discover(
+        [launch_root], identity=tracker.identity
+    )
+    preprocess_adapter.canonicalize(
+        preprocess_config,
+        tracker=tracker,
+        plan_only=True,
+        strict=True,
+    )
+    run_config = run_adapter.discover([launch_root], identity=tracker.identity)
+    with pytest.raises(FileNotFoundError, match="vehiclesFilePath"):
+        run_adapter.canonicalize(
+            run_config,
+            tracker=tracker,
+            plan_only=True,
+            strict=True,
+        )
