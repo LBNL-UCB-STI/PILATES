@@ -38,7 +38,6 @@ from .urbansim_atlas import (
     atlas_preprocess as atlas_preprocess,
     atlas_run as atlas_run,
     urbansim_postprocess as urbansim_postprocess,
-    urbansim_preprocess as urbansim_preprocess,
     urbansim_run as urbansim_run,
 )
 
@@ -55,7 +54,6 @@ from . import (
 STEP_DEFINITIONS: dict[str, StepDefinition[Any]] = {
     definition.name: definition
     for definition in (
-        urbansim_preprocess,
         urbansim_run,
         urbansim_postprocess,
         atlas_preprocess,

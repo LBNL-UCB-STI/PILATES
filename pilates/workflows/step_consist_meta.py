@@ -62,6 +62,7 @@ from consist.core.step_context import StepContext
 
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.atlas.preprocessor import selected_atlas_static_input_sources
+from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
 from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -455,6 +456,20 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             settings=settings,
             workspace_path=workspace_path,
         )
+        if model == "urbansim_run":
+            workspace = _workspace(ctx)
+            if workspace is not None:
+                static_identity_inputs = [
+                    (f"urbansim_static/{relpath}", source_path)
+                    for relpath, source_path in selected_urbansim_static_input_sources(
+                        settings,
+                        workspace,
+                    )
+                ]
+                resolved["identity_inputs"] = [
+                    *list(resolved.get("identity_inputs") or []),
+                    *static_identity_inputs,
+                ]
         if model.startswith("atlas_"):
             state = _state(ctx)
             atlas_runtime_identity: Dict[str, Any] = {}

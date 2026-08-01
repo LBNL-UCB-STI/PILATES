@@ -13,20 +13,21 @@ from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_con
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
+    FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
-    USIM_MUTABLE_DATA_DIR,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.atlas_state import AtlasSubState
-from pilates.workflows.steps import urbansim_atlas
+from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
+from pilates.urbansim import preprocessor as urbansim_preprocessor
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
 from pilates.workflows.steps.urbansim_atlas import (
     ATLAS_POSTPROCESS,
     ATLAS_PREPROCESS,
     ATLAS_RUN,
     URBANSIM_POSTPROCESS,
-    URBANSIM_PREPROCESS,
     URBANSIM_RUN,
 )
 from pilates.workflows.step_execution import execute_step
@@ -67,20 +68,61 @@ def _workspace(tmp_path: Path) -> SimpleNamespace:
     )
 
 
+def _settings_with_urbansim_static_sources(tmp_path: Path) -> SimpleNamespace:
+    settings = _settings()
+    settings.run.start_year = 2020
+    settings.run.models = SimpleNamespace(
+        traffic_assignment="beam",
+        travel="beam",
+    )
+    urbansim_source = tmp_path / "urbansim-source"
+    beam_source = tmp_path / "beam-source"
+    canonical_zones = tmp_path / "geography" / "zones.geojson"
+    settings.urbansim.local_data_input_folder = str(urbansim_source)
+    settings.beam = SimpleNamespace(local_input_folder=str(beam_source))
+    settings.shared = SimpleNamespace(
+        skims=SimpleNamespace(fname="base_skims.omx"),
+        geography=SimpleNamespace(
+            zones=SimpleNamespace(
+                zone_type="taz",
+                source_file=str(canonical_zones),
+                canonical_id_col="zone_id",
+                activitysim_index_col="TAZ",
+                source_crs="EPSG:4326",
+            ),
+            alternative_zones=None,
+        ),
+    )
+    settings.activitysim = None
+    for source in (
+        beam_source / "test" / "base_skims.omx",
+        urbansim_source / "hsize_ct_001.csv",
+        urbansim_source / "income_rates_001.csv",
+        urbansim_source / "relmap_001.csv",
+        urbansim_source / "schools_2010.csv",
+        urbansim_source / "blocks_school_districts_2010.csv",
+        canonical_zones,
+    ):
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(f"{source.name}\n", encoding="utf-8")
+    return settings
+
+
 def test_native_urbansim_atlas_definitions_resolve_to_canonical_contracts(
     tmp_path: Path,
 ) -> None:
     definitions = (
-        URBANSIM_PREPROCESS,
         URBANSIM_RUN,
         URBANSIM_POSTPROCESS,
         ATLAS_PREPROCESS,
         ATLAS_RUN,
         ATLAS_POSTPROCESS,
     )
-    settings = _settings()
+    settings = _settings_with_urbansim_static_sources(tmp_path)
     state = _state()
     workspace = _workspace(tmp_path)
+
+    assert "urbansim_preprocess" not in STEP_DEFINITIONS
 
     for definition in definitions:
         contract = resolve_step_contract(
@@ -112,9 +154,6 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
     state = _state()
     workspace = _workspace(tmp_path)
 
-    urbansim_preprocess_paths = URBANSIM_PREPROCESS.output_paths(
-        settings=settings, state=state, workspace=workspace
-    )
     urbansim_run_paths = URBANSIM_RUN.output_paths(
         settings=settings, state=state, workspace=workspace
     )
@@ -125,11 +164,6 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         settings=settings, state=state, workspace=workspace
     )
 
-    assert set(urbansim_preprocess_paths) >= {
-        USIM_MUTABLE_DATA_DIR,
-        USIM_DATASTORE_H5,
-    }
-    assert URBANSIM_PREPROCESS.archive_outputs is False
     assert set(urbansim_run_paths) == {USIM_DATASTORE_H5}
     assert set(atlas_postprocess_paths) == {
         USIM_POPULATION_SOURCE_H5,
@@ -143,6 +177,180 @@ def test_native_output_path_providers_preserve_typed_downstream_contracts(
         "atlas_jobs_csv",
         "atlas_grave_csv",
     }
+
+
+def test_urbansim_run_contract_consumes_only_scalar_semantic_inputs() -> None:
+    declared = URBANSIM_RUN.function.__consist_step__
+
+    assert set(declared.inputs or ()) == {USIM_DATASTORE_H5}
+    assert tuple(declared.optional_input_keys or ()) == (FINAL_SKIMS_OMX,)
+    assert "usim_mutable_data_dir" not in set(declared.inputs or ())
+    assert set(declared.schema_outputs or ()) == {
+        USIM_DATASTORE_H5,
+        USIM_FORECAST_OUTPUT,
+    }
+
+
+def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
+    tmp_path: Path,
+) -> None:
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test",
+            start_year=2020,
+            models=SimpleNamespace(traffic_assignment="beam", travel="beam"),
+        ),
+        urbansim=SimpleNamespace(
+            input_file_template="input_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"test": "001"}},
+        ),
+    )
+    workspace = _workspace(tmp_path)
+    selected = {
+        USIM_DATASTORE_H5: tmp_path / "selected" / "datastore.h5",
+        FINAL_SKIMS_OMX: tmp_path / "selected" / "final_skims.omx",
+    }
+
+    class _Coupler:
+        def get(self, key: str) -> object:
+            return selected.get(key)
+
+    bootstrap = URBANSIM_RUN.resolve_inputs(
+        settings=settings,
+        state=SimpleNamespace(current_year=2020, iteration=0),
+        workspace=workspace,
+        coupler=_Coupler(),
+    )
+    later = URBANSIM_RUN.resolve_inputs(
+        settings=settings,
+        state=SimpleNamespace(current_year=2030, iteration=0),
+        workspace=workspace,
+        coupler=_Coupler(),
+    )
+
+    assert bootstrap.required_roles == (USIM_DATASTORE_H5,)
+    assert bootstrap.optional_roles == (FINAL_SKIMS_OMX,)
+    assert later.required_roles == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
+    assert later.optional_roles == ()
+    assert later.logical_destinations == {
+        USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir()) / "input_001.h5",
+        FINAL_SKIMS_OMX: Path(workspace.get_usim_mutable_data_dir())
+        / "final_skims.omx",
+    }
+
+
+def test_selected_urbansim_static_sources_have_stable_relative_identity_names(
+    tmp_path: Path,
+) -> None:
+    urbansim_source = tmp_path / "urbansim-source"
+    beam_source = tmp_path / "beam-source"
+    canonical_zones = tmp_path / "geography" / "zones.geojson"
+    region_id = "001"
+    expected_sources = {
+        f"skims_mpo_{region_id}.omx": beam_source / "test" / "base_skims.omx",
+        f"hsize_ct_{region_id}.csv": urbansim_source / f"hsize_ct_{region_id}.csv",
+        f"income_rates_{region_id}.csv": urbansim_source
+        / f"income_rates_{region_id}.csv",
+        f"relmap_{region_id}.csv": urbansim_source / f"relmap_{region_id}.csv",
+        "schools_2010.csv": urbansim_source / "schools_2010.csv",
+        "blocks_school_districts_2010.csv": urbansim_source
+        / "blocks_school_districts_2010.csv",
+        "canonical_zones/zones.geojson": canonical_zones,
+    }
+    for source in expected_sources.values():
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text(f"{source.name}\n", encoding="utf-8")
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        urbansim=SimpleNamespace(
+            local_data_input_folder=str(urbansim_source),
+            region_mappings={"region_to_region_id": {"test": region_id}},
+        ),
+        beam=SimpleNamespace(local_input_folder=str(beam_source)),
+        shared=SimpleNamespace(
+            skims=SimpleNamespace(fname="base_skims.omx"),
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    zone_type="taz",
+                    source_file=str(canonical_zones),
+                    canonical_id_col="zone_id",
+                    activitysim_index_col="TAZ",
+                    source_crs="EPSG:4326",
+                ),
+                alternative_zones=None,
+            ),
+        ),
+        activitysim=None,
+    )
+
+    assert (
+        dict(
+            urbansim_preprocessor.selected_urbansim_static_input_sources(
+                settings, _workspace(tmp_path)
+            )
+        )
+        == expected_sources
+    )
+
+
+def test_urbansim_run_identity_includes_exact_selected_static_sources(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    existing_input = tmp_path / "existing.txt"
+    existing_input.write_text("existing\n", encoding="utf-8")
+    settings = _settings_with_urbansim_static_sources(tmp_path)
+    workspace = _workspace(tmp_path)
+
+    class _Context:
+        def get_runtime(self, name: str, default: object = None) -> object:
+            return {
+                "settings": settings,
+                "state": _state(),
+                "workspace": workspace,
+            }.get(name, default)
+
+    monkeypatch.setattr(
+        step_consist_meta,
+        "build_step_consist_kwargs",
+        lambda **_kwargs: {"identity_inputs": [("existing", existing_input)]},
+    )
+
+    identity_inputs = step_consist_meta.consist_step_meta("urbansim_run")[
+        "identity_inputs"
+    ](_Context())
+
+    assert identity_inputs == [
+        ("existing", existing_input),
+        (
+            "urbansim_static/skims_mpo_001.omx",
+            tmp_path / "beam-source" / "test" / "base_skims.omx",
+        ),
+        (
+            "urbansim_static/hsize_ct_001.csv",
+            tmp_path / "urbansim-source" / "hsize_ct_001.csv",
+        ),
+        (
+            "urbansim_static/income_rates_001.csv",
+            tmp_path / "urbansim-source" / "income_rates_001.csv",
+        ),
+        (
+            "urbansim_static/relmap_001.csv",
+            tmp_path / "urbansim-source" / "relmap_001.csv",
+        ),
+        (
+            "urbansim_static/schools_2010.csv",
+            tmp_path / "urbansim-source" / "schools_2010.csv",
+        ),
+        (
+            "urbansim_static/blocks_school_districts_2010.csv",
+            tmp_path / "urbansim-source" / "blocks_school_districts_2010.csv",
+        ),
+        (
+            "urbansim_static/canonical_zones/zones.geojson",
+            tmp_path / "geography" / "zones.geojson",
+        ),
+    ]
 
 
 def test_atlas_postprocess_output_uses_population_source_snapshot_at_start_year(
@@ -780,7 +988,7 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     assert projected == result.outputs
 
 
-def test_urbansim_preprocess_stages_the_bound_datastore_over_workspace_state(
+def test_urbansim_run_staging_uses_bound_datastore_over_workspace_state(
     tmp_path: Path,
 ) -> None:
     workspace = _workspace(tmp_path)
@@ -1029,13 +1237,6 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
             store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
     calls: dict[str, object] = {}
 
-    class _UrbanSimPreprocessor:
-        def __init__(self, *_args: object) -> None:
-            pass
-
-        def preprocess(self, _workspace: object, **kwargs: object) -> None:
-            calls["urbansim_preprocess"] = kwargs
-
     class _AtlasPreprocessor:
         def __init__(self, *_args: object) -> None:
             pass
@@ -1059,17 +1260,10 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         ) -> None:
             calls["atlas_postprocess"] = kwargs
 
-    monkeypatch.setattr(urbansim_atlas, "UrbansimPreprocessor", _UrbanSimPreprocessor)
     monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _AtlasPreprocessor)
     monkeypatch.setattr(urbansim_atlas, "AtlasRunner", _AtlasRunner)
     monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _AtlasPostprocessor)
 
-    urbansim_atlas._native_urbansim_preprocess(
-        snapshots["usim_datastore_h5"],
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
     urbansim_atlas._native_atlas_preprocess(
         snapshots["usim_datastore_h5"],
         settings=settings,
@@ -1107,13 +1301,6 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         workspace=workspace,
     )
 
-    # The bound datastore path is an execution input, not a hint for an
-    # adapter-owned workspace lookup.
-    assert calls["urbansim_preprocess"] == {
-        "usim_datastore_h5": snapshots["usim_datastore_h5"],
-        "final_skims_omx": None,
-        "allow_workspace_skim_fallback": True,
-    }
     assert calls["atlas_preprocess"] == {
         "usim_datastore_h5": snapshots["usim_datastore_h5"],
         "final_skims_omx": None,
@@ -1124,6 +1311,38 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
     )
     assert calls["atlas_postprocess"] == {
         "usim_datastore_h5": snapshots["usim_datastore_h5"]
+    }
+
+
+def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    datastore = tmp_path / "resolved" / "datastore.h5"
+    final_skims = tmp_path / "resolved" / "final_skims.omx"
+    workspace = _workspace(tmp_path)
+    calls: dict[str, object] = {}
+
+    class _Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, **kwargs: object) -> None:
+            calls.update(kwargs)
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _Runner)
+
+    urbansim_atlas._native_urbansim_run(
+        datastore,
+        final_skims,
+        settings=_settings(),
+        state=_state(),
+        workspace=workspace,
+    )
+
+    assert calls == {
+        "usim_datastore_h5": datastore,
+        "final_skims_omx": final_skims,
+        "workspace": workspace,
     }
 
 

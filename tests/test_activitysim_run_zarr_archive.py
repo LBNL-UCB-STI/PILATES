@@ -1,4 +1,4 @@
-"""Regression coverage for archiving generated ActivitySim Zarr skims."""
+"""Regression coverage for generated ActivitySim Zarr skim ownership."""
 
 from __future__ import annotations
 
@@ -39,7 +39,9 @@ def _settings() -> SimpleNamespace:
     )
 
 
-def test_omx_mode_enqueues_finalized_zarr_skims_for_archiving(monkeypatch, tmp_path):
+def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(
+    monkeypatch, tmp_path
+):
     workspace = _workspace(tmp_path)
     settings = _settings()
     state = SimpleNamespace(
@@ -88,7 +90,7 @@ def test_omx_mode_enqueues_finalized_zarr_skims_for_archiving(monkeypatch, tmp_p
 
     assert outputs.zarr_skims == zarr_path
     assert (zarr_path / ".zgroup").exists()
-    assert archived == [("zarr_skims", zarr_path)]
+    assert archived == []
 
 
 def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(

@@ -135,7 +135,6 @@ def test_surface_construction_for_full_shape():
         "supply_demand_loop",
     }.issubset(surface.enabled_stage_names)
     assert {
-        "urbansim_preprocess",
         "atlas_preprocess",
         "activitysim_preprocess",
         "beam_preprocess",

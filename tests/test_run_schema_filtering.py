@@ -70,7 +70,6 @@ def test_filter_schema_steps_for_activitysim_beam_only_excludes_urbansim_atlas()
     assert all(
         step not in required_steps
         for step_name in (
-            "urbansim_preprocess",
             "urbansim_run",
             "urbansim_postprocess",
             "atlas_preprocess",

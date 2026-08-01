@@ -88,7 +88,6 @@ from workflow_state import WorkflowState
 
 EXPECTED_STAGE_MODELS = (
     "initialization",
-    "urbansim_preprocess",
     "urbansim_run",
     "urbansim_postprocess",
     "atlas_preprocess",
@@ -295,6 +294,11 @@ def _build_settings(tmp_path: Path):
             "geography": {
                 "FIPS": {"county": ["00001"]},
                 "local_crs": "EPSG:4326",
+                "zones": {
+                    "zone_type": "taz",
+                    "source_file": str(tmp_path / "canonical-zones.geojson"),
+                    "canonical_id_col": "TAZ",
+                },
             },
             "skims": {"fname": "skims.omx"},
             "database": {
@@ -344,7 +348,7 @@ def _build_settings(tmp_path: Path):
         },
         "beam": {
             "config": "beam.conf",
-            "local_input_folder": "beam/input",
+            "local_input_folder": str(tmp_path / "beam_input"),
             "local_mutable_data_folder": "beam/input",
             "local_output_folder": "beam/output",
             "scenario_folder": "beam/scenario",
@@ -432,6 +436,24 @@ def golden_stub_env(tmp_path, monkeypatch):
     region_id = settings.urbansim.region_mappings["region_to_region_id"][
         settings.run.region
     ]
+    urbansim_source_dir = Path(settings.urbansim.local_data_input_folder)
+    for filename in (
+        f"hsize_ct_{region_id}.csv",
+        f"income_rates_{region_id}.csv",
+        f"relmap_{region_id}.csv",
+        "schools_2010.csv",
+        "blocks_school_districts_2010.csv",
+    ):
+        _write_file(urbansim_source_dir / filename)
+    _write_file(
+        Path(settings.beam.local_input_folder)
+        / settings.run.region
+        / settings.shared.skims.fname
+    )
+    _write_file(
+        Path(settings.shared.geography.zones.source_file),
+        '{"type":"FeatureCollection","features":[]}\n',
+    )
     usim_input_path = usim_dir / settings.urbansim.input_file_template.format(
         region_id=region_id
     )

@@ -103,6 +103,11 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     monkeypatch,
 ) -> None:
     settings = _settings()
+    settings.run.region = "test"
+    settings.urbansim = SimpleNamespace(
+        input_file_template="input_{region_id}.h5",
+        region_mappings={"region_to_region_id": {"test": "001"}},
+    )
     state = _state(current_year=2022)
     workspace = SimpleNamespace(
         full_path=".",
@@ -120,7 +125,7 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     def resolve_urbansim(**kwargs):
         captured["urbansim"] = kwargs["required_roles"]
         return ResolvedStepInputs(
-            step_name="urbansim_preprocess", binding=BindingResult()
+            step_name="urbansim_run", binding=BindingResult()
         )
 
     def resolve_atlas(**kwargs):
@@ -133,11 +138,6 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
         staticmethod(lambda *_args: {}),
     )
     monkeypatch.setattr(activitysim, "resolve_artifact_roles", resolve_activitysim)
-    monkeypatch.setattr(
-        urbansim_atlas,
-        "_urbansim_preprocess_native_output_paths",
-        lambda **_kwargs: {USIM_DATASTORE_H5: "urbansim/data/input.h5"},
-    )
     monkeypatch.setattr(urbansim_atlas, "_resolve_native_inputs", resolve_urbansim)
 
     activitysim._activitysim_preprocess_resolver(
@@ -146,7 +146,7 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
         workspace=workspace,
         coupler=object(),
     )
-    urbansim_atlas._resolve_urbansim_preprocess_inputs(
+    urbansim_atlas._resolve_urbansim_run_inputs(
         settings=settings,
         state=state,
         workspace=workspace,
@@ -348,11 +348,11 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         def get_preprocessor(self, _model, _state):
             return _ActivitysimPreprocessor()
 
-    class _UrbansimPreprocessor:
+    class _UrbansimRunner:
         def __init__(self, *_args):
             pass
 
-        def preprocess(self, _workspace, **kwargs):
+        def run(self, **kwargs):
             captured["urbansim"] = kwargs
 
     class _AtlasPreprocessor:
@@ -363,7 +363,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
             captured["atlas"] = kwargs
 
     monkeypatch.setattr(activitysim, "ModelFactory", _Factory)
-    monkeypatch.setattr(urbansim_atlas, "UrbansimPreprocessor", _UrbansimPreprocessor)
+    monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _UrbansimRunner)
     monkeypatch.setattr(urbansim_atlas, "AtlasPreprocessor", _AtlasPreprocessor)
 
     population = Path("/bound/population.h5")
@@ -375,7 +375,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         state=state,
         workspace=workspace,
     )
-    urbansim_atlas._native_urbansim_preprocess(
+    urbansim_atlas._native_urbansim_run(
         population,
         skims,
         settings=settings,
@@ -392,12 +392,12 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
 
     assert captured["activitysim"]["prepare_omx_skims"] is False
     assert "final_skims_omx" not in captured["activitysim"]
-    assert all(
-        values["allow_workspace_skim_fallback"] is False
-        for name, values in captured.items()
-        if name != "activitysim"
-    )
-    assert captured["urbansim"]["final_skims_omx"] == skims
+    assert captured["atlas"]["allow_workspace_skim_fallback"] is False
+    assert captured["urbansim"] == {
+        "usim_datastore_h5": population,
+        "final_skims_omx": skims,
+        "workspace": workspace,
+    }
     assert captured["atlas"]["final_skims_omx"] == skims
 
 

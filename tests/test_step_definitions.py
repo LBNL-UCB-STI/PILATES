@@ -9,12 +9,12 @@ import pandas as pd
 from consist import BindingResult, resolve_step_contract
 
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.config.models import BeamArtifactFormatsConfig
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
@@ -76,7 +76,11 @@ def _settings(*, activitysim: object | None = _DEFAULT_ACTIVITYSIM) -> SimpleNam
         ),
         atlas=SimpleNamespace(beamac=0),
         activitysim=activitysim,
-        beam=SimpleNamespace(config="beam.conf", full_skim=None),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            full_skim=None,
+            artifact_formats=BeamArtifactFormatsConfig(),
+        ),
         write_skims_to_omx=False,
     )
 
@@ -116,6 +120,41 @@ def _write_file(path: Path) -> None:
     path.write_text(path.name, encoding="utf-8")
 
 
+def _configure_urbansim_static_sources(
+    settings: SimpleNamespace, tmp_path: Path
+) -> None:
+    """Provide the configured files fingerprinted by the UrbanSim run contract."""
+
+    source_root = tmp_path / "urbansim-source"
+    beam_root = tmp_path / "beam-source"
+    zone_source = tmp_path / "geography" / "zones.geojson"
+    settings.urbansim.local_data_input_folder = str(source_root)
+    settings.beam.local_input_folder = str(beam_root)
+    settings.shared = SimpleNamespace(
+        skims=SimpleNamespace(fname="skims.omx"),
+        geography=SimpleNamespace(
+            zones=SimpleNamespace(
+                zone_type="taz",
+                source_file=str(zone_source),
+                canonical_id_col="TAZ",
+            ),
+            alternative_zones=None,
+        ),
+    )
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    for source in (
+        beam_root / region / "skims.omx",
+        source_root / f"hsize_ct_{region_id}.csv",
+        source_root / f"income_rates_{region_id}.csv",
+        source_root / f"relmap_{region_id}.csv",
+        source_root / "schools_2010.csv",
+        source_root / "blocks_school_districts_2010.csv",
+        zone_source,
+    ):
+        _write_file(source)
+
+
 def _contract_output_paths(
     output_paths: Mapping[str, Any],
 ) -> dict[str, Path]:
@@ -126,7 +165,6 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
     monkeypatch, tmp_path: Path
 ) -> None:
     expected = {
-        "urbansim_preprocess",
         "urbansim_run",
         "urbansim_postprocess",
         "atlas_preprocess",
@@ -144,6 +182,7 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
     settings = _settings()
     state = _state()
     workspace = _workspace(tmp_path)
+    _configure_urbansim_static_sources(settings, tmp_path)
     monkeypatch.setattr(
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
@@ -201,23 +240,9 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
 
 def test_native_steps_declare_static_consist_metadata() -> None:
     expected = {
-        "urbansim_preprocess": {
+        "urbansim_run": {
             "inputs": {USIM_DATASTORE_H5},
             "optional": {FINAL_SKIMS_OMX},
-            "schema_outputs": {
-                USIM_DATASTORE_H5,
-                ASIM_OMX_SKIMS,
-                "hh_size",
-                "income_rates",
-                "relmap",
-                "geoid_to_zone",
-                "schools",
-                "school_districts",
-            },
-        },
-        "urbansim_run": {
-            "inputs": {"usim_mutable_data_dir"},
-            "optional": set(),
             "schema_outputs": {USIM_DATASTORE_H5, "usim_forecast_output"},
         },
         "urbansim_postprocess": {
@@ -410,8 +435,7 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         workspace=workspace,
         resolved_inputs=None,
     )
-    atlas_output_dir = _path(atlas_paths[ATLAS_OUTPUT_DIR])
-    atlas_output_dir.mkdir(parents=True)
+    atlas_output_dir = Path(workspace.get_atlas_output_dir())
     atlas_population = _path(atlas_paths[USIM_POPULATION_SOURCE_H5])
     atlas_vehicles = _path(atlas_paths[ATLAS_VEHICLES2_OUTPUT])
     _write_file(atlas_population)
@@ -420,7 +444,6 @@ def test_native_model_family_projectors_agree_with_declared_destinations(
         {
             key: SimpleNamespace(container_uri=f"archive://prior/{key}")
             for key in (
-                ATLAS_OUTPUT_DIR,
                 USIM_POPULATION_SOURCE_H5,
                 ATLAS_VEHICLES2_OUTPUT,
             )

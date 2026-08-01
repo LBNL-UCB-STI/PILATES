@@ -25,10 +25,11 @@ from pilates.workflows.step_definition import StepDefinition
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
+    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
 from pilates.workflows.steps import urbansim_atlas
-from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS
+from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS, URBANSIM_RUN
 
 
 @pytest.mark.parametrize("cache_hit", [False, True], ids=["miss", "cache-hit"])
@@ -246,6 +247,103 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
 
     assert received_result is result
     assert projected == result.outputs
+
+
+def test_urbansim_run_archives_only_scalar_forecast_output(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The active UrbanSim run uses central archival without publishing staging."""
+
+    class Coupler:
+        def __init__(self) -> None:
+            self.values: dict[str, object] = {}
+
+        def update(self, artifacts: dict[str, object]) -> None:
+            self.values.update(artifacts)
+
+    class ArchiveTracker:
+        def __init__(self, archived_outputs: dict[str, Artifact]) -> None:
+            self.archived_outputs = archived_outputs
+            self.archive_calls: list[tuple[str, str]] = []
+
+        def archive_run_outputs(
+            self, run_id: str, archive_root: str, *, mode: str
+        ) -> SimpleNamespace:
+            assert mode == "copy"
+            self.archive_calls.append((run_id, archive_root))
+            return SimpleNamespace(outputs=self.archived_outputs)
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    workspace_root = tmp_path / "workspace"
+    forecast_h5 = workspace_root / "urbansim" / "data" / "output_2030.h5"
+    forecast_h5.parent.mkdir(parents=True)
+    forecast_h5.write_bytes(b"forecast\n")
+    input_h5 = tmp_path / "input_001.h5"
+    input_h5.write_bytes(b"input\n")
+
+    run_id = "urbansim-run-id"
+    run = Run(
+        id=run_id,
+        model_name="urbansim_run",
+        config_hash=None,
+        git_hash=None,
+    )
+    outputs = {
+        key: Artifact(key=key, container_uri=str(forecast_h5), driver="other")
+        for key in (USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT)
+    }
+    archived_outputs = {
+        key: Artifact(
+            key=key,
+            container_uri=f"workspace://archived/{forecast_h5.name}",
+            driver="other",
+        )
+        for key in outputs
+    }
+    coupler = Coupler()
+    tracker = ArchiveTracker(archived_outputs)
+    scenario = SimpleNamespace(coupler=coupler, tracker=tracker)
+    scenario.run = lambda **_kwargs: RunResult(run=run, outputs=outputs)
+    settings = SimpleNamespace(
+        urbansim=SimpleNamespace(output_file_template="output_{year}.h5")
+    )
+    state = SimpleNamespace(forecast_year=2030)
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_usim_mutable_data_dir=lambda: str(forecast_h5.parent),
+    )
+    resolved = ResolvedStepInputs(
+        step_name="urbansim_run",
+        binding=BindingResult(inputs={USIM_DATASTORE_H5: input_h5}),
+        required_roles=(USIM_DATASTORE_H5,),
+        source_by_role={USIM_DATASTORE_H5: "coupler"},
+    )
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+
+    result, projected = execute_step(
+        scenario=scenario,
+        definition=URBANSIM_RUN,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        stage="land_use",
+        year=2030,
+        iteration=0,
+        phase="run",
+        resolved_inputs=resolved,
+    )
+
+    assert URBANSIM_RUN.archive_outputs is True
+    assert tracker.archive_calls == [
+        (run_id, str(archive_root / "consist-recovery" / run_id))
+    ]
+    assert result.outputs == archived_outputs
+    assert projected.usim_datastore_h5 == forecast_h5
+    assert set(coupler.values) == {USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT}
+    assert "usim_mutable_data_dir" not in coupler.values
 
 
 def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root(

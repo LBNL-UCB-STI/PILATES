@@ -16,6 +16,8 @@ from pilates.runtime.archive_paths import archive_fallback_path
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
 from pilates.utils.beam import get_beam_omx_skims_name
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.zone_utils import resolve_canonical_zone_source_path
+from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 if TYPE_CHECKING:
     from workflow_state import WorkflowState
@@ -76,6 +78,54 @@ def _beam_input_root(settings: PilatesConfig) -> Path:
         else os.path.join(project_root, settings.beam.local_input_folder)
     )
     return Path(beam_input_dir)
+
+
+def selected_urbansim_static_input_sources(
+    settings: PilatesConfig,
+    workspace: "Workspace",
+) -> Tuple[Tuple[str, Path], ...]:
+    """Resolve immutable sources that contribute to an UrbanSim run's identity.
+
+    The relative names describe the stable model-facing role of each source;
+    absolute host paths remain values only. These files are identity inputs for
+    Consist, not semantic coupler roles or outputs recovered from an older run.
+    """
+
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    source_dir = _urbansim_source_data_dir(settings)
+    beam_inputs_root = _beam_input_root(settings)
+    canonical_zone_source = Path(
+        resolve_canonical_zone_source_path(settings, workspace)
+    )
+
+    selected_sources = (
+        (
+            f"skims_mpo_{region_id}.omx",
+            beam_inputs_root / region / get_beam_omx_skims_name(settings),
+        ),
+        (f"hsize_ct_{region_id}.csv", source_dir / f"hsize_ct_{region_id}.csv"),
+        (
+            f"income_rates_{region_id}.csv",
+            source_dir / f"income_rates_{region_id}.csv",
+        ),
+        (f"relmap_{region_id}.csv", source_dir / f"relmap_{region_id}.csv"),
+        ("schools_2010.csv", source_dir / "schools_2010.csv"),
+        (
+            "blocks_school_districts_2010.csv",
+            source_dir / "blocks_school_districts_2010.csv",
+        ),
+        (
+            f"canonical_zones/{canonical_zone_source.name}",
+            canonical_zone_source,
+        ),
+    )
+    missing = [str(path) for _name, path in selected_sources if not path.is_file()]
+    if missing:
+        raise RuntimeError(
+            "Missing configured UrbanSim static input files: " + ", ".join(missing)
+        )
+    return selected_sources
 
 
 def _restore_missing_mutable_urbansim_supporting_inputs(
@@ -203,6 +253,91 @@ def _stage_declared_urbansim_datastore(
     if source.resolve() != destination.resolve():
         shutil.copy2(source, destination)
     return destination
+
+
+def stage_urbansim_run_workspace(
+    *,
+    settings: PilatesConfig,
+    state: "WorkflowState",
+    workspace: "Workspace",
+    usim_datastore_h5: Path,
+    final_skims_omx: Path | None,
+) -> UrbanSimPreprocessOutputs:
+    """Stage UrbanSim's mutable workspace immediately before its container run.
+
+    The workflow supplies immutable, already-materialized artifacts. UrbanSim's
+    container continues to read its conventional mutable-data filenames, so this
+    helper is the sole handoff between those two representations.
+    """
+    logger.info("[UrbansimRunner] Staging mutable UrbanSim run workspace.")
+    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+    mutable_dir.mkdir(parents=True, exist_ok=True)
+
+    _stage_declared_urbansim_datastore(
+        settings=settings,
+        workspace=workspace,
+        usim_datastore_h5=Path(usim_datastore_h5),
+    )
+    for relative_name, source_path in selected_urbansim_static_input_sources(
+        settings,
+        workspace,
+    ):
+        if relative_name.startswith("canonical_zones/"):
+            continue
+        destination = mutable_dir / relative_name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_path, destination)
+
+    from pilates.utils.zone_utils import get_block_to_zone_mapping
+
+    mapping = get_block_to_zone_mapping(settings, state.start_year, workspace)
+    geoid_to_zone_path = mutable_dir / "geoid_to_zone.csv"
+    (
+        pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
+        .rename_axis("GEOID")
+        .to_csv(geoid_to_zone_path)
+    )
+
+    updated_skims_path: Optional[Path] = None
+    explicit_skims_path = (
+        Path(final_skims_omx)
+        if final_skims_omx is not None and Path(final_skims_omx).is_file()
+        else None
+    )
+    requires_final_skims = requires_prior_beam_skim_handoff(
+        settings=settings,
+        state=state,
+    )
+    if explicit_skims_path is None and requires_final_skims:
+        raise FileNotFoundError(
+            "UrbanSim run requires the resolved final_skims_omx handoff "
+            "after BEAM has run."
+        )
+    if final_skims_omx is not None and explicit_skims_path is None:
+        logger.warning(
+            "[UrbansimRunner] Explicit final_skims_omx artifact did not resolve "
+            "to an existing path: %s. Keeping the configured base OMX.",
+            final_skims_omx,
+        )
+    if explicit_skims_path is not None:
+        logger.info(
+            "[UrbansimRunner] Using explicit final_skims_omx artifact: %s",
+            explicit_skims_path,
+        )
+        region = settings.run.region
+        region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+        destination = mutable_dir / f"skims_mpo_{region_id}.omx"
+        logger.info("Copying skims from %s to %s", explicit_skims_path, destination)
+        shutil.copy2(explicit_skims_path, destination)
+        updated_skims_path = destination
+
+    prepared_inputs = _mutable_urbansim_input_paths(settings, workspace)
+    if updated_skims_path is not None:
+        prepared_inputs["usim_skims_input_updated"] = updated_skims_path
+    return UrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=mutable_dir,
+        prepared_inputs=prepared_inputs,
+    )
 
 
 def _load_raw_skims(settings, asim_data_dir, usim_data_dir, skim_format, workspace):
@@ -575,134 +710,15 @@ class UrbansimPreprocessor(GenericPreprocessor):
         final_skims_omx: Optional[Any] = None,
         allow_workspace_skim_fallback: bool = True,
     ) -> UrbanSimPreprocessOutputs:
-        """
-        Preprocess UrbanSim data, including copying necessary skims.
-        """
-        logger.info("[UrbansimPreprocessor] Preprocessing for UrbanSim.")
-        settings = self.state.full_settings
-
-        # Ensure the mutable data directory exists, especially on restarts when Initialization is skipped.
-        usim_mutable_data_dir = workspace.get_usim_mutable_data_dir()
-        os.makedirs(usim_mutable_data_dir, exist_ok=True)
-        if usim_datastore_h5 is None:
-            raise TypeError(
-                "UrbansimPreprocessor._preprocess requires usim_datastore_h5"
-            )
-        _stage_declared_urbansim_datastore(
-            settings=settings,
-            workspace=workspace,
-            usim_datastore_h5=Path(usim_datastore_h5),
+        """Retain the legacy preprocessor surface without staging runner inputs."""
+        del (
+            previous_records,
+            usim_datastore_h5,
+            final_skims_omx,
+            allow_workspace_skim_fallback,
         )
-        _restore_missing_mutable_urbansim_supporting_inputs(
-            settings,
-            self.state,
-            workspace,
-        )
-
-        updated_skims_path: Optional[Path] = None
-
-        try:
-            # Generate the block-to-zone mapping for UrbanSim
-            logger.info("Generating block-to-zone mapping for UrbanSim.")
-            from pilates.utils.zone_utils import get_block_to_zone_mapping
-
-            mapping = get_block_to_zone_mapping(
-                settings, self.state.start_year, workspace
-            )
-
-            # Save the mapping to a CSV file in the mutable data directory
-            geoid_to_zone_fname = "geoid_to_zone.csv"
-            geoid_to_zone_path = os.path.join(
-                workspace.get_usim_mutable_data_dir(), geoid_to_zone_fname
-            )
-            (
-                pd.DataFrame.from_dict(mapping, orient="index", columns=["zone_id"])
-                .rename_axis("GEOID")
-                .to_csv(geoid_to_zone_path)
-            )
-
-            # If not the first iteration, check if BEAM is enabled and copy updated skims
-            if (
-                self.state.current_year > settings.run.start_year
-                or self.state.iteration > 0
-            ):
-                if settings.run.models.travel == "beam":
-                    logger.info(
-                        "Updating skims from BEAM mutable output for subsequent iteration."
-                    )
-                    if final_skims_omx is not None and Path(final_skims_omx).exists():
-                        source_skims_path = str(Path(final_skims_omx))
-                        logger.info(
-                            "[UrbansimPreprocessor] Using explicit final_skims_omx artifact: %s",
-                            source_skims_path,
-                        )
-                    else:
-                        if not allow_workspace_skim_fallback:
-                            raise FileNotFoundError(
-                                "UrbanSim preprocess requires the resolved "
-                                "final_skims_omx handoff after BEAM has run."
-                            )
-                        if final_skims_omx is not None:
-                            logger.warning(
-                                "[UrbansimPreprocessor] Explicit final_skims_omx artifact "
-                                "did not resolve to an existing path: %s. Falling back to "
-                                "legacy BEAM skims discovery.",
-                                final_skims_omx,
-                            )
-                        is_restart_run = getattr(self.state, "is_restart_run", None)
-                        if is_restart_run is None:
-                            is_restart_run = bool(self.state.run_info_path)
-                        if (
-                            is_restart_run
-                            and self.state.run_info_path
-                            and os.path.exists(self.state.run_info_path)
-                        ):
-                            logger.info(
-                                f"[UrbansimPreprocessor] Restarted run detected. Using previous run's output path from {self.state.run_info_path}"
-                            )
-                            previous_run_dir = os.path.dirname(self.state.run_info_path)
-                            beam_mutable_data_dir = os.path.join(
-                                previous_run_dir, "beam", "input"
-                            )
-                        else:
-                            beam_mutable_data_dir = (
-                                workspace.get_beam_mutable_data_dir()
-                            )
-
-                        source_skims_path = os.path.join(
-                            beam_mutable_data_dir,
-                            settings.run.region,
-                            get_beam_omx_skims_name(settings),
-                        )
-
-                    region_id = settings.urbansim.region_mappings[
-                        "region_to_region_id"
-                    ][settings.run.region]
-                    dest_skims_fname = f"skims_mpo_{region_id}.omx"
-                    dest_skims_path = os.path.join(
-                        workspace.get_usim_mutable_data_dir(), dest_skims_fname
-                    )
-
-                    if os.path.exists(source_skims_path):
-                        logger.info(
-                            f"Copying skims from {source_skims_path} to {dest_skims_path}"
-                        )
-                        shutil.copy(source_skims_path, dest_skims_path)
-                        updated_skims_path = Path(dest_skims_path)
-                    else:
-                        logger.warning(
-                            f"Skims file not found at source: {source_skims_path}"
-                        )
-
-        except Exception as e:
-            logger.error(f"Error during UrbanSim preprocessing: {e}")
-            raise
-
-        prepared_inputs = _mutable_urbansim_input_paths(settings, workspace)
-        if updated_skims_path is not None and updated_skims_path.exists():
-            prepared_inputs["usim_skims_input_updated"] = updated_skims_path
-
+        usim_mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+        usim_mutable_data_dir.mkdir(parents=True, exist_ok=True)
         return UrbanSimPreprocessOutputs(
-            usim_mutable_data_dir=Path(usim_mutable_data_dir),
-            prepared_inputs=prepared_inputs,
+            usim_mutable_data_dir=usim_mutable_data_dir,
         )

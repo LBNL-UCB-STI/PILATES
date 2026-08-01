@@ -10,7 +10,6 @@ from pilates.utils import consist_runtime as cr
 from pilates.utils.formatting import formatted_print
 from pilates.workflows.steps import (
     urbansim_postprocess,
-    urbansim_preprocess,
     urbansim_run,
 )
 from pilates.workflows.coupler_namespace import resolve_coupler_value
@@ -40,9 +39,9 @@ def run_land_use_stage(
     Run the UrbanSim land-use stage and return updated UrbanSim inputs.
 
     This stage is responsible for land-use evolution. It prepares UrbanSim
-    inputs (including any pre-existing datastore), executes preprocess/run/
-    postprocess steps, and then updates the UrbanSim datastore reference for
-    downstream stages.
+    inputs (including any pre-existing datastore), executes run/postprocess
+    steps, and then updates the UrbanSim datastore reference for downstream
+    stages.
 
     The stage keeps two semantic datastore handles alive:
     - ``usim_datastore_base_h5`` for the static/exogenous baseline role
@@ -82,18 +81,6 @@ def run_land_use_stage(
     # Definitions own semantic selection.  The stage intentionally sequences
     # native executions only; it neither constructs bindings nor replays output
     # records through a holder.
-    _, preprocess_outputs = execute_step(
-        scenario=scenario,
-        definition=urbansim_preprocess,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        stage="land_use",
-        year=year,
-        iteration=getattr(state, "iteration", None),
-        phase="preprocess",
-    )
-    del preprocess_outputs
     _, run_outputs = execute_step(
         scenario=scenario,
         definition=urbansim_run,

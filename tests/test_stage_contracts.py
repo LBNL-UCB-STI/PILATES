@@ -45,7 +45,7 @@ def _assert_native_sequence(function: object, definitions: tuple[str, ...]) -> N
 def test_land_use_stage_sequences_native_urbansim_definitions() -> None:
     _assert_native_sequence(
         land_use.run_land_use_stage,
-        ("urbansim_preprocess", "urbansim_run", "urbansim_postprocess"),
+        ("urbansim_run", "urbansim_postprocess"),
     )
 
 

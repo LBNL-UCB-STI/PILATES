@@ -451,13 +451,6 @@ def _planned_artifact_path_metadata(
             "Current mutable UrbanSim datastore handoff. This often reuses the same physical input-slot path as the base datastore handle.",
         )
 
-    if producer_step_name == "urbansim_preprocess":
-        return (
-            "current_input_seed",
-            input_path,
-            "Current UrbanSim datastore handle at preprocessing time. This is the seeded mutable input-slot file for the runner.",
-        )
-
     return (
         "current_datastore_handle",
         input_path,
@@ -550,9 +543,6 @@ class _PlanBuilder:
 
     def _add_year_steps(self, *, year: int, forecast_year: int) -> None:
         if self._stage_enabled("land_use"):
-            self._add_step_run(
-                "urbansim_preprocess", year=year, forecast_year=forecast_year
-            )
             self._add_step_run("urbansim_run", year=year, forecast_year=forecast_year)
             self._add_step_run(
                 "urbansim_postprocess",

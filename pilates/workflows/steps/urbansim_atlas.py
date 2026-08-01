@@ -23,18 +23,13 @@ from pilates.config.models import PilatesConfig
 from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs as NativeUrbanSimPostprocessOutputs,
 )
-from pilates.urbansim.outputs import (
-    UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs,
-)
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.runner import UrbansimRunner
-from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_SOURCE_H5,
-    USIM_MUTABLE_DATA_DIR,
 )
 from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
@@ -242,16 +237,6 @@ def _native_contract_output_paths(
     return resolve
 
 
-def _urbansim_preprocess_native_output_paths(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
-) -> Dict[str, Any]:
-    return UrbansimPreprocessor.expected_outputs(settings, state, workspace)
-
-
 def _urbansim_run_native_output_paths(
     *,
     settings: PilatesConfig,
@@ -406,7 +391,7 @@ def _atlas_postprocess_native_output_paths(
     return outputs
 
 
-def _resolve_urbansim_preprocess_inputs(
+def _resolve_urbansim_run_inputs(
     *,
     settings: PilatesConfig,
     state: WorkflowState,
@@ -417,42 +402,21 @@ def _resolve_urbansim_preprocess_inputs(
         settings=settings,
         state=state,
     )
-    output_paths = _urbansim_preprocess_native_output_paths(
-        settings=settings, state=state, workspace=workspace
-    )
-    destinations = {
-        USIM_DATASTORE_H5: Path(output_paths[USIM_DATASTORE_H5]),
-        FINAL_SKIMS_OMX: Path(workspace.get_usim_mutable_data_dir())
-        / "final_skims.omx",
-    }
+    region = settings.run.region
+    region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
+    mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
     return _resolve_native_inputs(
-        step_name="urbansim_preprocess",
-        function=_native_urbansim_preprocess,
+        step_name="urbansim_run",
+        function=_native_urbansim_run,
         required_roles=(
             USIM_DATASTORE_H5,
             *((FINAL_SKIMS_OMX,) if requires_beam_skim else ()),
         ),
         optional_roles=(() if requires_beam_skim else (FINAL_SKIMS_OMX,)),
-        logical_destinations=destinations,
-        coupler=coupler,
-    )
-
-
-def _resolve_urbansim_run_inputs(
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    coupler: CouplerProtocol,
-) -> ResolvedStepInputs:
-    del settings
-    return _resolve_native_inputs(
-        step_name="urbansim_run",
-        function=_native_urbansim_run,
-        required_roles=(USIM_MUTABLE_DATA_DIR,),
-        optional_roles=(),
         logical_destinations={
-            USIM_MUTABLE_DATA_DIR: Path(workspace.get_usim_mutable_data_dir())
+            USIM_DATASTORE_H5: mutable_data_dir
+            / settings.urbansim.input_file_template.format(region_id=region_id),
+            FINAL_SKIMS_OMX: mutable_data_dir / "final_skims.omx",
         },
         coupler=coupler,
     )
@@ -591,50 +555,10 @@ def _resolve_atlas_postprocess_inputs(
 
 
 @define_step(
-    model="urbansim_preprocess",
-    name_template="urbansim_preprocess__y{year}__i{iteration}__phase_{phase}",
-    inputs={USIM_DATASTORE_H5: None},
-    optional_input_keys=(FINAL_SKIMS_OMX,),
-    schema_outputs=[
-        USIM_DATASTORE_H5,
-        "omx_skims",
-        "hh_size",
-        "income_rates",
-        "relmap",
-        "geoid_to_zone",
-        "schools",
-        "school_districts",
-    ],
-    output_paths=_native_contract_output_paths(
-        _urbansim_preprocess_native_output_paths
-    ),
-    input_binding="paths",
-    **consist_step_meta("urbansim_preprocess"),
-)
-@require_runtime_kwargs("settings", "state", "workspace")
-def _native_urbansim_preprocess(
-    usim_datastore_h5: Path,
-    final_skims_omx: Path | None = None,
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-) -> None:
-    UrbansimPreprocessor("urbansim", state).preprocess(
-        workspace,
-        usim_datastore_h5=usim_datastore_h5,
-        final_skims_omx=final_skims_omx,
-        allow_workspace_skim_fallback=not requires_prior_beam_skim_handoff(
-            settings=settings,
-            state=state,
-        ),
-    )
-
-
-@define_step(
     model="urbansim_run",
     name_template="urbansim_run__y{year}__i{iteration}__phase_{phase}",
-    inputs={USIM_MUTABLE_DATA_DIR: None},
+    inputs={USIM_DATASTORE_H5: None},
+    optional_input_keys=(FINAL_SKIMS_OMX,),
     schema_outputs=[USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT],
     output_paths=_native_contract_output_paths(_urbansim_run_native_output_paths),
     input_binding="paths",
@@ -642,7 +566,8 @@ def _native_urbansim_preprocess(
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_urbansim_run(
-    usim_mutable_data_dir: Path,
+    usim_datastore_h5: Path,
+    final_skims_omx: Path | None = None,
     *,
     settings: PilatesConfig,
     state: WorkflowState,
@@ -650,8 +575,9 @@ def _native_urbansim_run(
 ) -> None:
     del settings
     UrbansimRunner("urbansim", state).run(
-        NativeUrbanSimPreprocessOutputs(usim_mutable_data_dir=usim_mutable_data_dir),
-        workspace,
+        usim_datastore_h5=usim_datastore_h5,
+        final_skims_omx=final_skims_omx,
+        workspace=workspace,
     )
 
 
@@ -860,49 +786,6 @@ def _native_atlas_postprocess(
     )
 
 
-def _project_urbansim_preprocess(
-    outputs: Mapping[str, Any],
-    *,
-    settings: PilatesConfig,
-    state: WorkflowState,
-    workspace: Workspace,
-    resolved_inputs: ResolvedStepInputs | None = None,
-) -> NativeUrbanSimPreprocessOutputs:
-    declared_outputs = _urbansim_preprocess_native_output_paths(
-        settings=settings, state=state, workspace=workspace
-    )
-    prepared_inputs = {
-        key: _persisted_output_path(
-            outputs,
-            step_name="urbansim_preprocess",
-            key=key,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        )
-        for key in outputs
-        if key != USIM_MUTABLE_DATA_DIR
-    }
-    projected = NativeUrbanSimPreprocessOutputs(
-        usim_mutable_data_dir=_persisted_output_path(
-            outputs,
-            step_name="urbansim_preprocess",
-            key=USIM_MUTABLE_DATA_DIR,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        ),
-        prepared_inputs=prepared_inputs,
-    )
-    projected.validate(
-        _validation_context(
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            step_name="urbansim_preprocess",
-        )
-    )
-    return projected
-
-
 def _project_urbansim_run(
     outputs: Mapping[str, Any],
     *,
@@ -1092,17 +975,6 @@ def _project_atlas_postprocess(
     return projected
 
 
-URBANSIM_PREPROCESS = StepDefinition(
-    name="urbansim_preprocess",
-    function=_native_urbansim_preprocess,
-    resolve_inputs=_resolve_urbansim_preprocess_inputs,
-    project_outputs=_project_urbansim_preprocess,
-    output_paths=_urbansim_preprocess_native_output_paths,
-    execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache_options,
-    archive_outputs=False,
-)
-
 URBANSIM_RUN = StepDefinition(
     name="urbansim_run",
     function=_native_urbansim_run,
@@ -1156,8 +1028,7 @@ ATLAS_POSTPROCESS = StepDefinition(
 )
 
 # Canonical registry members use the workflow step names.  Uppercase aliases keep
-# the six definitions convenient to import in focused model tests.
-urbansim_preprocess = URBANSIM_PREPROCESS
+# the five definitions convenient to import in focused model tests.
 urbansim_run = URBANSIM_RUN
 urbansim_postprocess = URBANSIM_POSTPROCESS
 atlas_preprocess = ATLAS_PREPROCESS
