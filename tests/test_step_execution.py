@@ -1,7 +1,9 @@
+from dataclasses import replace
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from consist import (
@@ -21,6 +23,12 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
 from pilates.workflows.step_execution import execute_step
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_H5,
+    USIM_POPULATION_SOURCE_H5,
+)
+from pilates.workflows.steps import urbansim_atlas
+from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS
 
 
 @pytest.mark.parametrize("cache_hit", [False, True], ids=["miss", "cache-hit"])
@@ -285,6 +293,105 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
     assert hydrated.outputs["bundle"].resolvable is True
     assert hydrated.outputs["bundle"].status == "materialized_from_filesystem"
     assert (hydrated.outputs["skims"].path / "nested" / "0.0").read_bytes() == b"skim"
+
+
+def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """UrbanSim postprocess publishes its immutable population snapshot centrally."""
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    workspace_root = tmp_path / "workspace"
+    datastore = tmp_path / "source" / "output_2030.h5"
+    datastore.parent.mkdir(parents=True)
+    with pd.HDFStore(datastore, mode="w") as store:
+        for table in ("households", "persons", "jobs", "blocks"):
+            store.put(table, pd.DataFrame({"value": [1]}))
+
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": str(workspace_root)},
+    )
+    with tracker.start_run("seed", "test"):
+        artifact = tracker.log_artifact(
+            datastore,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="test"),
+        urbansim=SimpleNamespace(
+            command_template="urbansim {0}",
+            input_file_template="input_{region_id}.h5",
+            input_file_template_year=None,
+            output_file_template="output_{year}.h5",
+            region_id="001",
+            region_mappings={"region_to_region_id": {"test": "001"}},
+        ),
+    )
+    state = SimpleNamespace(
+        year=2030,
+        current_year=2030,
+        forecast_year=2030,
+        set_sub_stage_progress=lambda _stage: None,
+    )
+    workspace = SimpleNamespace(
+        full_path=str(workspace_root),
+        get_usim_mutable_data_dir=lambda: str(workspace_root / "urbansim" / "data"),
+    )
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    population_source = (
+        workspace_root / "urbansim" / "data" / "output_2030_population_source.h5"
+    )
+    definition = replace(
+        URBANSIM_POSTPROCESS,
+        output_paths=lambda **_kwargs: {USIM_POPULATION_SOURCE_H5: population_source},
+        project_outputs=lambda outputs, **_kwargs: outputs,
+    )
+
+    with tracker.scenario("urbansim") as scenario:
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, artifact)
+        result, _ = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="land_use",
+            year=state.year,
+            iteration=0,
+            phase="postprocess",
+        )
+
+    source = Path(result.outputs[USIM_POPULATION_SOURCE_H5].path)
+    assert source == population_source
+    assert result.outputs[USIM_POPULATION_SOURCE_H5].recovery_roots == [
+        str((archive_root / "consist-recovery" / str(result.run.id)).resolve())
+    ]
+    source.unlink()
+    tracker.hydrate_run_outputs(
+        result.run.id,
+        target_root=workspace_root,
+        keys=[USIM_POPULATION_SOURCE_H5],
+        preserve_existing=False,
+        on_missing="raise",
+    )
+    assert source.exists()
 
 
 def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None:

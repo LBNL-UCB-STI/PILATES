@@ -88,19 +88,13 @@ def test_fresh_bootstrap_sequence_defers_initialized_marker_until_coupler_seed(
 def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
     tmp_path, monkeypatch
 ):
-    previous_run_dir = tmp_path / "previous-run"
-    previous_file = (
-        previous_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
-    )
-    previous_file.parent.mkdir(parents=True)
-    previous_file.write_text("seed\n", encoding="utf-8")
     current_atlas_input = tmp_path / "current-run" / "atlas" / "atlas_input"
     state = SimpleNamespace(
         data_initialized=True,
         start_year=2017,
         year=2023,
         current_year=2023,
-        run_info_path=str(previous_run_dir / "run_state.yaml"),
+        run_info_path=str(tmp_path / "previous-run" / "run_state.yaml"),
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
     )
     settings = SimpleNamespace(
@@ -124,6 +118,7 @@ def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
         is_restart_run=True,
     )
     observed_paths: list[bool] = []
+    hydration_calls: list[bool] = []
 
     def find_missing(**_kwargs):
         observed_paths.append(
@@ -146,10 +141,16 @@ def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
     monkeypatch.setattr(
         run_module, "_find_missing_restart_local_artifacts", find_missing
     )
+    monkeypatch.setattr(
+        run_module.restart_runtime,
+        "hydrate_restart_atlas_continuation_inputs",
+        lambda **_kwargs: hydration_calls.append(True),
+    )
 
     run_module._run_bootstrap_sequence(prepared)
 
-    assert observed_paths == [False, True]
+    assert hydration_calls == [True]
+    assert observed_paths == [False, False]
 
 
 class DummyInitialization:
@@ -2185,10 +2186,12 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
     assert "activitysim_config_settings_yaml_configs" not in keys
     assert "activitysim_config_settings_yaml_configs_mp" not in keys
     assert "zarr_skims" not in keys
-    assert any(key.startswith("atlas_static::") for key in keys)
+    assert not any(key.startswith("atlas_") for key in keys)
 
 
-def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_path):
+def test_restart_preflight_does_not_require_atlas_static_inputs_in_vehicle_stage(
+    tmp_path,
+):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     state = SimpleNamespace(
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model
@@ -2201,8 +2204,10 @@ def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_pat
     )
 
     paths = {item["path"] for item in missing}
-    assert any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
-    assert any(
+    assert not any(
+        path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths
+    )
+    assert not any(
         path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths
     )
 
@@ -2780,7 +2785,7 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         run_module.main()
 
 
-def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypatch):
+def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(tmp_path, monkeypatch):
     class SnapshotStub:
         def final_snapshot(self):
             return True
@@ -2955,7 +2960,7 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypa
     )
     with pytest.raises(
         RuntimeError,
-        match="Strict restart preflight failed; required restart artifacts are still missing after restart bootstrap",
+        match="ATLAS restart requires an archive Consist tracker",
     ):
         run_module.main()
 

@@ -13,11 +13,7 @@ from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import (
-    artifact_to_existing_path,
-    enqueue_archive_copy,
-    log_output_only,
-)
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -409,7 +405,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         Notes
         -----
         Output keys
-            - ``atlas_output_dir``: ATLAS output directory after postprocessing.
             - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
               selected as the downstream population source.
             - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
@@ -427,7 +422,6 @@ class AtlasPostprocessor(GenericPostprocessor):
             else None
         )
         return {
-            ATLAS_OUTPUT_DIR: workspace.get_atlas_output_dir(),
             USIM_POPULATION_SOURCE_H5: usim_output_path,
             **(
                 {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
@@ -530,38 +524,6 @@ class AtlasPostprocessor(GenericPostprocessor):
                 f"{output_year}"
             )
         output_paths[ATLAS_VEHICLES2_OUTPUT] = Path(atlas_veh2_file)
-
-        # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
-        atlas_input_root = workspace.get_atlas_mutable_input_dir()
-        atlas_year_input_dir = os.path.join(atlas_input_root, f"year{output_year}")
-        if os.path.exists(atlas_year_input_dir):
-            log_output_only(
-                key=f"atlas_input_year_dir_{output_year}",
-                path=atlas_year_input_dir,
-                description=f"ATLAS year-input snapshot directory for year {output_year}",
-            )
-            enqueue_archive_copy(
-                key=f"atlas_input_year_dir_{output_year}",
-                path=atlas_year_input_dir,
-            )
-        for base_dir in (
-            atlas_year_input_dir,
-            atlas_input_root,
-            workspace.get_atlas_output_dir(),
-        ):
-            for filename in ("vehicles_output.RData", "households_output.RData"):
-                snapshot_path = os.path.join(base_dir, filename)
-                if not os.path.exists(snapshot_path):
-                    continue
-                log_output_only(
-                    key=f"atlas_rdata_{output_year}",
-                    path=snapshot_path,
-                    description=f"ATLAS RData snapshot for year {output_year}",
-                )
-                enqueue_archive_copy(
-                    key=f"atlas_rdata_{output_year}",
-                    path=snapshot_path,
-                )
 
         return AtlasPostprocessOutputs(
             atlas_output_dir=Path(workspace.get_atlas_output_dir()),

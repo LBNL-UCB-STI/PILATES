@@ -385,7 +385,7 @@ def restart_query_scope_for_step(step_name: str) -> Mapping[str, Optional[str]]:
     if spec.stage_name == "vehicle_ownership_model":
         return {
             "model": spec.step_name,
-            "stage": "atlas",
+            "stage": "vehicle_ownership",
             "phase": spec.phase,
         }
     if spec.stage_name == "traffic_assignment":

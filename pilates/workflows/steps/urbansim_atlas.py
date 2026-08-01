@@ -10,6 +10,7 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
+    OutputSet,
     ResolvedBinding,
     StepIdentity,
     define_step,
@@ -30,7 +31,6 @@ from pilates.urbansim.postprocessor import UrbansimPostprocessor
 from pilates.urbansim.runner import UrbansimRunner
 from pilates.urbansim.preprocessor import UrbansimPreprocessor
 from pilates.workflows.artifact_keys import (
-    ATLAS_OUTPUT_DIR,
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
     USIM_POPULATION_SOURCE_H5,
@@ -64,6 +64,9 @@ from .shared import (
 
 
 # Native Consist step definitions.
+
+_ATLAS_HOUSEHOLDV_CSV_INPUT = "atlas_householdv_csv"
+_ATLAS_VEHICLES_CSV_INPUT = "atlas_vehicles_csv"
 
 
 def _persisted_output_path(
@@ -279,7 +282,28 @@ def _urbansim_postprocess_native_output_paths(
     paths[f"{USIM_INPUT_ARCHIVE_PREFIX}{forecast_year}"] = mutable_data_dir / (
         f"input_data_for_{forecast_year}_outputs.h5"
     )
+    paths[USIM_POPULATION_SOURCE_H5] = _urbansim_population_source_path(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
     return paths
+
+
+def _urbansim_population_source_path(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Path:
+    """Return the declared immutable snapshot destination for this forecast year."""
+
+    forecast_output = Path(workspace.get_usim_mutable_data_dir()) / (
+        settings.urbansim.output_file_template.format(year=state.forecast_year)
+    )
+    return forecast_output.with_name(
+        f"{forecast_output.stem}_population_source{forecast_output.suffix}"
+    )
 
 
 def _atlas_preprocess_native_output_paths(
@@ -289,18 +313,37 @@ def _atlas_preprocess_native_output_paths(
     workspace: Workspace,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> Dict[str, Any]:
-    atlas_input_dir = Path(workspace.get_atlas_mutable_input_dir())
-    year_input_dir = atlas_input_dir / f"year{state.forecast_year}"
-    paths: Dict[str, Any] = {
-        "atlas_mutable_input_dir": atlas_input_dir,
-        "atlas_households_csv": year_input_dir / "households.csv",
-        "atlas_blocks_csv": year_input_dir / "blocks.csv",
-        "atlas_persons_csv": year_input_dir / "persons.csv",
-        "atlas_residential_csv": year_input_dir / "residential.csv",
-        "atlas_jobs_csv": year_input_dir / "jobs.csv",
+    del resolved_inputs
+    return dict(
+        _atlas_preprocess_prepared_input_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+    )
+
+
+def _atlas_preprocess_prepared_input_paths(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+) -> Mapping[str, Path]:
+    """Project the known prepared CSV members from the declared year root."""
+    root = Path(workspace.get_atlas_mutable_input_dir()) / f"year{state.forecast_year}"
+    paths: dict[str, Path] = {
+        "atlas_households_csv": root / "households.csv",
+        "atlas_blocks_csv": root / "blocks.csv",
+        "atlas_persons_csv": root / "persons.csv",
+        "atlas_residential_csv": root / "residential.csv",
+        "atlas_jobs_csv": root / "jobs.csv",
     }
     if state.year > state.start_year:
-        paths["atlas_grave_csv"] = year_input_dir / "grave.csv"
+        paths["atlas_grave_csv"] = root / "grave.csv"
+    if settings.atlas.beamac > 0:
+        paths["atlas_accessibility_csv"] = (
+            root / f"accessibility_{state.forecast_year}_tract.csv"
+        )
     return paths
 
 
@@ -314,9 +357,29 @@ def _atlas_run_native_output_paths(
     output_dir = Path(workspace.get_atlas_output_dir())
     forecast_year = state.forecast_year
     return {
-        ATLAS_OUTPUT_DIR: output_dir,
         f"householdv_{forecast_year}": output_dir / f"householdv_{forecast_year}.csv",
         f"vehicles_{forecast_year}": output_dir / f"vehicles_{forecast_year}.csv",
+    }
+
+
+def _atlas_run_output_sets(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    workspace: Workspace,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> Mapping[str, OutputSet]:
+    """Declare the ATLAS continuation surface exactly."""
+
+    del settings, resolved_inputs
+    forecast_year = state.forecast_year
+    continuation_members = ("vehicles_output.RData", "households_output.RData")
+    return {
+        f"atlas_continuation_{forecast_year}": OutputSet(
+            root=Path(workspace.get_atlas_mutable_input_dir()) / f"year{forecast_year}",
+            include=continuation_members,
+            expected_members=continuation_members,
+        ),
     }
 
 
@@ -382,7 +445,7 @@ def _resolve_urbansim_run_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
-    del settings, state
+    del settings
     return _resolve_native_inputs(
         step_name="urbansim_run",
         function=_native_urbansim_run,
@@ -464,15 +527,17 @@ def _resolve_atlas_run_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
-    del settings, state
+    prepared_inputs = _atlas_preprocess_prepared_input_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
     return _resolve_native_inputs(
         step_name="atlas_run",
         function=_native_atlas_run,
-        required_roles=("atlas_mutable_input_dir",),
+        required_roles=tuple(prepared_inputs),
         optional_roles=(),
-        logical_destinations={
-            "atlas_mutable_input_dir": Path(workspace.get_atlas_mutable_input_dir())
-        },
+        logical_destinations=prepared_inputs,
         coupler=coupler,
     )
 
@@ -484,22 +549,44 @@ def _resolve_atlas_postprocess_inputs(
     workspace: Workspace,
     coupler: CouplerProtocol,
 ) -> ResolvedStepInputs:
-    return _resolve_native_inputs(
+    forecast_year = state.forecast_year
+    semantic_roles = {
+        _ATLAS_HOUSEHOLDV_CSV_INPUT: f"householdv_{forecast_year}",
+        _ATLAS_VEHICLES_CSV_INPUT: f"vehicles_{forecast_year}",
+        USIM_DATASTORE_H5: USIM_DATASTORE_H5,
+    }
+    logical_destinations = {
+        _ATLAS_HOUSEHOLDV_CSV_INPUT: Path(workspace.get_atlas_output_dir())
+        / f"householdv_{forecast_year}.csv",
+        _ATLAS_VEHICLES_CSV_INPUT: Path(workspace.get_atlas_output_dir())
+        / f"vehicles_{forecast_year}.csv",
+        USIM_DATASTORE_H5: Path(
+            _urbansim_run_native_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            )[USIM_DATASTORE_H5]
+        ),
+    }
+    selected_inputs: dict[str, Any] = {}
+    source_by_role: dict[str, str] = {}
+    selected_key_by_role: dict[str, str] = {}
+    for parameter, semantic_role in semantic_roles.items():
+        resolved = resolve_coupler_value(coupler, semantic_role)
+        source_by_role[parameter] = resolved.source
+        if resolved.storage_key is not None:
+            selected_key_by_role[parameter] = resolved.storage_key
+        if resolved.value is not None:
+            selected_inputs[parameter] = resolved.value
+
+    return ResolvedStepInputs(
         step_name="atlas_postprocess",
-        function=_native_atlas_postprocess,
-        required_roles=(ATLAS_OUTPUT_DIR, USIM_DATASTORE_H5),
-        optional_roles=(),
-        logical_destinations={
-            ATLAS_OUTPUT_DIR: Path(workspace.get_atlas_output_dir()),
-            USIM_DATASTORE_H5: Path(
-                _urbansim_run_native_output_paths(
-                    settings=settings,
-                    state=state,
-                    workspace=workspace,
-                )[USIM_DATASTORE_H5]
-            ),
-        },
-        coupler=coupler,
+        binding=BindingResult(inputs=selected_inputs),
+        required_roles=tuple(semantic_roles),
+        source_by_role=source_by_role,
+        selected_key_by_role=selected_key_by_role,
+        logical_destinations=logical_destinations,
+        metadata={"semantic_role_by_parameter": semantic_roles},
     )
 
 
@@ -572,7 +659,7 @@ def _native_urbansim_run(
     model="urbansim_postprocess",
     name_template="urbansim_postprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={USIM_DATASTORE_H5: None},
-    schema_outputs=[USIM_DATASTORE_H5],
+    schema_outputs=[USIM_DATASTORE_H5, USIM_POPULATION_SOURCE_H5],
     output_paths=_native_contract_output_paths(
         _urbansim_postprocess_native_output_paths
     ),
@@ -587,11 +674,28 @@ def _native_urbansim_postprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
     UrbansimPostprocessor("urbansim", state).postprocess(
         NativeUrbanSimRunOutputs(usim_datastore_h5=usim_datastore_h5),
         workspace,
     )
+    population_source = _urbansim_population_source_path(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    population_source.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(usim_datastore_h5, population_source)
+    alias_result = ensure_usim_population_year_table_aliases(
+        h5_path=str(population_source),
+        year=state.forecast_year,
+    )
+    missing_root = alias_result.get("missing_root", ())
+    if missing_root:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing root tables: "
+            f"h5_path={population_source} year={state.forecast_year} "
+            f"missing_root={missing_root}"
+        )
 
 
 @define_step(
@@ -600,13 +704,13 @@ def _native_urbansim_postprocess(
     inputs={USIM_DATASTORE_H5: None},
     optional_input_keys=(FINAL_SKIMS_OMX,),
     schema_outputs=[
-        "atlas_mutable_input_dir",
         "atlas_households_csv",
         "atlas_blocks_csv",
         "atlas_persons_csv",
         "atlas_residential_csv",
         "atlas_jobs_csv",
         "atlas_grave_csv",
+        "atlas_accessibility_csv",
     ],
     output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
@@ -635,23 +739,63 @@ def _native_atlas_preprocess(
 @define_step(
     model="atlas_run",
     name_template="atlas_run__y{year}__i{iteration}__phase_{phase}",
-    inputs={"atlas_mutable_input_dir": None},
-    schema_outputs=[ATLAS_OUTPUT_DIR],
+    inputs={
+        "atlas_households_csv": None,
+        "atlas_blocks_csv": None,
+        "atlas_persons_csv": None,
+        "atlas_residential_csv": None,
+        "atlas_jobs_csv": None,
+        "atlas_grave_csv": None,
+        "atlas_accessibility_csv": None,
+    },
+    schema_outputs=["householdv_{year}", "vehicles_{year}"],
     output_paths=_native_contract_output_paths(_atlas_run_native_output_paths),
     input_binding="paths",
     **consist_step_meta("atlas_run"),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_run(
-    atlas_mutable_input_dir: Path,
+    atlas_households_csv: Path,
+    atlas_blocks_csv: Path,
+    atlas_persons_csv: Path,
+    atlas_residential_csv: Path,
+    atlas_jobs_csv: Path,
+    atlas_grave_csv: Path | None = None,
+    atlas_accessibility_csv: Path | None = None,
     *,
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
+    mutable_input_root = Path(workspace.get_atlas_mutable_input_dir())
+    received_inputs = {
+        "atlas_households_csv": atlas_households_csv,
+        "atlas_blocks_csv": atlas_blocks_csv,
+        "atlas_persons_csv": atlas_persons_csv,
+        "atlas_residential_csv": atlas_residential_csv,
+        "atlas_jobs_csv": atlas_jobs_csv,
+        **({"atlas_grave_csv": atlas_grave_csv} if atlas_grave_csv is not None else {}),
+        **(
+            {"atlas_accessibility_csv": atlas_accessibility_csv}
+            if atlas_accessibility_csv is not None
+            else {}
+        ),
+    }
+    expected_inputs = _atlas_preprocess_prepared_input_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+    if received_inputs != expected_inputs:
+        raise RuntimeError(
+            "ATLAS run received prepared inputs at unexpected destinations: "
+            f"expected {expected_inputs}, got {received_inputs}"
+        )
     AtlasRunner("atlas", state).run(
-        AtlasPreprocessOutputs(atlas_mutable_input_dir=atlas_mutable_input_dir),
+        AtlasPreprocessOutputs(
+            atlas_mutable_input_dir=mutable_input_root,
+            prepared_inputs=received_inputs,
+        ),
         workspace,
     )
 
@@ -659,7 +803,11 @@ def _native_atlas_run(
 @define_step(
     model="atlas_postprocess",
     name_template="atlas_postprocess__y{year}__i{iteration}__phase_{phase}",
-    inputs={ATLAS_OUTPUT_DIR: None, USIM_DATASTORE_H5: None},
+    inputs={
+        _ATLAS_HOUSEHOLDV_CSV_INPUT: None,
+        _ATLAS_VEHICLES_CSV_INPUT: None,
+        USIM_DATASTORE_H5: None,
+    },
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
     output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
@@ -667,7 +815,8 @@ def _native_atlas_run(
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_postprocess(
-    atlas_output_dir: Path,
+    atlas_householdv_csv: Path,
+    atlas_vehicles_csv: Path,
     usim_datastore_h5: Path,
     *,
     settings: PilatesConfig,
@@ -676,15 +825,27 @@ def _native_atlas_postprocess(
 ) -> None:
     del settings
     forecast_year = state.forecast_year
+    atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    expected_raw_outputs = {
+        f"householdv_{forecast_year}": atlas_output_dir
+        / f"householdv_{forecast_year}.csv",
+        f"vehicles_{forecast_year}": atlas_output_dir / f"vehicles_{forecast_year}.csv",
+    }
+    received_raw_outputs = {
+        f"householdv_{forecast_year}": atlas_householdv_csv,
+        f"vehicles_{forecast_year}": atlas_vehicles_csv,
+    }
+    for key, expected_path in expected_raw_outputs.items():
+        received_path = received_raw_outputs[key]
+        if received_path != expected_path:
+            raise RuntimeError(
+                "ATLAS postprocess received raw output at an unexpected destination: "
+                f"expected {expected_path}, got {received_path}"
+            )
     AtlasPostprocessor("atlas", state).postprocess(
         AtlasRunOutputs(
             atlas_output_dir=atlas_output_dir,
-            raw_outputs={
-                f"householdv_{forecast_year}": atlas_output_dir
-                / f"householdv_{forecast_year}.csv",
-                f"vehicles_{forecast_year}": atlas_output_dir
-                / f"vehicles_{forecast_year}.csv",
-            },
+            raw_outputs=received_raw_outputs,
         ),
         workspace,
         usim_datastore_h5=usim_datastore_h5,
@@ -838,17 +999,10 @@ def _project_atlas_preprocess(
             declared_outputs=declared_outputs,
             workspace=workspace,
         )
-        for key in outputs
-        if key != "atlas_mutable_input_dir"
+        for key in declared_outputs
     }
     projected = AtlasPreprocessOutputs(
-        atlas_mutable_input_dir=_persisted_output_path(
-            outputs,
-            step_name="atlas_preprocess",
-            key="atlas_mutable_input_dir",
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        ),
+        atlas_mutable_input_dir=Path(workspace.get_atlas_mutable_input_dir()),
         prepared_inputs=prepared_inputs,
     )
     projected.validate(
@@ -874,13 +1028,7 @@ def _project_atlas_run(
         settings=settings, state=state, workspace=workspace
     )
     projected = AtlasRunOutputs(
-        atlas_output_dir=_persisted_output_path(
-            outputs,
-            step_name="atlas_run",
-            key=ATLAS_OUTPUT_DIR,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        ),
+        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
         raw_outputs={
             key: _persisted_output_path(
                 outputs,
@@ -889,8 +1037,7 @@ def _project_atlas_run(
                 declared_outputs=declared_outputs,
                 workspace=workspace,
             )
-            for key in outputs
-            if key != ATLAS_OUTPUT_DIR
+            for key in declared_outputs
         },
     )
     projected.validate(
@@ -916,13 +1063,7 @@ def _project_atlas_postprocess(
         settings=settings, state=state, workspace=workspace
     )
     projected = AtlasPostprocessOutputs(
-        atlas_output_dir=_persisted_output_path(
-            outputs,
-            step_name="atlas_postprocess",
-            key=ATLAS_OUTPUT_DIR,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        ),
+        atlas_output_dir=Path(workspace.get_atlas_output_dir()),
         usim_datastore_h5=_persisted_output_path(
             outputs,
             step_name="atlas_postprocess",
@@ -998,6 +1139,7 @@ ATLAS_RUN = StepDefinition(
     resolve_inputs=_resolve_atlas_run_inputs,
     project_outputs=_project_atlas_run,
     output_paths=_atlas_run_native_output_paths,
+    output_sets=_atlas_run_output_sets,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )

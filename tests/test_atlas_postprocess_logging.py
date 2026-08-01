@@ -1,3 +1,4 @@
+import inspect
 from types import SimpleNamespace
 
 import pandas as pd
@@ -7,16 +8,9 @@ from pilates.atlas import postprocessor as atlas_postprocessor
 from pilates.atlas.outputs import AtlasRunOutputs
 
 
-def test_atlas_postprocess_enqueues_restart_critical_intermediates(
+def test_atlas_postprocess_does_not_rediscover_or_archive_continuation_files(
     monkeypatch, tmp_path
 ):
-    calls = []
-    monkeypatch.setattr(
-        atlas_postprocessor,
-        "log_output_only",
-        lambda **kwargs: calls.append(kwargs),
-    )
-
     usim_dir = tmp_path / "urbansim" / "data"
     atlas_output_dir = tmp_path / "atlas" / "atlas_output"
     atlas_input_dir = tmp_path / "atlas" / "atlas_input" / "year2023"
@@ -77,14 +71,9 @@ def test_atlas_postprocess_enqueues_restart_critical_intermediates(
         usim_datastore_h5=usim_h5,
     )
 
-    assert len(calls) == 2
-    assert any(
-        call["key"] == "atlas_input_year_dir_2023"
-        and str(call["path"]).endswith("year2023")
-        for call in calls
-    )
-    assert sum(1 for call in calls if call["key"] == "atlas_rdata_2023") == 1
-    assert all("description" in call for call in calls)
+    source = inspect.getsource(atlas_postprocessor.AtlasPostprocessor._postprocess)
+    assert "log_output_only" not in source
+    assert "enqueue_archive_copy" not in source
 
 
 def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):

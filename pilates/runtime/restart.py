@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from bisect import bisect_left
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
@@ -18,6 +19,7 @@ from typing import (
 )
 
 from pilates.runtime.scenario_runtime import resolve_cache_epoch
+from pilates.runtime.promote_run_archive import _open_archive_tracker
 from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
@@ -138,13 +140,7 @@ def hydrate_restart_atlas_continuation_inputs(
     workspace: Any,
     workflow_stage: Any,
 ) -> None:
-    """Restore later-interval ATLAS continuation inputs before strict checks.
-
-    Vehicle ownership always restarts at its major-stage boundary. The initial
-    interval can recreate its own seed CSVs, but a later interval starts after
-    its predecessor and therefore needs the archived start-year/prior-subyear
-    inputs before ATLAS preprocess executes.
-    """
+    """Hydrate the selected prior ATLAS subyear before strict restart checks."""
 
     model_cfg = getattr(getattr(settings, "run", None), "models", None)
     if getattr(model_cfg, "vehicle_ownership", None) != "atlas":
@@ -168,19 +164,155 @@ def hydrate_restart_atlas_continuation_inputs(
     ):
         return
 
-    get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
-    if not callable(get_atlas_input_dir):
-        return
-
-    from pilates.atlas.preprocessor import _restore_restart_atlas_year_inputs
-
-    _restore_restart_atlas_year_inputs(
-        previous_run_dir=os.path.dirname(os.fspath(run_info_path)),
-        workspace=workspace,
-        start_year=start_year,
-        atlas_year=atlas_year,
-        force=True,
+    prior_atlas_year = atlas_year - 2
+    archive_run_dir = Path(os.fspath(run_info_path)).parent
+    tracker = _open_archive_tracker(
+        settings,
+        archive_run_dir=archive_run_dir,
     )
+    if tracker is None:
+        raise RuntimeError(
+            f"ATLAS restart requires an archive Consist tracker for {archive_run_dir}"
+        )
+
+    iteration = _coerce_int(getattr(state, "iteration", None))
+    facet = _restart_atlas_identity_facet(
+        settings=settings,
+        state=state,
+        atlas_subyear=prior_atlas_year,
+        workspace=workspace,
+    )
+    preprocess_run = _select_exact_completed_restart_run(
+        tracker=tracker,
+        target=restart_target_for_step(
+            settings=settings,
+            step_name="atlas_preprocess",
+            year=prior_atlas_year,
+            iteration=iteration,
+            facet=facet,
+            state=state,
+            archive_run_dir=archive_run_dir,
+        ),
+        step_name="atlas_preprocess",
+    )
+    atlas_run = _select_exact_completed_restart_run(
+        tracker=tracker,
+        target=restart_target_for_step(
+            settings=settings,
+            step_name="atlas_run",
+            year=prior_atlas_year,
+            iteration=iteration,
+            facet=facet,
+            state=state,
+            archive_run_dir=archive_run_dir,
+        ),
+        step_name="atlas_run",
+    )
+
+    from pilates.workflows.steps.urbansim_atlas import (
+        _atlas_preprocess_prepared_input_paths,
+    )
+
+    prior_state = type(
+        "RestartAtlasSubState",
+        (),
+        {
+            "year": prior_atlas_year,
+            "forecast_year": prior_atlas_year,
+            "start_year": start_year,
+        },
+    )()
+    prepared_destinations = _atlas_preprocess_prepared_input_paths(
+        settings=settings,
+        state=prior_state,
+        workspace=workspace,
+    )
+    tracker.hydrate_run_outputs(
+        str(atlas_run.id),
+        target_root=workspace.full_path,
+        keys=[f"atlas_continuation_{prior_atlas_year}"],
+        preserve_existing=False,
+        on_missing="raise",
+    )
+    tracker.hydrate_run_outputs_to_destinations(
+        str(preprocess_run.id),
+        destinations_by_key=prepared_destinations,
+        preserve_existing=False,
+        on_missing="raise",
+    )
+
+
+def _restart_atlas_identity_facet(
+    *,
+    settings: Any,
+    state: Any,
+    atlas_subyear: int,
+    workspace: Any,
+) -> dict[str, Any]:
+    """Reconstruct the native ATLAS producer facet for one archived subyear."""
+
+    from pilates.utils.consist_config import build_step_consist_kwargs
+
+    workspace_path = getattr(workspace, "full_path", None)
+    metadata = build_step_consist_kwargs(
+        model="atlas_preprocess",
+        settings=settings,
+        workspace_path=str(workspace_path) if workspace_path is not None else None,
+    )
+    facet = dict(metadata.get("facet") or {})
+    facet["atlas_subyear"] = atlas_subyear
+    facet["main_forecast_year"] = _atlas_parent_forecast_year_for_subyear(
+        state=state,
+        atlas_subyear=atlas_subyear,
+    )
+    return facet
+
+
+def _atlas_parent_forecast_year_for_subyear(*, state: Any, atlas_subyear: int) -> int:
+    """Return the scheduler boundary that ended the selected ATLAS interval."""
+
+    schedule = tuple(int(year) for year in getattr(state, "_year_schedule", ()))
+    boundary_index = bisect_left(schedule, atlas_subyear)
+    if boundary_index == len(schedule) or (
+        boundary_index == 0 and atlas_subyear < schedule[0]
+    ):
+        raise RuntimeError(
+            "Cannot reconstruct the native ATLAS producer facet: selected subyear "
+            f"{atlas_subyear} is outside WorkflowState._year_schedule={schedule}"
+        )
+    return schedule[boundary_index]
+
+
+def _select_exact_completed_restart_run(
+    *,
+    tracker: Any,
+    target: Mapping[str, Any],
+    step_name: str,
+) -> Any:
+    """Select one completed producer within the archive's scoped run catalog."""
+
+    query = {
+        key: target[key]
+        for key in (
+            "year",
+            "model",
+            "stage",
+            "phase",
+            "status",
+            "iteration",
+            "cache_epoch",
+            "run_scope",
+            "facet",
+        )
+        if key in target
+    }
+    candidates = list(tracker.find_matching_runs(**query))
+    if len(candidates) != 1:
+        raise RuntimeError(
+            "ATLAS restart requires exactly one completed "
+            f"{step_name} run for target {query}; found {len(candidates)}"
+        )
+    return candidates[0]
 
 
 def format_missing_artifact_summary(
