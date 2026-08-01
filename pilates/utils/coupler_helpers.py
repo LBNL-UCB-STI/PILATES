@@ -50,7 +50,6 @@ _ARCHIVE_ALLOWED_DIR_PATTERNS = (
     "zarr_skims",
     "zarr_skims_*",
     "raw_od_skims_zarr_*",
-    "asim_input_skims_zarr_archived",
     "asim_output_dir",
     "asim_mutable_data_dir",
     "activitysim_bootstrap_data_root",

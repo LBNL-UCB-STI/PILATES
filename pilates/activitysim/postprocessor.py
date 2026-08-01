@@ -78,7 +78,6 @@ def _activitysim_archived_input_paths(
         "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
         "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
         "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
-        "asim_input_skims_zarr_archived": str(archived_inputs_dir / "skims.zarr"),
     }
 
 
@@ -1074,28 +1073,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.info(f"Archived ActivitySim input: {input_file}")
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
-
-        # Archive skims.zarr from activitysim/output/cache/
-        zarr_source_path = asim_runtime_zarr_path(workspace)
-        if os.path.exists(zarr_source_path):
-            zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
-            if os.path.exists(zarr_target_path):
-                if os.path.isdir(zarr_target_path):
-                    shutil.rmtree(zarr_target_path)
-                else:
-                    os.remove(zarr_target_path)
-            if os.path.isdir(zarr_source_path):
-                shutil.copytree(zarr_source_path, zarr_target_path)
-            else:
-                shutil.copy2(zarr_source_path, zarr_target_path)
-            content_hash = _resolve_content_hash(zarr_source_path)
-
-            processed_outputs["asim_input_skims_zarr_archived"] = zarr_target_path
-            if content_hash:
-                processed_output_hashes["asim_input_skims_zarr_archived"] = content_hash
-            logger.info("Archived ActivitySim input: skims.zarr")
-        else:
-            logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
 
         if self.state.is_enabled(WorkflowState.Stage.land_use):
             if not population_source_h5_path:

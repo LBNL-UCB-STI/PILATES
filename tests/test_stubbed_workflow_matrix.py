@@ -364,8 +364,6 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     processed_outputs["asim_input_land_use_csv_archived"] = (
         asim_input_dir / "land_use.csv"
     )
-    processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
-
     beam_plans = beam_input_dir / "plans.parquet"
     beam_households = beam_input_dir / "households.parquet"
     beam_persons = beam_input_dir / "persons.parquet"

@@ -1072,8 +1072,11 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
 
     source_events = tmp_path / "source-events.parquet"
     source_links = tmp_path / "source-links.parquet"
+    zarr_skims = tmp_path / "asim-output" / "cache" / "skims.zarr"
     source_events.write_text("events", encoding="utf-8")
     source_links.write_text("links", encoding="utf-8")
+    (zarr_skims / ".zgroup").parent.mkdir(parents=True)
+    (zarr_skims / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     output_paths = {
         "events_parquet_2030_2_type_PathTraversal": (
             tmp_path
@@ -1096,13 +1099,14 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
             pass
 
         @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, str]:
-            return {}
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {ZARR_SKIMS: zarr_skims}
 
         def postprocess(
             self, *_args: object, **_kwargs: object
         ) -> BeamPostprocessOutputs:
             return BeamPostprocessOutputs(
+                zarr_skims=zarr_skims,
                 split_events={
                     "events_parquet_2030_2_type_PathTraversal": source_events
                 },
@@ -1111,6 +1115,12 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.BeamPostprocessor", FakePostprocessor
+    )
+    archive_keys: list[str] = []
+    monkeypatch.setattr(
+        beam_steps,
+        "enqueue_archive_copy",
+        lambda *, key, path, workspace: archive_keys.append(key),
     )
     settings = SimpleNamespace(
         activitysim=None,
@@ -1136,6 +1146,10 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
         "events_parquet_2030_2_type_PathTraversal": "events",
         "path_traversal_links_2030_2": "links",
     }
+    assert archive_keys == [
+        "events_parquet_2030_2_type_PathTraversal",
+        "path_traversal_links_2030_2",
+    ]
 
 
 def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(

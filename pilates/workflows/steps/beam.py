@@ -1375,6 +1375,8 @@ def _native_beam_postprocess(
         declared_outputs=declared_outputs,
     )
     for key, path in produced_sources.items():
+        if key == ZARR_SKIMS:
+            continue
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 

@@ -132,7 +132,6 @@ EXPECTED_ASIM_ARCHIVED_INPUT_KEYS = {
     "asim_input_persons_csv_archived",
     "asim_input_land_use_csv_archived",
     "asim_input_skims_omx_archived",
-    "asim_input_skims_zarr_archived",
 }
 
 
@@ -857,11 +856,6 @@ def golden_stub_env(tmp_path, monkeypatch):
                         workspace.get_asim_mutable_data_dir()
                     )
                     / "skims.omx",
-                    "asim_input_skims_zarr_archived": Path(
-                        workspace.get_asim_output_dir()
-                    )
-                    / "cache"
-                    / "skims.zarr",
                 }
                 for output_key, source_path in archived_input_sources.items():
                     target_name = source_path.name
