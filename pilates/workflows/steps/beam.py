@@ -47,7 +47,6 @@ from pilates.workflows.coupler_namespace import (
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -779,14 +778,12 @@ def _beam_linkstats_output_cache(
 def _resolve_beam_preprocess_inputs(
     *, settings: Any, state: Any, workspace: Any, coupler: Any
 ) -> ResolvedStepInputs:
-    config_path = _require_primary_beam_config(settings, workspace)
     surface = build_enabled_workflow_surface(settings)
     requires_atlas_vehicles = (
         surface.profile.vehicle_ownership_model_enabled
         and getattr(state, "current_inner_iter", 0) == 0
     )
     required_roles = (
-        BEAM_CONFIG_FILE,
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
@@ -807,8 +804,7 @@ def _resolve_beam_preprocess_inputs(
         artifact_rules=artifact_rules_for_step_name(
             "beam_preprocess", settings=settings
         ),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
+        logical_destinations={},
         year=resolve_forecast_year(state),
         surface=surface,
     )
@@ -850,24 +846,16 @@ def _resolve_beam_run_inputs(
     coupler: Any,
     launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    config_path = (
-        launch_config.primary_config
-        if launch_config is not None
-        else _require_primary_beam_config(settings, workspace)
-    )
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
         workspace=workspace,
         required_roles=(
-            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART, ZARR_SKIMS),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
     )
 
 
@@ -1120,24 +1108,16 @@ def _resolve_beam_full_skim_inputs(
     coupler: Any,
     launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    config_path = (
-        launch_config.primary_config
-        if launch_config is not None
-        else _require_primary_beam_config(settings, workspace)
-    )
     return _resolved_beam_inputs(
         step_name="beam_full_skim",
         coupler=coupler,
         workspace=workspace,
         required_roles=(
-            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART,),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
     )
 
 
@@ -1172,7 +1152,6 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
     model="beam_preprocess",
     name_template="beam_preprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1190,7 +1169,6 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
     **consist_step_meta("beam_preprocess"),
 )
 def _native_beam_preprocess(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1202,10 +1180,7 @@ def _native_beam_preprocess(
     workspace: Workspace,
     _consist_ctx: Any,
 ) -> None:
-    if not beam_config_file.exists():
-        raise FileNotFoundError(
-            f"beam_preprocess config is missing: {beam_config_file}"
-        )
+    _require_primary_beam_config(settings, workspace)
     from pilates.beam.preprocessor import BeamPreprocessor
 
     inputs = {
@@ -1250,7 +1225,6 @@ def _native_beam_preprocess(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1262,7 +1236,6 @@ def _native_beam_preprocess(
     **consist_step_meta("beam_run"),
 )
 def _native_beam_run(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1275,12 +1248,9 @@ def _native_beam_run(
     beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
-    if not beam_config_file.exists():
-        raise FileNotFoundError(f"beam_run config is missing: {beam_config_file}")
-    if beam_config_file != beam_launch_config.primary_config:
-        raise RuntimeError(
-            "beam_run binding config must be the same derived config mounted by "
-            "the runner."
+    if not beam_launch_config.primary_config.exists():
+        raise FileNotFoundError(
+            f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
     validate_staged_linkstats_reference(
         settings=settings,
@@ -1414,7 +1384,6 @@ def _native_beam_postprocess(
     model="beam_full_skim",
     name_template="beam_full_skim__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1426,7 +1395,6 @@ def _native_beam_postprocess(
     **consist_step_meta("beam_full_skim"),
 )
 def _native_beam_full_skim(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1438,10 +1406,9 @@ def _native_beam_full_skim(
     beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
-    if beam_config_file != beam_launch_config.primary_config:
-        raise RuntimeError(
-            "beam_full_skim binding config must be the same derived config mounted "
-            "by the runner."
+    if not beam_launch_config.primary_config.exists():
+        raise FileNotFoundError(
+            f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,

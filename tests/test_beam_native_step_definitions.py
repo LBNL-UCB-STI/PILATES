@@ -14,7 +14,6 @@ from pilates.runtime.archive_paths import resolve_workspace_uri_path
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -187,7 +186,10 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
     assert output_set.include == "**/*"
     assert output_set.exclude == "**/*.zarr/**"
     assert output_set.recursive is True
-    assert all(Path(path).is_relative_to(Path(output_set.root)) for path in scalar_paths.values())
+    assert all(
+        Path(path).is_relative_to(Path(output_set.root))
+        for path in scalar_paths.values()
+    )
     assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)
 
 
@@ -367,7 +369,6 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
     )
 
     beam_steps._native_beam_run(
-        config,
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
@@ -415,7 +416,6 @@ def test_native_beam_run_fails_closed_before_starting_runner(
 
     with pytest.raises(RuntimeError, match="linkstats launch proof failed"):
         beam_steps._native_beam_run(
-            config,
             *inputs,
             settings=object(),
             state=SimpleNamespace(year=2030, iteration=1),
@@ -471,11 +471,8 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
     )
 
     assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == {
-        "beam_config_file": launch_config_path,
-        **values,
-    }
-    assert set(resolved.logical_destinations) == {"beam_config_file", *values}
+    assert dict(resolved.binding.inputs or {}) == values
+    assert set(resolved.logical_destinations) == set(values)
 
 
 def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
@@ -528,13 +525,11 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
     assert inputs[BEAM_PERSONS_IN] is activitysim_outputs["persons_asim_out"]
     assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
     assert resolved.selected_key_by_role == {
-        BEAM_CONFIG_FILE: BEAM_CONFIG_FILE,
         BEAM_PLANS_IN: "beam_plans_asim_out",
         BEAM_HOUSEHOLDS_IN: "households_asim_out",
         BEAM_PERSONS_IN: "persons_asim_out",
     }
     assert set(inputs) == {
-        BEAM_CONFIG_FILE,
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
@@ -1307,7 +1302,6 @@ def test_native_beam_run_logs_raw_zarr_directly_without_materializing_copy(
     )
 
     _native_beam_run(
-        config,
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
