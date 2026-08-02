@@ -16,8 +16,6 @@ from consist.core.tracker import Tracker
 from consist.models.artifact import Artifact
 
 from pilates.runtime.archive_paths import archive_roots
-from pilates.workflows.artifact_keys import ZARR_SKIMS
-
 _ARCHIVE_ENABLE_ENV = "PILATES_ENABLE_ARCHIVE_COPY"
 
 
@@ -44,14 +42,19 @@ def _configured_child_recovery_root(run_id: str) -> str | None:
     return str(Path(archive_root) / "consist-recovery" / run_id)
 
 
-def _is_direct_zarr_snapshot(artifact: Artifact) -> bool:
-    """Return whether an output needs PILATES's durable Zarr snapshot."""
+def _is_direct_zarr_snapshot(
+    artifact: Artifact, *, output_set_roots: tuple[str, ...]
+) -> bool:
+    """Return whether an unbundled Zarr output needs PILATES's recovery snapshot."""
 
     metadata = artifact.meta if isinstance(artifact.meta, dict) else {}
     return (
-        artifact.key == ZARR_SKIMS
-        and artifact.driver == "zarr"
+        artifact.driver == "zarr"
         and bool(metadata.get("directory_artifact"))
+        and not any(
+            artifact.container_uri.startswith(f"{root.rstrip('/')}/")
+            for root in output_set_roots
+        )
     )
 
 
@@ -101,10 +104,15 @@ def archive_completed_run(*, tracker: Tracker | None, result: RunResult) -> RunR
     if tracker is None:
         raise RuntimeError("Cannot archive completed run without a Consist tracker.")
     recovery_root = Path(archive_root).resolve()
+    output_set_roots = tuple(
+        artifact.container_uri
+        for artifact in result.outputs.values()
+        if artifact.driver == "artifact_set"
+    )
     snapshotted_keys = tuple(
         key
         for key, artifact in result.outputs.items()
-        if _is_direct_zarr_snapshot(artifact)
+        if _is_direct_zarr_snapshot(artifact, output_set_roots=output_set_roots)
     )
     if not snapshotted_keys:
         archived = tracker.archive_run_outputs(

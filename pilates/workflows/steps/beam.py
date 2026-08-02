@@ -37,6 +37,7 @@ from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,
     enqueue_archive_copy,
 )
@@ -251,9 +252,7 @@ def _beam_run_native_output_paths(
         BEAM_PLANS_OUT: ".csv.gz",
         f"events_parquet_{year}_{iteration}": ".parquet",
     }
-    if settings.beam.artifact_formats.activitysim_skims == "zarr":
-        keys_and_suffixes[f"raw_od_skims_zarr_{year}_{iteration}"] = ".zarr"
-    else:
+    if settings.beam.artifact_formats.activitysim_skims != "zarr":
         keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
     root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
     return {
@@ -298,6 +297,10 @@ def _beam_run_output_sets(
                 workspace=workspace,
             ),
             include="**/*",
+            # Zarr has a first-class immutable-directory artifact contract in
+            # Consist.  It is logged directly after BEAM selects its final
+            # iteration rather than represented as a member of this file set.
+            exclude="**/*.zarr/**",
             recursive=True,
         )
     }
@@ -494,17 +497,23 @@ def _project_beam_run_outputs(
     declared_outputs = _beam_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    raw_outputs = {
-        key: _path_from_output(
-            outputs=outputs,
-            step_name="beam_run",
-            key=key,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        )
-        for key in outputs
-        if key in declared_outputs
-    }
+    raw_outputs = {}
+    for key, output in outputs.items():
+        if key in declared_outputs:
+            raw_outputs[key] = _path_from_output(
+                outputs=outputs,
+                step_name="beam_run",
+                key=key,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+        elif _is_direct_beam_zarr_output_key(key):
+            path = artifact_to_existing_path(output, workspace=workspace)
+            if path is None:
+                raise RuntimeError(
+                    f"beam_run direct Zarr output {key!r} could not be materialized."
+                )
+            raw_outputs[key] = Path(path)
     projected = BeamRunOutputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
         raw_outputs=raw_outputs,
@@ -1145,6 +1154,20 @@ def _log_native_output_records(*, outputs: Any, context: Any) -> None:
         )
 
 
+def _is_direct_beam_zarr_output_key(key: str) -> bool:
+    """Return whether ``key`` is BEAM's direct raw-OD Zarr artifact."""
+
+    return key.startswith("raw_od_skims_zarr_")
+
+
+def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) -> None:
+    """Record BEAM's selected raw Zarr skims without copying its directory tree."""
+
+    for key, path in sources.items():
+        if _is_direct_beam_zarr_output_key(key):
+            context.log_output(path, key=key, artifact_kind="directory")
+
+
 @define_step(
     model="beam_preprocess",
     name_template="beam_preprocess__y{year}__i{iteration}__phase_{phase}",
@@ -1294,8 +1317,14 @@ def _native_beam_run(
         state=state,
         workspace=workspace,
     )
+    sources = _beam_run_native_sources(produced)
+    _log_direct_beam_zarr_outputs(sources=sources, context=_consist_ctx)
     _materialize_native_outputs(
-        source_paths=_beam_run_native_sources(produced),
+        source_paths={
+            key: path
+            for key, path in sources.items()
+            if not _is_direct_beam_zarr_output_key(key)
+        },
         declared_outputs=_beam_run_native_output_paths(
             settings=settings, state=state, workspace=workspace
         ),

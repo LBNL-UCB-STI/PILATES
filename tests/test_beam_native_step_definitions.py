@@ -25,6 +25,8 @@ from pilates.workflows.steps.beam import (
     _beam_preprocess_native_output_paths,
     _beam_run_native_output_paths,
     _materialize_native_outputs,
+    _native_beam_run,
+    _project_beam_run_outputs,
     _resolve_beam_preprocess_inputs,
     _resolved_beam_inputs,
     _native_beam_postprocess,
@@ -132,15 +134,15 @@ def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> 
 @pytest.mark.parametrize(
     ("skim_format", "expected_key", "expected_suffix"),
     (
-        ("zarr", "raw_od_skims_zarr_2030_2", ".zarr"),
+        ("zarr", None, None),
         ("omx", "raw_od_skims_2030_2", ".omx"),
     ),
 )
 def test_beam_run_output_paths_declare_only_configured_activitysim_skim_format(
     tmp_path: Path,
     skim_format: str,
-    expected_key: str,
-    expected_suffix: str,
+    expected_key: str | None,
+    expected_suffix: str | None,
 ) -> None:
     workspace = SimpleNamespace(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
@@ -153,8 +155,11 @@ def test_beam_run_output_paths_declare_only_configured_activitysim_skim_format(
     )
 
     skim_keys = {key for key in outputs if key.startswith("raw_od_skims")}
-    assert skim_keys == {expected_key}
-    assert outputs[expected_key].suffix == expected_suffix
+    if expected_key is None:
+        assert skim_keys == set()
+    else:
+        assert skim_keys == {expected_key}
+        assert outputs[expected_key].suffix == expected_suffix
 
 
 def test_beam_run_declares_only_exact_region_year_iteration_output_set(
@@ -180,11 +185,10 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
         tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
     )
     assert output_set.include == "**/*"
+    assert output_set.exclude == "**/*.zarr/**"
     assert output_set.recursive is True
-    assert all(
-        Path(path).is_relative_to(Path(output_set.root))
-        for path in scalar_paths.values()
-    )
+    assert all(Path(path).is_relative_to(Path(output_set.root)) for path in scalar_paths.values())
+    assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)
 
 
 def test_native_beam_run_does_not_enqueue_declared_tree_members() -> None:
@@ -1241,13 +1245,101 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
     assert set(paths) == {
         "linkstats",
         "beam_plans_out",
-        "raw_od_skims_zarr_2030_2",
         "events_parquet_2030_2",
     }
     assert len(set(paths.values())) == len(paths)
     assert all(
         ".pilates-consist-outputs/beam_run" in str(path) for path in paths.values()
     )
+
+
+def test_native_beam_run_logs_raw_zarr_directly_without_materializing_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "beam.conf"
+    config.write_text("beam {}\n", encoding="utf-8")
+    inputs = {}
+    for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+        path = tmp_path / f"{key}.csv"
+        path.write_text(f"{key}\n", encoding="utf-8")
+        inputs[key] = path
+    raw_zarr = tmp_path / "beam-output" / "ITERS" / "it.1" / "1.skims.zarr"
+    (raw_zarr / ".zgroup").parent.mkdir(parents=True)
+    (raw_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    logged: list[tuple[Path, str, str]] = []
+    materialized: dict[str, object] = {}
+
+    class Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, *_args: object, **_kwargs: object) -> BeamRunOutputs:
+            return BeamRunOutputs(
+                beam_output_dir=Path(workspace.get_beam_output_dir()),
+                raw_outputs={"raw_od_skims_zarr_2030_2": raw_zarr},
+            )
+
+    context = SimpleNamespace(
+        canonicalization=object(),
+        log_output=lambda path, key, artifact_kind: logged.append(
+            (Path(path), key, artifact_kind)
+        ),
+    )
+    monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
+    monkeypatch.setattr(
+        beam_steps, "validate_staged_linkstats_reference", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_materialize_native_outputs",
+        lambda **kwargs: materialized.update(kwargs),
+    )
+
+    _native_beam_run(
+        config,
+        inputs[BEAM_PLANS_IN],
+        inputs[BEAM_HOUSEHOLDS_IN],
+        inputs[BEAM_PERSONS_IN],
+        settings=_beam_settings(),
+        state=SimpleNamespace(year=2030, iteration=2),
+        workspace=workspace,
+        beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
+        _consist_ctx=context,
+    )
+
+    assert logged == [(raw_zarr, "raw_od_skims_zarr_2030_2", "directory")]
+    assert "raw_od_skims_zarr_2030_2" not in materialized["source_paths"]
+    assert "raw_od_skims_zarr_2030_2" not in materialized["declared_outputs"]
+
+
+def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    zarr = tmp_path / "beam-output" / "ITERS" / "it.1" / "1.skims.zarr"
+    (zarr / ".zgroup").parent.mkdir(parents=True)
+    (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+    projected = _project_beam_run_outputs(
+        {"raw_od_skims_zarr_2030_2": SimpleNamespace(path=zarr)},
+        settings=_beam_settings(),
+        state=SimpleNamespace(year=2030, iteration=2),
+        workspace=workspace,
+        resolved_inputs=_empty_resolved_inputs(),
+    )
+
+    assert projected.raw_outputs == {"raw_od_skims_zarr_2030_2": zarr}
 
 
 def test_beam_postprocess_dynamic_closure_excludes_non_numeric_suffixes(
