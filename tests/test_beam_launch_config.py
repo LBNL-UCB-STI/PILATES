@@ -26,6 +26,7 @@ def _settings() -> SimpleNamespace:
             artifact_formats=BeamArtifactFormatsConfig(),
             activitysim_skims_file_base_name="skimsActivitySimOD",
         ),
+        activitysim=None,
         shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
     )
 
@@ -451,6 +452,40 @@ def test_beam_run_adapter_uses_the_compiled_launch_tree(tmp_path: Path) -> None:
         ].identity_policy
         == "ignored"
     )
+
+
+def test_beam_adapter_omits_activitysim_alias_without_activitysim_config(
+    tmp_path: Path,
+) -> None:
+    from consist.core.step_context import StepContext
+
+    from pilates.beam.launch_config import BeamLaunchConfig
+    from pilates.workspace import Workspace
+    from pilates.workflows.step_consist_meta import consist_step_meta
+
+    settings = _settings()
+    settings.activitysim = None
+    settings.beam.local_output_folder = "beam/output"
+    workspace = Workspace(settings, str(tmp_path), "run")
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = _write_base_config(launch_root)
+    context = StepContext(
+        func_name="beam_run",
+        model="beam_run",
+        runtime_kwargs={
+            "settings": settings,
+            "workspace": workspace,
+            "beam_launch_config": BeamLaunchConfig(
+                root=launch_root,
+                primary_config=launch_primary,
+            ),
+        },
+    )
+
+    adapter = consist_step_meta("beam_run")["adapter"](context)
+
+    assert adapter is not None
+    assert "activitysim_output" not in adapter.path_aliases
 
 
 def test_beam_preprocess_adapter_defers_generated_vehicles_destination(
