@@ -41,7 +41,10 @@ def _postprocess_output_stem(output_key: str) -> str:
 def _atlas_owns_vehicle_ownership(settings: PilatesConfig) -> bool:
     """Return whether ATLAS, rather than ActivitySim, owns household cars."""
 
-    return settings.run.models.vehicle_ownership == "atlas"
+    return (
+        settings.vehicle_ownership_model_enabled
+        and settings.run.models.vehicle_ownership == "atlas"
+    )
 
 
 def _read_household_table(path: Path) -> pd.DataFrame:
@@ -1075,11 +1078,14 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             postprocess_kwargs["population_source_h5_path"] = population_source_h5_path
         if current_input_h5_path is not None:
             postprocess_kwargs["current_input_h5_path"] = current_input_h5_path
+        if households_asim_input_path is not None:
+            postprocess_kwargs["households_asim_input_path"] = (
+                households_asim_input_path
+            )
         return self._postprocess(
             raw_outputs,
             workspace,
             model_run_hash,
-            households_asim_input_path=households_asim_input_path,
             **postprocess_kwargs,
         )
 
