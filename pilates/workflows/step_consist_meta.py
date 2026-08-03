@@ -61,6 +61,8 @@ from typing import Any, Dict, Optional
 from consist.core.step_context import StepContext
 
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
+from pilates.atlas.preprocessor import selected_atlas_static_input_sources
+from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
 from pilates.utils.consist_config import build_step_consist_kwargs
 from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
@@ -324,6 +326,22 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 )
         path_aliases["beam_region_input"] = config_root
 
+        vehicle_file_policy = BeamReferencePolicy(
+            identity_policy=(
+                "output_or_runtime_ignored"
+                if model == "beam_preprocess"
+                else "delegated_to_artifacts"
+            ),
+            role="beam_vehicle_input",
+            required=model != "beam_preprocess",
+            reason=(
+                "generated_by_beam_preprocess_from_declared_atlas_vehicle_input"
+                if model == "beam_preprocess"
+                else "vehicles_declared_as_step_artifact"
+            ),
+            delegated_artifact_keys=(BEAM_VEHICLES_IN,),
+        )
+
         reference_policies = {
             "beam.routing.r5.directory": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
@@ -353,13 +371,7 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                     BEAM_VEHICLES_IN,
                 ),
             ),
-            "beam.agentsim.agents.vehicles.vehiclesFilePath": BeamReferencePolicy(
-                identity_policy="delegated_to_artifacts",
-                role="beam_vehicle_input",
-                required=True,
-                reason="vehicles_declared_as_step_artifact",
-                delegated_artifact_keys=(BEAM_VEHICLES_IN,),
-            ),
+            "beam.agentsim.agents.vehicles.vehiclesFilePath": vehicle_file_policy,
             "beam.warmStart.initialLinkstatsFilePath": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
                 role="beam_linkstats_warmstart",
@@ -454,6 +466,20 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
             settings=settings,
             workspace_path=workspace_path,
         )
+        if model == "urbansim_run":
+            workspace = _workspace(ctx)
+            if workspace is not None:
+                static_identity_inputs = [
+                    (f"urbansim_static/{relpath}", source_path)
+                    for relpath, source_path in selected_urbansim_static_input_sources(
+                        settings,
+                        workspace,
+                    )
+                ]
+                resolved["identity_inputs"] = [
+                    *list(resolved.get("identity_inputs") or []),
+                    *static_identity_inputs,
+                ]
         if model.startswith("atlas_"):
             state = _state(ctx)
             atlas_runtime_identity: Dict[str, Any] = {}
@@ -474,6 +500,18 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                     **dict(resolved.get("facet") or {}),
                     **atlas_runtime_identity,
                 }
+            if model == "atlas_run":
+                static_identity_inputs = [
+                    (f"atlas_static/{relpath}", source_path)
+                    for relpath, source_path in selected_atlas_static_input_sources(
+                        settings
+                    )
+                ]
+                if static_identity_inputs:
+                    resolved["identity_inputs"] = [
+                        *list(resolved.get("identity_inputs") or []),
+                        *static_identity_inputs,
+                    ]
         adapter = _adapter(ctx)
         if adapter is not None:
             resolved["adapter"] = adapter

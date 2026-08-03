@@ -9,7 +9,7 @@ from pilates.beam.outputs import (
     BeamRunOutputs,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
-from pilates.beam.runner import BeamRunner
+from pilates.beam.runner import BeamRunner, rename_beam_output_directory
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.outputs_base import ValidationContext
 
@@ -37,6 +37,26 @@ class _StubState:
 def _touch(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("stub")
+
+
+def test_rename_beam_output_directory_creates_declared_region_parent(
+    tmp_path: Path,
+) -> None:
+    beam_output_dir = tmp_path / "beam-output"
+    beam_run_dir = beam_output_dir / "beam-generated-run"
+    _touch(beam_run_dir / "ITERS" / "it.0" / "events.csv.gz")
+
+    _, renamed_output_dir = rename_beam_output_directory(
+        str(beam_output_dir),
+        SimpleNamespace(run=SimpleNamespace(region="seattle")),
+        year=2030,
+        replanning_iteration_number=2,
+    )
+
+    renamed_root = beam_output_dir / "seattle" / "year-2030-iteration-2"
+    assert Path(renamed_output_dir) == renamed_root
+    assert (renamed_root / "ITERS" / "it.0" / "events.csv.gz").exists()
+    assert not beam_run_dir.exists()
 
 
 def test_gather_outputs_logs_phys_sim_linkstats_parquet_files(tmp_path):
@@ -214,6 +234,46 @@ def test_beam_runner_mounts_the_bound_launch_tree(
         str(launch_root.parent): {"bind": str(launch_root.parent), "mode": "rw"},
         str(tmp_path / "beam-output"): {"bind": "/app/output", "mode": "rw"},
     }
+
+
+def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _StubState()
+    state.current_year = 2030
+    state.current_inner_iter = 2
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            activitysim_skims_file_base_name="skimsActivitySimOD",
+        ),
+        shared=SimpleNamespace(skims=SimpleNamespace(fname="skims.omx")),
+    )
+    runner = BeamRunner("beam_runner", state)
+    workspace = _Workspace(tmp_path)
+    launch_root = tmp_path / "launch" / "seattle"
+    launch_primary = launch_root / "configs" / "beam.conf"
+    launch_primary.parent.mkdir(parents=True)
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+    launch_config = BeamLaunchConfig(root=launch_root, primary_config=launch_primary)
+
+    monkeypatch.setattr(runner, "get_model_and_image", lambda *_args: ("beam", "image"))
+    monkeypatch.setattr(runner, "run_container", lambda **_kwargs: True)
+    monkeypatch.setattr(
+        "pilates.beam.runner.rename_beam_output_directory",
+        lambda *_args: (_ for _ in ()).throw(OSError("rename failed")),
+    )
+    monkeypatch.setattr(
+        runner,
+        "gather_outputs",
+        lambda *_args: pytest.fail("must not gather from the broad output root"),
+    )
+
+    with pytest.raises(RuntimeError, match="rename BEAM output directory"):
+        runner._run(RecordStore(), workspace, launch_config)
 
 
 def test_beam_postprocess_outputs_preserve_all_paths_when_omx_exists(

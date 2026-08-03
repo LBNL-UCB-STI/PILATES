@@ -26,7 +26,6 @@ from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_H5,
-    USIM_MUTABLE_DATA_DIR,
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
@@ -44,14 +43,9 @@ class EligibilityEntry:
 
 ELIGIBILITY_MATRIX = (
     EligibilityEntry(
-        "urbansim_preprocess",
-        False,
-        "required datastore is read from the mutable workspace instead of its strict parameter",
-    ),
-    EligibilityEntry(
         "urbansim_run",
         False,
-        "workspace-only mutable directory",
+        "configured static identity inputs are staged outside the strict semantic binding",
     ),
     EligibilityEntry("urbansim_postprocess", True),
     EligibilityEntry(
@@ -113,7 +107,7 @@ def test_matrix_covers_each_native_step_definition_once() -> None:
 
     assert len(matrix_names) == len(set(matrix_names))
     assert set(matrix_names) == set(STEP_DEFINITIONS)
-    assert len(matrix_names) == 14
+    assert len(matrix_names) == 13
 
 
 @pytest.mark.parametrize(
@@ -256,7 +250,6 @@ def resolver_environment(
         USIM_DATASTORE_BASE_H5,
         USIM_DATASTORE_CURRENT_H5,
         USIM_DATASTORE_H5,
-        USIM_MUTABLE_DATA_DIR,
         USIM_POPULATION_SOURCE_H5,
         ZARR_SKIMS,
         "atlas_mutable_input_dir",

@@ -24,17 +24,7 @@ from __future__ import annotations
 #                                                                                                after scenario filtering. Key is sanitized relative path.
 #
 # ------------------------------------------------------------------------------------------------ -----------------------------------------------
-# urbansim_preprocess             (none)                                                      Prepared inputs (from UrbansimPreprocessor._preprocess):
-#                                                                                              - geoid_to_zone
-#                                                                                              - usim_skims_input_updated (if BEAM skims copied)
-#                                                                                              - plus pass-through of initialization inputs:
-#                                                                                                usim_datastore_h5, omx_skims, hh_size, income_rates,
-#                                                                                                relmap, schools, school_districts, usim_data_reference
-#
-#                                                                                              Additionally logs:
-#                                                                                              - usim_datastore_h5 (if the input datastore exists)
-#
-# urbansim_run                    prepared_inputs keys + usim_datastore_h5 (if present)       Raw outputs:
+# urbansim_run                    usim_datastore_h5 + final_skims_omx (when required)          Raw outputs:
 #                                                                                              - usim_forecast_output
 #
 #                                                                                              Additionally logs:

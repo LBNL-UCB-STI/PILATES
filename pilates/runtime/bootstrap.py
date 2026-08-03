@@ -4,7 +4,7 @@ import logging
 import os
 from typing import Any, Callable, Dict, Mapping, Optional
 
-from consist.types import CacheOptions
+from consist.types import CacheOptions, OutputArtifactSpec
 
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.config import PilatesConfig
@@ -116,9 +116,26 @@ def _bootstrap_output_paths(
     settings: PilatesConfig,
     workspace: Workspace,
     surface: Any = None,
-) -> Dict[str, str]:
-    output_paths: Dict[str, str] = {}
+) -> Dict[str, OutputArtifactSpec]:
+    """Declare immutable snapshots of the bootstrap-owned workspace roots.
+
+    The initialization phase mutates these directories as a unit.  They must
+    therefore be logged as Consist directory artifacts rather than ordinary
+    file outputs: central archival validates and recovers their complete tree,
+    including empty directories, and cache replay restores each declared root.
+    Exact files remain bootstrap *invariants* for post-hydration validation;
+    declaring them again would duplicate bytes already owned by a root.
+    """
+
+    del surface
+    output_paths: Dict[str, OutputArtifactSpec] = {}
     run_models = getattr(getattr(settings, "run", None), "models", None)
+
+    def declare_directory(key: str, path: str) -> None:
+        output_paths[key] = OutputArtifactSpec(
+            path=path,
+            meta={"directory_artifact": True},
+        )
 
     get_usim_data_dir = getattr(workspace, "get_usim_mutable_data_dir", None)
     if callable(get_usim_data_dir) and (
@@ -126,40 +143,25 @@ def _bootstrap_output_paths(
         or getattr(run_models, "activity_demand", None) == "activitysim"
         or getattr(run_models, "vehicle_ownership", None) == "atlas"
     ):
-        output_paths["urbansim_mutable_data_dir"] = get_usim_data_dir()
+        declare_directory("urbansim_mutable_data_dir", get_usim_data_dir())
 
     if get_activity_demand_model(settings) == "activitysim":
         get_asim_data_dir = getattr(workspace, "get_asim_mutable_data_dir", None)
         if callable(get_asim_data_dir):
-            output_paths["activitysim_mutable_data_dir"] = get_asim_data_dir()
+            declare_directory("activitysim_mutable_data_dir", get_asim_data_dir())
         get_asim_configs_dir = getattr(workspace, "get_asim_mutable_configs_dir", None)
         if callable(get_asim_configs_dir):
-            output_paths["activitysim_mutable_configs_dir"] = get_asim_configs_dir()
+            declare_directory("activitysim_mutable_configs_dir", get_asim_configs_dir())
 
     if getattr(run_models, "vehicle_ownership", None) == "atlas":
         get_atlas_input_dir = getattr(workspace, "get_atlas_mutable_input_dir", None)
         if callable(get_atlas_input_dir):
-            output_paths["atlas_mutable_input_dir"] = get_atlas_input_dir()
+            declare_directory("atlas_mutable_input_dir", get_atlas_input_dir())
 
     if get_traffic_assignment_model(settings) == "beam":
         get_beam_input_dir = getattr(workspace, "get_beam_mutable_data_dir", None)
         if callable(get_beam_input_dir):
-            output_paths["beam_mutable_data_dir"] = get_beam_input_dir()
-
-    # Cache-hit bootstrap replay materializes only the explicitly requested
-    # output paths. The workspace-invariant check is stricter than the coarse
-    # mutable-root set above: later startup code expects specific staged files
-    # like ActivitySim settings.yaml overlays and the BEAM primary config to
-    # exist. Include those exact invariants here so a bootstrap cache hit can
-    # restore them directly instead of replaying only root directories and then
-    # falling back to a full rerun.
-    output_paths.update(
-        _bootstrap_required_workspace_artifacts(
-            settings=settings,
-            workspace=workspace,
-            surface=surface,
-        )
-    )
+            declare_directory("beam_mutable_data_dir", get_beam_input_dir())
 
     return output_paths
 
@@ -318,8 +320,13 @@ def run_bootstrap_phase(
     merge_epoch_facet_fn: Callable[..., Dict[str, Any]],
     cache_options_cls: type[CacheOptions] = CacheOptions,
 ) -> Dict[str, Any]:
-    """
-    Execute initialization in a dedicated pre-scenario bootstrap phase.
+    """Execute initialization in a dedicated pre-scenario bootstrap phase.
+
+    Bootstrap snapshots remain local cache outputs.  They are reproducible
+    workspace staging inputs rather than completed native-model products, so
+    they deliberately do not enter the recovery-copy archive boundary.  A
+    later cache replay that cannot restore their workspace invariants falls
+    back to this initialization run.
     """
     _warn_on_bootstrap_fast_hashing(settings)
     staged_artifact_summary: Dict[str, Any] = {}

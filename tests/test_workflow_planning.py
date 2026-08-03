@@ -145,11 +145,11 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     plan = _build_plan(settings, include_postprocessing=False)
 
     first_year_steps = [step for step in plan.step_runs if step.year == 2017]
-    assert [step.step_name for step in first_year_steps[:3]] == [
-        "urbansim_preprocess",
+    assert [step.step_name for step in first_year_steps[:2]] == [
         "urbansim_run",
         "urbansim_postprocess",
     ]
+    assert "urbansim_preprocess" not in [step.step_name for step in plan.step_runs]
 
     atlas_preprocess_runs = [
         step for step in first_year_steps if step.step_name == "atlas_preprocess"
@@ -291,7 +291,8 @@ def test_static_execution_plan_coalesces_final_skims_omx_external_artifact():
         next(step.step_name for step in plan.step_runs if step.id == edge.target)
         for edge in consuming_edges
     }
-    assert "urbansim_preprocess" in consuming_step_names
+    assert "urbansim_run" in consuming_step_names
+    assert "urbansim_preprocess" not in consuming_step_names
 
 
 def test_static_execution_plan_uses_final_skims_omx_not_generic_omx_fallback():
@@ -390,7 +391,7 @@ def test_static_execution_plan_renders_mermaid_without_contract_gaps():
 
     mermaid = render_plan_mermaid(plan)
     assert mermaid.startswith("flowchart TD")
-    assert "urbansim_preprocess" in mermaid
+    assert "urbansim_preprocess" not in mermaid
     assert "atlas_run" in mermaid
 
 

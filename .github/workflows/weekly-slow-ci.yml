@@ -1,0 +1,37 @@
+name: Weekly slow CI
+
+on:
+  schedule:
+    - cron: "17 8 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  slow-test-suite:
+    name: Slow end-to-end pytest suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.6"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            environment.yml
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+
+      - name: Run slow end-to-end tests
+        run: |
+          python -m pytest -q tests -m slow_ci

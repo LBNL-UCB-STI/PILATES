@@ -42,7 +42,6 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_JOBS_TABLE,
     USIM_POPULATION_BLOCKS_TABLE,
     USIM_INPUT_NEXT,
-    USIM_MUTABLE_DATA_DIR,
     ZARR_SKIMS,
 )
 from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
@@ -72,7 +71,6 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     USIM_H5_UPDATED: "UrbanSim datastore updated by ATLAS postprocess.",
     USIM_INPUT_NEXT: "UrbanSim datastore for the next iteration produced by ActivitySim.",
-    USIM_MUTABLE_DATA_DIR: "UrbanSim mutable data directory in workspace.",
     ASIM_MUTABLE_DATA_DIR: "ActivitySim mutable data directory from preprocess.",
     ATLAS_OUTPUT_DIR: "ATLAS output directory for the current sub-year.",
     BEAM_MUTABLE_DATA_DIR: "BEAM mutable data directory populated for the run.",
@@ -101,9 +99,6 @@ PILATES_COUPLER_SCHEMA: Dict[str, str] = {
     ),
     "asim_input_land_use_csv_archived": (
         "Archived ActivitySim preprocess land use CSV restored on replay/restart."
-    ),
-    "asim_input_skims_zarr_archived": (
-        "Archived ActivitySim preprocess Zarr skims restored on replay/restart."
     ),
     BEAM_OUTPUT_PLANS_XML: "BEAM output plans XML (previous run warm-start source).",
     BEAM_EXPERIENCED_PLANS_XML: "BEAM experienced plans XML (previous run warm-start source).",

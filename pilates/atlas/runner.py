@@ -3,6 +3,10 @@ from typing import Dict, Any
 import logging
 import os
 
+from pilates.atlas.preprocessor import (
+    selected_atlas_static_input_sources,
+    stage_selected_atlas_static_inputs,
+)
 from pilates.atlas.outputs import AtlasPreprocessOutputs, AtlasRunOutputs
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
@@ -157,6 +161,13 @@ class AtlasRunner(GenericRunner):
         )
         settings = self.state.full_settings
 
+        selected_static_sources = selected_atlas_static_input_sources(settings)
+        stage_selected_atlas_static_inputs(
+            settings=settings,
+            output_dir=workspace.get_atlas_mutable_input_dir(),
+            selected_sources=selected_static_sources,
+        )
+
         # Get container configuration
         vehicle_ownership_model, atlas_image = self.get_model_and_image(
             settings, "vehicle_ownership_model"
@@ -284,6 +295,20 @@ class AtlasRunner(GenericRunner):
             preview = ", ".join(missing_outputs)
             raise RuntimeError(
                 f"ATLAS run did not produce required current-year outputs: {preview}"
+            )
+
+        continuation_dir = (
+            Path(workspace.get_atlas_mutable_input_dir()) / f"year{output_year}"
+        )
+        missing_continuation = [
+            continuation_dir / filename
+            for filename in ("vehicles_output.RData", "households_output.RData")
+            if not (continuation_dir / filename).is_file()
+        ]
+        if missing_continuation:
+            preview = ", ".join(str(path) for path in missing_continuation)
+            raise RuntimeError(
+                "ATLAS run did not produce required continuation outputs: " + preview
             )
 
         logger.info(

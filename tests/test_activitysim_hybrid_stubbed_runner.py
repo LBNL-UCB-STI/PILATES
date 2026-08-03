@@ -223,7 +223,7 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert "asim_input_persons_csv_archived" in output_map
     assert "asim_input_land_use_csv_archived" in output_map
     assert "asim_input_skims_omx_archived" not in output_map
-    assert "asim_input_skims_zarr_archived" in output_map
+    assert "asim_input_skims_zarr_archived" not in output_map
 
     iteration_dir = (
         asim_output_dir
@@ -262,10 +262,6 @@ def test_activitysim_pre_post_with_stubbed_runner(monkeypatch, tmp_path: Path) -
     assert (
         postprocess_outputs.processed_output_hashes["asim_input_land_use_csv_archived"]
         == "hash_land_use"
-    )
-    assert (
-        postprocess_outputs.processed_output_hashes["asim_input_skims_zarr_archived"]
-        == "hash_zarr_skims"
     )
     assert state.sub_stage_progress == "postprocessor"
 
@@ -351,7 +347,7 @@ def test_activitysim_postprocess_archives_omx_when_zarr_was_not_a_run_input(
         for short_name, path, _description in postprocess_outputs._iter_record_items()
     }
     assert "asim_input_skims_omx_archived" in output_map
-    assert "asim_input_skims_zarr_archived" in output_map
+    assert "asim_input_skims_zarr_archived" not in output_map
     assert (
         postprocess_outputs.processed_output_hashes["asim_input_skims_omx_archived"]
         == "hash_omx_skims"

@@ -179,91 +179,6 @@ def restart_required_atlas_input_paths(
     return required
 
 
-def _restore_restart_atlas_year_inputs(
-    *,
-    previous_run_dir: str,
-    workspace: "Workspace",
-    start_year: int,
-    atlas_year: int,
-    force: bool = False,
-) -> None:
-    """
-    Rehydrate restart-critical ATLAS files from the previous run.
-
-    For reruns of later ATLAS subyears, restoring only the workflow start year
-    is insufficient. The dynamic container also expects the immediately
-    preceding ATLAS subyear input directory to exist.
-    """
-    required_paths = restart_required_atlas_input_paths(
-        atlas_input_root=workspace.get_atlas_mutable_input_dir(),
-        start_year=start_year,
-        atlas_year=atlas_year,
-    )
-    configured_atlas_input_root = os.path.abspath(
-        workspace.get_atlas_mutable_input_dir()
-    )
-    atlas_input_root = os.path.realpath(configured_atlas_input_root)
-    previous_atlas_input_root = os.path.realpath(
-        os.path.join(previous_run_dir, "atlas", "atlas_input")
-    )
-    for key, required_destination in required_paths.items():
-        relative_path = os.path.relpath(
-            os.path.abspath(required_destination), configured_atlas_input_root
-        )
-        destination = os.path.normpath(os.path.join(atlas_input_root, relative_path))
-        if os.path.commonpath((atlas_input_root, destination)) != atlas_input_root:
-            raise RuntimeError(
-                "Restart-required ATLAS input escapes the mutable input root: "
-                f"{required_destination}"
-            )
-        destination_parent = os.path.realpath(os.path.dirname(destination))
-        if (
-            os.path.commonpath((atlas_input_root, destination_parent))
-            != atlas_input_root
-        ):
-            raise RuntimeError(
-                "Restart-required ATLAS input parent escapes the mutable input root: "
-                f"{required_destination}"
-            )
-        source = os.path.join(previous_atlas_input_root, relative_path)
-
-        # Archive and workspace can intentionally be the same location. There
-        # is nothing to rehydrate in that topology, and copying a file onto
-        # itself raises ``SameFileError``.
-        if os.path.normpath(source) == destination:
-            continue
-        if not os.path.exists(source):
-            logger.warning(
-                "[AtlasPreprocessor] Restart requires archived ATLAS input %s, "
-                "but it was missing: %s",
-                key,
-                source,
-            )
-            # A forced restart restore treats the archive as authoritative. Do
-            # not let an unverified local remnant satisfy the later existence
-            # check when the authoritative source is absent.
-            if force and os.path.lexists(destination):
-                os.unlink(destination)
-            continue
-        if not force and os.path.exists(destination):
-            continue
-
-        if force and os.path.lexists(destination):
-            os.unlink(destination)
-        elif os.path.lexists(destination):
-            # A dangling destination symlink cannot be copied through. Replace
-            # it with the archived file without following its target.
-            os.unlink(destination)
-
-        os.makedirs(os.path.dirname(destination), exist_ok=True)
-        logger.info(
-            "[AtlasPreprocessor] Restoring restart-required ATLAS input %s: %s",
-            key,
-            source,
-        )
-        shutil.copy2(source, destination, follow_symlinks=False)
-
-
 def _record_restart_chained_rdata_inputs(
     *,
     prepared_inputs: Dict[str, Path],
@@ -395,11 +310,8 @@ def _resolve_atlas_static_sources(
     return source_dir, default_source_dir
 
 
-def _stage_atlas_static_inputs(
-    *,
-    settings,
-    output_dir: str,
-) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+def selected_atlas_static_input_sources(settings) -> Tuple[Tuple[str, Path], ...]:
+    """Resolve the exact static ATLAS source files selected by ``settings``."""
     source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
     source_dirs = [source_dir]
     if default_source_dir not in source_dirs:
@@ -423,17 +335,8 @@ def _stage_atlas_static_inputs(
         )
 
     required_relpaths = atlas_static_input_relpaths(settings)
-    logger.info(
-        "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
-        "(primary=%s fallback=%s)",
-        source_dir,
-        default_source_dir,
-    )
-
-    staged_paths: Dict[str, Path] = {}
-    metadata_by_key: Dict[str, Dict[str, object]] = {}
     missing_required_relpaths: List[str] = []
-    fallback_copy_count = 0
+    selected_sources: List[Tuple[str, Path]] = []
 
     for relpath in required_relpaths:
         normalized_relpath = relpath.replace("\\", "/")
@@ -450,32 +353,13 @@ def _stage_atlas_static_inputs(
             missing_required_relpaths.append(normalized_relpath)
             continue
 
-        if source_base is not None and source_base != source_dir:
-            fallback_copy_count += 1
+        if source_base != source_dir:
             logger.warning(
                 "[AtlasPreprocessor] Required file missing in primary source, "
                 "using fallback: %s",
                 normalized_relpath,
             )
-
-        dest_path = os.path.realpath(os.path.join(output_dir, normalized_relpath))
-        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-        shutil.copy2(source_path, dest_path)
-
-        rel_no_ext = os.path.splitext(normalized_relpath)[0]
-        rel_key = rel_no_ext
-        short_name = sanitize_artifact_key(rel_key) or rel_key
-        staged_paths[short_name] = Path(dest_path)
-        metadata_by_key[short_name] = _atlas_static_input_metadata(
-            relpath=normalized_relpath,
-            settings=settings,
-            source_origin=(
-                "fallback"
-                if source_base is not None and source_base != source_dir
-                else "primary"
-            ),
-            source_path=source_path,
-        )
+        selected_sources.append((normalized_relpath, Path(source_path)))
 
     if missing_required_relpaths:
         preview = ", ".join(sorted(missing_required_relpaths)[:8])
@@ -483,6 +367,46 @@ def _stage_atlas_static_inputs(
             "Missing required ATLAS static input files "
             f"(count={len(missing_required_relpaths)}). "
             f"Preview: {preview}"
+        )
+
+    return tuple(selected_sources)
+
+
+def stage_selected_atlas_static_inputs(
+    *,
+    settings,
+    output_dir: str,
+    selected_sources: Tuple[Tuple[str, Path], ...],
+) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+    """Copy an already selected static ATLAS source set into the run workspace."""
+    source_dir, default_source_dir = _resolve_atlas_static_sources(settings)
+    logger.info(
+        "[AtlasPreprocessor] Copying ATLAS static files to mutable input "
+        "(primary=%s fallback=%s)",
+        source_dir,
+        default_source_dir,
+    )
+
+    staged_paths: Dict[str, Path] = {}
+    metadata_by_key: Dict[str, Dict[str, object]] = {}
+    fallback_copy_count = 0
+    for relpath, source_path in selected_sources:
+        dest_path = os.path.realpath(os.path.join(output_dir, relpath))
+        os.makedirs(os.path.dirname(dest_path), exist_ok=True)
+        shutil.copy2(source_path, dest_path)
+
+        source_origin = (
+            "primary" if source_path.is_relative_to(source_dir) else "fallback"
+        )
+        if source_origin == "fallback":
+            fallback_copy_count += 1
+        short_name = sanitize_artifact_key(os.path.splitext(relpath)[0]) or relpath
+        staged_paths[short_name] = Path(dest_path)
+        metadata_by_key[short_name] = _atlas_static_input_metadata(
+            relpath=relpath,
+            settings=settings,
+            source_origin=source_origin,
+            source_path=str(source_path),
         )
 
     if fallback_copy_count:
@@ -496,6 +420,18 @@ def _stage_atlas_static_inputs(
         len(staged_paths),
     )
     return staged_paths, metadata_by_key
+
+
+def _stage_atlas_static_inputs(
+    *,
+    settings,
+    output_dir: str,
+) -> Tuple[Dict[str, Path], Dict[str, Dict[str, object]]]:
+    return stage_selected_atlas_static_inputs(
+        settings=settings,
+        output_dir=output_dir,
+        selected_sources=selected_atlas_static_input_sources(settings),
+    )
 
 
 class AtlasPreprocessor(GenericPreprocessor):
@@ -636,67 +572,8 @@ class AtlasPreprocessor(GenericPreprocessor):
         """
         logger.info("[AtlasPreprocessor] Starting preprocessing for ATLAS.")
         settings = self.state.full_settings
-        prepared_inputs, prepared_input_meta = _stage_atlas_static_inputs(
-            settings=settings,
-            output_dir=workspace.get_atlas_mutable_input_dir(),
-        )
-
-        # --- Ensure global ATLAS input files are present for every year ---
-        # Source for global files (e.g., cpi.csv, RData/Rdat files)
-        global_source_dir = "pilates/atlas/atlas_input"
-        if not os.path.isabs(global_source_dir):
-            project_root = find_project_root(start_path=os.path.dirname(__file__))
-            if not project_root:
-                project_root = os.path.realpath(os.getcwd())
-                logger.warning(
-                    "[NOT IDEAL] Could not locate PILATES project root via markers; "
-                    "falling back to cwd='%s'.",
-                    project_root,
-                )
-            global_source_dir = os.path.join(project_root, global_source_dir)
-
-        # Destination for global files in the current run's mutable directory
-        current_atlas_mutable_input_root = workspace.get_atlas_mutable_input_dir()
-
-        # Copy global top-level ATLAS files, including legacy *.Rdat.
-        for f, label in _discover_global_atlas_input_files(global_source_dir):
-            dest_path = os.path.realpath(
-                os.path.join(current_atlas_mutable_input_root, os.path.basename(f))
-            )
-            if not os.path.exists(dest_path):
-                shutil.copy2(f, dest_path)
-                logger.info(
-                    f"[AtlasPreprocessor] Copied global {label} file: {f} to {dest_path}"
-                )
-            else:
-                logger.debug(
-                    f"[AtlasPreprocessor] Global {label} file already exists: {dest_path}"
-                )
-
-        # --- End Global File Handling ---
-
-        # --- Restart Logic for year-specific data ---
-        is_restart_run = getattr(self.state, "is_restart_run", None)
-        if is_restart_run is None:
-            is_restart_run = bool(self.state.run_info_path)
-        if (
-            is_restart_run
-            and self.state.run_info_path
-            and os.path.exists(self.state.run_info_path)
-        ):
-            # This is a restarted run
-            previous_run_dir = os.path.dirname(self.state.run_info_path)
-            logger.info(
-                f"[AtlasPreprocessor] Restarted run detected. Using previous run's output path from {previous_run_dir}"
-            )
-
-            # 1. Copy restart-critical ATLAS year inputs from previous run.
-            _restore_restart_atlas_year_inputs(
-                previous_run_dir=previous_run_dir,
-                workspace=workspace,
-                start_year=self.state.start_year,
-                atlas_year=self.state.year,
-            )
+        prepared_inputs: Dict[str, Path] = {}
+        prepared_input_meta: Dict[str, Dict[str, object]] = {}
 
         if usim_datastore_h5 is None:
             raise TypeError("AtlasPreprocessor._preprocess requires usim_datastore_h5")

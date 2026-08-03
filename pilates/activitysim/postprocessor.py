@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import re
 import shutil
@@ -35,6 +36,130 @@ logger = logging.getLogger(__name__)
 
 def _postprocess_output_stem(output_key: str) -> str:
     return re.sub(r"_asim_out$", "", output_key)
+
+
+def _atlas_owns_vehicle_ownership(settings: PilatesConfig) -> bool:
+    """Return whether ATLAS, rather than ActivitySim, owns household cars."""
+
+    return (
+        settings.vehicle_ownership_model_enabled
+        and settings.run.models.vehicle_ownership == "atlas"
+    )
+
+
+def _read_household_table(path: Path) -> pd.DataFrame:
+    if path.suffix == ".parquet":
+        return pd.read_parquet(path)
+    if path.suffix in {".csv", ".gz"}:
+        return pd.read_csv(path)
+    raise ValueError(
+        f"Cannot restore ATLAS household cars from unsupported table format: {path}"
+    )
+
+
+def _write_household_table(table: pd.DataFrame, path: Path) -> None:
+    if path.suffix == ".parquet":
+        table.to_parquet(path)
+        return
+    if path.suffix in {".csv", ".gz"}:
+        table.to_csv(path)
+        return
+    raise ValueError(
+        f"Cannot restore ATLAS household cars to unsupported table format: {path}"
+    )
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _household_index(table: pd.DataFrame, *, path: Path) -> pd.DataFrame:
+    """Normalize a household table to a unique integer household_id index."""
+
+    if table.index.name == "household_id":
+        normalized = table.copy()
+    elif "household_id" in table.columns:
+        normalized = table.set_index("household_id", drop=True)
+    else:
+        raise ValueError(
+            "ATLAS household cars handoff requires a household_id column or index; "
+            f"path={path}"
+        )
+
+    numeric_ids = pd.to_numeric(
+        pd.Series(normalized.index, index=normalized.index), errors="coerce"
+    )
+    invalid_ids = numeric_ids.isna() | (numeric_ids % 1 != 0)
+    if invalid_ids.any() or normalized.index.has_duplicates:
+        invalid_or_duplicate = invalid_ids.to_numpy() | normalized.index.duplicated()
+        sample = normalized.index[invalid_or_duplicate].tolist()[:10]
+        raise ValueError(
+            "ATLAS household cars handoff requires unique integer household_id values; "
+            f"path={path} sample={sample}"
+        )
+    normalized.index = pd.Index(numeric_ids.astype("int64"), name="household_id")
+    return normalized
+
+
+def restore_atlas_household_cars(
+    *,
+    households_output_path: Path,
+    households_input_path: Path,
+) -> str:
+    """Restore ATLAS-owned ``cars`` into ActivitySim's final households table.
+
+    ActivitySim can retain a historical ``auto_ownership`` column even when its
+    ownership model is disabled.  The input table is the authoritative handoff
+    from ATLAS, so require an exact household-id match and preserve the stale
+    ActivitySim column separately for diagnostics.
+    """
+
+    output_households = _household_index(
+        _read_household_table(households_output_path), path=households_output_path
+    )
+    input_households = _household_index(
+        _read_household_table(households_input_path), path=households_input_path
+    )
+    if "cars" not in input_households.columns:
+        raise ValueError(
+            "ATLAS household cars handoff requires canonical 'cars' in the "
+            f"ActivitySim household input; path={households_input_path}"
+        )
+
+    missing_from_input = output_households.index.difference(input_households.index)
+    missing_from_output = input_households.index.difference(output_households.index)
+    if len(missing_from_input) or len(missing_from_output):
+        raise ValueError(
+            "ATLAS household cars handoff requires exact household-id coverage; "
+            f"output_path={households_output_path} input_path={households_input_path} "
+            f"missing_from_input={missing_from_input.tolist()[:10]} "
+            f"missing_from_output={missing_from_output.tolist()[:10]}"
+        )
+
+    cars = pd.to_numeric(input_households["cars"], errors="coerce")
+    invalid_cars = cars.isna() | (cars % 1 != 0) | (cars < 0)
+    if invalid_cars.any():
+        sample = cars.loc[invalid_cars].head(10).to_dict()
+        raise ValueError(
+            "ATLAS household cars handoff requires non-negative integer 'cars'; "
+            f"input_path={households_input_path} sample={sample}"
+        )
+
+    output_households["cars"] = cars.astype("int64").reindex(output_households.index)
+    _write_household_table(output_households, households_output_path)
+    digest = _sha256_file(households_output_path)
+    logger.info(
+        "Restored ATLAS-authoritative cars into ActivitySim households output: "
+        "output=%s input=%s households=%s",
+        households_output_path,
+        households_input_path,
+        len(output_households),
+    )
+    return digest
 
 
 def _activitysim_iteration_output_paths(
@@ -78,7 +203,6 @@ def _activitysim_archived_input_paths(
         "asim_input_persons_csv_archived": str(archived_inputs_dir / "persons.csv"),
         "asim_input_land_use_csv_archived": str(archived_inputs_dir / "land_use.csv"),
         "asim_input_skims_omx_archived": str(archived_inputs_dir / "skims.omx"),
-        "asim_input_skims_zarr_archived": str(archived_inputs_dir / "skims.zarr"),
     }
 
 
@@ -942,6 +1066,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         model_run_hash: Optional[str] = None,
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
+        households_asim_input_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         if not isinstance(raw_outputs, ActivitySimRunOutputs):
             raise TypeError(
@@ -953,6 +1078,10 @@ class ActivitysimPostprocessor(GenericPostprocessor):
             postprocess_kwargs["population_source_h5_path"] = population_source_h5_path
         if current_input_h5_path is not None:
             postprocess_kwargs["current_input_h5_path"] = current_input_h5_path
+        if households_asim_input_path is not None:
+            postprocess_kwargs["households_asim_input_path"] = (
+                households_asim_input_path
+            )
         return self._postprocess(
             raw_outputs,
             workspace,
@@ -967,6 +1096,7 @@ class ActivitysimPostprocessor(GenericPostprocessor):
         model_run_hash: Optional[str] = None,
         population_source_h5_path: Optional[str] = None,
         current_input_h5_path: Optional[str] = None,
+        households_asim_input_path: Optional[str] = None,
     ) -> ActivitySimPostprocessOutputs:
         """
         Consolidates all postprocessing steps for ActivitySim.
@@ -1042,6 +1172,31 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 hash_map[os.path.abspath(str(source_path))] = record_hash
             return hash_map
 
+        atlas_households_input_path: Optional[Path] = None
+        if _atlas_owns_vehicle_ownership(settings):
+            if households_asim_input_path is None:
+                raise ValueError(
+                    "ActivitySim postprocess requires households_asim_input_path when "
+                    "ATLAS owns vehicle ownership."
+                )
+            household_output_key = next(
+                (
+                    raw_key
+                    for raw_key in raw_outputs.raw_outputs
+                    if normalize_asim_output_key(
+                        re.sub(r"_asim_out_temp$", "", raw_key)
+                    )
+                    == "households_asim_out"
+                ),
+                None,
+            )
+            if household_output_key is None:
+                raise ValueError(
+                    "ActivitySim postprocess requires a households_asim_out raw output "
+                    "when ATLAS owns vehicle ownership."
+                )
+            atlas_households_input_path = Path(households_asim_input_path)
+
         content_hash_map = _build_content_hash_map()
 
         def _resolve_content_hash(source_path: str) -> Optional[str]:
@@ -1074,28 +1229,6 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 logger.info(f"Archived ActivitySim input: {input_file}")
             else:
                 logger.debug(f"Input file not found, skipping archive: {source_path}")
-
-        # Archive skims.zarr from activitysim/output/cache/
-        zarr_source_path = asim_runtime_zarr_path(workspace)
-        if os.path.exists(zarr_source_path):
-            zarr_target_path = os.path.join(inputs_folder_path, "skims.zarr")
-            if os.path.exists(zarr_target_path):
-                if os.path.isdir(zarr_target_path):
-                    shutil.rmtree(zarr_target_path)
-                else:
-                    os.remove(zarr_target_path)
-            if os.path.isdir(zarr_source_path):
-                shutil.copytree(zarr_source_path, zarr_target_path)
-            else:
-                shutil.copy2(zarr_source_path, zarr_target_path)
-            content_hash = _resolve_content_hash(zarr_source_path)
-
-            processed_outputs["asim_input_skims_zarr_archived"] = zarr_target_path
-            if content_hash:
-                processed_output_hashes["asim_input_skims_zarr_archived"] = content_hash
-            logger.info("Archived ActivitySim input: skims.zarr")
-        else:
-            logger.debug(f"Zarr skims not found, skipping archive: {zarr_source_path}")
 
         if self.state.is_enabled(WorkflowState.Stage.land_use):
             if not population_source_h5_path:
@@ -1161,6 +1294,30 @@ class ActivitysimPostprocessor(GenericPostprocessor):
                 _postprocess_output_stem(output_key) + ".parquet",
             )
             content_hash = raw_outputs.raw_output_hashes.get(short_name)
+            restore_atlas_cars = (
+                atlas_households_input_path is not None
+                and output_key == "households_asim_out"
+            )
+            if restore_atlas_cars:
+                if os.path.abspath(source) != os.path.abspath(target):
+                    if not os.path.exists(source):
+                        if not os.path.exists(target):
+                            logger.debug(
+                                "ASim output missing, skipping copy: %s", source
+                            )
+                            continue
+                    else:
+                        # Keep the resolved ActivitySim-run input immutable.  The
+                        # postprocess output is the derived artifact that gains
+                        # ATLAS-authoritative cars.
+                        shutil.copy2(source, target)
+                content_hash = restore_atlas_household_cars(
+                    households_output_path=Path(target),
+                    households_input_path=atlas_households_input_path,
+                )
+                processed_outputs[output_key] = target
+                processed_output_hashes[output_key] = content_hash
+                continue
             if os.path.abspath(source) == os.path.abspath(target):
                 processed_outputs[output_key] = target
                 if content_hash:

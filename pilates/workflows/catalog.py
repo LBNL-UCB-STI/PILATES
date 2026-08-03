@@ -143,8 +143,8 @@ _BEAM_PROVENANCE = WorkflowStepProvenanceSpec(builder_key="beam")
 
 WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
     WorkflowStepSpec(
-        step_name="urbansim_preprocess",
-        phase="preprocess",
+        step_name="urbansim_run",
+        phase="run",
         stage_name="land_use",
         order=10,
         depends_on=(),
@@ -153,20 +153,10 @@ WORKFLOW_STEP_SPECS: Tuple[WorkflowStepSpec, ...] = (
         provenance=_URBANSIM_PROVENANCE,
     ),
     WorkflowStepSpec(
-        step_name="urbansim_run",
-        phase="run",
-        stage_name="land_use",
-        order=20,
-        depends_on=("urbansim_preprocess",),
-        enabled_flag_attr="land_use_enabled",
-        enabled_model_attr="land_use",
-        provenance=_URBANSIM_PROVENANCE,
-    ),
-    WorkflowStepSpec(
         step_name="urbansim_postprocess",
         phase="postprocess",
         stage_name="land_use",
-        order=30,
+        order=20,
         dynamic_output_families=(
             "usim_input_archive_{year}",
             "usim_input_merged_{year}",
@@ -385,7 +375,7 @@ def restart_query_scope_for_step(step_name: str) -> Mapping[str, Optional[str]]:
     if spec.stage_name == "vehicle_ownership_model":
         return {
             "model": spec.step_name,
-            "stage": "atlas",
+            "stage": "vehicle_ownership",
             "phase": spec.phase,
         }
     if spec.stage_name == "traffic_assignment":

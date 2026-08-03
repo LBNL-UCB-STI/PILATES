@@ -30,7 +30,6 @@ from pilates.workflows.artifact_keys import (
     USIM_FORECAST_OUTPUT,
     USIM_H5_UPDATED,
     USIM_POPULATION_SOURCE_H5,
-    USIM_MUTABLE_DATA_DIR,
 )
 
 NAMESPACE_SEPARATOR = "/"
@@ -44,7 +43,6 @@ _EXPLICIT_NAMESPACE_BY_KEY = {
     USIM_DATASTORE_CURRENT_H5: "urbansim",
     USIM_DATASTORE_H5: "urbansim",
     USIM_H5_UPDATED: "urbansim",
-    USIM_MUTABLE_DATA_DIR: "urbansim",
     USIM_FORECAST_OUTPUT: "urbansim",
     USIM_POPULATION_SOURCE_H5: "urbansim",
     # ActivitySim

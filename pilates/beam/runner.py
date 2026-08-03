@@ -195,18 +195,13 @@ def rename_beam_output_directory(
         get_setting(settings, "run.region"),
         "year-{0}-iteration-{1}".format(year, replanning_iteration_number),
     )
+    Path(new_iteration_output_directory).parent.mkdir(parents=True, exist_ok=True)
     if os.path.exists(new_iteration_output_directory):
         os.rename(
             new_iteration_output_directory,
             find_not_taken_dir_name(new_iteration_output_directory),
         )
-    try:
-        os.rename(beam_run_output_dir, new_iteration_output_directory)
-    except FileNotFoundError:
-        logger.warning(
-            "Files {0} not found. Adding a slash".format(beam_run_output_dir)
-        )
-        os.rename("/" + str(beam_run_output_dir), new_iteration_output_directory)
+    os.rename(beam_run_output_dir, new_iteration_output_directory)
     return beam_run_output_dir, new_iteration_output_directory
 
 
@@ -612,20 +607,19 @@ class BeamRunner(GenericRunner):
         if not success:
             raise RuntimeError("BEAM run failed after container execution.")
 
-        output_path_for_gather: str
         try:
-            old_path, new_path = rename_beam_output_directory(
+            _, output_path_for_gather = rename_beam_output_directory(
                 workspace.get_beam_output_dir(),
                 settings,
                 self.state.current_year,
                 self.state.current_inner_iter,
             )
-            output_path_for_gather = new_path
-        except Exception as e:
-            logger.error(
-                f"Failed to rename BEAM output directory: {e}. Proceeding without rename."
-            )
-            output_path_for_gather = workspace.get_beam_output_dir()
+        except OSError as exc:
+            raise RuntimeError(
+                "Failed to rename BEAM output directory to its declared "
+                "region/year/iteration root; refusing to gather from the "
+                "broad BEAM output root."
+            ) from exc
 
         # ASSEMBLE OUTPUTS
         skims_fname = get_setting(settings, "shared.skims.fname")

@@ -1007,7 +1007,7 @@ def _activitysim_postprocess_callable(
 ) -> None:
     """Postprocess persisted ActivitySim raw outputs without a holder lookup."""
 
-    del households_asim_in, persons_asim_in, land_use_asim_in, omx_skims, zarr_skims
+    del persons_asim_in, land_use_asim_in, omx_skims, zarr_skims
     del settings
     raw_outputs = ActivitySimRunOutputs(
         output_dir=Path(workspace.get_asim_output_dir()),
@@ -1031,6 +1031,7 @@ def _activitysim_postprocess_callable(
     ModelFactory().get_postprocessor("activitysim", state).postprocess(
         raw_outputs,
         workspace,
+        households_asim_input_path=str(households_asim_in),
         population_source_h5_path=(
             str(usim_population_source_h5)
             if usim_population_source_h5 is not None

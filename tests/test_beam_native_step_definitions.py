@@ -9,10 +9,11 @@ from consist import (
     Tracker,
     resolve_step_contract,
 )
+from pilates.config.models import BeamArtifactFormatsConfig
+from pilates.runtime.archive_paths import resolve_workspace_uri_path
 
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -23,6 +24,8 @@ from pilates.workflows.steps.beam import (
     _beam_preprocess_native_output_paths,
     _beam_run_native_output_paths,
     _materialize_native_outputs,
+    _native_beam_run,
+    _project_beam_run_outputs,
     _resolve_beam_preprocess_inputs,
     _resolved_beam_inputs,
     _native_beam_postprocess,
@@ -41,6 +44,15 @@ def _empty_resolved_inputs() -> ResolvedStepInputs:
     return ResolvedStepInputs(
         step_name="test",
         binding=BindingResult(inputs={}),
+    )
+
+
+def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
+    return SimpleNamespace(
+        run=SimpleNamespace(region="test-region"),
+        beam=SimpleNamespace(
+            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format)
+        ),
     )
 
 
@@ -102,13 +114,92 @@ def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> 
     )
 
     outputs = _beam_run_native_output_paths(
-        settings=SimpleNamespace(),
+        settings=_beam_settings(),
         state=SimpleNamespace(forecast_year=2030, iteration=1),
         workspace=workspace,
     )
 
     assert outputs["linkstats"] == (
-        tmp_path / "beam-output" / ".pilates-consist-outputs" / "beam_run" / "linkstats"
+        tmp_path
+        / "beam-output"
+        / "test-region"
+        / "year-2030-iteration-1"
+        / ".pilates-consist-outputs"
+        / "beam_run"
+        / "linkstats"
+    )
+
+
+@pytest.mark.parametrize(
+    ("skim_format", "expected_key", "expected_suffix"),
+    (
+        ("zarr", None, None),
+        ("omx", "raw_od_skims_2030_2", ".omx"),
+    ),
+)
+def test_beam_run_output_paths_declare_only_configured_activitysim_skim_format(
+    tmp_path: Path,
+    skim_format: str,
+    expected_key: str | None,
+    expected_suffix: str | None,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    outputs = _beam_run_native_output_paths(
+        settings=_beam_settings(skim_format=skim_format),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+    )
+
+    skim_keys = {key for key in outputs if key.startswith("raw_od_skims")}
+    if expected_key is None:
+        assert skim_keys == set()
+    else:
+        assert skim_keys == {expected_key}
+        assert outputs[expected_key].suffix == expected_suffix
+
+
+def test_beam_run_declares_only_exact_region_year_iteration_output_set(
+    tmp_path: Path,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+
+    output_set = beam_run.output_sets(
+        settings=_beam_settings(),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+    )["beam_run_outputs"]
+    scalar_paths = beam_run.output_paths(
+        settings=_beam_settings(),
+        state=SimpleNamespace(forecast_year=2030, iteration=2),
+        workspace=workspace,
+        resolved_inputs=None,
+    )
+
+    assert output_set.root == (
+        tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
+    )
+    assert output_set.include == "**/*"
+    assert output_set.exclude == "**/*.zarr/**"
+    assert output_set.recursive is True
+    assert all(
+        Path(path).is_relative_to(Path(output_set.root))
+        for path in scalar_paths.values()
+    )
+    assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)
+
+
+def test_native_beam_run_does_not_enqueue_declared_tree_members() -> None:
+    assert "enqueue_archive_copy" not in inspect.getsource(beam_steps._native_beam_run)
+
+
+def test_archive_paths_leaves_legacy_beam_input_uri_unrewritten() -> None:
+    assert resolve_workspace_uri_path("beam_input://test-region/beam.conf") == (
+        "beam_input://test-region/beam.conf"
     )
 
 
@@ -145,7 +236,11 @@ def test_native_beam_definitions_resolve_consist_contracts(
     )
     settings = SimpleNamespace(
         activitysim=None,
-        beam=SimpleNamespace(config="beam.conf", full_skim=None),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            full_skim=None,
+            artifact_formats=BeamArtifactFormatsConfig(),
+        ),
         run=SimpleNamespace(
             region="test-region",
             models=SimpleNamespace(land_use=None),
@@ -274,11 +369,10 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
     )
 
     beam_steps._native_beam_run(
-        config,
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
-        settings=object(),
+        settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=1),
         workspace=workspace,
         beam_launch_config=launch_config,
@@ -322,7 +416,6 @@ def test_native_beam_run_fails_closed_before_starting_runner(
 
     with pytest.raises(RuntimeError, match="linkstats launch proof failed"):
         beam_steps._native_beam_run(
-            config,
             *inputs,
             settings=object(),
             state=SimpleNamespace(year=2030, iteration=1),
@@ -378,11 +471,8 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
     )
 
     assert isinstance(resolved.binding, BindingResult)
-    assert dict(resolved.binding.inputs or {}) == {
-        "beam_config_file": launch_config_path,
-        **values,
-    }
-    assert set(resolved.logical_destinations) == {"beam_config_file", *values}
+    assert dict(resolved.binding.inputs or {}) == values
+    assert set(resolved.logical_destinations) == set(values)
 
 
 def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
@@ -435,13 +525,11 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
     assert inputs[BEAM_PERSONS_IN] is activitysim_outputs["persons_asim_out"]
     assert resolved.source_by_role[BEAM_PLANS_IN] == "coupler"
     assert resolved.selected_key_by_role == {
-        BEAM_CONFIG_FILE: BEAM_CONFIG_FILE,
         BEAM_PLANS_IN: "beam_plans_asim_out",
         BEAM_HOUSEHOLDS_IN: "households_asim_out",
         BEAM_PERSONS_IN: "persons_asim_out",
     }
     assert set(inputs) == {
-        BEAM_CONFIG_FILE,
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
@@ -983,8 +1071,11 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
 
     source_events = tmp_path / "source-events.parquet"
     source_links = tmp_path / "source-links.parquet"
+    zarr_skims = tmp_path / "asim-output" / "cache" / "skims.zarr"
     source_events.write_text("events", encoding="utf-8")
     source_links.write_text("links", encoding="utf-8")
+    (zarr_skims / ".zgroup").parent.mkdir(parents=True)
+    (zarr_skims / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     output_paths = {
         "events_parquet_2030_2_type_PathTraversal": (
             tmp_path
@@ -1007,13 +1098,14 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
             pass
 
         @staticmethod
-        def expected_outputs(*_args: object) -> dict[str, str]:
-            return {}
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {ZARR_SKIMS: zarr_skims}
 
         def postprocess(
             self, *_args: object, **_kwargs: object
         ) -> BeamPostprocessOutputs:
             return BeamPostprocessOutputs(
+                zarr_skims=zarr_skims,
                 split_events={
                     "events_parquet_2030_2_type_PathTraversal": source_events
                 },
@@ -1022,6 +1114,12 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.BeamPostprocessor", FakePostprocessor
+    )
+    archive_keys: list[str] = []
+    monkeypatch.setattr(
+        beam_steps,
+        "enqueue_archive_copy",
+        lambda *, key, path, workspace: archive_keys.append(key),
     )
     settings = SimpleNamespace(
         activitysim=None,
@@ -1047,6 +1145,10 @@ def test_native_beam_postprocess_promotes_every_closed_typed_output(
         "events_parquet_2030_2_type_PathTraversal": "events",
         "path_traversal_links_2030_2": "links",
     }
+    assert archive_keys == [
+        "events_parquet_2030_2_type_PathTraversal",
+        "path_traversal_links_2030_2",
+    ]
 
 
 def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
@@ -1128,7 +1230,7 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output")
     )
     paths = beam_run.output_paths(
-        settings=object(),
+        settings=_beam_settings(),
         state=SimpleNamespace(year=2030, iteration=2),
         workspace=workspace,
         resolved_inputs=None,
@@ -1138,14 +1240,100 @@ def test_beam_run_declares_closed_individually_keyed_handoff_outputs(
     assert set(paths) == {
         "linkstats",
         "beam_plans_out",
-        "raw_od_skims_2030_2",
-        "raw_od_skims_zarr_2030_2",
         "events_parquet_2030_2",
     }
     assert len(set(paths.values())) == len(paths)
     assert all(
         ".pilates-consist-outputs/beam_run" in str(path) for path in paths.values()
     )
+
+
+def test_native_beam_run_logs_raw_zarr_directly_without_materializing_copy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = tmp_path / "beam.conf"
+    config.write_text("beam {}\n", encoding="utf-8")
+    inputs = {}
+    for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+        path = tmp_path / f"{key}.csv"
+        path.write_text(f"{key}\n", encoding="utf-8")
+        inputs[key] = path
+    raw_zarr = tmp_path / "beam-output" / "ITERS" / "it.1" / "1.skims.zarr"
+    (raw_zarr / ".zgroup").parent.mkdir(parents=True)
+    (raw_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    logged: list[tuple[Path, str, str]] = []
+    materialized: dict[str, object] = {}
+
+    class Runner:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def run(self, *_args: object, **_kwargs: object) -> BeamRunOutputs:
+            return BeamRunOutputs(
+                beam_output_dir=Path(workspace.get_beam_output_dir()),
+                raw_outputs={"raw_od_skims_zarr_2030_2": raw_zarr},
+            )
+
+    context = SimpleNamespace(
+        canonicalization=object(),
+        log_output=lambda path, key, artifact_kind: logged.append(
+            (Path(path), key, artifact_kind)
+        ),
+    )
+    monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
+    monkeypatch.setattr(
+        beam_steps, "validate_staged_linkstats_reference", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "_materialize_native_outputs",
+        lambda **kwargs: materialized.update(kwargs),
+    )
+
+    _native_beam_run(
+        inputs[BEAM_PLANS_IN],
+        inputs[BEAM_HOUSEHOLDS_IN],
+        inputs[BEAM_PERSONS_IN],
+        settings=_beam_settings(),
+        state=SimpleNamespace(year=2030, iteration=2),
+        workspace=workspace,
+        beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
+        _consist_ctx=context,
+    )
+
+    assert logged == [(raw_zarr, "raw_od_skims_zarr_2030_2", "directory")]
+    assert "raw_od_skims_zarr_2030_2" not in materialized["source_paths"]
+    assert "raw_od_skims_zarr_2030_2" not in materialized["declared_outputs"]
+
+
+def test_project_beam_run_outputs_uses_direct_logged_zarr_path(tmp_path: Path) -> None:
+    workspace = SimpleNamespace(
+        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
+    )
+    zarr = tmp_path / "beam-output" / "ITERS" / "it.1" / "1.skims.zarr"
+    (zarr / ".zgroup").parent.mkdir(parents=True)
+    (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+    projected = _project_beam_run_outputs(
+        {"raw_od_skims_zarr_2030_2": SimpleNamespace(path=zarr)},
+        settings=_beam_settings(),
+        state=SimpleNamespace(year=2030, iteration=2),
+        workspace=workspace,
+        resolved_inputs=_empty_resolved_inputs(),
+    )
+
+    assert projected.raw_outputs == {"raw_od_skims_zarr_2030_2": zarr}
 
 
 def test_beam_postprocess_dynamic_closure_excludes_non_numeric_suffixes(

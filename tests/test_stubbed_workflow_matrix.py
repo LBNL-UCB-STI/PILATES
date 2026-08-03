@@ -226,6 +226,8 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
                 f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
                 'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
                 'beam.outputs.baseOutputDirectory = "/app/output"',
+                'beam.agentsim.taz.filePath = ""',
+                'beam.agentsim.taz.tazIdFieldName = "TAZ"',
                 'matsim.modules.network.inputNetworkFile = ""',
                 'beam.physsim.inputNetworkFilePath = ""',
             )
@@ -364,8 +366,6 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     processed_outputs["asim_input_land_use_csv_archived"] = (
         asim_input_dir / "land_use.csv"
     )
-    processed_outputs["asim_input_skims_zarr_archived"] = zarr_path
-
     beam_plans = beam_input_dir / "plans.parquet"
     beam_households = beam_input_dir / "households.parquet"
     beam_persons = beam_input_dir / "persons.parquet"
@@ -534,20 +534,30 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     def _fake_atlas_run(self, _inputs, _workspace):
         atlas_output_dir = Path(_workspace.get_atlas_output_dir())
         output_year = self.state.forecast_year
+        continuation_dir = (
+            Path(_workspace.get_atlas_mutable_input_dir()) / f"year{output_year}"
+        )
         households_path = atlas_output_dir / f"householdv_{output_year}.csv"
         vehicles_path = atlas_output_dir / f"vehicles_{output_year}.csv"
-        pd.DataFrame({"household_id": [1, 2], "nvehicles": [1, 2]}).to_csv(
-            households_path, index=False
-        )
         pd.DataFrame(
             {
                 "household_id": [1, 2],
-                "vehicle_id": [1, 1],
-                "bodytype": ["sedan", "suv"],
-                "pred_power": ["gasoline", "electricity"],
-                "modelyear": [2018, 2020],
+                "nvehicles": [1, 2],
+                "year": [output_year, output_year],
+            }
+        ).to_csv(households_path, index=False)
+        pd.DataFrame(
+            {
+                "household_id": [1, 2, 2],
+                "vehicle_id": [1, 1, 2],
+                "year": [output_year, output_year, output_year],
+                "bodytype": ["sedan", "suv", "suv"],
+                "pred_power": ["gasoline", "electricity", "electricity"],
+                "modelyear": [2018, 2020, 2020],
             }
         ).to_csv(vehicles_path, index=False)
+        _write_file(continuation_dir / "households_output.RData", "stub")
+        _write_file(continuation_dir / "vehicles_output.RData", "stub")
         return AtlasRunOutputs(
             atlas_output_dir=atlas_output_dir,
             raw_outputs={
@@ -580,5 +590,5 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
     steps = _steps_by_model(env)
     assert "atlas_run" in steps
     atlas_run_outputs = set((steps["atlas_run"].get("outputs") or {}).values())
-    assert "atlas_output_dir" in atlas_run_outputs
+    assert "atlas_continuation_2017" in atlas_run_outputs
     assert USIM_DATASTORE_H5 not in atlas_run_outputs

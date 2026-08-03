@@ -13,11 +13,7 @@ from pilates.atlas.outputs import AtlasPostprocessOutputs, AtlasRunOutputs
 from pilates.atlas.preprocessor import _resolve_atlas_h5_table_key
 from pilates.config import PilatesConfig
 from pilates.workspace import Workspace
-from pilates.utils.coupler_helpers import (
-    artifact_to_existing_path,
-    enqueue_archive_copy,
-    log_output_only,
-)
+from pilates.utils.coupler_helpers import artifact_to_existing_path
 from pilates.utils.state_access import uses_input_datastore
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -324,6 +320,197 @@ def atlas_add_vehileTypeId(
     df.to_csv(output_vehicles2_csv_path, index=False)
 
 
+def _coerce_atlas_integer_column(
+    values: pd.Series,
+    *,
+    column_name: str,
+    path: str,
+) -> pd.Series:
+    numeric = pd.to_numeric(values, errors="coerce")
+    invalid = numeric.isna() | (numeric % 1 != 0)
+    if invalid.any():
+        sample = values.loc[invalid].head(10).tolist()
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: invalid integer values "
+            f"for {column_name!r} in {path}; sample={sample}"
+        )
+    return numeric.astype("int64")
+
+
+def validate_atlas_household_vehicle_contract(
+    *,
+    householdv_csv_path: str,
+    vehicles_csv_path: str,
+    atlas_subyear: int,
+    state: Any,
+) -> None:
+    """Ensure ATLAS ownership totals and its vehicle inventory agree exactly."""
+    householdv_columns = set(pd.read_csv(householdv_csv_path, nrows=0).columns)
+    required_householdv_columns = {"household_id", "nvehicles", "year"}
+    missing_householdv_columns = required_householdv_columns - householdv_columns
+    if missing_householdv_columns:
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: householdv output is "
+            f"missing required columns {sorted(missing_householdv_columns)}; "
+            f"householdv_path={householdv_csv_path}"
+        )
+
+    vehicle_columns = set(pd.read_csv(vehicles_csv_path, nrows=0).columns)
+    required_vehicle_columns = {"household_id", "vehicle_id", "year"}
+    missing_vehicle_columns = required_vehicle_columns - vehicle_columns
+    if missing_vehicle_columns:
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: vehicles output is "
+            f"missing required columns {sorted(missing_vehicle_columns)}; "
+            f"vehicles_path={vehicles_csv_path}"
+        )
+
+    householdv = pd.read_csv(
+        householdv_csv_path,
+        usecols=["household_id", "nvehicles", "year"],
+    )
+    household_ids = _coerce_atlas_integer_column(
+        householdv["household_id"],
+        column_name="householdv.household_id",
+        path=householdv_csv_path,
+    )
+    expected_vehicle_counts = _coerce_atlas_integer_column(
+        householdv["nvehicles"],
+        column_name="householdv.nvehicles",
+        path=householdv_csv_path,
+    )
+    if (expected_vehicle_counts < 0).any():
+        sample = (
+            expected_vehicle_counts.loc[expected_vehicle_counts < 0].head(10).tolist()
+        )
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: householdv.nvehicles "
+            f"must be non-negative; householdv_path={householdv_csv_path} "
+            f"sample={sample}"
+        )
+    if household_ids.duplicated().any():
+        sample = (
+            household_ids.loc[household_ids.duplicated(keep=False)].head(10).tolist()
+        )
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: householdv output has "
+            f"duplicate household_id values; householdv_path={householdv_csv_path} "
+            f"sample={sample}"
+        )
+    householdv_years = _coerce_atlas_integer_column(
+        householdv["year"],
+        column_name="householdv.year",
+        path=householdv_csv_path,
+    )
+    if (householdv_years != atlas_subyear).any():
+        sample = (
+            householdv_years.loc[householdv_years != atlas_subyear].head(10).tolist()
+        )
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: householdv.year must "
+            f"equal atlas_subyear={atlas_subyear}; householdv_path={householdv_csv_path} "
+            f"sample={sample}"
+        )
+
+    expected_by_household = pd.Series(
+        expected_vehicle_counts.to_numpy(),
+        index=pd.Index(household_ids.to_numpy(), name="household_id"),
+        dtype="int64",
+    )
+    vehicle_usecols = ["household_id", "vehicle_id", "year"]
+
+    vehicle_counts = pd.Series(dtype="int64")
+    unexpected_vehicle_rows = 0
+    unexpected_household_samples: list[int] = []
+    year_mismatch_samples: list[int] = []
+    total_vehicle_rows = 0
+    for vehicles_chunk in pd.read_csv(
+        vehicles_csv_path,
+        usecols=vehicle_usecols,
+        chunksize=250_000,
+    ):
+        vehicle_household_ids = _coerce_atlas_integer_column(
+            vehicles_chunk["household_id"],
+            column_name="vehicles.household_id",
+            path=vehicles_csv_path,
+        )
+        _coerce_atlas_integer_column(
+            vehicles_chunk["vehicle_id"],
+            column_name="vehicles.vehicle_id",
+            path=vehicles_csv_path,
+        )
+        total_vehicle_rows += len(vehicles_chunk)
+        unexpected_mask = ~vehicle_household_ids.isin(expected_by_household.index)
+        unexpected_vehicle_rows += int(unexpected_mask.sum())
+        if unexpected_mask.any() and len(unexpected_household_samples) < 10:
+            unexpected_household_samples.extend(
+                vehicle_household_ids.loc[unexpected_mask]
+                .head(10 - len(unexpected_household_samples))
+                .tolist()
+            )
+        vehicle_years = _coerce_atlas_integer_column(
+            vehicles_chunk["year"],
+            column_name="vehicles.year",
+            path=vehicles_csv_path,
+        )
+        mismatched_year = vehicle_years != atlas_subyear
+        if mismatched_year.any() and len(year_mismatch_samples) < 10:
+            year_mismatch_samples.extend(
+                vehicle_years.loc[mismatched_year]
+                .head(10 - len(year_mismatch_samples))
+                .tolist()
+            )
+        chunk_counts = vehicle_household_ids.value_counts(sort=False).astype("int64")
+        vehicle_counts = vehicle_counts.add(chunk_counts, fill_value=0).astype("int64")
+
+    observed_vehicle_counts = vehicle_counts.reindex(
+        expected_by_household.index,
+        fill_value=0,
+    ).astype("int64")
+    shortfall_mask = expected_by_household > observed_vehicle_counts
+    surplus_mask = expected_by_household < observed_vehicle_counts
+    if (
+        unexpected_vehicle_rows
+        or year_mismatch_samples
+        or shortfall_mask.any()
+        or surplus_mask.any()
+    ):
+        count_frame = pd.DataFrame(
+            {
+                "nvehicles": expected_by_household,
+                "vehicle_row_count": observed_vehicle_counts,
+            }
+        )
+        shortfall_samples = (
+            count_frame.loc[shortfall_mask]
+            .head(10)
+            .reset_index()
+            .to_dict(orient="records")
+        )
+        surplus_samples = (
+            count_frame.loc[surplus_mask]
+            .head(10)
+            .reset_index()
+            .to_dict(orient="records")
+        )
+        raise ValueError(
+            "ATLAS household/vehicle contract violation: "
+            f"atlas_interval_start_year={getattr(state, 'atlas_interval_start_year', None)} "
+            f"atlas_subyear={atlas_subyear} "
+            f"main_forecast_year={getattr(state, 'main_forecast_year', None)} "
+            f"forecast_year={getattr(state, 'forecast_year', None)} "
+            f"householdv_path={householdv_csv_path} vehicles_path={vehicles_csv_path} "
+            f"households={len(expected_by_household)} expected_vehicle_rows={int(expected_by_household.sum())} "
+            f"vehicle_rows={total_vehicle_rows} unexpected_vehicle_rows={unexpected_vehicle_rows} "
+            f"sample_unexpected_households={unexpected_household_samples} "
+            f"sample_vehicle_year_mismatches={year_mismatch_samples} "
+            f"households_with_vehicle_shortfall={int(shortfall_mask.sum())} "
+            f"sample_household_shortfalls={shortfall_samples} "
+            f"households_with_vehicle_surplus={int(surplus_mask.sum())} "
+            f"sample_household_surpluses={surplus_samples}"
+        )
+
+
 atlas_add_vehicleTypeId = atlas_add_vehileTypeId
 
 
@@ -409,7 +596,6 @@ class AtlasPostprocessor(GenericPostprocessor):
         Notes
         -----
         Output keys
-            - ``atlas_output_dir``: ATLAS output directory after postprocessing.
             - ``usim_population_source_h5``: Updated UrbanSim datastore (H5)
               selected as the downstream population source.
             - ``atlas_vehicles2_output``: ATLAS vehicles2 CSV emitted for BEAM.
@@ -427,7 +613,6 @@ class AtlasPostprocessor(GenericPostprocessor):
             else None
         )
         return {
-            ATLAS_OUTPUT_DIR: workspace.get_atlas_output_dir(),
             USIM_POPULATION_SOURCE_H5: usim_output_path,
             **(
                 {ATLAS_VEHICLES2_OUTPUT: vehicles2_path}
@@ -495,23 +680,15 @@ class AtlasPostprocessor(GenericPostprocessor):
                 f"year {self.state.current_year}: {usim_h5_file}"
             )
 
-        # Perform the update
-        updated_households_table = self.atlas_update_h5_vehicle(
-            settings, output_year, str(usim_h5_file), str(atlas_hh_path)
+        # Validate ATLAS's raw ownership outputs before generating any derived
+        # vehicle inventory or mutating the population source.  BEAM requires
+        # one staged vehicle row for every declared household vehicle.
+        validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(atlas_hh_path),
+            vehicles_csv_path=str(atlas_veh_path),
+            atlas_subyear=int(output_year),
+            state=self.state,
         )
-        if not updated_households_table:
-            raise RuntimeError(
-                "ATLAS postprocess failed to update UrbanSim HDF5 with vehicle ownership"
-            )
-        self._validate_updated_h5_table(
-            h5_file_path=str(usim_h5_file),
-            table_path=updated_households_table,
-            output_year=output_year,
-        )
-        logger.info(
-            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
-        )
-        updated_usim_h5 = Path(usim_h5_file)
 
         # --- vehicleTypeId addition and Provenance ---
         atlas_veh2_file = os.path.join(
@@ -531,37 +708,24 @@ class AtlasPostprocessor(GenericPostprocessor):
             )
         output_paths[ATLAS_VEHICLES2_OUTPUT] = Path(atlas_veh2_file)
 
-        # Keep ATLAS subyear intermediates durable for restart and subyear chaining.
-        atlas_input_root = workspace.get_atlas_mutable_input_dir()
-        atlas_year_input_dir = os.path.join(atlas_input_root, f"year{output_year}")
-        if os.path.exists(atlas_year_input_dir):
-            log_output_only(
-                key=f"atlas_input_year_dir_{output_year}",
-                path=atlas_year_input_dir,
-                description=f"ATLAS year-input snapshot directory for year {output_year}",
+        # Perform the update only after the raw vehicle inventory has been
+        # proved consistent with the ownership totals used to set ``cars``.
+        updated_households_table = self.atlas_update_h5_vehicle(
+            settings, output_year, str(usim_h5_file), str(atlas_hh_path)
+        )
+        if not updated_households_table:
+            raise RuntimeError(
+                "ATLAS postprocess failed to update UrbanSim HDF5 with vehicle ownership"
             )
-            enqueue_archive_copy(
-                key=f"atlas_input_year_dir_{output_year}",
-                path=atlas_year_input_dir,
-            )
-        for base_dir in (
-            atlas_year_input_dir,
-            atlas_input_root,
-            workspace.get_atlas_output_dir(),
-        ):
-            for filename in ("vehicles_output.RData", "households_output.RData"):
-                snapshot_path = os.path.join(base_dir, filename)
-                if not os.path.exists(snapshot_path):
-                    continue
-                log_output_only(
-                    key=f"atlas_rdata_{output_year}",
-                    path=snapshot_path,
-                    description=f"ATLAS RData snapshot for year {output_year}",
-                )
-                enqueue_archive_copy(
-                    key=f"atlas_rdata_{output_year}",
-                    path=snapshot_path,
-                )
+        self._validate_updated_h5_table(
+            h5_file_path=str(usim_h5_file),
+            table_path=updated_households_table,
+            output_year=output_year,
+        )
+        logger.info(
+            "[AtlasPostprocessor] Updated UrbanSim HDF5 with new vehicle ownership."
+        )
+        updated_usim_h5 = Path(usim_h5_file)
 
         return AtlasPostprocessOutputs(
             atlas_output_dir=Path(workspace.get_atlas_output_dir()),

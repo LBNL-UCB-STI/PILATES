@@ -22,6 +22,7 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
+    OutputSet,
     define_step,
 )
 
@@ -36,7 +37,9 @@ from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
+    artifact_to_existing_path,
     artifact_to_path,
+    enqueue_archive_copy,
 )
 from pilates.workflows.coupler_namespace import (
     coupler_storage_keys,
@@ -44,7 +47,6 @@ from pilates.workflows.coupler_namespace import (
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -236,7 +238,7 @@ def _beam_run_native_output_paths(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
-    del settings, resolved_inputs
+    del resolved_inputs
     year = resolve_forecast_year(state)
     if year is None:
         raise RuntimeError("beam_run requires a resolved forecast year.")
@@ -247,11 +249,11 @@ def _beam_run_native_output_paths(
         # its staged copy from the actual bytes before BEAM selects a reader.
         LINKSTATS: "",
         BEAM_PLANS_OUT: ".csv.gz",
-        f"raw_od_skims_{year}_{iteration}": ".omx",
-        f"raw_od_skims_zarr_{year}_{iteration}": ".zarr",
         f"events_parquet_{year}_{iteration}": ".parquet",
     }
-    root = Path(workspace.get_beam_output_dir())
+    if settings.beam.artifact_formats.activitysim_skims != "zarr":
+        keys_and_suffixes[f"raw_od_skims_{year}_{iteration}"] = ".omx"
+    root = _beam_run_output_root(settings=settings, state=state, workspace=workspace)
     return {
         key: _native_output_destination(
             root=root,
@@ -260,6 +262,46 @@ def _beam_run_native_output_paths(
             suffix=suffix,
         )
         for key, suffix in keys_and_suffixes.items()
+    }
+
+
+def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
+    """Return the one BEAM run tree owned by this region/year/iteration."""
+
+    year = resolve_forecast_year(state)
+    if year is None:
+        raise RuntimeError("beam_run requires a resolved forecast year.")
+    return (
+        Path(workspace.get_beam_output_dir())
+        / settings.run.region
+        / f"year-{year}-iteration-{int(state.iteration)}"
+    )
+
+
+def _beam_run_output_sets(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Any,
+    resolved_inputs: ResolvedStepInputs | None = None,
+) -> Mapping[str, OutputSet]:
+    """Declare the exact renamed BEAM run tree as one logical artifact."""
+
+    del resolved_inputs
+    return {
+        "beam_run_outputs": OutputSet(
+            root=_beam_run_output_root(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ),
+            include="**/*",
+            # Zarr has a first-class immutable-directory artifact contract in
+            # Consist.  It is logged directly after BEAM selects its final
+            # iteration rather than represented as a member of this file set.
+            exclude="**/*.zarr/**",
+            recursive=True,
+        )
     }
 
 
@@ -454,17 +496,23 @@ def _project_beam_run_outputs(
     declared_outputs = _beam_run_native_output_paths(
         settings=settings, state=state, workspace=workspace
     )
-    raw_outputs = {
-        key: _path_from_output(
-            outputs=outputs,
-            step_name="beam_run",
-            key=key,
-            declared_outputs=declared_outputs,
-            workspace=workspace,
-        )
-        for key in outputs
-        if key in declared_outputs
-    }
+    raw_outputs = {}
+    for key, output in outputs.items():
+        if key in declared_outputs:
+            raw_outputs[key] = _path_from_output(
+                outputs=outputs,
+                step_name="beam_run",
+                key=key,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+        elif _is_direct_beam_zarr_output_key(key):
+            path = artifact_to_existing_path(output, workspace=workspace)
+            if path is None:
+                raise RuntimeError(
+                    f"beam_run direct Zarr output {key!r} could not be materialized."
+                )
+            raw_outputs[key] = Path(path)
     projected = BeamRunOutputs(
         beam_output_dir=Path(workspace.get_beam_output_dir()),
         raw_outputs=raw_outputs,
@@ -730,14 +778,12 @@ def _beam_linkstats_output_cache(
 def _resolve_beam_preprocess_inputs(
     *, settings: Any, state: Any, workspace: Any, coupler: Any
 ) -> ResolvedStepInputs:
-    config_path = _require_primary_beam_config(settings, workspace)
     surface = build_enabled_workflow_surface(settings)
     requires_atlas_vehicles = (
         surface.profile.vehicle_ownership_model_enabled
         and getattr(state, "current_inner_iter", 0) == 0
     )
     required_roles = (
-        BEAM_CONFIG_FILE,
         BEAM_PLANS_IN,
         BEAM_HOUSEHOLDS_IN,
         BEAM_PERSONS_IN,
@@ -758,8 +804,7 @@ def _resolve_beam_preprocess_inputs(
         artifact_rules=artifact_rules_for_step_name(
             "beam_preprocess", settings=settings
         ),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
+        logical_destinations={},
         year=resolve_forecast_year(state),
         surface=surface,
     )
@@ -801,24 +846,16 @@ def _resolve_beam_run_inputs(
     coupler: Any,
     launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    config_path = (
-        launch_config.primary_config
-        if launch_config is not None
-        else _require_primary_beam_config(settings, workspace)
-    )
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
         workspace=workspace,
         required_roles=(
-            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART, ZARR_SKIMS),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
     )
 
 
@@ -1071,24 +1108,16 @@ def _resolve_beam_full_skim_inputs(
     coupler: Any,
     launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    config_path = (
-        launch_config.primary_config
-        if launch_config is not None
-        else _require_primary_beam_config(settings, workspace)
-    )
     return _resolved_beam_inputs(
         step_name="beam_full_skim",
         coupler=coupler,
         workspace=workspace,
         required_roles=(
-            BEAM_CONFIG_FILE,
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
         ),
         optional_roles=(LINKSTATS_WARMSTART,),
-        explicit_inputs={BEAM_CONFIG_FILE: config_path},
-        logical_destinations={BEAM_CONFIG_FILE: config_path},
     )
 
 
@@ -1105,11 +1134,24 @@ def _log_native_output_records(*, outputs: Any, context: Any) -> None:
         )
 
 
+def _is_direct_beam_zarr_output_key(key: str) -> bool:
+    """Return whether ``key`` is BEAM's direct raw-OD Zarr artifact."""
+
+    return key.startswith("raw_od_skims_zarr_")
+
+
+def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) -> None:
+    """Record BEAM's selected raw Zarr skims without copying its directory tree."""
+
+    for key, path in sources.items():
+        if _is_direct_beam_zarr_output_key(key):
+            context.log_output(path, key=key, artifact_kind="directory")
+
+
 @define_step(
     model="beam_preprocess",
     name_template="beam_preprocess__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1127,7 +1169,6 @@ def _log_native_output_records(*, outputs: Any, context: Any) -> None:
     **consist_step_meta("beam_preprocess"),
 )
 def _native_beam_preprocess(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1139,10 +1180,7 @@ def _native_beam_preprocess(
     workspace: Workspace,
     _consist_ctx: Any,
 ) -> None:
-    if not beam_config_file.exists():
-        raise FileNotFoundError(
-            f"beam_preprocess config is missing: {beam_config_file}"
-        )
+    _require_primary_beam_config(settings, workspace)
     from pilates.beam.preprocessor import BeamPreprocessor
 
     inputs = {
@@ -1178,6 +1216,8 @@ def _native_beam_preprocess(
             ),
         ),
     )
+    for key, path in produced.prepared_inputs.items():
+        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1185,7 +1225,6 @@ def _native_beam_preprocess(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1197,7 +1236,6 @@ def _native_beam_preprocess(
     **consist_step_meta("beam_run"),
 )
 def _native_beam_run(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1210,12 +1248,9 @@ def _native_beam_run(
     beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
-    if not beam_config_file.exists():
-        raise FileNotFoundError(f"beam_run config is missing: {beam_config_file}")
-    if beam_config_file != beam_launch_config.primary_config:
-        raise RuntimeError(
-            "beam_run binding config must be the same derived config mounted by "
-            "the runner."
+    if not beam_launch_config.primary_config.exists():
+        raise FileNotFoundError(
+            f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
     validate_staged_linkstats_reference(
         settings=settings,
@@ -1252,8 +1287,14 @@ def _native_beam_run(
         state=state,
         workspace=workspace,
     )
+    sources = _beam_run_native_sources(produced)
+    _log_direct_beam_zarr_outputs(sources=sources, context=_consist_ctx)
     _materialize_native_outputs(
-        source_paths=_beam_run_native_sources(produced),
+        source_paths={
+            key: path
+            for key, path in sources.items()
+            if not _is_direct_beam_zarr_output_key(key)
+        },
         declared_outputs=_beam_run_native_output_paths(
             settings=settings, state=state, workspace=workspace
         ),
@@ -1332,6 +1373,10 @@ def _native_beam_postprocess(
         source_paths=produced_sources,
         declared_outputs=declared_outputs,
     )
+    for key, path in produced_sources.items():
+        if key == ZARR_SKIMS:
+            continue
+        enqueue_archive_copy(key=key, path=path, workspace=workspace)
     del _consist_ctx
 
 
@@ -1339,7 +1384,6 @@ def _native_beam_postprocess(
     model="beam_full_skim",
     name_template="beam_full_skim__y{year}__i{iteration}__phase_{phase}",
     inputs={
-        BEAM_CONFIG_FILE: None,
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
         BEAM_PERSONS_IN: None,
@@ -1351,7 +1395,6 @@ def _native_beam_postprocess(
     **consist_step_meta("beam_full_skim"),
 )
 def _native_beam_full_skim(
-    beam_config_file: Path,
     plans_beam_in: Path,
     households_beam_in: Path,
     persons_beam_in: Path,
@@ -1363,10 +1406,9 @@ def _native_beam_full_skim(
     beam_launch_config: BeamLaunchConfig,
     _consist_ctx: Any,
 ) -> None:
-    if beam_config_file != beam_launch_config.primary_config:
-        raise RuntimeError(
-            "beam_full_skim binding config must be the same derived config mounted "
-            "by the runner."
+    if not beam_launch_config.primary_config.exists():
+        raise FileNotFoundError(
+            f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
@@ -1392,6 +1434,23 @@ def _native_beam_full_skim(
         state=state,
         workspace=workspace,
     )
+    # Materialize and enqueue full skims
+    full_skims_path = getattr(produced, "full_skims", None)
+    if full_skims_path:
+        dest = _native_output_destination(
+            root=Path(workspace.get_beam_output_dir()),
+            step_name="beam_full_skim",
+            key="beam_full_skims",
+            suffix=".omx" if not Path(full_skims_path).suffix == ".zarr" else ".zarr",
+        )
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        if Path(full_skims_path).is_dir():
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(full_skims_path, dest)
+        else:
+            shutil.copy2(full_skims_path, dest)
+        enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
     del _consist_ctx
 
 
@@ -1410,6 +1469,7 @@ beam_run = StepDefinition(
     resolve_inputs=_resolve_beam_run_inputs,
     project_outputs=_project_beam_run_outputs,
     output_paths=_beam_run_native_output_paths,
+    output_sets=_beam_run_output_sets,
     execution_options=_native_execution_options,
     cache_options=_beam_linkstats_output_cache,
 )

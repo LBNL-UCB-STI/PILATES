@@ -6,6 +6,7 @@ import os
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
+from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
 from pilates.urbansim import postprocessor as usim_post
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -208,11 +209,17 @@ class UrbansimRunner(GenericRunner):
 
     def run(
         self,
-        inputs: UrbanSimPreprocessOutputs,
+        usim_datastore_h5: Path,
         workspace: Workspace,
+        final_skims_omx: Path | None = None,
         model_run_hash: Optional[str] = None,
     ) -> UrbanSimRunOutputs:
-        if not isinstance(inputs, UrbanSimPreprocessOutputs):
-            raise TypeError("UrbansimRunner.run expects UrbanSimPreprocessOutputs")
         self.state.set_sub_stage_progress("runner")
+        inputs = stage_urbansim_run_workspace(
+            settings=self.state.full_settings,
+            state=self.state,
+            workspace=workspace,
+            usim_datastore_h5=usim_datastore_h5,
+            final_skims_omx=final_skims_omx,
+        )
         return self._run(inputs, workspace, model_run_hash)

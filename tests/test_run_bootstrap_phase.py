@@ -6,7 +6,9 @@ import os
 from pathlib import Path
 
 import pytest
-from consist.types import CacheOptions
+from consist import RunResult
+from consist.models.run import Run
+from consist.types import CacheOptions, OutputArtifactSpec
 
 from pilates.runtime import bootstrap as bootstrap_runtime
 from pilates.runtime import launcher as run_module
@@ -86,19 +88,13 @@ def test_fresh_bootstrap_sequence_defers_initialized_marker_until_coupler_seed(
 def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
     tmp_path, monkeypatch
 ):
-    previous_run_dir = tmp_path / "previous-run"
-    previous_file = (
-        previous_run_dir / "atlas" / "atlas_input" / "year2017" / "households.csv"
-    )
-    previous_file.parent.mkdir(parents=True)
-    previous_file.write_text("seed\n", encoding="utf-8")
     current_atlas_input = tmp_path / "current-run" / "atlas" / "atlas_input"
     state = SimpleNamespace(
         data_initialized=True,
         start_year=2017,
         year=2023,
         current_year=2023,
-        run_info_path=str(previous_run_dir / "run_state.yaml"),
+        run_info_path=str(tmp_path / "previous-run" / "run_state.yaml"),
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model,
     )
     settings = SimpleNamespace(
@@ -122,6 +118,7 @@ def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
         is_restart_run=True,
     )
     observed_paths: list[bool] = []
+    hydration_calls: list[bool] = []
 
     def find_missing(**_kwargs):
         observed_paths.append(
@@ -144,10 +141,16 @@ def test_restart_bootstrap_hydrates_atlas_continuation_before_strict_preflight(
     monkeypatch.setattr(
         run_module, "_find_missing_restart_local_artifacts", find_missing
     )
+    monkeypatch.setattr(
+        run_module.restart_runtime,
+        "hydrate_restart_atlas_continuation_inputs",
+        lambda **_kwargs: hydration_calls.append(True),
+    )
 
     run_module._run_bootstrap_sequence(prepared)
 
-    assert observed_paths == [False, True]
+    assert hydration_calls == [True]
+    assert observed_paths == [False, False]
 
 
 class DummyInitialization:
@@ -188,7 +191,8 @@ class DummyTracker:
 
     @staticmethod
     def _realize_output_paths(output_paths):
-        for path in (output_paths or {}).values():
+        for output in (output_paths or {}).values():
+            path = output.path if isinstance(output, OutputArtifactSpec) else output
             target = Path(path)
             if target.suffix:
                 target.parent.mkdir(parents=True, exist_ok=True)
@@ -200,6 +204,22 @@ class DummyTracker:
                         "usim",
                         encoding="utf-8",
                     )
+                if target.parts[-2:] == ("activitysim", "configs"):
+                    for dirname in (
+                        "configs",
+                        "configs_extended",
+                        "configs_mp",
+                        "configs_sh_compile",
+                    ):
+                        settings_path = target / dirname / "settings.yaml"
+                        settings_path.parent.mkdir(parents=True, exist_ok=True)
+                        settings_path.write_text(
+                            "settings: hydrated\n", encoding="utf-8"
+                        )
+                if target.parts[-2:] == ("beam", "input"):
+                    beam_config = target / "test" / "beam.conf"
+                    beam_config.parent.mkdir(parents=True, exist_ok=True)
+                    beam_config.write_text("beam: hydrated\n", encoding="utf-8")
 
     def run(self, **kwargs):
         self.calls.append(kwargs)
@@ -214,6 +234,31 @@ class DummyTracker:
                 id=response["run_id"],
                 meta=response.get("meta"),
             ),
+        )
+
+
+class ArchiveAwareTracker(DummyTracker):
+    def __init__(self, responses):
+        super().__init__(responses)
+        self.archive_calls: list[tuple[str, str]] = []
+
+    def archive_run_outputs(self, run_id, archive_root, *, mode):
+        assert mode == "copy"
+        self.archive_calls.append((run_id, archive_root))
+        return SimpleNamespace(outputs={})
+
+    def run(self, **kwargs):
+        result = super().run(**kwargs)
+        return RunResult(
+            run=Run(
+                id=result.run.id,
+                model_name="initialization",
+                config_hash=None,
+                git_hash=None,
+                meta=result.run.meta or {},
+            ),
+            outputs={},
+            cache_hit=result.cache_hit,
         )
 
 
@@ -344,6 +389,90 @@ def test_run_bootstrap_phase_cache_miss_executes_once(monkeypatch):
     cache_options = first_call["cache_options"]
     assert isinstance(cache_options, CacheOptions)
     assert cache_options.cache_hydration == "outputs-requested"
+
+
+def test_bootstrap_cache_disabled_execution_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[{"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_off"}]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=False),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=None,
+    )
+
+    assert tracker.archive_calls == []
+
+
+def test_bootstrap_executed_probe_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[
+            {"cache_hit": False, "execute_fn": True, "run_id": "bootstrap_probe"}
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=DummyWorkspace(),
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert tracker.archive_calls == []
+
+
+def test_bootstrap_fallback_rerun_does_not_archive_workspace_snapshots(
+    monkeypatch, tmp_path
+):
+    monkeypatch.setattr(run_module, "Initialization", DummyInitialization)
+    monkeypatch.setattr(run_module, "build_step_consist_kwargs", lambda *_a, **_k: {})
+    archive_root = tmp_path / "archive"
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    tracker = ArchiveAwareTracker(
+        responses=[
+            {"cache_hit": True, "execute_fn": False, "run_id": "bootstrap_probe"},
+            {
+                "cache_hit": False,
+                "execute_fn": True,
+                "run_id": "bootstrap_fallback",
+            },
+        ]
+    )
+
+    run_module.run_bootstrap_phase(
+        tracker=tracker,
+        settings=_settings(cache_enabled=True),
+        state=_state(),
+        workspace=DummyWorkspace(str(tmp_path / "bootstrap-run")),
+        scenario_id="seattle-baseline",
+        seed=12345,
+    )
+
+    assert tracker.archive_calls == []
 
 
 def test_log_bootstrap_result_summary_includes_cache_miss_fields(caplog):
@@ -599,20 +728,17 @@ def test_run_bootstrap_phase_requests_exact_workspace_invariants_for_replay(
     assert result["bootstrap_cache_hit"] is True
     assert result["replay_hydration_complete"] is True
     output_paths = tracker.calls[0]["output_paths"]
-    assert output_paths["activitysim_config_settings_yaml_configs"].endswith(
-        "activitysim/configs/configs/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_extended"].endswith(
-        "activitysim/configs/configs_extended/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_mp"].endswith(
-        "activitysim/configs/configs_mp/settings.yaml"
-    )
-    assert output_paths["activitysim_config_settings_yaml_configs_sh_compile"].endswith(
-        "activitysim/configs/configs_sh_compile/settings.yaml"
-    )
-    assert output_paths["beam_primary_config_file"].endswith(
-        "beam/input/test/beam.conf"
+    assert set(output_paths) == {
+        "urbansim_mutable_data_dir",
+        "activitysim_mutable_data_dir",
+        "activitysim_mutable_configs_dir",
+        "atlas_mutable_input_dir",
+        "beam_mutable_data_dir",
+    }
+    assert all(
+        isinstance(output, OutputArtifactSpec)
+        and output.meta == {"directory_artifact": True}
+        for output in output_paths.values()
     )
 
 
@@ -2064,10 +2190,12 @@ def test_restart_preflight_skips_activitysim_locals_outside_supply_demand_stage(
     assert "activitysim_config_settings_yaml_configs" not in keys
     assert "activitysim_config_settings_yaml_configs_mp" not in keys
     assert "zarr_skims" not in keys
-    assert any(key.startswith("atlas_static::") for key in keys)
+    assert not any(key.startswith("atlas_") for key in keys)
 
 
-def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_path):
+def test_restart_preflight_does_not_require_atlas_static_inputs_in_vehicle_stage(
+    tmp_path,
+):
     workspace = DummyWorkspace(str(tmp_path / "local-run"))
     state = SimpleNamespace(
         current_major_stage=WorkflowState.Stage.vehicle_ownership_model
@@ -2080,8 +2208,8 @@ def test_restart_preflight_requires_atlas_static_inputs_in_vehicle_stage(tmp_pat
     )
 
     paths = {item["path"] for item in missing}
-    assert any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
-    assert any(
+    assert not any(path.endswith("atlas/atlas_input/psid_names.Rdat") for path in paths)
+    assert not any(
         path.endswith("atlas/atlas_input/accessbility_2015.RData") for path in paths
     )
 
@@ -2659,7 +2787,9 @@ def test_main_restart_strict_still_fails_when_required_artifacts_remain_missing(
         run_module.main()
 
 
-def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypatch):
+def test_main_restart_fails_when_atlas_archive_tracker_is_unavailable(
+    tmp_path, monkeypatch
+):
     class SnapshotStub:
         def final_snapshot(self):
             return True
@@ -2834,7 +2964,7 @@ def test_main_restart_strict_fails_without_atlas_repair_paths(tmp_path, monkeypa
     )
     with pytest.raises(
         RuntimeError,
-        match="Strict restart preflight failed; required restart artifacts are still missing after restart bootstrap",
+        match="ATLAS restart requires an archive Consist tracker",
     ):
         run_module.main()
 

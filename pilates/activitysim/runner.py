@@ -10,7 +10,6 @@ import zarr
 
 from pilates.config import PilatesConfig
 from pilates.generic.runner import GenericRunner
-from pilates.utils.coupler_helpers import enqueue_archive_copy
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
@@ -517,7 +516,6 @@ class ActivitysimRunner(GenericRunner):
             outputs.zarr_skims = finalize_activitysim_zarr_skims(
                 asim_runtime_zarr_path(workspace), self.state.full_settings, workspace
             )
-            enqueue_archive_copy(key=ZARR_SKIMS, path=outputs.zarr_skims)
         return outputs
 
     @staticmethod

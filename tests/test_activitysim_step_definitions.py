@@ -13,7 +13,6 @@ from consist import (
     Tracker,
     resolve_step_contract,
 )
-
 from pilates.activitysim.outputs import (
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_tables,
@@ -178,6 +177,41 @@ def test_activitysim_definitions_resolve_native_consist_contracts(
         assert contract.model == "activitysim"
         assert contract.name.startswith(f"{definition.name}__y2025__i0")
         assert contract.input_binding == "paths"
+
+
+def test_activitysim_native_steps_declare_zarr_directly_without_output_set(
+    tmp_path: Path,
+) -> None:
+    """Zarr uses its native directory-artifact contract, not an OutputSet."""
+
+    workspace = SimpleNamespace(
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+    )
+    state = SimpleNamespace(year=2025, forecast_year=2025, iteration=0)
+    settings = _activitysim_test_settings()
+
+    assert activitysim.activitysim_preprocess.output_sets is None
+    assert activitysim.activitysim_run.output_sets is None
+
+    zarr_input_paths = activitysim.activitysim_run.output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=_activitysim_run_resolution(produces_zarr=False),
+    )
+    zarr_output_paths = activitysim.activitysim_run.output_paths(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        resolved_inputs=_activitysim_run_resolution(produces_zarr=True),
+    )
+
+    assert ZARR_SKIMS not in zarr_input_paths
+    assert ZARR_SKIMS in zarr_output_paths
+    assert Path(zarr_output_paths[ZARR_SKIMS].path) == (
+        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    )
 
 
 def test_activitysim_preprocess_resolver_keeps_one_semantic_binding(
@@ -638,6 +672,7 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
                 {
                     key: str(kwargs[key])
                     for key in (
+                        "households_asim_input_path",
                         "population_source_h5_path",
                         "current_input_h5_path",
                     )
@@ -698,6 +733,9 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
     base_snapshot = snapshot_root / USIM_DATASTORE_BASE_H5
     assert Path(received["population_source_h5_path"]) == population_snapshot
     assert Path(received["current_input_h5_path"]) == current_snapshot
+    assert Path(received["households_asim_input_path"]) == (
+        snapshot_root / ASIM_HOUSEHOLDS_IN
+    )
     assert len({population_snapshot, current_snapshot, base_snapshot}) == 3
     assert all(
         path.read_text(encoding="utf-8") == "tracked h5\n"
@@ -750,6 +788,7 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
 
     assert captured["population_source_h5_path"] == str(population_source)
     assert captured["current_input_h5_path"] == str(population_source)
+    assert captured["households_asim_input_path"] == "/inputs/households.csv"
 
 
 def test_activitysim_projectors_validate_persisted_outputs(

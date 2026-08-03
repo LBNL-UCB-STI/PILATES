@@ -6,6 +6,8 @@ from typing import Any, TypeVar
 
 from consist import ExecutionOptions, RunResult, StepIdentity
 
+from pilates.runtime.run_output_archive import archive_completed_run
+from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
 
@@ -98,6 +100,16 @@ def execute_step(
             if definition.output_paths is not None
             else None
         ),
+        output_sets=(
+            definition.output_sets(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                resolved_inputs=resolved,
+            )
+            if definition.output_sets is not None
+            else None
+        ),
         cache_options=(
             definition.cache_options(
                 settings=settings, state=state, workspace=workspace
@@ -108,6 +120,12 @@ def execute_step(
         execution_options=options,
         step_identity=step_identity,
     )
+    if definition.archive_outputs:
+        archived_result = archive_completed_run(tracker=scenario.tracker, result=result)
+        if archived_result is not result:
+            for key, artifact in archived_result.outputs.items():
+                set_coupler_from_artifact(scenario.coupler, key, artifact)
+            result = archived_result
     return result, definition.project_outputs(
         result.outputs,
         settings=settings,

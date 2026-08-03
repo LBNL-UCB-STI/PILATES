@@ -12,9 +12,6 @@ from pilates.runtime.archive_paths import archive_fallback_path
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
 from pilates.utils.coupler_helpers import (
-    archive_copy_destination,
-    archive_copy_now,
-    flush_archive_queue,
     set_coupler_from_artifact,
 )
 from pilates.utils.usim_h5 import resolve_usim_population_table_paths
@@ -347,40 +344,6 @@ def run_vehicle_ownership_stage(
                         year=atlas_year,
                         context=f"ATLAS postprocess local output y{atlas_year}",
                     )
-                    archive_dest = archive_copy_destination(
-                        key=USIM_POPULATION_SOURCE_H5,
-                        path=atlas_postprocess_outputs.usim_datastore_h5,
-                    )
-                    archive_copy_now(
-                        key=USIM_POPULATION_SOURCE_H5,
-                        path=atlas_postprocess_outputs.usim_datastore_h5,
-                        force=True,
-                    )
-                    if archive_dest is not None and os.path.exists(archive_dest):
-                        _validate_population_h5_for_activitysim_year(
-                            path=archive_dest,
-                            year=atlas_year,
-                            context=f"ATLAS postprocess archived output y{atlas_year}",
-                        )
-
-            atlas_input_root = workspace.get_atlas_mutable_input_dir()
-            atlas_year_input_dir = os.path.join(atlas_input_root, f"year{atlas_year}")
-            archive_copy_now(
-                key=f"atlas_input_year_dir_{atlas_year}",
-                path=atlas_year_input_dir,
-            )
-            for base_dir in (
-                atlas_year_input_dir,
-                atlas_input_root,
-                workspace.get_atlas_output_dir(),
-            ):
-                for filename in ("vehicles_output.RData", "households_output.RData"):
-                    archive_copy_now(
-                        key=f"atlas_rdata_{atlas_year}",
-                        path=os.path.join(base_dir, filename),
-                    )
-            # Ensure year N artifacts are durable before year N+1 consumes them.
-            flush_archive_queue(timeout=300, fail_on_timeout=False)
         except Exception:
             from pilates.utils.failure_handling import persist_state_on_error
 

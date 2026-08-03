@@ -113,7 +113,6 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
     steps = scenario_run.meta["steps"]
     assert [step["model"] for step in steps] == [
         "initialization",
-        "urbansim_preprocess",
         "urbansim_run",
         "urbansim_postprocess",
     ]
