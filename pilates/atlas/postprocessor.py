@@ -380,14 +380,18 @@ def validate_atlas_household_vehicle_contract(
         path=householdv_csv_path,
     )
     if (expected_vehicle_counts < 0).any():
-        sample = expected_vehicle_counts.loc[expected_vehicle_counts < 0].head(10).tolist()
+        sample = (
+            expected_vehicle_counts.loc[expected_vehicle_counts < 0].head(10).tolist()
+        )
         raise ValueError(
             "ATLAS household/vehicle contract violation: householdv.nvehicles "
             f"must be non-negative; householdv_path={householdv_csv_path} "
             f"sample={sample}"
         )
     if household_ids.duplicated().any():
-        sample = household_ids.loc[household_ids.duplicated(keep=False)].head(10).tolist()
+        sample = (
+            household_ids.loc[household_ids.duplicated(keep=False)].head(10).tolist()
+        )
         raise ValueError(
             "ATLAS household/vehicle contract violation: householdv output has "
             f"duplicate household_id values; householdv_path={householdv_csv_path} "
@@ -399,7 +403,9 @@ def validate_atlas_household_vehicle_contract(
         path=householdv_csv_path,
     )
     if (householdv_years != atlas_subyear).any():
-        sample = householdv_years.loc[householdv_years != atlas_subyear].head(10).tolist()
+        sample = (
+            householdv_years.loc[householdv_years != atlas_subyear].head(10).tolist()
+        )
         raise ValueError(
             "ATLAS household/vehicle contract violation: householdv.year must "
             f"equal atlas_subyear={atlas_subyear}; householdv_path={householdv_csv_path} "

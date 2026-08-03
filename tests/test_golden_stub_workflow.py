@@ -455,7 +455,7 @@ def golden_stub_env(tmp_path, monkeypatch):
             '{"type":"FeatureCollection","features":['
             '{"type":"Feature","properties":{"TAZ":1},'
             '"geometry":{"type":"Polygon","coordinates":['
-            '[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}\n'
+            "[[0,0],[1,0],[1,1],[0,1],[0,0]]]}}]}\n"
         ),
     )
     usim_input_path = usim_dir / settings.urbansim.input_file_template.format(

@@ -2,12 +2,16 @@ from types import SimpleNamespace
 
 import pandas as pd
 import pandas.testing as pdt
+import pytest
 
 from pilates.activitysim.postprocessor import (
+    ActivitysimPostprocessor,
     _next_iter_usim_input_store_path,
     _prepare_updated_tables,
     create_usim_input_data,
+    restore_atlas_household_cars,
 )
+from pilates.activitysim.outputs import ActivitySimRunOutputs
 
 
 def _settings(vehicle_ownership=None):
@@ -37,6 +41,107 @@ def test_next_iter_usim_input_store_path_uses_mutable_input_not_forecast_output(
 
     assert path == str(tmp_path / "urbansim" / "data" / "custom_mpo_001_model_data.h5")
     assert not path.endswith("model_data_2021.h5")
+
+
+def test_restore_atlas_household_cars_preserves_stale_auto_ownership(tmp_path):
+    households_input = tmp_path / "households.csv"
+    households_output = tmp_path / "households.parquet"
+    pd.DataFrame({"household_id": [1, 2], "cars": [1, 2]}).to_csv(
+        households_input, index=False
+    )
+    pd.DataFrame(
+        {"auto_ownership": [3, 1]},
+        index=pd.Index([1, 2], name="household_id"),
+    ).to_parquet(households_output)
+
+    content_hash = restore_atlas_household_cars(
+        households_output_path=households_output,
+        households_input_path=households_input,
+    )
+
+    restored = pd.read_parquet(households_output)
+    assert restored["cars"].tolist() == [1, 2]
+    assert restored["auto_ownership"].tolist() == [3, 1]
+    assert len(content_hash) == 64
+
+
+def test_restore_atlas_household_cars_requires_exact_household_coverage(tmp_path):
+    households_input = tmp_path / "households.csv"
+    households_output = tmp_path / "households.parquet"
+    pd.DataFrame({"household_id": [1, 2], "cars": [1, 2]}).to_csv(
+        households_input, index=False
+    )
+    pd.DataFrame(
+        {"auto_ownership": [3]},
+        index=pd.Index([1], name="household_id"),
+    ).to_parquet(households_output)
+
+    with pytest.raises(ValueError, match="exact household-id coverage"):
+        restore_atlas_household_cars(
+            households_output_path=households_output,
+            households_input_path=households_input,
+        )
+
+
+def test_atlas_postprocess_derives_households_output_without_mutating_run_input(
+    tmp_path,
+):
+    asim_input_dir = tmp_path / "activitysim" / "data"
+    asim_output_dir = tmp_path / "activitysim" / "output"
+    asim_input_dir.mkdir(parents=True)
+    asim_output_dir.mkdir(parents=True)
+    households_input = asim_input_dir / "households.csv"
+    raw_households_output = tmp_path / "resolved-inputs" / "households.parquet"
+    raw_households_output.parent.mkdir()
+    pd.DataFrame({"household_id": [1, 2], "cars": [1, 2]}).to_csv(
+        households_input, index=False
+    )
+    pd.DataFrame(
+        {"auto_ownership": [3, 1]},
+        index=pd.Index([1, 2], name="household_id"),
+    ).to_parquet(raw_households_output)
+
+    settings = _settings(vehicle_ownership="atlas")
+    settings.activitysim = SimpleNamespace(output_tables={"prefix": "", "tables": []})
+    state = SimpleNamespace(
+        full_settings=settings,
+        year=2019,
+        current_year=2019,
+        forecast_year=2021,
+        current_inner_iter=0,
+        is_enabled=lambda _stage: False,
+        set_sub_stage_progress=lambda _value: None,
+    )
+    workspace = SimpleNamespace(
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_asim_mutable_data_dir=lambda: str(asim_input_dir),
+    )
+    raw_outputs = ActivitySimRunOutputs(
+        output_dir=asim_output_dir,
+        raw_outputs={"households_asim_out": raw_households_output},
+        raw_output_hashes={"households_asim_out": "upstream-hash"},
+    )
+    archived_households = (
+        asim_output_dir / "year-2019-iteration-0" / "households.parquet"
+    )
+    archived_households.parent.mkdir()
+    pd.DataFrame(
+        {"auto_ownership": [9, 9]},
+        index=pd.Index([1, 2], name="household_id"),
+    ).to_parquet(archived_households)
+
+    outputs = ActivitysimPostprocessor("activitysim", state).postprocess(
+        raw_outputs,
+        workspace,
+        households_asim_input_path=str(households_input),
+    )
+
+    assert "cars" not in pd.read_parquet(raw_households_output).columns
+    archived = pd.read_parquet(archived_households)
+    assert archived["cars"].tolist() == [1, 2]
+    assert archived["auto_ownership"].tolist() == [3, 1]
+    assert raw_outputs.raw_output_hashes["households_asim_out"] == "upstream-hash"
+    assert outputs.processed_output_hashes["households_asim_out"] != "upstream-hash"
 
 
 def test_prepare_updated_tables_preserves_usim_person_household_ids_when_asim_ids_are_invalid(

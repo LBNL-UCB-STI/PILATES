@@ -672,6 +672,7 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
                 {
                     key: str(kwargs[key])
                     for key in (
+                        "households_asim_input_path",
                         "population_source_h5_path",
                         "current_input_h5_path",
                     )
@@ -732,6 +733,9 @@ def test_activitysim_postprocess_executes_h5_aliases_from_strict_snapshots(
     base_snapshot = snapshot_root / USIM_DATASTORE_BASE_H5
     assert Path(received["population_source_h5_path"]) == population_snapshot
     assert Path(received["current_input_h5_path"]) == current_snapshot
+    assert Path(received["households_asim_input_path"]) == (
+        snapshot_root / ASIM_HOUSEHOLDS_IN
+    )
     assert len({population_snapshot, current_snapshot, base_snapshot}) == 3
     assert all(
         path.read_text(encoding="utf-8") == "tracked h5\n"
@@ -784,6 +788,7 @@ def test_activitysim_postprocess_uses_population_source_when_current_alias_is_om
 
     assert captured["population_source_h5_path"] == str(population_source)
     assert captured["current_input_h5_path"] == str(population_source)
+    assert captured["households_asim_input_path"] == "/inputs/households.csv"
 
 
 def test_activitysim_projectors_validate_persisted_outputs(

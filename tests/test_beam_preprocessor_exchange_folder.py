@@ -6,11 +6,32 @@ import pytest
 import pandas as pd
 
 from pilates.beam.beam_input_staging import (
+    BeamDataHelper,
     _normalize_beam_vehicle_columns,
     summarize_population_consistency,
     summarize_vehicle_category_consistency,
     validate_population_consistency,
 )
+
+
+def test_beam_households_preserve_explicit_cars_over_auto_ownership(tmp_path):
+    households_path = tmp_path / "households.parquet"
+    pd.DataFrame(
+        {
+            "household_id": [1, 2],
+            "auto_ownership": [3, 1],
+            "cars": [1, 2],
+        }
+    ).to_parquet(households_path, index=False)
+
+    households = BeamDataHelper.read_and_clean(
+        str(households_path), "households", "parquet"
+    )
+
+    assert households["cars"].tolist() == [1, 2]
+    assert "auto_ownership" not in households.columns
+
+
 from pilates.beam.preprocessor import BeamPreprocessor
 from pilates.generic.records import FileRecord, RecordStore
 from pilates.workflows.artifact_keys import (

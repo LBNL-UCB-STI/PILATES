@@ -106,6 +106,21 @@ class BeamDataHelper:
             raise ValueError(f"Unsupported file format: {file_format}")
 
         rename_map = cls.RENAMES.get(table_type, {})
+        if table_type == "households" and "cars" in df.columns:
+            # ATLAS is the ownership authority in coupled runs.  Preserve an
+            # explicit canonical cars field rather than creating duplicate
+            # columns and retaining whichever one happened to appear first.
+            rename_map = {
+                source: target
+                for source, target in rename_map.items()
+                if target not in df.columns
+            }
+            ownership_aliases = [
+                source
+                for source, target in cls.RENAMES["households"].items()
+                if target == "cars" and source in df.columns
+            ]
+            df = df.drop(columns=ownership_aliases)
         df = df.rename(columns=rename_map)
         df = df.loc[:, ~df.columns.duplicated()].copy()
 

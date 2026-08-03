@@ -223,13 +223,13 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
         beam_config_path,
         "\n".join(
             (
-                    f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
-                    'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
-                    'beam.outputs.baseOutputDirectory = "/app/output"',
-                    'beam.agentsim.taz.filePath = ""',
-                    'beam.agentsim.taz.tazIdFieldName = "TAZ"',
-                    'matsim.modules.network.inputNetworkFile = ""',
-                    'beam.physsim.inputNetworkFilePath = ""',
+                f'beam.inputDirectory = "{beam_input_dir / settings.run.region}"',
+                'beam.routing.r5.directory = ${beam.inputDirectory}"/r5"',
+                'beam.outputs.baseOutputDirectory = "/app/output"',
+                'beam.agentsim.taz.filePath = ""',
+                'beam.agentsim.taz.tazIdFieldName = "TAZ"',
+                'matsim.modules.network.inputNetworkFile = ""',
+                'beam.physsim.inputNetworkFilePath = ""',
             )
         )
         + "\n",
