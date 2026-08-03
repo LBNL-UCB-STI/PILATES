@@ -190,6 +190,21 @@ def _linkstats_warmstart_suffix(
     return suffixes or ".csv.gz"
 
 
+def _beam_population_input_suffix(settings: Any) -> str:
+    """Return the suffix written by the ActivitySim-to-BEAM staging step."""
+
+    activitysim = settings.activitysim
+    file_format = activitysim.file_format if activitysim is not None else "csv"
+    if file_format == "parquet":
+        return ".parquet"
+    if file_format == "csv":
+        return ".csv.gz"
+    raise ValueError(
+        "BEAM preprocess does not support ActivitySim input format "
+        f"{file_format!r}; expected 'parquet' or 'csv'."
+    )
+
+
 def _beam_preprocess_native_output_paths(
     *,
     settings: Any,
@@ -197,7 +212,7 @@ def _beam_preprocess_native_output_paths(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs | None = None,
 ) -> dict[str, Path]:
-    del settings, state
+    del state
     selected = (
         tuple(resolved_inputs.metadata.get("native_output_keys", ()))
         if resolved_inputs is not None
@@ -209,10 +224,20 @@ def _beam_preprocess_native_output_paths(
             "vehicles_beam_in",
         )
     )
+    population_keys = {
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+    }
+    population_suffix = (
+        _beam_population_input_suffix(settings)
+        if population_keys.intersection(selected)
+        else ""
+    )
     suffixes = {
-        BEAM_PLANS_IN: ".csv",
-        BEAM_HOUSEHOLDS_IN: ".csv",
-        BEAM_PERSONS_IN: ".csv",
+        BEAM_PLANS_IN: population_suffix,
+        BEAM_HOUSEHOLDS_IN: population_suffix,
+        BEAM_PERSONS_IN: population_suffix,
         LINKSTATS_WARMSTART: _linkstats_warmstart_suffix(
             workspace=workspace,
             resolved_inputs=resolved_inputs,
@@ -772,6 +797,19 @@ def _beam_linkstats_output_cache(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
         cache_version=1,
+    )
+
+
+def _beam_preprocess_output_cache(
+    *, settings: Any, state: Any, workspace: Any
+) -> CacheOptions:
+    """Reject preprocess caches written with incorrect population suffixes."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-requested",
+        cache_hydration_failure="miss",
+        cache_version=2,
     )
 
 
@@ -1461,7 +1499,7 @@ beam_preprocess = StepDefinition(
     project_outputs=_project_beam_preprocess_outputs,
     output_paths=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_beam_linkstats_output_cache,
+    cache_options=_beam_preprocess_output_cache,
 )
 beam_run = StepDefinition(
     name="beam_run",

@@ -108,6 +108,46 @@ def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
     )
 
 
+@pytest.mark.parametrize(
+    ("file_format", "expected_suffix"),
+    (("parquet", ".parquet"), ("csv", ".csv.gz")),
+)
+def test_beam_preprocess_output_paths_match_population_file_format(
+    tmp_path: Path,
+    file_format: str,
+    expected_suffix: str,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(activitysim=SimpleNamespace(file_format=file_format))
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(inputs={}),
+        metadata={
+            "native_output_keys": (
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+                "vehicles_beam_in",
+            )
+        },
+    )
+
+    outputs = _beam_preprocess_native_output_paths(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=workspace,
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert all(
+        str(outputs[key]).endswith(expected_suffix)
+        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+    )
+    assert str(outputs["vehicles_beam_in"]).endswith(".csv")
+
+
 def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> None:
     workspace = SimpleNamespace(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
@@ -210,7 +250,7 @@ def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> N
         "workspace": SimpleNamespace(),
     }
 
-    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 1
+    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 2
     assert beam_run.cache_options(**options_kwargs).cache_version == 1
 
 
@@ -1158,7 +1198,10 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
     declared = beam_preprocess.output_paths(
-        settings=object(), state=object(), workspace=workspace, resolved_inputs=None
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -1176,7 +1219,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
             )
             for key, path in paths.items()
         },
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1192,7 +1235,10 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
     declared = beam_preprocess.output_paths(
-        settings=object(), state=object(), workspace=workspace, resolved_inputs=None
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -1204,7 +1250,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
 
     fresh = beam_preprocess.project_outputs(
         {key: SimpleNamespace(container_uri=str(path)) for key, path in paths.items()},
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1214,7 +1260,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
             key: SimpleNamespace(container_uri=f"archive://prior/{path.name}")
             for key, path in paths.items()
         },
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1414,7 +1460,7 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
     ):
         beam_preprocess.project_outputs(
             outputs,
-            settings=object(),
+            settings=SimpleNamespace(activitysim=None),
             state=object(),
             workspace=workspace,
             resolved_inputs=_empty_resolved_inputs(),
