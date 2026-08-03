@@ -16,7 +16,6 @@ from pilates.workflows.artifact_keys import (
     ASIM_OMX_SKIMS,
     ASIM_PERSONS_IN,
     ATLAS_VEHICLES2_OUTPUT,
-    BEAM_CONFIG_FILE,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -322,7 +321,6 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "beam_preprocess": {
             "inputs": {
-                BEAM_CONFIG_FILE,
                 BEAM_PLANS_IN,
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
@@ -338,7 +336,6 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "beam_run": {
             "inputs": {
-                BEAM_CONFIG_FILE,
                 BEAM_PLANS_IN,
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
@@ -353,7 +350,6 @@ def test_native_steps_declare_static_consist_metadata() -> None:
         },
         "beam_full_skim": {
             "inputs": {
-                BEAM_CONFIG_FILE,
                 BEAM_PLANS_IN,
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,

@@ -42,8 +42,8 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
         def __init__(self) -> None:
             self.values: dict[str, object] = {}
 
-        def update(self, artifacts: dict[str, object]) -> None:
-            self.values.update(artifacts)
+        def set_from_artifact(self, key: str, artifact: object) -> None:
+            self.values[key] = artifact
 
     class Tracker:
         def __init__(self, archived_outputs: dict[str, object]) -> None:
@@ -258,8 +258,8 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         def __init__(self) -> None:
             self.values: dict[str, object] = {}
 
-        def update(self, artifacts: dict[str, object]) -> None:
-            self.values.update(artifacts)
+        def set_from_artifact(self, key: str, artifact: object) -> None:
+            self.values[key] = artifact
 
     class ArchiveTracker:
         def __init__(self, archived_outputs: dict[str, Artifact]) -> None:
