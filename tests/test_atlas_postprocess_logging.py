@@ -21,10 +21,10 @@ def test_atlas_postprocess_does_not_rediscover_or_archive_continuation_files(
     usim_h5 = usim_dir / "model_data_2023.h5"
     usim_h5.write_text("h5")
     (atlas_output_dir / "householdv_2023.csv").write_text(
-        "household_id,nvehicles\n1,1\n"
+        "household_id,nvehicles,year\n1,1,2023\n"
     )
     (atlas_output_dir / "vehicles_2023.csv").write_text(
-        "bodytype,pred_power,modelyear\nsedan,gas,2020\n"
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
     )
     (atlas_input_dir / "vehicles_output.RData").write_text("rdata")
 
@@ -95,8 +95,10 @@ def test_atlas_postprocess_uses_selected_start_year_h5(monkeypatch, tmp_path):
     base_h5.write_text("h5")
     hh_csv = atlas_output_dir / "householdv_2023.csv"
     veh_csv = atlas_output_dir / "vehicles_2023.csv"
-    hh_csv.write_text("household_id,nvehicles\n1,1\n")
-    veh_csv.write_text("bodytype,pred_power,modelyear\nsedan,gas,2020\n")
+    hh_csv.write_text("household_id,nvehicles,year\n1,1,2023\n")
+    veh_csv.write_text(
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
+    )
 
     state = SimpleNamespace(
         full_settings=SimpleNamespace(
@@ -160,8 +162,10 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
     usim_h5.write_text("h5")
     hh_csv = atlas_output_dir / "householdv_2023.csv"
     veh_csv = atlas_output_dir / "vehicles_2023.csv"
-    hh_csv.write_text("household_id,nvehicles\n1,1\n")
-    veh_csv.write_text("bodytype,pred_power,modelyear\nsedan,gas,2020\n")
+    hh_csv.write_text("household_id,nvehicles,year\n1,1,2023\n")
+    veh_csv.write_text(
+        "household_id,vehicle_id,year,bodytype,pred_power,modelyear\n1,1,2023,sedan,gas,2020\n"
+    )
 
     state = SimpleNamespace(
         full_settings=SimpleNamespace(
@@ -192,6 +196,87 @@ def test_atlas_postprocess_raises_when_h5_update_fails(monkeypatch, tmp_path):
             ),
             workspace,
             usim_datastore_h5=usim_h5,
+        )
+
+
+def test_atlas_postprocess_rejects_vehicle_shortfall_before_h5_mutation(tmp_path):
+    """A raw ATLAS vehicle deficit must not reach the population snapshot."""
+    atlas_output_dir = tmp_path / "atlas" / "atlas_output"
+    atlas_output_dir.mkdir(parents=True)
+    h5_path = tmp_path / "model_data_2021.h5"
+    pd.DataFrame(
+        {"cars": [0]},
+        index=pd.Index([1], name="household_id"),
+    ).to_hdf(str(h5_path), key="/2021/households", mode="w")
+
+    householdv_path = atlas_output_dir / "householdv_2021.csv"
+    vehicles_path = atlas_output_dir / "vehicles_2021.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles,year\n1,2,2021\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id,year\n1,1,2021\n",
+        encoding="utf-8",
+    )
+
+    state = SimpleNamespace(
+        full_settings=SimpleNamespace(),
+        year=2021,
+        current_year=2021,
+        forecast_year=2021,
+        atlas_interval_start_year=2019,
+        main_forecast_year=2021,
+        is_start_year=lambda: False,
+    )
+    workspace = SimpleNamespace(
+        get_atlas_output_dir=lambda: str(atlas_output_dir),
+    )
+
+    postprocessor = atlas_postprocessor.AtlasPostprocessor("atlas", state)
+    with pytest.raises(
+        ValueError,
+        match=(
+            "ATLAS household/vehicle contract violation.*"
+            "atlas_interval_start_year=2019.*atlas_subyear=2021.*"
+            "main_forecast_year=2021"
+        ),
+    ):
+        postprocessor._postprocess(
+            AtlasRunOutputs(
+                atlas_output_dir=atlas_output_dir,
+                raw_outputs={
+                    "householdv_2021": householdv_path,
+                    "vehicles_2021": vehicles_path,
+                },
+            ),
+            workspace,
+            usim_datastore_h5=h5_path,
+        )
+
+    with pd.HDFStore(h5_path, mode="r") as store:
+        assert store["/2021/households"]["cars"].tolist() == [0]
+    assert not (atlas_output_dir / "vehicles2_2021.csv").exists()
+
+
+def test_atlas_vehicle_contract_rejects_stale_householdv_year(tmp_path):
+    householdv_path = tmp_path / "householdv_2021.csv"
+    vehicles_path = tmp_path / "vehicles_2021.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles,year\n1,1,2019\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id,year\n1,1,2021\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="householdv.year"):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2021,
+            state=SimpleNamespace(),
         )
 
 
