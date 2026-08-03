@@ -280,6 +280,82 @@ def test_atlas_vehicle_contract_rejects_stale_householdv_year(tmp_path):
         )
 
 
+def test_atlas_vehicle_contract_accepts_yearless_base_year_outputs(tmp_path):
+    householdv_path = tmp_path / "householdv_2017.csv"
+    vehicles_path = tmp_path / "vehicles_2017.csv"
+    householdv_path.write_text(
+        "household_id,nvehicles\n1,2\n2,0\n",
+        encoding="utf-8",
+    )
+    vehicles_path.write_text(
+        "household_id,vehicle_id\n1,10\n1,11\n",
+        encoding="utf-8",
+    )
+
+    atlas_postprocessor.validate_atlas_household_vehicle_contract(
+        householdv_csv_path=str(householdv_path),
+        vehicles_csv_path=str(vehicles_path),
+        atlas_subyear=2017,
+        state=SimpleNamespace(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("householdv_header", "householdv_row", "vehicles_header", "vehicles_row", "match"),
+    [
+        (
+            "household_id,nvehicles",
+            "1,1",
+            "household_id,vehicle_id,year",
+            "1,10,2019",
+            "sample_vehicle_year_mismatches",
+        ),
+        (
+            "household_id,nvehicles,year",
+            "1,1,2019",
+            "household_id,vehicle_id",
+            "1,10",
+            "householdv.year",
+        ),
+    ],
+)
+def test_atlas_vehicle_contract_validates_present_year_independently(
+    tmp_path,
+    householdv_header,
+    householdv_row,
+    vehicles_header,
+    vehicles_row,
+    match,
+):
+    householdv_path = tmp_path / "householdv_2021.csv"
+    vehicles_path = tmp_path / "vehicles_2021.csv"
+    householdv_path.write_text(f"{householdv_header}\n{householdv_row}\n")
+    vehicles_path.write_text(f"{vehicles_header}\n{vehicles_row}\n")
+
+    with pytest.raises(ValueError, match=match):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2021,
+            state=SimpleNamespace(),
+        )
+
+
+def test_atlas_vehicle_contract_rejects_yearless_vehicle_shortfall(tmp_path):
+    householdv_path = tmp_path / "householdv_2017.csv"
+    vehicles_path = tmp_path / "vehicles_2017.csv"
+    householdv_path.write_text("household_id,nvehicles\n1,2\n")
+    vehicles_path.write_text("household_id,vehicle_id\n1,10\n")
+
+    with pytest.raises(ValueError, match="households_with_vehicle_shortfall=1"):
+        atlas_postprocessor.validate_atlas_household_vehicle_contract(
+            householdv_csv_path=str(householdv_path),
+            vehicles_csv_path=str(vehicles_path),
+            atlas_subyear=2017,
+            state=SimpleNamespace(),
+        )
+
+
 def test_atlas_update_h5_vehicle_rejects_household_id_set_mismatch(tmp_path, caplog):
     h5_path = tmp_path / "model_data_2023.h5"
     hh_csv = tmp_path / "householdv_2023.csv"

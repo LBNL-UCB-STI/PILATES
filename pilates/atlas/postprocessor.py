@@ -344,9 +344,14 @@ def validate_atlas_household_vehicle_contract(
     atlas_subyear: int,
     state: Any,
 ) -> None:
-    """Ensure ATLAS ownership totals and its vehicle inventory agree exactly."""
+    """Ensure ATLAS ownership totals and vehicle inventory agree exactly.
+
+    The state-derived ATLAS output key binds each artifact to ``atlas_subyear``.
+    Raw ``year`` columns are optional across ATLAS schema variants, but must
+    agree with that subyear whenever present.
+    """
     householdv_columns = set(pd.read_csv(householdv_csv_path, nrows=0).columns)
-    required_householdv_columns = {"household_id", "nvehicles", "year"}
+    required_householdv_columns = {"household_id", "nvehicles"}
     missing_householdv_columns = required_householdv_columns - householdv_columns
     if missing_householdv_columns:
         raise ValueError(
@@ -356,7 +361,7 @@ def validate_atlas_household_vehicle_contract(
         )
 
     vehicle_columns = set(pd.read_csv(vehicles_csv_path, nrows=0).columns)
-    required_vehicle_columns = {"household_id", "vehicle_id", "year"}
+    required_vehicle_columns = {"household_id", "vehicle_id"}
     missing_vehicle_columns = required_vehicle_columns - vehicle_columns
     if missing_vehicle_columns:
         raise ValueError(
@@ -365,10 +370,12 @@ def validate_atlas_household_vehicle_contract(
             f"vehicles_path={vehicles_csv_path}"
         )
 
-    householdv = pd.read_csv(
-        householdv_csv_path,
-        usecols=["household_id", "nvehicles", "year"],
-    )
+    householdv_has_year = "year" in householdv_columns
+    vehicle_has_year = "year" in vehicle_columns
+    householdv_usecols = ["household_id", "nvehicles"]
+    if householdv_has_year:
+        householdv_usecols.append("year")
+    householdv = pd.read_csv(householdv_csv_path, usecols=householdv_usecols)
     household_ids = _coerce_atlas_integer_column(
         householdv["household_id"],
         column_name="householdv.household_id",
@@ -397,27 +404,32 @@ def validate_atlas_household_vehicle_contract(
             f"duplicate household_id values; householdv_path={householdv_csv_path} "
             f"sample={sample}"
         )
-    householdv_years = _coerce_atlas_integer_column(
-        householdv["year"],
-        column_name="householdv.year",
-        path=householdv_csv_path,
-    )
-    if (householdv_years != atlas_subyear).any():
-        sample = (
-            householdv_years.loc[householdv_years != atlas_subyear].head(10).tolist()
+    if householdv_has_year:
+        householdv_years = _coerce_atlas_integer_column(
+            householdv["year"],
+            column_name="householdv.year",
+            path=householdv_csv_path,
         )
-        raise ValueError(
-            "ATLAS household/vehicle contract violation: householdv.year must "
-            f"equal atlas_subyear={atlas_subyear}; householdv_path={householdv_csv_path} "
-            f"sample={sample}"
-        )
+        if (householdv_years != atlas_subyear).any():
+            sample = (
+                householdv_years.loc[householdv_years != atlas_subyear]
+                .head(10)
+                .tolist()
+            )
+            raise ValueError(
+                "ATLAS household/vehicle contract violation: householdv.year must "
+                f"equal atlas_subyear={atlas_subyear}; householdv_path={householdv_csv_path} "
+                f"sample={sample}"
+            )
 
     expected_by_household = pd.Series(
         expected_vehicle_counts.to_numpy(),
         index=pd.Index(household_ids.to_numpy(), name="household_id"),
         dtype="int64",
     )
-    vehicle_usecols = ["household_id", "vehicle_id", "year"]
+    vehicle_usecols = ["household_id", "vehicle_id"]
+    if vehicle_has_year:
+        vehicle_usecols.append("year")
 
     vehicle_counts = pd.Series(dtype="int64")
     unexpected_vehicle_rows = 0
@@ -448,18 +460,19 @@ def validate_atlas_household_vehicle_contract(
                 .head(10 - len(unexpected_household_samples))
                 .tolist()
             )
-        vehicle_years = _coerce_atlas_integer_column(
-            vehicles_chunk["year"],
-            column_name="vehicles.year",
-            path=vehicles_csv_path,
-        )
-        mismatched_year = vehicle_years != atlas_subyear
-        if mismatched_year.any() and len(year_mismatch_samples) < 10:
-            year_mismatch_samples.extend(
-                vehicle_years.loc[mismatched_year]
-                .head(10 - len(year_mismatch_samples))
-                .tolist()
+        if vehicle_has_year:
+            vehicle_years = _coerce_atlas_integer_column(
+                vehicles_chunk["year"],
+                column_name="vehicles.year",
+                path=vehicles_csv_path,
             )
+            mismatched_year = vehicle_years != atlas_subyear
+            if mismatched_year.any() and len(year_mismatch_samples) < 10:
+                year_mismatch_samples.extend(
+                    vehicle_years.loc[mismatched_year]
+                    .head(10 - len(year_mismatch_samples))
+                    .tolist()
+                )
         chunk_counts = vehicle_household_ids.value_counts(sort=False).astype("int64")
         vehicle_counts = vehicle_counts.add(chunk_counts, fill_value=0).astype("int64")
 

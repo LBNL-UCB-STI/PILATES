@@ -320,7 +320,9 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 )
             if hasattr(workspace_obj, "get_beam_output_dir"):
                 path_aliases["beam_output"] = Path(workspace_obj.get_beam_output_dir())
-            if hasattr(workspace_obj, "get_asim_output_dir"):
+            if settings.activitysim is not None and hasattr(
+                workspace_obj, "get_asim_output_dir"
+            ):
                 path_aliases["activitysim_output"] = Path(
                     workspace_obj.get_asim_output_dir()
                 )
