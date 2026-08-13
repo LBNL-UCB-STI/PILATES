@@ -138,6 +138,27 @@ def asim_runtime_zarr_path(workspace: Workspace) -> str:
     return os.path.join(asim_runtime_cache_dir(workspace), "skims.zarr")
 
 
+def asim_compile_output_dir(workspace: Workspace) -> str:
+    """Return the private output root used by the ActivitySim Numba warmup."""
+    return str(Path(workspace.get_asim_output_dir()).parent / "compile-output")
+
+
+def _stage_compile_zarr_input(
+    zarr_input_path: str,
+    compile_runtime_cache_dir: str,
+) -> str:
+    """Copy a selected immutable Zarr input onto the private compile surface."""
+    source = Path(zarr_input_path)
+    destination = Path(compile_runtime_cache_dir) / "skims.zarr"
+    if not source.is_dir():
+        raise RuntimeError(
+            "ActivitySim warmup requires the selected Zarr skim input to be a directory."
+        )
+    _remove_path_if_present(str(destination))
+    shutil.copytree(source, destination)
+    return str(destination)
+
+
 def asim_staged_input_paths(workspace: Workspace) -> Dict[str, str]:
     asim_data_dir = workspace.get_asim_mutable_data_dir()
     return {
@@ -229,9 +250,8 @@ class ActivitysimNumbaWarmup(GenericRunner):
     Private compile-mode execution used to warm node-local Numba caches.
 
     It intentionally has no workflow identity, typed outputs, state mutation,
-    or provenance publication.  Its return value only reports the local Zarr
-    side effect so the caller can finalize it before production might discover
-    it.
+    or provenance publication. Its temporary output root is isolated from the
+    production output root, including any compile-local Zarr conversion.
     """
 
     @staticmethod
@@ -256,11 +276,15 @@ class ActivitysimNumbaWarmup(GenericRunner):
         working_dir=None,
         *,
         workspace: Optional[Workspace] = None,
+        output_dir: Optional[str] = None,
+        runtime_cache_dir: Optional[str] = None,
     ):
         return ActivitysimRunner.get_asim_docker_vols(
             settings,
             working_dir=working_dir,
             workspace=workspace,
+            output_dir=output_dir,
+            runtime_cache_dir=runtime_cache_dir,
         )
 
     def __init__(
@@ -281,18 +305,29 @@ class ActivitysimNumbaWarmup(GenericRunner):
         self,
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> Optional[Path]:
+        *,
+        skim_mode: ActivitysimSkimMode = "omx",
+        zarr_input_path: Optional[str] = None,
+    ) -> None:
         if not isinstance(inputs, ActivitySimPreprocessOutputs):
             raise TypeError(
                 "ActivitysimNumbaWarmup.run expects ActivitySimPreprocessOutputs"
             )
-        return self._run(inputs, workspace)
+        self._run(
+            inputs,
+            workspace,
+            skim_mode=skim_mode,
+            zarr_input_path=zarr_input_path,
+        )
 
     def _run(
         self,
         inputs: ActivitySimPreprocessOutputs,
         workspace: Workspace,
-    ) -> Optional[Path]:
+        *,
+        skim_mode: ActivitysimSkimMode = "omx",
+        zarr_input_path: Optional[str] = None,
+    ) -> None:
         del inputs
         settings = self.state.full_settings
         region = settings.run.region
@@ -305,10 +340,20 @@ class ActivitysimNumbaWarmup(GenericRunner):
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
         os.makedirs(shared_tmp_dir, exist_ok=True)
 
+        compile_output_dir = asim_compile_output_dir(workspace)
+        compile_runtime_cache_dir = os.path.join(compile_output_dir, "cache")
+        os.makedirs(compile_runtime_cache_dir, exist_ok=True)
+        compile_zarr_input_path = (
+            _stage_compile_zarr_input(zarr_input_path, compile_runtime_cache_dir)
+            if skim_mode == "zarr" and zarr_input_path is not None
+            else None
+        )
         asim_docker_vols = self.get_asim_docker_vols(
             settings,
             workspace=workspace,
             working_dir=workspace.full_path,
+            output_dir=compile_output_dir,
+            runtime_cache_dir=compile_runtime_cache_dir,
         )
         asim_docker_vols.update(
             {
@@ -320,15 +365,6 @@ class ActivitysimNumbaWarmup(GenericRunner):
         _, activity_demand_image = self.get_model_and_image(
             settings, "activity_demand_model"
         )
-
-        asim_local_output_folder = os.path.abspath(
-            os.path.join(workspace.full_path, settings.activitysim.local_output_folder)
-        )
-        os.makedirs(
-            os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
-        )
-
-        all_skims_path = asim_runtime_zarr_path(workspace)
 
         asim_cmd = self.get_base_asim_cmd(
             settings, household_sample_size=2500, num_processes=1
@@ -342,7 +378,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
             environment=container_environment,
             working_dir=asim_workdir,
             volumes=asim_docker_vols,
-            zarr_input_path=all_skims_path if os.path.exists(all_skims_path) else None,
+            zarr_input_path=compile_zarr_input_path,
         )
 
         success = self.run_container(
@@ -355,35 +391,14 @@ class ActivitysimNumbaWarmup(GenericRunner):
             working_dir=asim_workdir,
             args=additional_args,
             environment=container_environment,
-            output_paths=[all_skims_path],
+            output_paths=[compile_output_dir],
             lineage_mode="none",
         )
 
         if not success:
             raise RuntimeError("ActivitySim Numba warmup failed")
 
-        zarr_skims_path = None
-        if os.path.exists(all_skims_path):
-            try:
-                finalize_activitysim_zarr_skims(all_skims_path, settings, workspace)
-            except Exception as e:
-                logger.error(
-                    "Failed to finalize warmup-created Zarr skims: %s",
-                    e,
-                    exc_info=True,
-                )
-                raise RuntimeError(
-                    "Failed to finalize warmup-created Zarr skims, cannot proceed."
-                ) from e
-
-            zarr_skims_path = all_skims_path
-            logger.info("Warmup created Zarr skims: %s", all_skims_path)
-        else:
-            logger.warning(
-                "ActivitySim Numba warmup succeeded but created no Zarr skims."
-            )
-
-        return Path(zarr_skims_path) if zarr_skims_path is not None else None
+        logger.info("ActivitySim Numba warmup completed in %s", compile_output_dir)
 
 
 class ActivitysimRunner(GenericRunner):
@@ -487,6 +502,13 @@ class ActivitysimRunner(GenericRunner):
                 input_path=str(input_path),
                 workspace=workspace,
             )
+        if skim_mode == "zarr":
+            zarr_input_path = staged_extra_inputs.get(ZARR_SKIMS)
+            if zarr_input_path is None or not os.path.exists(zarr_input_path):
+                raise RuntimeError(
+                    "ActivitySim Zarr mode requires a staged, existing Zarr skim input."
+                )
+            staged_extra_inputs[ZARR_SKIMS] = zarr_input_path
         if skip_numba_warmup:
             warmup_decision = "skipped (explicit rewind skip)"
         elif not persist_sharrow_cache_enabled(self.state.full_settings):
@@ -499,8 +521,14 @@ class ActivitysimRunner(GenericRunner):
             warmup_decision = "running"
         logger.info("ActivitySim Numba warmup: %s", warmup_decision)
         if warmup_decision == "running":
+            zarr_input_path = (
+                staged_extra_inputs.get(ZARR_SKIMS) if skim_mode == "zarr" else None
+            )
             ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
-                inputs, workspace
+                inputs,
+                workspace,
+                skim_mode=skim_mode,
+                zarr_input_path=zarr_input_path,
             )
             if not _dir_contains_files(asim_sharrow_cache_dir(workspace)):
                 raise RuntimeError(
@@ -544,6 +572,8 @@ class ActivitysimRunner(GenericRunner):
             mp_config_dirs = []
             compile_config_dirs = []
             for local, d in asim_docker_vols.items():
+                if d["bind"].endswith("/output/cache"):
+                    continue
                 if "data" in d["bind"]:
                     data_dirs.append(d["bind"])
                 elif "output" in d["bind"]:
@@ -576,16 +606,20 @@ class ActivitysimRunner(GenericRunner):
         working_dir=None,
         *,
         workspace: Optional[Workspace] = None,
+        output_dir: Optional[str] = None,
+        runtime_cache_dir: Optional[str] = None,
     ):
         region = settings.run.region
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
-        runtime_cache_dir = None
+        configured_runtime_cache_dir = runtime_cache_dir
         if workspace is not None:
             asim_local_mutable_data_folder = os.path.abspath(
                 workspace.get_asim_mutable_data_dir()
             )
-            asim_local_output_folder = os.path.abspath(workspace.get_asim_output_dir())
+            asim_local_output_folder = os.path.abspath(
+                output_dir if output_dir is not None else workspace.get_asim_output_dir()
+            )
             asim_local_configs_folder = os.path.abspath(
                 os.path.join(
                     workspace.get_asim_mutable_configs_dir(),
@@ -604,7 +638,10 @@ class ActivitysimRunner(GenericRunner):
                     "configs_mp",
                 )
             )
-            runtime_cache_dir = os.path.abspath(workspace.get_asim_runtime_cache_dir())
+            if configured_runtime_cache_dir is None:
+                configured_runtime_cache_dir = os.path.abspath(
+                    workspace.get_asim_runtime_cache_dir()
+                )
         elif working_dir is not None:
             asim_local_mutable_data_folder = os.path.abspath(
                 os.path.join(
@@ -694,8 +731,11 @@ class ActivitysimRunner(GenericRunner):
         default_runtime_cache_dir = os.path.abspath(
             os.path.join(asim_local_output_folder, "cache")
         )
-        if runtime_cache_dir and runtime_cache_dir != default_runtime_cache_dir:
-            asim_docker_vols[runtime_cache_dir] = {
+        if (
+            configured_runtime_cache_dir
+            and os.path.abspath(configured_runtime_cache_dir) != default_runtime_cache_dir
+        ):
+            asim_docker_vols[os.path.abspath(configured_runtime_cache_dir)] = {
                 "bind": asim_remote_runtime_cache_folder,
                 "mode": "rw",
             }

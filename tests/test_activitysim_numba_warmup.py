@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -21,6 +22,15 @@ class _Workspace:
 
     def get_asim_output_dir(self) -> str:
         return str(Path(self.full_path) / "activitysim" / "output")
+
+    def get_asim_mutable_data_dir(self) -> str:
+        return str(Path(self.full_path) / "activitysim" / "data")
+
+    def get_asim_mutable_configs_dir(self) -> str:
+        return str(Path(self.full_path) / "activitysim" / "configs")
+
+    def get_asim_runtime_cache_dir(self) -> str:
+        return str(Path(self.get_asim_output_dir()) / "cache")
 
 
 def test_activitysim_run_outputs_round_trip_generated_zarr(tmp_path: Path) -> None:
@@ -158,6 +168,7 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
         _warmup: object,
         _inputs: ActivitySimPreprocessOutputs,
         _workspace: _Workspace,
+        **_kwargs: object,
     ) -> None:
         warmup_calls.append(None)
         cache_dir.mkdir(parents=True, exist_ok=True)
@@ -175,9 +186,174 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
 
     monkeypatch.setattr(activitysim_runner.ActivitysimNumbaWarmup, "run", warm_cache)
     monkeypatch.setattr(runner, "_run", run_after_decision)
+    monkeypatch.setattr(
+        activitysim_runner,
+        "finalize_activitysim_zarr_skims",
+        lambda path, *_args: Path(path),
+    )
     caplog.set_level(logging.INFO, logger="pilates.activitysim.runner")
 
-    runner.run(inputs, workspace, skip_numba_warmup=skip_numba_warmup)
+    runner.run(
+        inputs,
+        workspace,
+        skim_mode="omx",
+        skip_numba_warmup=skip_numba_warmup,
+    )
 
     assert expected_decision in caplog.text
     assert len(warmup_calls) == expected_warmup_calls
+
+
+def test_numba_warmup_writes_only_to_isolated_compile_output_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A compile container write must not reach production's output mount."""
+    workspace = _Workspace(tmp_path)
+    production_output = Path(workspace.get_asim_output_dir())
+    production_output.mkdir(parents=True)
+    sentinel = production_output / "production-only.txt"
+    sentinel.write_text("keep", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
+            local_mutable_data_folder="activitysim/data",
+            local_output_folder="activitysim/output",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            file_format="parquet",
+            persist_sharrow_cache=True,
+            command_template="activitysim",
+            household_sample_size=0,
+            num_processes=2,
+            chunk_size=0,
+        ),
+    )
+    warmup = activitysim_runner.ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=settings)
+    )
+    captured_volumes: dict[str, dict[str, str]] = {}
+    attempted_production_mutations: list[str] = []
+
+    def is_production_path(value: object) -> bool:
+        if not isinstance(value, (str, Path)):
+            return False
+        try:
+            return os.path.commonpath(
+                [os.path.abspath(value), str(production_output)]
+            ) == str(production_output)
+        except ValueError:
+            return False
+
+    def guard_mutation(operation: str):
+        original = getattr(activitysim_runner.os, operation)
+
+        def guarded(*args: object, **kwargs: object):
+            if any(is_production_path(value) for value in args):
+                attempted_production_mutations.append(operation)
+                raise AssertionError(
+                    f"warmup attempted {operation} under production output"
+                )
+            return original(*args, **kwargs)
+
+        return guarded
+
+    for operation in (
+        "mkdir",
+        "makedirs",
+        "remove",
+        "rename",
+        "replace",
+        "unlink",
+        "utime",
+    ):
+        monkeypatch.setattr(
+            activitysim_runner.os, operation, guard_mutation(operation)
+        )
+
+    monkeypatch.setattr(
+        warmup,
+        "get_model_and_image",
+        lambda *_args: ("activity_demand_model", "image"),
+    )
+
+    def run_compile_container(*_args: object, **kwargs: object) -> bool:
+        captured_volumes.update(kwargs["volumes"])
+        output_root = next(
+            Path(local)
+            for local, mount in kwargs["volumes"].items()
+            if mount["bind"].endswith("/output")
+        )
+        assert not is_production_path(output_root)
+        output_root.mkdir(parents=True, exist_ok=True)
+        (output_root / "compile-only.txt").write_text("sample", encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(warmup, "run_container", run_compile_container)
+
+    warmup.run(_activitysim_inputs(tmp_path), workspace)
+
+    mounted_output = next(
+        Path(local)
+        for local, mount in captured_volumes.items()
+        if mount["bind"].endswith("/output")
+    )
+    assert mounted_output != production_output
+    assert (mounted_output / "compile-only.txt").read_text(encoding="utf-8") == "sample"
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert not (production_output / "compile-only.txt").exists()
+    assert attempted_production_mutations == []
+
+
+def test_numba_warmup_copies_the_selected_zarr_into_private_compile_scratch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Warmup must not mount the selected Zarr into the writable container."""
+    workspace = _Workspace(tmp_path)
+    zarr_parent = tmp_path / "selected-zarr"
+    zarr_path = zarr_parent / "skims.zarr"
+    zarr_path.mkdir(parents=True)
+    (zarr_path / ".zgroup").write_text("{}\n", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
+            local_mutable_data_folder="activitysim/data",
+            local_output_folder="activitysim/output",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            file_format="parquet",
+            persist_sharrow_cache=True,
+            command_template="activitysim",
+            household_sample_size=0,
+            num_processes=2,
+            chunk_size=0,
+        ),
+    )
+    warmup = activitysim_runner.ActivitysimNumbaWarmup(
+        "activitysim_numba_warmup", SimpleNamespace(full_settings=settings)
+    )
+    captured_volumes: dict[str, dict[str, str]] = {}
+    monkeypatch.setattr(
+        warmup,
+        "get_model_and_image",
+        lambda *_args: ("activity_demand_model", "image"),
+    )
+    monkeypatch.setattr(
+        warmup,
+        "run_container",
+        lambda *_args, **kwargs: (captured_volumes.update(kwargs["volumes"]) or True),
+    )
+
+    warmup.run(
+        _activitysim_inputs(tmp_path),
+        workspace,
+        skim_mode="zarr",
+        zarr_input_path=str(zarr_path),
+    )
+
+    compile_zarr = (
+        tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
+    )
+    assert str(zarr_path) not in captured_volumes
+    assert (compile_zarr / ".zgroup").read_text(encoding="utf-8") == "{}\n"

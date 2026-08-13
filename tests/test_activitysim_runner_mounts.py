@@ -60,6 +60,22 @@ def test_activitysim_numba_warmup_args_skip_configs_mp():
     assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs" in args
 
 
+def test_activitysim_numba_warmup_args_keep_one_compile_output_destination():
+    settings = _settings()
+    working_dir = "/tmp/pilates-workdir"
+    vols = ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
+    vols["/tmp/private-compile-cache"] = {
+        "bind": "/activitysim/activitysim/examples/prototype_mtc_clean/output/cache",
+        "mode": "rw",
+    }
+
+    args = ActivitysimNumbaWarmup.get_asim_additional_args(settings, vols, True)
+
+    output_root = "/activitysim/activitysim/examples/prototype_mtc_clean/output"
+    assert args.count("-o") == 1
+    assert args[args.index("-o") + 1] == output_root
+
+
 def test_activitysim_run_args_include_configs_mp():
     settings = _settings()
     working_dir = "/tmp/pilates-workdir"

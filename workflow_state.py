@@ -68,7 +68,10 @@ class WorkflowState:
         self.file_loc = file_loc
         self.mirror_file_loc: Optional[str] = None
 
-        self.__asim_compiled = asim_compiled
+        # Kept as an ignored constructor argument so archived callers that
+        # still pass the legacy field can load. Numba warmup is node-local
+        # acceleration state, not durable workflow state.
+        del asim_compiled
 
         # Store settings for access by methods that need them
         self._settings = {
@@ -123,25 +126,6 @@ class WorkflowState:
         self._set_year_schedule(self._compute_year_schedule())
 
     @property
-    def asim_compiled(self):
-        if self.current_year is not None:
-            if self.__asim_compiled:
-                logger.info(
-                    "ActivitySim already compiled in year %s", self.current_year
-                )
-            else:
-                logger.info(
-                    "ActivitySim not compiled in year %s, so running compilation (this will take longer)",
-                    self.current_year,
-                )
-        return self.__asim_compiled
-
-    def compile_asim(self):
-        self.__asim_compiled = True
-        logger.info("Completed compiling activitysim in year %s", self.current_year)
-        self.write_state()
-
-    @property
     def year(self):
         return self.current_year
 
@@ -188,11 +172,14 @@ class WorkflowState:
             "year": year,
             "stage": current_stage.name if current_stage else None,
             "iteration": iteration,
-            "asim_compiled": asim_compiled,
             "sub_stage_progress": sub_stage_progress,
             "run_info_path": run_info_path,
             "data_initialized": data_initialized,
         }
+        # Historic callers may still provide this positional field. It is
+        # intentionally ignored: a node-local Numba cache cannot determine
+        # cache eligibility or restart behavior.
+        del asim_compiled
         directory = os.path.dirname(file_loc)
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -215,7 +202,9 @@ class WorkflowState:
             else WorkflowState.Stage[stage_str]
         )
         iteration = data.get("iteration", 0) or 0
-        asim_compiled = data.get("asim_compiled", False)
+        # Accept old snapshots but never restore their warmup marker as
+        # workflow state.
+        asim_compiled = False
         sub_stage_progress = data.get("sub_stage_progress", None)
         run_info_path = data.get("run_info_path", None)
         data_initialized = data.get("data_initialized", False)
@@ -456,7 +445,7 @@ class WorkflowState:
                 self.current_sub_stage or self.current_major_stage,
                 target,
                 self.current_inner_iter,
-                self.__asim_compiled,
+                False,
                 self.sub_stage_progress,
                 self.run_info_path,
                 self.data_initialized,
