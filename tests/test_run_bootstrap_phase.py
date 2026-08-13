@@ -3174,6 +3174,25 @@ def test_snapshot_manager_triggers_outer_iteration_snapshots(tmp_path):
     assert latest_db.exists()
 
 
+def test_activitysim_boundary_forces_named_snapshot() -> None:
+    calls: list[dict[str, object]] = []
+    snapshot_manager = SimpleNamespace(
+        snapshot=lambda **kwargs: calls.append(kwargs) or True
+    )
+
+    assert run_module._snapshot_activitysim_boundary(
+        snapshot_manager,
+        year=2018,
+        iteration=2,
+    )
+    assert calls == [
+        {
+            "reason": "after_activitysim_y2018_i2",
+            "checkpoint": True,
+        }
+    ]
+
+
 def test_snapshot_manager_interval_snapshot_safe_point_behavior(tmp_path):
     tracker = DummySnapshotTracker()
     settings = SimpleNamespace(

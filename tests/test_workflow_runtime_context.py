@@ -144,6 +144,68 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
     assert seen["beam_context"] is context
 
 
+def test_supply_demand_snapshots_after_activitysim_before_beam(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A completed ActivitySim handoff is durable before BEAM begins."""
+
+    class _FakeStage:
+        supply_demand_loop = "supply_demand_loop"
+        activity_demand = "activity_demand"
+        traffic_assignment = "traffic_assignment"
+
+    class _FakeState:
+        Stage = _FakeStage
+        iteration = 0
+        current_major_stage = _FakeStage.supply_demand_loop
+        year = 2018
+        forecast_year = 2018
+        is_restart_run = False
+
+        def should_run(self, major_stage, iteration=None, sub_stage=None):
+            return major_stage == self.Stage.supply_demand_loop
+
+        def complete_step(self, *_args, **_kwargs):
+            return None
+
+    context = WorkflowRuntimeContext.from_parts(
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                supply_demand_iters=1,
+                models=SimpleNamespace(activity_demand="activitysim"),
+            )
+        ),
+        state=_FakeState(),
+        workspace=SimpleNamespace(full_path=str(tmp_path)),
+        surface=SimpleNamespace(profile=SimpleNamespace()),
+    )
+    events: list[str] = []
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
+        lambda **_kwargs: events.append("activitysim"),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand._run_traffic_assignment_phase",
+        lambda **_kwargs: events.append("beam"),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.stages.supply_demand.flush_archive_queue",
+        lambda **_kwargs: events.append("flush"),
+    )
+
+    run_supply_demand_stage(
+        scenario=SimpleNamespace(),
+        coupler=SimpleNamespace(),
+        year=2018,
+        handoff=LandUseToSupplyDemandHandoff(),
+        on_activity_demand_boundary=lambda _iteration: events.append("snapshot"),
+        context=context,
+    )
+
+    assert events[:4] == ["activitysim", "flush", "snapshot", "beam"]
+
+
 def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
     tmp_path: Path,
 ) -> None:

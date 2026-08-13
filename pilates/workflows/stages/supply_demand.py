@@ -29,6 +29,7 @@ def run_supply_demand_stage(
     coupler: CouplerProtocol,
     year: int,
     handoff: LandUseToSupplyDemandHandoff,
+    on_activity_demand_boundary: Optional[Callable[[int], None]] = None,
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
     context: WorkflowRuntimeContext,
 ) -> None:
@@ -58,6 +59,10 @@ def run_supply_demand_stage(
     on_iteration_boundary : Optional[Callable[[int], None]], optional
         Callback invoked after each outer iteration completes. Intended for
         orchestration-level safe-point actions such as DB snapshots.
+    on_activity_demand_boundary : Optional[Callable[[int], None]], optional
+        Callback invoked after a successful ActivitySim phase has been archived
+        and before BEAM begins. Intended for an orchestration-level durability
+        checkpoint of the ActivitySim handoff.
 
     A committed ``beam_run_completed -> beam_postprocess`` checkpoint is the
     only mid-stage restart boundary. Other resumed frontiers run their ordinary
@@ -110,6 +115,9 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 context=context,
             )
+            flush_archive_queue(timeout=300, fail_on_timeout=False)
+            if on_activity_demand_boundary is not None:
+                on_activity_demand_boundary(i)
         elif settings.run.models.activity_demand is not None:
             raise RuntimeError(
                 "ActivitySim is skipped outside the committed BEAM checkpoint "

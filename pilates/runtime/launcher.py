@@ -210,6 +210,20 @@ def _resolve_cache_epoch(settings: PilatesConfig) -> int:
     return scenario_runtime.resolve_cache_epoch(settings)
 
 
+def _snapshot_activitysim_boundary(
+    snapshot_manager: ConsistDbSnapshotManager,
+    *,
+    year: int,
+    iteration: int,
+) -> bool:
+    """Persist the completed ActivitySim handoff before BEAM begins."""
+
+    return snapshot_manager.snapshot(
+        reason=f"after_activitysim_y{year}_i{iteration}",
+        checkpoint=True,
+    )
+
+
 def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
     """
     Resolve the archive and mutable run roots for the current execution.
@@ -920,6 +934,13 @@ def main(
                         coupler=coupler,
                         year=year,
                         handoff=land_use_handoff,
+                        on_activity_demand_boundary=(
+                            lambda iteration, y=year: _snapshot_activitysim_boundary(
+                                snapshot_manager,
+                                year=y,
+                                iteration=iteration,
+                            )
+                        ),
                         on_iteration_boundary=(
                             lambda iteration, y=year: (
                                 snapshot_manager.on_outer_iteration_boundary(
