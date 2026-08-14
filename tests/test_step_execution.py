@@ -398,6 +398,12 @@ def test_urbansim_run_archives_only_scalar_forecast_output(
         binding=BindingResult(inputs={USIM_DATASTORE_H5: input_h5}),
         required_roles=(USIM_DATASTORE_H5,),
         source_by_role={USIM_DATASTORE_H5: "coupler"},
+        metadata={
+            "urbansim_launch_context": urbansim_atlas.UrbanSimLaunchContext(
+                mutable_data_dir=forecast_h5.parent,
+                output_datastore=forecast_h5,
+            )
+        },
     )
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
     monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))

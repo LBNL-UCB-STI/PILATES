@@ -23,6 +23,7 @@ from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
+from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.workflows.steps.urbansim_atlas import (
     ATLAS_POSTPROCESS,
     ATLAS_PREPROCESS,
@@ -203,6 +204,7 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
         ),
         urbansim=SimpleNamespace(
             input_file_template="input_{region_id}.h5",
+            output_file_template="output_{year}.h5",
             region_mappings={"region_to_region_id": {"test": "001"}},
         ),
     )
@@ -218,19 +220,23 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
 
     bootstrap = URBANSIM_RUN.resolve_inputs(
         settings=settings,
-        state=SimpleNamespace(current_year=2020, iteration=0),
+        state=SimpleNamespace(current_year=2020, forecast_year=2020, iteration=0),
         workspace=workspace,
         coupler=_Coupler(),
     )
     later = URBANSIM_RUN.resolve_inputs(
         settings=settings,
-        state=SimpleNamespace(current_year=2030, iteration=0),
+        state=SimpleNamespace(current_year=2030, forecast_year=2030, iteration=0),
         workspace=workspace,
         coupler=_Coupler(),
     )
 
     assert bootstrap.required_roles == (USIM_DATASTORE_H5,)
     assert bootstrap.optional_roles == (FINAL_SKIMS_OMX,)
+    assert bootstrap.metadata["urbansim_launch_context"] == UrbanSimLaunchContext(
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+        output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2020.h5",
+    )
     assert later.required_roles == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
     assert later.optional_roles == ()
     assert later.logical_destinations == {
@@ -1321,6 +1327,10 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
     datastore = tmp_path / "resolved" / "datastore.h5"
     final_skims = tmp_path / "resolved" / "final_skims.omx"
     workspace = _workspace(tmp_path)
+    launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+        output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5",
+    )
     calls: dict[str, object] = {}
 
     class _Runner:
@@ -1338,12 +1348,14 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
         settings=_settings(),
         state=_state(),
         workspace=workspace,
+        urbansim_launch_context=launch_context,
     )
 
     assert calls == {
         "usim_datastore_h5": datastore,
         "final_skims_omx": final_skims,
         "workspace": workspace,
+        "launch_context": launch_context,
     }
 
 

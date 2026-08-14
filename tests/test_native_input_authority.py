@@ -16,6 +16,7 @@ from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import activitysim, urbansim_atlas
+from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
 
 
@@ -106,9 +107,11 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     settings.run.region = "test"
     settings.urbansim = SimpleNamespace(
         input_file_template="input_{region_id}.h5",
+        output_file_template="output_{year}.h5",
         region_mappings={"region_to_region_id": {"test": "001"}},
     )
     state = _state(current_year=2022)
+    state.forecast_year = 2022
     workspace = SimpleNamespace(
         full_path=".",
         get_usim_mutable_data_dir=lambda: "urbansim/data",
@@ -366,6 +369,10 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
 
     population = Path("/bound/population.h5")
     skims = Path("/bound/final-skims.omx")
+    urbansim_launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=Path("/resolved/urbansim"),
+        output_datastore=Path("/resolved/urbansim/output_2022.h5"),
+    )
     activitysim._activitysim_preprocess_callable(
         population,
         skims,
@@ -379,6 +386,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         settings=settings,
         state=state,
         workspace=workspace,
+        urbansim_launch_context=urbansim_launch_context,
     )
     urbansim_atlas._native_atlas_preprocess(
         population,
@@ -395,6 +403,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         "usim_datastore_h5": population,
         "final_skims_omx": skims,
         "workspace": workspace,
+        "launch_context": urbansim_launch_context,
     }
     assert captured["atlas"]["final_skims_omx"] == skims
 

@@ -14,7 +14,6 @@ from pilates.generic.model import Model
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
-from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
@@ -25,9 +24,14 @@ CONSIST_CONTAINER_DEBUG_STREAM_ENV = "CONSIST_CONTAINER_DEBUG_STREAM"
 
 RunnerInputsT = TypeVar("RunnerInputsT")
 RunnerOutputsT = TypeVar("RunnerOutputsT")
+RunnerLaunchContextT = TypeVar("RunnerLaunchContextT")
 
 
-class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
+class GenericRunner(
+    Model,
+    ABC,
+    Generic[RunnerInputsT, RunnerOutputsT, RunnerLaunchContextT],
+):
     """
     Base class for model runners with model-specific input and output types.
     """
@@ -84,26 +88,26 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
     def run(
         self,
         store: RunnerInputsT,
-        workspace: Workspace,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Execute the model run.
 
         Args:
             store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
         """
         self.state.set_sub_stage_progress("runner")
-        return self._run(store, workspace)
+        return self._run(store, launch_context)
 
     @abc.abstractmethod
     def _run(
         self,
         store: RunnerInputsT,
-        workspace: Workspace,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Do the model run.
@@ -113,7 +117,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
         Args:
             store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.

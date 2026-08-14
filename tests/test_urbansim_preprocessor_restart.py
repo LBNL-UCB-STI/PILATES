@@ -8,7 +8,7 @@ from pilates.urbansim.preprocessor import (
     stage_urbansim_run_workspace,
 )
 from pilates.urbansim.outputs import UrbanSimPreprocessOutputs, UrbanSimRunOutputs
-from pilates.urbansim.runner import UrbansimRunner
+from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 
 
@@ -504,6 +504,10 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
         usim_mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
         prepared_inputs={"usim_datastore_h5": datastore},
     )
+    launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+        output_datastore=tmp_path / "run" / "urbansim" / "data" / "output.h5",
+    )
     captured: dict[str, object] = {}
 
     def _stage(**kwargs: object) -> UrbanSimPreprocessOutputs:
@@ -513,10 +517,10 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
     def _run(
         _self: UrbansimRunner,
         inputs: UrbanSimPreprocessOutputs,
-        run_workspace: _WorkspaceStub,
+        run_launch_context: UrbanSimLaunchContext,
         model_run_hash: str | None = None,
     ) -> UrbanSimRunOutputs:
-        captured["run"] = (inputs, run_workspace, model_run_hash)
+        captured["run"] = (inputs, run_launch_context, model_run_hash)
         return UrbanSimRunOutputs(usim_datastore_h5=tmp_path / "output.h5")
 
     monkeypatch.setattr("pilates.urbansim.runner.stage_urbansim_run_workspace", _stage)
@@ -525,6 +529,7 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
     result = runner.run(
         datastore,
         workspace,
+        launch_context=launch_context,
         final_skims_omx=final_skims,
         model_run_hash="run-hash",
     )
@@ -537,5 +542,48 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
         "usim_datastore_h5": datastore,
         "final_skims_omx": final_skims,
     }
-    assert captured["run"] == (staged, workspace, "run-hash")
+    assert captured["run"] == (staged, launch_context, "run-hash")
     assert result.usim_datastore_h5 == tmp_path / "output.h5"
+
+
+def test_urbansim_runner_uses_resolved_launch_context_for_container_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.urbansim.client_data_folder = "/data"
+    settings.urbansim.client_base_folder = "/"
+    runner = object.__new__(UrbansimRunner)
+    runner.model_name = "urbansim"
+    runner.state = SimpleNamespace(current_year=2020, full_settings=settings)
+    staged_root = tmp_path / "staged" / "urbansim" / "data"
+    launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=tmp_path / "resolved" / "urbansim" / "data",
+        output_datastore=tmp_path / "resolved" / "urbansim" / "data" / "output.h5",
+    )
+    staged = UrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=staged_root,
+        prepared_inputs={"usim_datastore_h5": tmp_path / "bound" / "datastore.h5"},
+    )
+    calls: dict[str, object] = {}
+
+    def run_container(*_args: object, **kwargs: object) -> bool:
+        calls.update(kwargs)
+        launch_context.output_datastore.parent.mkdir(parents=True)
+        launch_context.output_datastore.write_bytes(b"output")
+        return True
+
+    monkeypatch.setattr(
+        UrbansimRunner,
+        "get_model_and_image",
+        staticmethod(lambda *_args: ("urbansim", "image")),
+    )
+    monkeypatch.setattr(UrbansimRunner, "get_usim_cmd", lambda _self: "run")
+    monkeypatch.setattr(UrbansimRunner, "run_container", run_container)
+
+    result = runner._run(staged, launch_context)
+
+    assert calls["volumes"] == {
+        str(launch_context.mutable_data_dir): {"bind": "/data", "mode": "rw"}
+    }
+    assert result.usim_datastore_h5 == launch_context.output_datastore

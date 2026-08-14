@@ -25,7 +25,7 @@ from pilates.urbansim.outputs import (
 )
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
-from pilates.urbansim.runner import UrbansimRunner
+from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
@@ -142,6 +142,7 @@ def _resolve_native_inputs(
     logical_destinations: Mapping[str, Path],
     coupler: CouplerProtocol,
     step_identity: StepIdentity | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> ResolvedStepInputs:
     """Select fixed semantic roles once and retain their Consist artifacts."""
 
@@ -198,6 +199,7 @@ def _resolve_native_inputs(
         source_by_role=source_by_role,
         selected_key_by_role=selected_key_by_role,
         logical_destinations=selected_destinations,
+        metadata=metadata or {},
     )
 
 
@@ -213,6 +215,32 @@ def _native_execution_options(
         input_paths=resolved_inputs.logical_destinations,
         input_materialization="requested",
         input_materialization_mode="copy",
+    )
+
+
+def _urbansim_run_execution_options(
+    *,
+    resolved_inputs: ResolvedStepInputs | None = None,
+    **_: Any,
+) -> ExecutionOptions:
+    """Pass the resolver-owned UrbanSim launch context through runtime kwargs."""
+
+    if resolved_inputs is None:
+        raise RuntimeError("urbansim_run requires resolved inputs before execution")
+    launch_context = resolved_inputs.metadata.get("urbansim_launch_context")
+    if not isinstance(launch_context, UrbanSimLaunchContext):
+        raise RuntimeError("urbansim_run is missing its resolved launch context")
+    options = _native_execution_options(resolved_inputs=resolved_inputs)
+    return ExecutionOptions(
+        load_inputs=options.load_inputs,
+        input_binding=options.input_binding,
+        input_paths=options.input_paths,
+        input_materialization=options.input_materialization,
+        input_materialization_mode=options.input_materialization_mode,
+        executor=options.executor,
+        container=options.container,
+        runtime_kwargs={"urbansim_launch_context": launch_context},
+        inject_context=options.inject_context,
     )
 
 
@@ -409,6 +437,13 @@ def _resolve_urbansim_run_inputs(
     region = settings.run.region
     region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+    output_datastore = Path(
+        _urbansim_run_native_output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )[USIM_DATASTORE_H5]
+    )
     return _resolve_native_inputs(
         step_name="urbansim_run",
         function=_native_urbansim_run,
@@ -423,6 +458,12 @@ def _resolve_urbansim_run_inputs(
             FINAL_SKIMS_OMX: mutable_data_dir / "final_skims.omx",
         },
         coupler=coupler,
+        metadata={
+            "urbansim_launch_context": UrbanSimLaunchContext(
+                mutable_data_dir=mutable_data_dir,
+                output_datastore=output_datastore,
+            )
+        },
     )
 
 
@@ -595,7 +636,7 @@ _ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
     input_binding="paths",
     **consist_step_meta("urbansim_run", input_contract=_URBANSIM_RUN_INPUT_CONTRACT),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs("settings", "state", "workspace", "urbansim_launch_context")
 def _native_urbansim_run(
     usim_datastore_h5: Path,
     final_skims_omx: Path | None = None,
@@ -603,12 +644,14 @@ def _native_urbansim_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    urbansim_launch_context: UrbanSimLaunchContext,
 ) -> None:
     del settings
     UrbansimRunner("urbansim", state).run(
         usim_datastore_h5=usim_datastore_h5,
         final_skims_omx=final_skims_omx,
         workspace=workspace,
+        launch_context=urbansim_launch_context,
     )
 
 
@@ -1019,7 +1062,7 @@ URBANSIM_RUN = StepDefinition(
     project_outputs=_project_urbansim_run,
     input_contract=_URBANSIM_RUN_INPUT_CONTRACT,
     output_paths=_urbansim_run_native_output_paths,
-    execution_options=_native_execution_options,
+    execution_options=_urbansim_run_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )
 
