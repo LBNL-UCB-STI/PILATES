@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from consist.types import HasConsistFacet
 
-from pilates.config.models import PilatesConfig
+from pilates.config.models import PilatesConfig, admission_policy_fingerprint
 from pilates.workflows.catalog import provenance_builder_key_for_step_name
 
 
@@ -419,6 +419,15 @@ def build_urbansim_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "input_file_template_year": cfg.input_file_template_year,
         "output_file_template": cfg.output_file_template,
         "region_id": cfg.region_id,
+        "admission": (
+            {
+                "initial_datastore": admission_policy_fingerprint(
+                    cfg.admission.initial_datastore
+                )
+            }
+            if cfg.admission is not None
+            else None
+        ),
     }
 
 

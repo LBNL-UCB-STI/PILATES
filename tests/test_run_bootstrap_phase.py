@@ -3294,3 +3294,279 @@ def test_snapshot_retention_keeps_expected_number_of_snapshots(tmp_path):
     history_dir = snapshot_module.snapshot_history_dir(str(tmp_path / "archive-run"))
     history_entries = [path for path in history_dir.iterdir() if path.is_dir()]
     assert len(history_entries) == 2
+
+
+class _OuterScenarioStub:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+        self.coupler = SimpleNamespace(
+            declare_outputs=lambda *_args, **_kwargs: events.append("declare_outputs")
+        )
+
+    def __enter__(self):
+        self._events.append("scenario_enter")
+        return self
+
+    def __exit__(self, *_args):
+        self._events.append("scenario_exit")
+        return False
+
+
+class _OuterAdmissionState:
+    def __init__(self, *, data_initialized: bool, run_models: bool) -> None:
+        self.data_initialized = data_initialized
+        self._run_models = run_models
+
+    def set_data_initialized(self, value: bool) -> None:
+        self.data_initialized = value
+
+    def __iter__(self):
+        return iter((2020,) if self._run_models else ())
+
+    def should_run(self, stage) -> bool:
+        return self._run_models and stage == WorkflowState.Stage.land_use
+
+    def complete_step(self, _stage) -> None:
+        return None
+
+
+def _prepared_outer_admission_run(
+    tmp_path: Path,
+    *,
+    data_initialized: bool,
+    run_models: bool = False,
+):
+    settings = SimpleNamespace()
+    state = _OuterAdmissionState(
+        data_initialized=data_initialized,
+        run_models=run_models,
+    )
+    workspace = SimpleNamespace(full_path=str(tmp_path / "workspace"))
+    tracker = SimpleNamespace()
+    return SimpleNamespace(
+        settings=settings,
+        state=state,
+        surface=SimpleNamespace(),
+        workspace=workspace,
+        runtime_context=SimpleNamespace(),
+        tracker=tracker,
+        snapshot_manager=SimpleNamespace(final_snapshot=lambda: True),
+        run_name="outer-admission-test",
+        scenario_id="test",
+        seed=None,
+        cache_epoch=1,
+        is_restart_run=False,
+        archive_run_dir=str(tmp_path / "archive-run"),
+        local_run_dir=str(tmp_path / "local-run"),
+        archive_state_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+        local_state_path=str(tmp_path / "local-run" / "run_state.yaml"),
+        local_consist_db_path=None,
+        archive_consist_db_path=None,
+        run_notifier=None,
+        run_publisher=None,
+    )
+
+
+@pytest.mark.parametrize("bootstrap_cache_hit", [False, True])
+def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    bootstrap_cache_hit: bool,
+) -> None:
+    """A missing outer-run hook would seed bootstrap outputs before admission."""
+    events: list[str] = []
+    prepared = _prepared_outer_admission_run(tmp_path, data_initialized=False)
+    existing_reports = {"beam_linkstats_warmstart": {"outcome": "verified"}}
+    active_outer_run = SimpleNamespace(meta={"admission_reports": existing_reports})
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(run_module, "_prepare_run_context", lambda **_kwargs: prepared)
+    monkeypatch.setattr(
+        run_module,
+        "_run_bootstrap_sequence",
+        lambda _prepared: events.append("bootstrap")
+        or {"bootstrap_cache_hit": bootstrap_cache_hit},
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: _OuterScenarioStub(events),
+    )
+    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(run_module.cr, "current_run", lambda: active_outer_run)
+    monkeypatch.setattr(
+        run_module,
+        "preflight_bootstrap_urbansim_datastore_admission",
+        lambda **kwargs: events.append("admission") or captured.update(kwargs),
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "seed_bootstrap_artifacts_to_coupler",
+        lambda **_kwargs: events.append("seed"),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_rewind_uncommitted_activitysim_restart_to_provider_boundary",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
+    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        run_module,
+        "log_promotion_instructions_on_success",
+        lambda **_kwargs: None,
+    )
+
+    run_module.main()
+
+    assert events == [
+        "bootstrap",
+        "scenario_enter",
+        "declare_outputs",
+        "admission",
+        "seed",
+        "scenario_exit",
+    ]
+    assert captured == {
+        "settings": prepared.settings,
+        "metadata_logger": prepared.tracker,
+        "workspace_path": Path(prepared.workspace.full_path),
+        "report_dir": Path(prepared.archive_run_dir),
+        "existing_admission_reports": existing_reports,
+    }
+
+
+def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected datastore must stop before the coupler or any model can consume it."""
+    events: list[str] = []
+    prepared = _prepared_outer_admission_run(
+        tmp_path,
+        data_initialized=False,
+        run_models=True,
+    )
+
+    monkeypatch.setattr(run_module, "_prepare_run_context", lambda **_kwargs: prepared)
+    monkeypatch.setattr(
+        run_module,
+        "_run_bootstrap_sequence",
+        lambda _prepared: events.append("bootstrap") or {"bootstrap_cache_hit": True},
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: _OuterScenarioStub(events),
+    )
+    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(run_module.cr, "current_run", lambda: SimpleNamespace(meta={}))
+    monkeypatch.setattr(
+        run_module,
+        "preflight_bootstrap_urbansim_datastore_admission",
+        lambda **_kwargs: (_ for _ in ()).throw(RuntimeError("strict rejection")),
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "seed_bootstrap_artifacts_to_coupler",
+        lambda **_kwargs: events.append("seed"),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "run_land_use_stage",
+        lambda **_kwargs: events.append("model_execution"),
+    )
+    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
+    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
+
+    with pytest.raises(RuntimeError, match="strict rejection"):
+        run_module.main()
+
+    assert events == ["bootstrap", "scenario_enter", "declare_outputs", "scenario_exit"]
+
+
+def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ordinary resume has no bootstrap datastore to admit."""
+    events: list[str] = []
+    prepared = _prepared_outer_admission_run(tmp_path, data_initialized=True)
+
+    monkeypatch.setattr(run_module, "_prepare_run_context", lambda **_kwargs: prepared)
+    monkeypatch.setattr(
+        run_module,
+        "_run_bootstrap_sequence",
+        lambda _prepared: events.append("bootstrap") or None,
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_build_scenario_runtime_contract",
+        lambda **_kwargs: {
+            "scenario_kwargs": {},
+            "schema_steps_all": (),
+            "schema_steps_enabled": (),
+            "coupler_schema": {},
+            "required_output_keys": (),
+        },
+    )
+    monkeypatch.setattr(
+        run_module.cr,
+        "scenario",
+        lambda *_args, **_kwargs: _OuterScenarioStub(events),
+    )
+    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(
+        run_module,
+        "preflight_bootstrap_urbansim_datastore_admission",
+        lambda **_kwargs: events.append("admission"),
+    )
+    monkeypatch.setattr(
+        run_module.bootstrap_runtime,
+        "seed_bootstrap_artifacts_to_coupler",
+        lambda **_kwargs: events.append("seed"),
+    )
+    monkeypatch.setattr(
+        run_module,
+        "_rewind_uncommitted_activitysim_restart_to_provider_boundary",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(run_module, "flush_archive_queue", lambda **_kwargs: None)
+    monkeypatch.setattr(run_module, "stop_archive_worker", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        run_module,
+        "log_promotion_instructions_on_success",
+        lambda **_kwargs: None,
+    )
+
+    run_module.main()
+
+    assert events == [
+        "bootstrap",
+        "scenario_enter",
+        "declare_outputs",
+        "seed",
+        "scenario_exit",
+    ]

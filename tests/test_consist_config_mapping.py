@@ -1,12 +1,80 @@
 import pytest
 from unittest.mock import MagicMock
+from pydantic import ValidationError
 
+from pilates.config.models import (
+    BeamLinkstatsAdmissionConfig,
+    PilatesConfig,
+    admission_policy_fingerprint,
+)
 from pilates.utils.consist_config import (
     build_activitysim_identity_inputs,
     build_beam_identity_inputs,
     build_scenario_consist_kwargs,
     build_step_consist_kwargs,
+    build_urbansim_facet,
+    build_urbansim_identity_config,
 )
+
+
+_DECLARED_IDENTITY = "sha256:file:" + "a" * 64
+
+
+def _settings_with_urbansim_admission(
+    *,
+    mode: str = "strict",
+    identity: str = _DECLARED_IDENTITY,
+    source_uri: str = "s3://catalog/baselines/input.h5",
+    source_label: str = "catalog baseline",
+) -> PilatesConfig:
+    return PilatesConfig(
+        run={
+            "region": "test",
+            "scenario": "test",
+            "start_year": 2020,
+            "end_year": 2021,
+            "output_directory": "/tmp/output",
+            "output_run_name": "test-run",
+            "models": {
+                "land_use": "urbansim",
+                "travel": None,
+                "activity_demand": None,
+                "vehicle_ownership": None,
+            },
+        },
+        shared={
+            "geography": {"FIPS": {"county": ["06001"]}, "local_crs": "EPSG:32048"},
+            "skims": {"fname": "skims.h5"},
+            "database": {"enabled": True, "type": "duckdb", "path": "/tmp/test.duckdb"},
+        },
+        infrastructure={
+            "container_manager": "docker",
+            "singularity_images": {},
+            "docker_images": {},
+            "docker_config": {"stdout": False, "pull_latest": False},
+        },
+        urbansim={
+            "local_data_input_folder": "usim_input",
+            "local_mutable_data_folder": "usim_mutable",
+            "client_base_folder": "/app",
+            "client_data_folder": "/tmp",
+            "input_file_template": "input_{region_id}.h5",
+            "input_file_template_year": "input_{region_id}_{year}.h5",
+            "output_file_template": "output_{year}.h5",
+            "command_template": "echo",
+            "admission": {
+                "initial_datastore": {
+                    "mode": mode,
+                    "expectation": {
+                        "kind": "declared_digest",
+                        "identity": identity,
+                        "source_uri": source_uri,
+                        "source_label": source_label,
+                    },
+                }
+            },
+        },
+    )
 
 
 def test_build_scenario_consist_kwargs_includes_run_facet():
@@ -91,3 +159,83 @@ def test_build_beam_identity_inputs_missing_dir_returns_empty(tmp_path):
     settings.beam.local_mutable_data_folder = "beam/input"
 
     assert build_beam_identity_inputs(settings, str(tmp_path)) == []
+
+
+def test_urbansim_declared_digest_admission_uses_sanitized_cache_identity():
+    settings = _settings_with_urbansim_admission()
+
+    signature = settings.get_initialization_signature()
+    policy = signature["urbansim_admission"]["initial_datastore"]
+
+    assert policy == {
+        "mode": "strict",
+        "kind": "declared_digest",
+        "identity": _DECLARED_IDENTITY,
+    }
+    assert (
+        build_urbansim_identity_config(settings)["admission"]["initial_datastore"]
+        == policy
+    )
+
+    changed_mode = _settings_with_urbansim_admission(mode="warn")
+    changed_identity = _settings_with_urbansim_admission(
+        identity="sha256:file:" + "b" * 64
+    )
+    changed_source_uri = _settings_with_urbansim_admission(
+        source_uri="https://mirror.example.test/other-input.h5"
+    )
+    changed_source_label = _settings_with_urbansim_admission(
+        source_label="regional baseline mirror"
+    )
+
+    assert changed_mode.get_initialization_signature() != signature
+    assert changed_identity.get_initialization_signature() != signature
+    assert changed_source_uri.get_initialization_signature() == signature
+    assert changed_source_label.get_initialization_signature() == signature
+    assert (
+        build_urbansim_identity_config(changed_source_label)
+        == build_urbansim_identity_config(settings)
+    )
+    assert (
+        build_urbansim_facet(changed_source_label)["admission"]["initial_datastore"]
+        ["expectation"]["source_label"]
+        == "regional baseline mirror"
+    )
+
+
+@pytest.mark.parametrize(
+    "identity",
+    ["sha256:file:" + "A" * 64, "sha256:file:not-a-digest"],
+)
+def test_urbansim_declared_digest_admission_rejects_noncanonical_identity(identity):
+    with pytest.raises(ValidationError, match="sha256:file:<64 lowercase hexadecimal"):
+        _settings_with_urbansim_admission(identity=identity)
+
+
+def test_beam_linkstats_admission_normalizes_nested_and_legacy_expected_bytes_path():
+    nested = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expectation={
+            "kind": "prior_run",
+            "expected_run_id": "baseline-run",
+            "artifact_key": "linkstats_warmstart",
+            "expected_bytes_path": "/archive/nested-linkstats.csv.gz",
+        },
+    )
+    legacy = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expected_run_id="baseline-run",
+        artifact_key="linkstats_warmstart",
+        expected_bytes_path="/archive/legacy-linkstats.csv.gz",
+    )
+
+    assert nested.expectation.expected_bytes_path == "/archive/nested-linkstats.csv.gz"
+    assert nested.expected_bytes_path == "/archive/nested-linkstats.csv.gz"
+    assert legacy.expectation.expected_bytes_path == "/archive/legacy-linkstats.csv.gz"
+    assert legacy.expected_bytes_path == "/archive/legacy-linkstats.csv.gz"
+    assert admission_policy_fingerprint(nested) == {
+        "mode": "strict",
+        "kind": "prior_run",
+        "expected_run_id": "baseline-run",
+        "artifact_key": "linkstats_warmstart",
+    }

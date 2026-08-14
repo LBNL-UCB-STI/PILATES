@@ -18,6 +18,7 @@ import shutil
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 
+import consist as cr
 from consist import (
     BindingResult,
     CacheOptions,
@@ -32,6 +33,11 @@ from pilates.beam.config_hocon import (
 from pilates.beam.launch_paths import (
     validate_r5_execution_reference,
     validate_staged_linkstats_reference,
+)
+from pilates.beam.admission import (
+    has_staged_linkstats_admission_policy,
+    preflight_staged_linkstats_admission,
+    reject_or_warn_for_missing_staged_linkstats,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
@@ -1290,12 +1296,31 @@ def _native_beam_run(
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
-    validate_staged_linkstats_reference(
+    launch_reference = validate_staged_linkstats_reference(
         settings=settings,
         workspace=workspace,
         run_context=_consist_ctx,
         config_root=beam_launch_config.root,
     )
+    if launch_reference is None:
+        reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(settings=settings):
+        active_run = cr.current_run()
+        existing_admission_reports = (
+            active_run.meta.get("admission_reports", {})
+            if active_run is not None
+            else {}
+        )
+        if not isinstance(existing_admission_reports, Mapping):
+            existing_admission_reports = {}
+        preflight_staged_linkstats_admission(
+            tracker=cr.current_tracker(),
+            metadata_logger=_consist_ctx,
+            existing_admission_reports=existing_admission_reports,
+            settings=settings,
+            launch_reference=launch_reference,
+            report_dir=Path(state.run_info_path).parent,
+        )
     validate_r5_execution_reference(
         settings=settings,
         workspace=workspace,

@@ -51,7 +51,8 @@ def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
     return SimpleNamespace(
         run=SimpleNamespace(region="test-region"),
         beam=SimpleNamespace(
-            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format)
+            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format),
+            admission=None,
         ),
     )
 
@@ -345,7 +346,7 @@ def test_native_beam_artifact_inputs_match_callable_parameter_names() -> None:
         )
 
 
-def test_native_beam_run_validates_canonical_launch_references_before_runner(
+def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -362,27 +363,47 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
-    context = SimpleNamespace(canonicalization=object())
-    events: list[tuple[str, object]] = []
+    context = SimpleNamespace(canonicalization=object(), log_meta=lambda **_kwargs: None)
+    tracker = object()
+    events: list[str] = []
 
     launch_config = BeamLaunchConfig(root=tmp_path, primary_config=config)
 
-    def validate_linkstats(*, settings, workspace, run_context, config_root) -> None:
+    def validate_linkstats(*, settings, workspace, run_context, config_root) -> object:
         assert workspace is not None
         assert config_root == launch_config.root
-        events.append(("linkstats", run_context))
+        assert run_context is context
+        events.append("validate")
+        return object()
+
+    def admit_linkstats(
+        *,
+        tracker: object,
+        metadata_logger: object,
+        existing_admission_reports: dict[str, object],
+        settings: object,
+        launch_reference: object,
+        report_dir: Path,
+    ) -> None:
+        assert tracker is active_tracker
+        assert metadata_logger is context
+        assert existing_admission_reports == {"other_input": {"outcome": "verified"}}
+        assert launch_reference is not None
+        assert report_dir == tmp_path / "archive-run"
+        events.append("admit")
 
     def validate_r5(*, settings, workspace, run_context, config_root) -> None:
         assert workspace is not None
         assert config_root == launch_config.root
-        events.append(("r5", run_context))
+        assert run_context is context
+        events.append("r5")
 
     class Runner:
         def __init__(self, name: str, state: object) -> None:
             assert name == "beam_run"
 
         def run(self, *_args, **_kwargs) -> object:
-            events.append(("runner", context))
+            events.append("runner")
             return BeamRunOutputs(
                 beam_output_dir=tmp_path / "beam-output",
                 raw_outputs={},
@@ -392,6 +413,24 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         beam_steps,
         "validate_staged_linkstats_reference",
         validate_linkstats,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "preflight_staged_linkstats_admission",
+        admit_linkstats,
+        raising=False,
+    )
+    active_tracker = tracker
+    monkeypatch.setattr(
+        beam_steps,
+        "cr",
+        SimpleNamespace(
+            current_tracker=lambda: active_tracker,
+            current_run=lambda: SimpleNamespace(
+                meta={"admission_reports": {"other_input": {"outcome": "verified"}}}
+            ),
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -408,25 +447,30 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         beam_steps, "_materialize_native_outputs", lambda **_kwargs: None
     )
 
+    settings = _beam_settings()
+    settings.beam.admission = SimpleNamespace(
+        linkstats=SimpleNamespace(mode="warn")
+    )
+
     beam_steps._native_beam_run(
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
-        settings=_beam_settings(),
-        state=SimpleNamespace(year=2030, iteration=1),
+        settings=settings,
+        state=SimpleNamespace(
+            year=2030,
+            iteration=1,
+            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+        ),
         workspace=workspace,
         beam_launch_config=launch_config,
         _consist_ctx=context,
     )
 
-    assert events == [
-        ("linkstats", context),
-        ("r5", context),
-        ("runner", context),
-    ]
+    assert events == ["validate", "admit", "r5", "runner"]
 
 
-def test_native_beam_run_fails_closed_before_starting_runner(
+def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -442,23 +486,55 @@ def test_native_beam_run_fails_closed_before_starting_runner(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
 
-    def reject_linkstats(**_kwargs) -> None:
-        raise RuntimeError("linkstats launch proof failed")
+    def validate_linkstats(**_kwargs) -> object:
+        return object()
+
+    def reject_linkstats_admission(**_kwargs) -> None:
+        from pilates.beam.admission import BeamInputAdmissionError
+
+        raise BeamInputAdmissionError("mismatched")
 
     class Runner:
         def __init__(self, *_args, **_kwargs) -> None:
-            raise AssertionError("BeamRunner must not start after failed launch proof")
+            raise AssertionError("BeamRunner must not start after admission rejection")
 
     monkeypatch.setattr(
-        beam_steps, "validate_staged_linkstats_reference", reject_linkstats
+        beam_steps, "validate_staged_linkstats_reference", validate_linkstats
     )
+    monkeypatch.setattr(
+        beam_steps,
+        "preflight_staged_linkstats_admission",
+        reject_linkstats_admission,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "cr",
+        SimpleNamespace(
+            current_tracker=lambda: object(),
+            current_run=lambda: SimpleNamespace(meta={}),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None)
     monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
 
-    with pytest.raises(RuntimeError, match="linkstats launch proof failed"):
+    from pilates.beam.admission import BeamInputAdmissionError
+
+    settings = _beam_settings()
+    settings.beam.admission = SimpleNamespace(
+        linkstats=SimpleNamespace(mode="strict")
+    )
+
+    with pytest.raises(BeamInputAdmissionError, match="mismatched"):
         beam_steps._native_beam_run(
             *inputs,
-            settings=object(),
-            state=SimpleNamespace(year=2030, iteration=1),
+            settings=settings,
+            state=SimpleNamespace(
+                year=2030,
+                iteration=1,
+                run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+            ),
             workspace=workspace,
             beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
             _consist_ctx=SimpleNamespace(canonicalization=object()),

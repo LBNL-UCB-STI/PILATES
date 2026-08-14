@@ -17,7 +17,7 @@ import os
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
@@ -50,6 +50,9 @@ from pilates.atlas.inputs import (
     build_atlas_static_inputs_fallback,
 )
 from pilates.activitysim.preprocessor import required_asim_config_dirs
+from pilates.urbansim.admission import (
+    preflight_bootstrap_urbansim_datastore_admission,
+)
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
@@ -723,6 +726,26 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
     return bootstrap_result
 
 
+def _preflight_bootstrap_urbansim_datastore_admission(
+    prepared: PreparedRunContext,
+) -> None:
+    """Record and enforce datastore admission on the active outer scenario run."""
+    active_outer_run = cr.current_run()
+    existing_admission_reports: Mapping[str, object] | None = None
+    if active_outer_run is not None:
+        reports = active_outer_run.meta.get("admission_reports")
+        if isinstance(reports, Mapping):
+            existing_admission_reports = reports
+
+    preflight_bootstrap_urbansim_datastore_admission(
+        settings=prepared.settings,
+        metadata_logger=prepared.tracker,
+        workspace_path=Path(prepared.workspace.full_path),
+        report_dir=Path(prepared.archive_run_dir),
+        existing_admission_reports=existing_admission_reports,
+    )
+
+
 def _emit_pre_scenario_failure(
     prepared: PreparedRunContext,
     error: Exception,
@@ -864,6 +887,8 @@ def main(
                 warn_undefined=True,
                 description=coupler_schema,
             )
+            if bootstrap_result is not None:
+                _preflight_bootstrap_urbansim_datastore_admission(prepared)
             bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,

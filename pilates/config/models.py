@@ -7,9 +7,10 @@ Consist-specific identity and facet mapping lives in pilates.utils.consist_confi
 
 import os
 import logging
+import re
 import warnings
 from dataclasses import dataclass, field as dataclass_field
-from typing import Dict, List, Optional, Any, Literal
+from typing import Annotated, Dict, List, Optional, Any, Literal, Union
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -431,6 +432,96 @@ class InfrastructureConfig(BaseModel):
 # =============================================================================
 
 
+class PriorRunExpectation(BaseModel):
+    """Select one persisted input artifact from a completed Consist run."""
+
+    kind: Literal["prior_run"] = "prior_run"
+    expected_run_id: str = Field(
+        ..., description="Completed Consist run supplying the expected input."
+    )
+    artifact_key: str = Field(
+        ..., description="Exact persisted input artifact key on expected_run_id."
+    )
+    expected_bytes_path: Optional[str] = Field(
+        None,
+        description="Optional immutable historical bytes for hash re-verification.",
+    )
+
+
+class DeclaredDigestExpectation(BaseModel):
+    """Select one immutable raw-file identity declared outside a prior run."""
+
+    kind: Literal["declared_digest"] = "declared_digest"
+    identity: str = Field(
+        ...,
+        description="Canonical sha256:file identity for the expected raw bytes.",
+    )
+    source_uri: Optional[str] = Field(
+        None,
+        description="Optional opaque source location retained outside cache identity.",
+    )
+    source_label: Optional[str] = Field(
+        None,
+        description="Optional human-readable source label retained outside cache identity.",
+    )
+
+    @field_validator("identity")
+    @classmethod
+    def validate_identity(cls, value: str) -> str:
+        """Require one canonical raw-file SHA-256 identity before runtime."""
+        if not re.fullmatch(r"sha256:file:[0-9a-f]{64}", value):
+            raise ValueError(
+                "identity must be sha256:file:<64 lowercase hexadecimal characters>"
+            )
+        return value
+
+
+AdmissionExpectation = Annotated[
+    Union[PriorRunExpectation, DeclaredDigestExpectation],
+    Field(discriminator="kind"),
+]
+
+
+class AdmissionPolicyConfig(BaseModel):
+    """Typed inbound-admission policy shared by model-specific configuration."""
+
+    mode: Literal["warn", "strict"] = Field(
+        "warn", description="Warn or stop when the configured expectation differs."
+    )
+    expectation: AdmissionExpectation
+
+
+def admission_policy_fingerprint(
+    policy: Optional[AdmissionPolicyConfig],
+) -> Optional[Dict[str, str]]:
+    """Return the portable cache selector for an admission policy.
+
+    Runtime, report, and host-path details deliberately remain outside the
+    fingerprint. Only policy mode and immutable expectation selectors affect
+    cache identity.
+    """
+    if policy is None:
+        return None
+
+    expectation = policy.expectation
+    fingerprint = {"mode": policy.mode, "kind": expectation.kind}
+    if isinstance(expectation, DeclaredDigestExpectation):
+        fingerprint["identity"] = expectation.identity
+    else:
+        fingerprint["expected_run_id"] = expectation.expected_run_id
+        fingerprint["artifact_key"] = expectation.artifact_key
+    return fingerprint
+
+
+class UrbanSimAdmissionConfig(BaseModel):
+    """Optional inbound-admission policy for the UrbanSim bootstrap datastore."""
+
+    initial_datastore: Optional[AdmissionPolicyConfig] = Field(
+        None,
+        description="Optional expectation for the bootstrap-staged UrbanSim datastore.",
+    )
+
+
 class UrbanSimConfig(BaseModel):
     """UrbanSim land use model configuration."""
 
@@ -449,6 +540,10 @@ class UrbanSimConfig(BaseModel):
     command_template: str = Field(..., description="Command template")
     region_mappings: Dict[str, Any] = Field(
         default_factory=dict, description="Region-specific mappings"
+    )
+    admission: Optional[UrbanSimAdmissionConfig] = Field(
+        None,
+        description="Optional inbound-admission policy; omitted means disabled.",
     )
 
 
@@ -626,23 +721,43 @@ class FullSkimsCreatorConfig(BaseModel):
     )
 
 
-class BeamLinkstatsAdmissionConfig(BaseModel):
+class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
     """Explicit prior-run expectation for one staged BEAM warm-start file."""
 
-    mode: Literal["warn", "strict"] = Field(
-        "warn",
-        description="Warn or stop before BEAM when the configured baseline differs.",
-    )
-    expected_run_id: str = Field(
-        ..., description="Completed Consist run supplying the expected linkstats input."
-    )
-    artifact_key: str = Field(
-        ..., description="Exact persisted input artifact key on expected_run_id."
-    )
-    expected_bytes_path: Optional[str] = Field(
-        None,
-        description="Distinct immutable historical bytes for legacy hash re-verification.",
-    )
+    expectation: PriorRunExpectation
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_legacy_prior_run_fields(cls, value: Any) -> Any:
+        """Accept the existing flat BEAM policy while storing a shared expectation."""
+        if not isinstance(value, dict) or "expectation" in value:
+            return value
+        if "expected_run_id" not in value and "artifact_key" not in value:
+            return value
+
+        normalized = dict(value)
+        normalized["expectation"] = {
+            "kind": "prior_run",
+            "expected_run_id": normalized.pop("expected_run_id", None),
+            "artifact_key": normalized.pop("artifact_key", None),
+            "expected_bytes_path": normalized.pop("expected_bytes_path", None),
+        }
+        return normalized
+
+    @property
+    def expected_run_id(self) -> str:
+        """Compatibility view for BEAM's existing runtime admission helper."""
+        return self.expectation.expected_run_id
+
+    @property
+    def artifact_key(self) -> str:
+        """Compatibility view for BEAM's existing runtime admission helper."""
+        return self.expectation.artifact_key
+
+    @property
+    def expected_bytes_path(self) -> Optional[str]:
+        """Compatibility view for BEAM's existing runtime admission helper."""
+        return self.expectation.expected_bytes_path
 
 
 class BeamAdmissionConfig(BaseModel):
@@ -948,6 +1063,15 @@ class PilatesConfig(BaseModel):
                 # Determines which sub-models are active
                 "enabled_models": self.run.models,
             },
+            "urbansim_admission": (
+                {
+                    "initial_datastore": admission_policy_fingerprint(
+                        self.urbansim.admission.initial_datastore
+                    )
+                }
+                if self.urbansim is not None and self.urbansim.admission is not None
+                else None
+            ),
         }
 
 
