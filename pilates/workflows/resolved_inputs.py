@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from consist import BindingResult, ResolvedBinding
+
+if TYPE_CHECKING:
+    from pilates.workflows.step_definition import InputContract
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,6 +25,7 @@ class ResolvedStepInputs:
     selected_key_by_role: Mapping[str, str] = field(default_factory=dict)
     logical_destinations: Mapping[str, Path] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    input_contract: InputContract | None = None
 
     def __post_init__(self) -> None:
         """Defensively freeze all selected inputs and diagnostic maps."""
@@ -106,3 +110,14 @@ class ResolvedStepInputs:
                 f"{self.step_name} is missing required input roles: "
                 + ", ".join(sorted(missing))
             )
+
+    def with_input_contract(self, input_contract: InputContract) -> ResolvedStepInputs:
+        """Return this frozen selection with its definition-owned contract attached."""
+
+        if self.input_contract is not None and self.input_contract != input_contract:
+            raise RuntimeError(
+                f"{self.step_name} resolved a contract different from its definition"
+            )
+        resolved = replace(self, input_contract=input_contract)
+        object.__setattr__(resolved, "binding", self.binding)
+        return resolved

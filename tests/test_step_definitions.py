@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pandas as pd
+import pytest
 
 from consist import BindingResult, resolve_step_contract
 
@@ -29,6 +30,8 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_definition import ConfigContract, InputContract
+from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.workflows.steps import (
     STEP_DEFINITIONS,
     activitysim_preprocess,
@@ -45,6 +48,7 @@ _DEFAULT_ACTIVITYSIM = object()
 def _settings(*, activitysim: object | None = _DEFAULT_ACTIVITYSIM) -> SimpleNamespace:
     if activitysim is _DEFAULT_ACTIVITYSIM:
         activitysim = SimpleNamespace(
+            file_format="csv",
             output_tables={
                 "tables": [
                     "accessibility",
@@ -58,7 +62,7 @@ def _settings(*, activitysim: object | None = _DEFAULT_ACTIVITYSIM) -> SimpleNam
                     "tours",
                     "trips",
                 ]
-            }
+            },
         )
     return SimpleNamespace(
         run=SimpleNamespace(
@@ -235,6 +239,124 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
             assert _contract_output_paths(
                 contract.output_paths
             ) == _contract_output_paths(declared_paths)
+
+
+def test_native_step_definitions_classify_every_executable_input_contract() -> None:
+    """Every native step starts report-only and names its config contract form."""
+
+    expected_config_kinds = {
+        "beam_preprocess": "adapter",
+        "beam_run": "adapter",
+        "beam_postprocess": "adapter",
+        "beam_full_skim": "adapter",
+        "activitysim_preprocess": "adapter",
+        "activitysim_run": "adapter",
+        "activitysim_postprocess": "adapter",
+        "urbansim_run": "payload",
+        "urbansim_postprocess": "payload",
+        "atlas_preprocess": "payload",
+        "atlas_run": "payload",
+        "atlas_postprocess": "payload",
+        "postprocessing": "payload",
+    }
+
+    assert set(STEP_DEFINITIONS) == set(expected_config_kinds)
+    for name, definition in STEP_DEFINITIONS.items():
+        contract = definition.input_contract
+
+        assert contract.status == "incomplete"
+        assert contract.reason
+        assert contract.config_contract is not None
+        assert contract.config_contract.kind == expected_config_kinds[name]
+
+
+def test_input_contract_requires_the_status_specific_fields() -> None:
+    with pytest.raises(ValueError, match="require a reason"):
+        InputContract(status="incomplete")
+    with pytest.raises(ValueError, match="require a configuration contract"):
+        InputContract(status="complete")
+    with pytest.raises(ValueError, match="cannot include a reason"):
+        InputContract(
+            status="complete",
+            reason="not allowed",
+            config_contract=ConfigContract.payload(),
+        )
+
+
+def test_report_mode_records_contract_without_changing_decorated_config(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda model, settings, workspace_path=None: {
+            "config": {"model": model},
+            "facet": {"existing": True},
+        },
+    )
+    settings = _settings()
+    state = _state()
+    workspace = _workspace(tmp_path)
+
+    contract = resolve_step_contract(
+        beam_postprocess.function,
+        year=2030,
+        iteration=1,
+        phase="run",
+        stage="test",
+        runtime_kwargs={
+            "settings": settings,
+            "state": state,
+            "workspace": workspace,
+        },
+    )
+
+    assert contract.config == {"model": "beam_postprocess"}
+    assert contract.facet == {
+        "existing": True,
+        "native_input_contract": {
+            "status": "incomplete",
+            "reason": beam_postprocess.input_contract.reason,
+            "configuration": {
+                "kind": "adapter",
+                "available": False,
+            },
+        },
+    }
+
+
+def test_report_mode_records_unavailable_payload_contract(
+    monkeypatch, tmp_path: Path
+) -> None:
+    payload_contract = InputContract(
+        status="incomplete",
+        reason="payload resolver has not been closed",
+        config_contract=ConfigContract.payload(),
+    )
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda *_args, **_kwargs: {"facet": {"existing": True}},
+    )
+
+    class Context:
+        def get_runtime(self, name: str, default: object = None) -> object:
+            return {
+                "settings": _settings(),
+                "state": _state(),
+                "workspace": _workspace(tmp_path),
+            }.get(name, default)
+
+    facet = consist_step_meta("postprocessing", input_contract=payload_contract)[
+        "facet"
+    ](Context())
+
+    assert facet == {
+        "existing": True,
+        "native_input_contract": {
+            "status": "incomplete",
+            "reason": "payload resolver has not been closed",
+            "configuration": {"kind": "payload", "available": False},
+        },
+    }
 
 
 def test_native_steps_declare_static_consist_metadata() -> None:

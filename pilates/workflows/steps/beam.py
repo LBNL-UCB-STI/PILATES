@@ -69,7 +69,11 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.surface import build_enabled_workflow_surface
 from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 
@@ -1192,6 +1196,28 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
             context.log_output(path, key=key, artifact_kind="directory")
 
 
+_BEAM_PREPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mutable BEAM config tree, zone preparation, and workspace exchange reads",
+    config_contract=ConfigContract.adapter("beam"),
+)
+_BEAM_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="derived launch tree, raw R5 preparation, and optional direct skims",
+    config_contract=ConfigContract.adapter("beam"),
+)
+_BEAM_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="dynamic output discovery and ActivitySim workspace skim fallback",
+    config_contract=ConfigContract.adapter("beam"),
+)
+_BEAM_FULL_SKIM_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="model-visible workspace and launch dependencies are not yet inventoried",
+    config_contract=ConfigContract.adapter("beam"),
+)
+
+
 @define_step(
     model="beam_preprocess",
     name_template="beam_preprocess__y{year}__i{iteration}__phase_{phase}",
@@ -1210,7 +1236,9 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
     ],
     output_paths=_native_contract_output_paths(_beam_preprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("beam_preprocess"),
+    **consist_step_meta(
+        "beam_preprocess", input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT
+    ),
 )
 def _native_beam_preprocess(
     plans_beam_in: Path,
@@ -1277,7 +1305,7 @@ def _native_beam_preprocess(
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("beam_run"),
+    **consist_step_meta("beam_run", input_contract=_BEAM_RUN_INPUT_CONTRACT),
 )
 def _native_beam_run(
     plans_beam_in: Path,
@@ -1372,7 +1400,9 @@ def _native_beam_run(
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("beam_postprocess"),
+    **consist_step_meta(
+        "beam_postprocess", input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT
+    ),
 )
 def _native_beam_postprocess(
     zarr_skims: Path | None = None,
@@ -1455,7 +1485,9 @@ def _native_beam_postprocess(
     schema_outputs=["beam_full_skims"],
     output_paths=_native_contract_output_paths(_beam_full_skim_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("beam_full_skim"),
+    **consist_step_meta(
+        "beam_full_skim", input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT
+    ),
 )
 def _native_beam_full_skim(
     plans_beam_in: Path,
@@ -1522,6 +1554,7 @@ beam_preprocess = StepDefinition(
     function=_native_beam_preprocess,
     resolve_inputs=_resolve_beam_preprocess_inputs,
     project_outputs=_project_beam_preprocess_outputs,
+    input_contract=_BEAM_PREPROCESS_INPUT_CONTRACT,
     output_paths=_beam_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_beam_preprocess_output_cache,
@@ -1531,6 +1564,7 @@ beam_run = StepDefinition(
     function=_native_beam_run,
     resolve_inputs=_resolve_beam_run_inputs,
     project_outputs=_project_beam_run_outputs,
+    input_contract=_BEAM_RUN_INPUT_CONTRACT,
     output_paths=_beam_run_native_output_paths,
     output_sets=_beam_run_output_sets,
     execution_options=_native_execution_options,
@@ -1541,6 +1575,7 @@ beam_postprocess = StepDefinition(
     function=_native_beam_postprocess,
     resolve_inputs=_resolve_beam_postprocess_inputs,
     project_outputs=_project_beam_postprocess_outputs,
+    input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache,
@@ -1550,6 +1585,7 @@ beam_full_skim = StepDefinition(
     function=_native_beam_full_skim,
     resolve_inputs=_resolve_beam_full_skim_inputs,
     project_outputs=_project_beam_full_skim_outputs,
+    input_contract=_BEAM_FULL_SKIM_INPUT_CONTRACT,
     output_paths=_beam_full_skim_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache,

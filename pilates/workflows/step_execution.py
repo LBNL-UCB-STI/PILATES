@@ -57,7 +57,9 @@ def execute_step(
     }
     if step_identity is not None:
         resolver_kwargs["step_identity"] = step_identity
-    resolved = resolved_inputs or definition.resolve_inputs(**resolver_kwargs)
+    resolved = (
+        resolved_inputs or definition.resolve_inputs(**resolver_kwargs)
+    ).with_input_contract(definition.input_contract)
     resolved.require_complete()
     options = (
         definition.execution_options(

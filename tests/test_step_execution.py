@@ -8,6 +8,7 @@ import pytest
 
 from consist import (
     BindingResult,
+    CacheOptions,
     ExecutionOptions,
     OutputArtifactSpec,
     OutputSet,
@@ -21,7 +22,11 @@ from consist.models.run import Run
 from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_H5,
@@ -30,6 +35,13 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.steps import urbansim_atlas
 from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS, URBANSIM_RUN
+
+
+_EXAMPLE_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="test-only executable has no closed workspace contract",
+    config_contract=ConfigContract.payload(),
+)
 
 
 @pytest.mark.parametrize("cache_hit", [False, True], ids=["miss", "cache-hit"])
@@ -95,6 +107,7 @@ def test_execute_step_forwards_output_sets_and_projects_archived_outputs(
             received_outputs=outputs,
             coupler_bundle=coupler.values["bundle"],
         ),
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     archive_root = tmp_path / "archive"
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
@@ -164,6 +177,7 @@ def test_execute_step_skips_archival_when_normalized_roots_are_equal(
             step_name="example", binding=BindingResult(inputs={})
         ),
         project_outputs=lambda received_outputs, **_: received_outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     shared_root = tmp_path / "shared"
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(shared_root))
@@ -227,6 +241,7 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
             step_name="staging", binding=BindingResult(inputs={})
         ),
         project_outputs=lambda received_outputs, **_: received_outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
         archive_outputs=False,
     )
     monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(tmp_path / "local"))
@@ -246,6 +261,71 @@ def test_execute_step_keeps_explicit_staging_outputs_out_of_recovery_archive(
     )
 
     assert received_result is result
+    assert projected == result.outputs
+
+
+def test_execute_step_carries_report_only_contract_without_changing_options(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Passive contracts preserve existing cache and execution option behavior."""
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    resolved = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+    cache_options = CacheOptions(cache_hydration="outputs-requested")
+    execution_options = ExecutionOptions(
+        input_binding="paths",
+        input_paths={"selected": "/workspace/selected"},
+    )
+    result = RunResult(
+        run=Run(
+            id="example-run",
+            model_name="example",
+            config_hash=None,
+            git_hash=None,
+        ),
+        outputs={"result": Artifact(key="result", container_uri="workspace://result")},
+    )
+    seen: dict[str, object] = {}
+    scenario = SimpleNamespace(
+        coupler=SimpleNamespace(update=lambda _: None),
+        tracker=SimpleNamespace(),
+    )
+    scenario.run = lambda **kwargs: seen.update(kwargs) or result
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: resolved,
+        project_outputs=lambda outputs, **_: outputs,
+        execution_options=lambda **_: execution_options,
+        cache_options=lambda **_: cache_options,
+        input_contract=InputContract(
+            status="incomplete",
+            reason="example runner has not closed its workspace reads",
+            config_contract=ConfigContract.payload(),
+        ),
+        archive_outputs=False,
+    )
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "0")
+
+    _, projected = execute_step(
+        scenario=scenario,
+        definition=definition,
+        settings="settings",
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+    )
+
+    supplied_options = seen["execution_options"]
+    assert isinstance(supplied_options, ExecutionOptions)
+    assert supplied_options.input_paths == {"selected": "/workspace/selected"}
+    assert seen["cache_options"] == cache_options
     assert projected == result.outputs
 
 
@@ -400,6 +480,7 @@ def test_execute_step_archives_and_hydrates_nested_output_set_from_recovery_root
             "bundle": OutputSet(root="bundle", include="**/*", recursive=True)
         },
         execution_options=lambda **_: ExecutionOptions(inject_context="ctx"),
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
 
     with tracker.scenario("archive-probe") as scenario:
@@ -491,6 +572,7 @@ def test_urbansim_population_snapshot_archives_from_managed_workspace_mount(
             output_file_template="output_{year}.h5",
             region_id="001",
             region_mappings={"region_to_region_id": {"test": "001"}},
+            admission=None,
         ),
     )
     state = SimpleNamespace(
@@ -584,6 +666,7 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
             runtime_kwargs={"provider_value": "preserved"},
             load_inputs=True,
         ),
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     scenario = SimpleNamespace(coupler="coupler", tracker=None)
 
@@ -620,6 +703,7 @@ def test_execute_step_resolves_once_runs_once_and_projects_run_outputs() -> None
         "extra": "value",
         "provider_value": "preserved",
     }
+    assert calls[2][2].input_contract is _EXAMPLE_INPUT_CONTRACT
 
 
 def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
@@ -635,6 +719,7 @@ def test_execute_step_uses_supplied_resolved_inputs_without_resolving() -> None:
         function=example,
         resolve_inputs=lambda **_: (_ for _ in ()).throw(AssertionError("resolver")),
         project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     scenario = SimpleNamespace(coupler="coupler", tracker=None)
     scenario.run = lambda **_: SimpleNamespace(outputs={"result": "persisted"})
@@ -687,6 +772,7 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
         function=example,
         resolve_inputs=lambda **_: (_ for _ in ()).throw(AssertionError("resolver")),
         project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     seen: dict[str, object] = {}
     scenario = SimpleNamespace(coupler="coupler", tracker=None)
@@ -725,6 +811,7 @@ def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:
         output_paths=lambda *, resolved_inputs, **_: {
             "result": f"/outputs/{resolved_inputs.step_name}"
         },
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     scenario = SimpleNamespace(coupler="coupler", tracker=None)
     seen: dict[str, object] = {}
@@ -765,6 +852,7 @@ def test_execute_step_projects_persisted_outputs_identically_for_miss_and_hit() 
             projector_inputs.append(outputs)
             or require_output(outputs, step_name="example", key="result")
         ),
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     scenario = SimpleNamespace(coupler="coupler", tracker=None)
     scenario.run = lambda **_: SimpleNamespace(
@@ -833,6 +921,7 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
             step_name="example", binding=BindingResult(inputs={})
         ),
         project_outputs=lambda outputs, **_: outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
     )
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",

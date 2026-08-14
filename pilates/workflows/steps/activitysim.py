@@ -50,7 +50,11 @@ from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
@@ -228,6 +232,22 @@ _ACTIVITYSIM_RUN_REQUIRED_ROLES = (
     ASIM_LAND_USE_IN,
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
+)
+
+_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mutable ActivitySim config and data roots with selected-skim mode",
+    config_contract=ConfigContract.adapter("activitysim"),
+)
+_ACTIVITYSIM_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mutable configs, runtime cache and warmup, and model data roots",
+    config_contract=ConfigContract.adapter("activitysim"),
+)
+_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mixed aliases, direct skims, and model-owned roots",
+    config_contract=ConfigContract.adapter("activitysim"),
 )
 _ACTIVITYSIM_RUN_SKIM_ROLES = (ZARR_SKIMS, ASIM_OMX_SKIMS)
 _ACTIVITYSIM_SKIM_MODE_METADATA_KEY = "activitysim_skim_mode"
@@ -875,7 +895,9 @@ def _project_activitysim_postprocess_outputs(
     ],
     input_binding="paths",
     tags=["activitysim", "preprocess"],
-    **consist_step_meta("activitysim_preprocess"),
+    **consist_step_meta(
+        "activitysim_preprocess", input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _activitysim_preprocess_callable(
@@ -915,7 +937,9 @@ def _activitysim_preprocess_callable(
     schema_outputs=[*ASIM_REQUIRED_RUN_OUTPUT_KEYS, ZARR_SKIMS],
     input_binding="paths",
     tags=["activitysim", "run"],
-    **consist_step_meta("activitysim_run"),
+    **consist_step_meta(
+        "activitysim_run", input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _activitysim_run_callable(
@@ -978,7 +1002,10 @@ def _activitysim_run_callable(
     schema_outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
     input_binding="paths",
     tags=["activitysim", "postprocess"],
-    **consist_step_meta("activitysim_postprocess"),
+    **consist_step_meta(
+        "activitysim_postprocess",
+        input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _activitysim_postprocess_callable(
@@ -1054,6 +1081,7 @@ activitysim_preprocess = StepDefinition(
     function=_activitysim_preprocess_callable,
     resolve_inputs=_activitysim_preprocess_resolver,
     project_outputs=_project_activitysim_preprocess_outputs,
+    input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
@@ -1063,6 +1091,7 @@ activitysim_run = StepDefinition(
     function=_activitysim_run_callable,
     resolve_inputs=_activitysim_run_resolver,
     project_outputs=_project_activitysim_run_outputs,
+    input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT,
     output_paths=_activitysim_run_native_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
@@ -1072,6 +1101,7 @@ activitysim_postprocess = StepDefinition(
     function=_activitysim_postprocess_callable,
     resolve_inputs=_activitysim_postprocess_resolver,
     project_outputs=_project_activitysim_postprocess_outputs,
+    input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,

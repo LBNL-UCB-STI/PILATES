@@ -36,7 +36,11 @@ from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.utils.consist_runtime import require_runtime_kwargs
@@ -554,6 +558,33 @@ def _resolve_atlas_postprocess_inputs(
     )
 
 
+_URBANSIM_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="static model data is identity-only rather than resolver-bound",
+    config_contract=ConfigContract.payload(),
+)
+_URBANSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="previous mutable UrbanSim input H5 remains a model-visible read",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_PREPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="conditional workspace skim fallback remains available",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="static inputs are identity-only model-root reads",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="vehicle mapping is discovered in the mutable ATLAS root",
+    config_contract=ConfigContract.payload(),
+)
+
+
 @define_step(
     model="urbansim_run",
     name_template="urbansim_run__y{year}__i{iteration}__phase_{phase}",
@@ -562,7 +593,7 @@ def _resolve_atlas_postprocess_inputs(
     schema_outputs=[USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT],
     output_paths=_native_contract_output_paths(_urbansim_run_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("urbansim_run"),
+    **consist_step_meta("urbansim_run", input_contract=_URBANSIM_RUN_INPUT_CONTRACT),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_urbansim_run(
@@ -590,7 +621,9 @@ def _native_urbansim_run(
         _urbansim_postprocess_native_output_paths
     ),
     input_binding="paths",
-    **consist_step_meta("urbansim_postprocess"),
+    **consist_step_meta(
+        "urbansim_postprocess", input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_urbansim_postprocess(
@@ -640,7 +673,9 @@ def _native_urbansim_postprocess(
     ],
     output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_preprocess"),
+    **consist_step_meta(
+        "atlas_preprocess", input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_preprocess(
@@ -677,7 +712,7 @@ def _native_atlas_preprocess(
     schema_outputs=[],
     output_paths=_native_contract_output_paths(_atlas_run_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_run"),
+    **consist_step_meta("atlas_run", input_contract=_ATLAS_RUN_INPUT_CONTRACT),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_run(
@@ -737,7 +772,9 @@ def _native_atlas_run(
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
     output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_postprocess"),
+    **consist_step_meta(
+        "atlas_postprocess", input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_postprocess(
@@ -980,6 +1017,7 @@ URBANSIM_RUN = StepDefinition(
     function=_native_urbansim_run,
     resolve_inputs=_resolve_urbansim_run_inputs,
     project_outputs=_project_urbansim_run,
+    input_contract=_URBANSIM_RUN_INPUT_CONTRACT,
     output_paths=_urbansim_run_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
@@ -990,6 +1028,7 @@ URBANSIM_POSTPROCESS = StepDefinition(
     function=_native_urbansim_postprocess,
     resolve_inputs=_resolve_urbansim_postprocess_inputs,
     project_outputs=_project_urbansim_postprocess,
+    input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
@@ -1001,6 +1040,7 @@ ATLAS_PREPROCESS = StepDefinition(
     function=_native_atlas_preprocess,
     resolve_inputs=_resolve_atlas_preprocess_inputs,
     project_outputs=_project_atlas_preprocess,
+    input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
     output_paths=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
@@ -1011,6 +1051,7 @@ ATLAS_RUN = StepDefinition(
     function=_native_atlas_run,
     resolve_inputs=_resolve_atlas_run_inputs,
     project_outputs=_project_atlas_run,
+    input_contract=_ATLAS_RUN_INPUT_CONTRACT,
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
     execution_options=_native_execution_options,
@@ -1022,6 +1063,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     function=_native_atlas_postprocess,
     resolve_inputs=_resolve_atlas_postprocess_inputs,
     project_outputs=_project_atlas_postprocess,
+    input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,

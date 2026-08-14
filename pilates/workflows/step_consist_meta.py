@@ -71,6 +71,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
 )
+from pilates.workflows.step_definition import InputContract
 
 _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
@@ -101,7 +102,11 @@ def _filter_adapter_covered_identity_inputs(
     return filtered or None
 
 
-def consist_step_meta(model: str) -> Dict[str, Any]:
+def consist_step_meta(
+    model: str,
+    *,
+    input_contract: InputContract | None = None,
+) -> Dict[str, Any]:
     """
     Build StepContext-callable metadata for Consist step defaults.
 
@@ -111,6 +116,25 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
     """
 
     cache_attr = "_pilates_step_meta_cache"
+
+    def _contract_report(*, adapter: Any, payload: Any) -> Dict[str, Any] | None:
+        if input_contract is None:
+            return None
+        config_contract = input_contract.config_contract
+        if config_contract is None:
+            configuration = {"kind": None, "available": False}
+        elif config_contract.kind == "adapter":
+            configuration = {"kind": "adapter", "available": adapter is not None}
+        else:
+            configuration = {
+                "kind": "payload",
+                "available": isinstance(payload, dict),
+            }
+        return {
+            "status": input_contract.status,
+            "reason": input_contract.reason,
+            "configuration": configuration,
+        }
 
     def _runtime_value(ctx: StepContext, name: str) -> Any:
         return ctx.get_runtime(name, default=None)
@@ -525,6 +549,15 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 resolved["identity_inputs"] = identity_inputs
             else:
                 resolved.pop("identity_inputs", None)
+        contract_report = _contract_report(
+            adapter=adapter,
+            payload=resolved.get("config"),
+        )
+        if contract_report is not None:
+            resolved["facet"] = {
+                **dict(resolved.get("facet") or {}),
+                "native_input_contract": contract_report,
+            }
         if cache is not None:
             cache[model] = resolved
         return resolved

@@ -44,6 +44,7 @@ def _settings() -> SimpleNamespace:
             output_file_template="output_{year}.h5",
             region_id="001",
             region_mappings={"region_to_region_id": {"test": "001"}},
+            admission=None,
         ),
         atlas=SimpleNamespace(beamac=0),
     )
