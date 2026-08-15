@@ -87,26 +87,26 @@ class GenericRunner(
 
     def run(
         self,
-        store: RunnerInputsT,
+        inputs: RunnerInputsT,
         launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Execute the model run.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
+            inputs: The model-specific input prepared by preprocessing.
             launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
         """
         self.state.set_sub_stage_progress("runner")
-        return self._run(store, launch_context)
+        return self._run(inputs, launch_context)
 
     @abc.abstractmethod
     def _run(
         self,
-        store: RunnerInputsT,
+        inputs: RunnerInputsT,
         launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
@@ -116,7 +116,7 @@ class GenericRunner(
         effects.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
+            inputs: The model-specific input prepared by preprocessing.
             launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:

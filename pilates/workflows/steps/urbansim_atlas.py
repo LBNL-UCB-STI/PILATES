@@ -25,6 +25,7 @@ from pilates.urbansim.outputs import (
 )
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
+from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
 from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
@@ -677,11 +678,16 @@ def _native_urbansim_run(
     workspace: Workspace,
     urbansim_launch_context: UrbanSimLaunchContext,
 ) -> None:
-    del settings
-    UrbansimRunner("urbansim", state).run(
+    inputs = stage_urbansim_run_workspace(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        mutable_data_dir=urbansim_launch_context.mutable_data_dir,
         usim_datastore_h5=usim_datastore_h5,
         final_skims_omx=final_skims_omx,
-        workspace=workspace,
+    )
+    UrbansimRunner("urbansim", state).run(
+        inputs,
         launch_context=urbansim_launch_context,
     )
 

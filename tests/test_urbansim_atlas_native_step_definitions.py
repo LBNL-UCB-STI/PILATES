@@ -22,6 +22,7 @@ from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
+from pilates.urbansim.outputs import UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
 from pilates.atlas.runner import AtlasLaunchContext
 from pilates.urbansim.runner import UrbanSimLaunchContext
@@ -1011,7 +1012,7 @@ def test_urbansim_run_staging_uses_bound_datastore_over_workspace_state(
 
     staged = _stage_declared_urbansim_datastore(
         settings=_settings(),
-        workspace=workspace,
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
         usim_datastore_h5=bound_snapshot,
     )
 
@@ -1347,10 +1348,26 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, **kwargs: object) -> None:
+        def run(
+            self,
+            inputs: object,
+            launch_context: object,
+            **kwargs: object,
+        ) -> None:
+            calls["inputs"] = inputs
+            calls["launch_context"] = launch_context
             calls.update(kwargs)
 
     monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _Runner)
+    staged = NativeUrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=launch_context.mutable_data_dir,
+        prepared_inputs={"usim_datastore_h5": datastore},
+    )
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "stage_urbansim_run_workspace",
+        lambda **_kwargs: staged,
+    )
 
     urbansim_atlas._native_urbansim_run(
         datastore,
@@ -1362,9 +1379,7 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
     )
 
     assert calls == {
-        "usim_datastore_h5": datastore,
-        "final_skims_omx": final_skims,
-        "workspace": workspace,
+        "inputs": staged,
         "launch_context": launch_context,
     }
 

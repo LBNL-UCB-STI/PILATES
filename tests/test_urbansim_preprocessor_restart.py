@@ -490,14 +490,11 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    settings = _settings(tmp_path)
     workspace = _WorkspaceStub(tmp_path / "run", tmp_path / "run" / "urbansim" / "data")
     datastore = tmp_path / "bound" / "datastore.h5"
-    final_skims = tmp_path / "beam-final" / "final_skims.omx"
     progress: list[str] = []
     runner = object.__new__(UrbansimRunner)
     runner.state = SimpleNamespace(
-        full_settings=settings,
         set_sub_stage_progress=progress.append,
     )
     staged = UrbanSimPreprocessOutputs(
@@ -510,10 +507,6 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
     )
     captured: dict[str, object] = {}
 
-    def _stage(**kwargs: object) -> UrbanSimPreprocessOutputs:
-        captured["stage"] = kwargs
-        return staged
-
     def _run(
         _self: UrbansimRunner,
         inputs: UrbanSimPreprocessOutputs,
@@ -523,25 +516,11 @@ def test_urbansim_runner_stages_scalar_inputs_before_running(
         captured["run"] = (inputs, run_launch_context, model_run_hash)
         return UrbanSimRunOutputs(usim_datastore_h5=tmp_path / "output.h5")
 
-    monkeypatch.setattr("pilates.urbansim.runner.stage_urbansim_run_workspace", _stage)
     monkeypatch.setattr(UrbansimRunner, "_run", _run)
 
-    result = runner.run(
-        datastore,
-        workspace,
-        launch_context=launch_context,
-        final_skims_omx=final_skims,
-        model_run_hash="run-hash",
-    )
+    result = runner.run(staged, launch_context, model_run_hash="run-hash")
 
     assert progress == ["runner"]
-    assert captured["stage"] == {
-        "settings": settings,
-        "state": runner.state,
-        "workspace": workspace,
-        "usim_datastore_h5": datastore,
-        "final_skims_omx": final_skims,
-    }
     assert captured["run"] == (staged, launch_context, "run-hash")
     assert result.usim_datastore_h5 == tmp_path / "output.h5"
 
