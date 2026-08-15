@@ -7,6 +7,7 @@ import pytest
 from consist import ExecutionOptions, Tracker, resolve_step_contract
 
 from pilates.atlas.preprocessor import AtlasPreprocessor
+from pilates.atlas.runner import AtlasLaunchContext
 import pilates.atlas.preprocessor as atlas_preprocessor_module
 from pilates.runtime import restart as restart_runtime
 from pilates.workflows import binding as workflow_binding
@@ -240,12 +241,12 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, _inputs: object, run_workspace: object) -> None:
-            output_dir = Path(run_workspace.get_atlas_output_dir())
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_dir = launch_context.output_root
             output_dir.mkdir(parents=True)
             (output_dir / "householdv_2021.csv").write_text("id\n1\n")
             (output_dir / "vehicles_2021.csv").write_text("id\n1\n")
-            root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2021"
+            root = launch_context.input_root / "year2021"
             (root / "vehicles_output.RData").write_text("vehicles\n")
             (root / "households_output.RData").write_text("households\n")
 
@@ -263,7 +264,15 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
         stage="vehicle_ownership",
         runtime_kwargs=runtime,
     ).facet
-    assert native_facet == {"atlas_subyear": 2021, "main_forecast_year": 2023}
+    assert native_facet == {
+        "atlas_subyear": 2021,
+        "main_forecast_year": 2023,
+        "native_input_contract": {
+            "status": "incomplete",
+            "reason": "conditional workspace skim fallback remains available",
+            "configuration": {"available": True, "kind": "payload"},
+        },
+    }
 
     with tracker.scenario("native-atlas-restart") as scenario:
         preprocess_result = scenario.run(
@@ -304,7 +313,14 @@ def test_restart_selects_archived_native_atlas_producers_from_prior_interval_fac
                 settings=settings, state=producer_state, workspace=workspace
             ),
             execution_options=ExecutionOptions(
-                input_binding="paths", runtime_kwargs=runtime
+                input_binding="paths",
+                runtime_kwargs={
+                    **runtime,
+                    "atlas_launch_context": AtlasLaunchContext(
+                        input_root=Path(workspace.get_atlas_mutable_input_dir()),
+                        output_root=Path(workspace.get_atlas_output_dir()),
+                    ),
+                },
             ),
         )
 

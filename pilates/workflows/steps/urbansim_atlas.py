@@ -18,7 +18,7 @@ from consist import (
 
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
-from pilates.atlas.runner import AtlasRunner
+from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs as NativeUrbanSimPostprocessOutputs,
@@ -240,6 +240,32 @@ def _urbansim_run_execution_options(
         executor=options.executor,
         container=options.container,
         runtime_kwargs={"urbansim_launch_context": launch_context},
+        inject_context=options.inject_context,
+    )
+
+
+def _atlas_run_execution_options(
+    *,
+    resolved_inputs: ResolvedStepInputs | None = None,
+    **_: Any,
+) -> ExecutionOptions:
+    """Pass the resolver-owned ATLAS launch context through runtime kwargs."""
+
+    if resolved_inputs is None:
+        raise RuntimeError("atlas_run requires resolved inputs before execution")
+    launch_context = resolved_inputs.metadata.get("atlas_launch_context")
+    if not isinstance(launch_context, AtlasLaunchContext):
+        raise RuntimeError("atlas_run is missing its resolved launch context")
+    options = _native_execution_options(resolved_inputs=resolved_inputs)
+    return ExecutionOptions(
+        load_inputs=options.load_inputs,
+        input_binding=options.input_binding,
+        input_paths=options.input_paths,
+        input_materialization=options.input_materialization,
+        input_materialization_mode=options.input_materialization_mode,
+        executor=options.executor,
+        container=options.container,
+        runtime_kwargs={"atlas_launch_context": launch_context},
         inject_context=options.inject_context,
     )
 
@@ -541,6 +567,10 @@ def _resolve_atlas_run_inputs(
         state=state,
         workspace=workspace,
     )
+    launch_context = AtlasLaunchContext(
+        input_root=Path(workspace.get_atlas_mutable_input_dir()),
+        output_root=Path(workspace.get_atlas_output_dir()),
+    )
     return _resolve_native_inputs(
         step_name="atlas_run",
         function=_native_atlas_run,
@@ -548,6 +578,7 @@ def _resolve_atlas_run_inputs(
         optional_roles=(),
         logical_destinations=prepared_inputs,
         coupler=coupler,
+        metadata={"atlas_launch_context": launch_context},
     )
 
 
@@ -757,7 +788,7 @@ def _native_atlas_preprocess(
     input_binding="paths",
     **consist_step_meta("atlas_run", input_contract=_ATLAS_RUN_INPUT_CONTRACT),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs("settings", "state", "workspace", "atlas_launch_context")
 def _native_atlas_run(
     atlas_households_csv: Path,
     atlas_blocks_csv: Path,
@@ -770,8 +801,8 @@ def _native_atlas_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    atlas_launch_context: AtlasLaunchContext,
 ) -> None:
-    mutable_input_root = Path(workspace.get_atlas_mutable_input_dir())
     received_inputs = {
         "atlas_households_csv": atlas_households_csv,
         "atlas_blocks_csv": atlas_blocks_csv,
@@ -797,10 +828,10 @@ def _native_atlas_run(
         )
     AtlasRunner("atlas", state).run(
         AtlasPreprocessOutputs(
-            atlas_mutable_input_dir=mutable_input_root,
+            atlas_mutable_input_dir=atlas_launch_context.input_root,
             prepared_inputs=received_inputs,
         ),
-        workspace,
+        atlas_launch_context,
     )
 
 
@@ -1097,7 +1128,7 @@ ATLAS_RUN = StepDefinition(
     input_contract=_ATLAS_RUN_INPUT_CONTRACT,
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
-    execution_options=_native_execution_options,
+    execution_options=_atlas_run_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )
 

@@ -23,6 +23,7 @@ from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
+from pilates.atlas.runner import AtlasLaunchContext
 from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.workflows.steps.urbansim_atlas import (
     ATLAS_POSTPROCESS,
@@ -528,12 +529,12 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, _inputs: object, run_workspace: object) -> None:
-            output_root = Path(run_workspace.get_atlas_output_dir())
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
             output_root.mkdir(parents=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
-            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root = launch_context.input_root / "year2030"
             (year_root / "vehicles_output.RData").write_text("vehicles\n")
             (year_root / "households_output.RData").write_text("households\n")
 
@@ -734,14 +735,12 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, _inputs: object, run_workspace: object) -> None:
-            output_root = Path(run_workspace.get_atlas_output_dir())
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
             output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
-            continuation_root = (
-                Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
-            )
+            continuation_root = launch_context.input_root / "year2030"
             continuation_root.mkdir(parents=True, exist_ok=True)
             (continuation_root / "vehicles_output.RData").write_text("vehicles")
             (continuation_root / "households_output.RData").write_text("households")
@@ -806,6 +805,10 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
                 settings=settings,
                 state=state,
                 workspace=workspace,
+                atlas_launch_context=AtlasLaunchContext(
+                    input_root=Path(workspace.get_atlas_mutable_input_dir()),
+                    output_root=Path(workspace.get_atlas_output_dir()),
+                ),
             )
 
         run_result = tracker.run(
@@ -1255,8 +1258,8 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, inputs: object, _workspace: object) -> None:
-            calls["atlas_run"] = inputs
+        def run(self, inputs: object, launch_context: object) -> None:
+            calls["atlas_run"] = (inputs, launch_context)
 
     class _AtlasPostprocessor:
         def __init__(self, *_args: object) -> None:
@@ -1277,6 +1280,10 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         state=state,
         workspace=workspace,
     )
+    atlas_launch_context = AtlasLaunchContext(
+        input_root=Path(workspace.get_atlas_mutable_input_dir()),
+        output_root=Path(workspace.get_atlas_output_dir()),
+    )
     urbansim_atlas._native_atlas_run(
         **{
             key: snapshots[key]
@@ -1289,6 +1296,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         settings=settings,
         state=state,
         workspace=workspace,
+        atlas_launch_context=atlas_launch_context,
     )
     snapshots["householdv_2030"] = (
         Path(workspace.get_atlas_output_dir()) / "householdv_2030.csv"
@@ -1313,9 +1321,11 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         "final_skims_omx": None,
         "allow_workspace_skim_fallback": True,
     }
-    assert getattr(calls["atlas_run"], "atlas_mutable_input_dir") == Path(
+    atlas_run_inputs, captured_atlas_launch_context = calls["atlas_run"]
+    assert getattr(atlas_run_inputs, "atlas_mutable_input_dir") == Path(
         workspace.get_atlas_mutable_input_dir()
     )
+    assert captured_atlas_launch_context == atlas_launch_context
     assert calls["atlas_postprocess"] == {
         "usim_datastore_h5": snapshots["usim_datastore_h5"]
     }
