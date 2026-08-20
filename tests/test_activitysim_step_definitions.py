@@ -17,6 +17,7 @@ from pilates.activitysim.outputs import (
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_tables,
 )
+from pilates.activitysim.runner import ActivitySimLaunchContext
 from pilates.activitysim.postprocessor import _activitysim_iteration_output_paths
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -934,10 +935,19 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
             f"activitysim_run reread frozen native role {key!r}"
         )
     )
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_runtime_cache_dir=lambda: str(
+            tmp_path / "activitysim" / "output" / "cache"
+        ),
+    )
     resolved = activitysim._activitysim_run_resolver(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
-        workspace=SimpleNamespace(),
+        workspace=workspace,
         coupler=coupler,
     )
 
@@ -998,6 +1008,36 @@ def test_activitysim_run_resolver_rejects_when_no_published_skim_source(
         )
 
 
+def test_activitysim_execution_options_carry_resolved_launch_context() -> None:
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=Path("/workspace"),
+        mutable_data_dir=Path("/inputs"),
+        output_dir=Path("/output"),
+        compile_output_dir=Path("/compile-output"),
+        mutable_configs_dir=Path("/configs"),
+        runtime_cache_dir=Path("/output/cache"),
+        runtime_zarr_path=Path("/output/cache/skims.zarr"),
+        shared_cache_dir=Path("/shared-cache"),
+        shared_tmp_dir=Path("/tmp"),
+    )
+    resolved = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(),
+        required_roles=(ASIM_LAND_USE_IN,),
+        logical_destinations={ASIM_LAND_USE_IN: Path("inputs/land_use.csv")},
+        metadata={"activitysim_launch_context": launch_context},
+    )
+
+    options = activitysim.activitysim_run.execution_options(
+        settings=None,
+        state=None,
+        workspace=None,
+        resolved_inputs=resolved,
+    )
+
+    assert options.runtime_kwargs == {"activitysim_launch_context": launch_context}
+
+
 @pytest.mark.parametrize(
     ("zarr_skims", "omx_skims", "expected_mode", "expected_extra_key"),
     [
@@ -1015,10 +1055,12 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
     captured: dict[str, object] = {}
 
     class Runner:
-        def run(self, inputs, workspace, *, skim_mode, extra_inputs):
+        def run(
+            self, inputs, launch_context, *, skim_mode, extra_inputs, workspace=None
+        ):
             captured.update(
                 inputs=inputs,
-                workspace=workspace,
+                launch_context=launch_context,
                 skim_mode=skim_mode,
                 extra_inputs=extra_inputs,
             )
@@ -1028,7 +1070,18 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         "get_runner",
         lambda _self, *_args: Runner(),
     )
-    workspace = SimpleNamespace(get_asim_mutable_data_dir=lambda: "/inputs")
+    workspace = SimpleNamespace()
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=Path("/workspace"),
+        mutable_data_dir=Path("/inputs"),
+        output_dir=Path("/output"),
+        compile_output_dir=Path("/compile-output"),
+        mutable_configs_dir=Path("/configs"),
+        runtime_cache_dir=Path("/output/cache"),
+        runtime_zarr_path=Path("/output/cache/skims.zarr"),
+        shared_cache_dir=Path("/shared-cache"),
+        shared_tmp_dir=Path("/tmp"),
+    )
 
     activitysim._activitysim_run_callable(
         Path("/inputs/land_use.csv"),
@@ -1039,9 +1092,11 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         settings=SimpleNamespace(),
         state=SimpleNamespace(),
         workspace=workspace,
+        activitysim_launch_context=launch_context,
     )
 
     assert captured["skim_mode"] == expected_mode
+    assert captured["launch_context"] == launch_context
     if expected_extra_key is None:
         assert captured["extra_inputs"] == {}
         assert captured["inputs"].omx_skims == omx_skims
@@ -1071,6 +1126,7 @@ def test_activitysim_run_callable_rejects_ambiguous_skim_sources(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),
             workspace=SimpleNamespace(get_asim_mutable_data_dir=lambda: "/inputs"),
+            activitysim_launch_context=None,
         )
 
 

@@ -236,6 +236,56 @@ def test_beam_runner_mounts_the_bound_launch_tree(
     }
 
 
+def test_beam_runner_rejects_missing_launch_config_before_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    state = _StubState()
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(config="beam.conf", memory="4g"),
+    )
+    runner = BeamRunner("beam_runner", state)
+
+    class WorkspaceWithoutBeamInput:
+        def get_beam_output_dir(self) -> str:
+            return str(tmp_path / "beam-output")
+
+        def get_beam_mutable_data_dir(self) -> str:
+            raise AssertionError("runner must not derive BEAM input from Workspace")
+
+    with pytest.raises(RuntimeError, match="launch configuration"):
+        runner._run(RecordStore(), WorkspaceWithoutBeamInput(), None)
+
+
+def test_full_skim_runner_rejects_missing_launch_config_before_workspace_fallback(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.runner import BeamFullSkimRunner
+
+    state = _StubState()
+    state.full_settings = SimpleNamespace(
+        run=SimpleNamespace(region="seattle"),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            memory="4g",
+            full_skim=SimpleNamespace(run_schedule="standalone"),
+        ),
+    )
+    runner = BeamFullSkimRunner("beam_full_skim", state)
+
+    class WorkspaceWithoutBeamInput:
+        def get_beam_output_dir(self) -> str:
+            return str(tmp_path / "beam-output")
+
+        def get_beam_mutable_data_dir(self) -> str:
+            raise AssertionError(
+                "full-skim runner must not derive BEAM input from Workspace"
+            )
+
+    with pytest.raises(RuntimeError, match="launch configuration"):
+        runner._run(RecordStore(), WorkspaceWithoutBeamInput(), None)
+
+
 def test_beam_runner_fails_closed_when_output_tree_cannot_be_renamed(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

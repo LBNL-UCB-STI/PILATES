@@ -6,6 +6,7 @@ constructs the appropriate command and environment for the BackgroundSkimsCreato
 """
 
 from types import SimpleNamespace
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
@@ -56,6 +57,7 @@ class TestBeamFullSkimMode:
     def _setup_runner_test(self, skim_cfg, *, full_skim=False):
         """Common test setup for runner tests."""
         from pilates.beam.runner import BeamFullSkimRunner, BeamRunner
+        from pilates.beam.launch_config import BeamLaunchConfig
         from pilates.generic.records import RecordStore
 
         settings = self._make_settings(full_skim_cfg=skim_cfg)
@@ -72,8 +74,13 @@ class TestBeamFullSkimMode:
         workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
 
         store = RecordStore(recordList=[])
+        launch_root = Path("/tmp/beam_launch") / ("full_skim" if full_skim else "beam")
+        launch_config = BeamLaunchConfig(
+            root=launch_root,
+            primary_config=launch_root / "beam.conf",
+        )
 
-        return runner, workspace, store
+        return runner, workspace, store, launch_config
 
     @patch("pilates.beam.runner._calculate_optimal_parallelism")
     @patch("pilates.beam.runner.get_setting")
@@ -105,12 +112,14 @@ class TestBeamFullSkimMode:
             linkstats_file=None,
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         # Verify run_container was called
         assert mock_run_container.called
@@ -162,12 +171,14 @@ class TestBeamFullSkimMode:
             linkstats_file=None,  # No linkstats
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -204,12 +215,14 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -241,12 +254,14 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": True, "walk": True, "transit": True},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -277,13 +292,13 @@ class TestBeamFullSkimMode:
         mock_get_setting.return_value = "skims.omx"
 
         skim_cfg = self._make_skim_config(run_schedule="disabled")
-        runner, workspace, store = self._setup_runner_test(skim_cfg)
+        runner, workspace, store, launch_config = self._setup_runner_test(skim_cfg)
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
             with patch.object(runner, "gather_outputs", return_value=[]):
-                runner._run(store, workspace)
+                runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -322,12 +337,14 @@ class TestBeamFullSkimMode:
             modes_to_build={"drive": False, "walk": False, "transit": False},
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]
@@ -359,12 +376,14 @@ class TestBeamFullSkimMode:
             peak_hours=[6.0, 8.5, 12.0, 17.5, 20.0],
         )
 
-        runner, workspace, store = self._setup_runner_test(skim_cfg, full_skim=True)
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
 
         with patch.object(
             runner, "get_model_and_image", return_value=("beam", "beam:latest")
         ):
-            runner._run(store, workspace)
+            runner._run(store, workspace, launch_config)
 
         call_kwargs = mock_run_container.call_args.kwargs
         command = call_kwargs["command"]

@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import inspect
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Literal, Mapping
 
@@ -31,6 +32,21 @@ from pilates.workflows.artifact_keys import (
 logger = logging.getLogger(__name__)
 
 ActivitysimSkimMode = Literal["omx", "zarr"]
+
+
+@dataclass(frozen=True, slots=True)
+class ActivitySimLaunchContext:
+    """Resolved model-visible roots for one ActivitySim invocation."""
+
+    workspace_root: Path
+    mutable_data_dir: Path
+    output_dir: Path
+    compile_output_dir: Path
+    mutable_configs_dir: Path
+    runtime_cache_dir: Path
+    runtime_zarr_path: Path
+    shared_cache_dir: Path
+    shared_tmp_dir: Path
 
 
 def _log_activitysim_launch_context(
@@ -201,10 +217,16 @@ def _stage_runtime_input_path(
     *,
     key: str,
     input_path: str,
-    workspace: Workspace,
+    workspace: Optional[Workspace] = None,
+    runtime_zarr_path: Optional[Path] = None,
 ) -> str:
     if key == "zarr_skims":
-        runtime_path = asim_runtime_zarr_path(workspace)
+        if runtime_zarr_path is None:
+            if workspace is None:
+                raise RuntimeError("ActivitySim Zarr staging requires a runtime path")
+            runtime_path = asim_runtime_zarr_path(workspace)
+        else:
+            runtime_path = str(runtime_zarr_path)
     else:
         return input_path
     if os.path.abspath(input_path) == os.path.abspath(runtime_path):
@@ -275,6 +297,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
         settings: PilatesConfig,
         working_dir=None,
         *,
+        launch_context: Optional[ActivitySimLaunchContext] = None,
         workspace: Optional[Workspace] = None,
         output_dir: Optional[str] = None,
         runtime_cache_dir: Optional[str] = None,
@@ -282,6 +305,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
         return ActivitysimRunner.get_asim_docker_vols(
             settings,
             working_dir=working_dir,
+            launch_context=launch_context,
             workspace=workspace,
             output_dir=output_dir,
             runtime_cache_dir=runtime_cache_dir,
@@ -304,7 +328,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
     def run(
         self,
         inputs: ActivitySimPreprocessOutputs,
-        workspace: Workspace,
+        launch_context: ActivitySimLaunchContext,
         *,
         skim_mode: ActivitysimSkimMode = "omx",
         zarr_input_path: Optional[str] = None,
@@ -315,7 +339,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
             )
         self._run(
             inputs,
-            workspace,
+            launch_context,
             skim_mode=skim_mode,
             zarr_input_path=zarr_input_path,
         )
@@ -323,7 +347,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
     def _run(
         self,
         inputs: ActivitySimPreprocessOutputs,
-        workspace: Workspace,
+        launch_context: ActivitySimLaunchContext,
         *,
         skim_mode: ActivitysimSkimMode = "omx",
         zarr_input_path: Optional[str] = None,
@@ -334,13 +358,13 @@ class ActivitysimNumbaWarmup(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
-        shared_cache_dir = os.path.join(workspace.full_path, "shared_cache")
-        shared_tmp_dir = os.path.join(workspace.full_path, "tmp")
+        shared_cache_dir = str(launch_context.shared_cache_dir)
+        shared_tmp_dir = str(launch_context.shared_tmp_dir)
 
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
         os.makedirs(shared_tmp_dir, exist_ok=True)
 
-        compile_output_dir = asim_compile_output_dir(workspace)
+        compile_output_dir = str(launch_context.compile_output_dir)
         compile_runtime_cache_dir = os.path.join(compile_output_dir, "cache")
         os.makedirs(compile_runtime_cache_dir, exist_ok=True)
         compile_zarr_input_path = (
@@ -350,8 +374,12 @@ class ActivitysimNumbaWarmup(GenericRunner):
         )
         asim_docker_vols = self.get_asim_docker_vols(
             settings,
-            workspace=workspace,
-            working_dir=workspace.full_path,
+            launch_context=replace(
+                launch_context,
+                output_dir=Path(compile_output_dir),
+                runtime_cache_dir=Path(compile_runtime_cache_dir),
+                runtime_zarr_path=Path(compile_runtime_cache_dir) / "skims.zarr",
+            ),
             output_dir=compile_output_dir,
             runtime_cache_dir=compile_runtime_cache_dir,
         )
@@ -479,11 +507,12 @@ class ActivitysimRunner(GenericRunner):
     def run(
         self,
         inputs: ActivitySimPreprocessOutputs,
-        workspace: Workspace,
+        launch_context: ActivitySimLaunchContext,
         *,
         skim_mode: ActivitysimSkimMode = "zarr",
         extra_inputs: Optional[Mapping[str, Any]] = None,
         skip_numba_warmup: bool = False,
+        workspace: Optional[Workspace] = None,
     ) -> ActivitySimRunOutputs:
         if not isinstance(inputs, ActivitySimPreprocessOutputs):
             raise TypeError(
@@ -500,7 +529,7 @@ class ActivitysimRunner(GenericRunner):
             staged_extra_inputs[key] = _stage_runtime_input_path(
                 key=key,
                 input_path=str(input_path),
-                workspace=workspace,
+                runtime_zarr_path=launch_context.runtime_zarr_path,
             )
         if skim_mode == "zarr":
             zarr_input_path = staged_extra_inputs.get(ZARR_SKIMS)
@@ -515,7 +544,7 @@ class ActivitysimRunner(GenericRunner):
             warmup_decision = "skipped (persistent cache disabled)"
         elif self.state.full_settings.activitysim.num_processes <= 1:
             warmup_decision = "skipped (single-process run)"
-        elif _dir_contains_files(asim_sharrow_cache_dir(workspace)):
+        elif _dir_contains_files(str(launch_context.shared_cache_dir / "numba")):
             warmup_decision = "skipped (node-local cache present)"
         else:
             warmup_decision = "running"
@@ -526,23 +555,29 @@ class ActivitysimRunner(GenericRunner):
             )
             ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
                 inputs,
-                workspace,
+                launch_context,
                 skim_mode=skim_mode,
                 zarr_input_path=zarr_input_path,
             )
-            if not _dir_contains_files(asim_sharrow_cache_dir(workspace)):
+            if not _dir_contains_files(str(launch_context.shared_cache_dir / "numba")):
                 raise RuntimeError(
                     "ActivitySim Numba warmup completed without a nonempty local cache."
                 )
         outputs = self._run(
             inputs,
-            workspace,
+            launch_context,
             skim_mode=skim_mode,
             extra_inputs=staged_extra_inputs,
         )
         if skim_mode == "omx":
+            if workspace is None:
+                raise RuntimeError(
+                    "ActivitySim OMX mode requires a workspace for skim finalization"
+                )
             outputs.zarr_skims = finalize_activitysim_zarr_skims(
-                asim_runtime_zarr_path(workspace), self.state.full_settings, workspace
+                str(launch_context.runtime_zarr_path),
+                self.state.full_settings,
+                workspace,
             )
         return outputs
 
@@ -605,6 +640,7 @@ class ActivitysimRunner(GenericRunner):
         settings: PilatesConfig,
         working_dir=None,
         *,
+        launch_context: Optional[ActivitySimLaunchContext] = None,
         workspace: Optional[Workspace] = None,
         output_dir: Optional[str] = None,
         runtime_cache_dir: Optional[str] = None,
@@ -613,12 +649,43 @@ class ActivitysimRunner(GenericRunner):
         asim_subdir = settings.activitysim.region_mappings["region_to_subdir"][region]
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         configured_runtime_cache_dir = runtime_cache_dir
-        if workspace is not None:
+        if launch_context is not None:
+            asim_local_mutable_data_folder = os.path.abspath(
+                str(launch_context.mutable_data_dir)
+            )
+            asim_local_output_folder = os.path.abspath(
+                output_dir if output_dir is not None else str(launch_context.output_dir)
+            )
+            asim_local_configs_folder = os.path.abspath(
+                os.path.join(
+                    str(launch_context.mutable_configs_dir),
+                    settings.activitysim.main_configs_dir,
+                )
+            )
+            asim_local_configs_compile_folder = os.path.abspath(
+                os.path.join(
+                    str(launch_context.mutable_configs_dir),
+                    "configs_sh_compile",
+                )
+            )
+            asim_local_configs_mp_folder = os.path.abspath(
+                os.path.join(
+                    str(launch_context.mutable_configs_dir),
+                    "configs_mp",
+                )
+            )
+            if configured_runtime_cache_dir is None:
+                configured_runtime_cache_dir = os.path.abspath(
+                    str(launch_context.runtime_cache_dir)
+                )
+        elif workspace is not None:
             asim_local_mutable_data_folder = os.path.abspath(
                 workspace.get_asim_mutable_data_dir()
             )
             asim_local_output_folder = os.path.abspath(
-                output_dir if output_dir is not None else workspace.get_asim_output_dir()
+                output_dir
+                if output_dir is not None
+                else workspace.get_asim_output_dir()
             )
             asim_local_configs_folder = os.path.abspath(
                 os.path.join(
@@ -733,7 +800,8 @@ class ActivitysimRunner(GenericRunner):
         )
         if (
             configured_runtime_cache_dir
-            and os.path.abspath(configured_runtime_cache_dir) != default_runtime_cache_dir
+            and os.path.abspath(configured_runtime_cache_dir)
+            != default_runtime_cache_dir
         ):
             asim_docker_vols[os.path.abspath(configured_runtime_cache_dir)] = {
                 "bind": asim_remote_runtime_cache_folder,
@@ -755,7 +823,7 @@ class ActivitysimRunner(GenericRunner):
     def _run(
         self,
         inputs: ActivitySimPreprocessOutputs,
-        workspace: Workspace,
+        launch_context: ActivitySimLaunchContext,
         *,
         skim_mode: ActivitysimSkimMode,
         extra_inputs: Optional[Mapping[str, Any]] = None,
@@ -778,9 +846,9 @@ class ActivitysimRunner(GenericRunner):
         asim_workdir = os.path.join("activitysim", asim_subdir)
 
         # Get from your config
-        # Create shared cache and tmp inside the run workspace
-        shared_cache_dir = os.path.join(workspace.full_path, "shared_cache")
-        shared_tmp_dir = os.path.join(workspace.full_path, "tmp")
+        # Create shared cache and tmp inside the resolved launch roots.
+        shared_cache_dir = str(launch_context.shared_cache_dir)
+        shared_tmp_dir = str(launch_context.shared_tmp_dir)
 
         # Create them
         os.makedirs(os.path.join(shared_cache_dir, "numba"), exist_ok=True)
@@ -790,8 +858,7 @@ class ActivitysimRunner(GenericRunner):
 
         asim_docker_vols = self.get_asim_docker_vols(
             settings,
-            workspace=workspace,
-            working_dir=workspace.full_path,
+            launch_context=launch_context,
         )
 
         asim_docker_vols.update(
@@ -805,11 +872,9 @@ class ActivitysimRunner(GenericRunner):
             settings, "activity_demand_model"
         )
 
-        all_skims_path = asim_runtime_zarr_path(workspace)
+        all_skims_path = str(launch_context.runtime_zarr_path)
 
-        asim_local_output_folder = os.path.abspath(
-            os.path.join(workspace.full_path, settings.activitysim.local_output_folder)
-        )
+        asim_local_output_folder = os.path.abspath(str(launch_context.output_dir))
 
         os.makedirs(
             os.path.join(asim_local_output_folder, "cache", "numba"), exist_ok=True
@@ -849,7 +914,7 @@ class ActivitysimRunner(GenericRunner):
 
         # Clear any stale success marker before running ActivitySim.
         clear_asim_run_marker(
-            workspace.get_asim_output_dir(),
+            str(launch_context.output_dir),
             self.state.current_year,
             self.state.current_inner_iter,
         )
@@ -864,7 +929,7 @@ class ActivitysimRunner(GenericRunner):
             working_dir=asim_workdir,
             args=additional_args,
             environment=container_environment,
-            output_paths=[workspace.get_asim_output_dir()],
+            output_paths=[str(launch_context.output_dir)],
             lineage_mode="none",
         )
 
@@ -876,7 +941,7 @@ class ActivitysimRunner(GenericRunner):
             raise RuntimeError(message)
 
         # Assemble outputs from final_pipeline parquet files.
-        output_dir = os.path.join(workspace.get_asim_output_dir(), "final_pipeline")
+        output_dir = os.path.join(str(launch_context.output_dir), "final_pipeline")
         raw_outputs: Dict[str, Path] = {}
         if os.path.exists(output_dir):
             for fname in os.listdir(output_dir):
@@ -886,7 +951,7 @@ class ActivitysimRunner(GenericRunner):
 
         if raw_outputs:
             write_asim_run_marker(
-                workspace.get_asim_output_dir(),
+                str(launch_context.output_dir),
                 self.state.current_year,
                 self.state.current_inner_iter,
                 meta={
@@ -903,6 +968,6 @@ class ActivitysimRunner(GenericRunner):
             )
 
         return ActivitySimRunOutputs(
-            output_dir=Path(workspace.get_asim_output_dir()),
+            output_dir=launch_context.output_dir,
             raw_outputs=raw_outputs,
         )

@@ -12,13 +12,33 @@ from types import SimpleNamespace
 from consist import BindingResult, ExecutionOptions, Tracker, define_step
 
 from pilates.activitysim import runner as activitysim_runner
-from pilates.activitysim.outputs import ActivitySimPreprocessOutputs, ActivitySimRunOutputs
+from pilates.activitysim.outputs import (
+    ActivitySimPreprocessOutputs,
+    ActivitySimRunOutputs,
+)
 from pilates.activitysim.runner import (
+    ActivitySimLaunchContext,
     ActivitysimNumbaWarmup,
     ActivitysimRunner,
     asim_compile_output_dir,
 )
 from pilates.utils import consist_runtime as cr
+
+
+def _launch_context(root: Path) -> ActivitySimLaunchContext:
+    output_dir = root / "activitysim" / "output"
+    runtime_cache_dir = output_dir / "cache"
+    return ActivitySimLaunchContext(
+        workspace_root=root,
+        mutable_data_dir=root / "activitysim" / "data",
+        output_dir=output_dir,
+        compile_output_dir=root / "activitysim" / "compile-output",
+        mutable_configs_dir=root / "activitysim" / "configs",
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=root / "shared_cache",
+        shared_tmp_dir=root / "tmp",
+    )
 
 
 def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
@@ -37,9 +57,7 @@ def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
     )
     state = SimpleNamespace(full_settings=settings)
     warmup = ActivitysimNumbaWarmup("activitysim_numba_warmup", state)
-    production_zarr_path = (
-        tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
-    )
+    production_zarr_path = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
     compile_output = Path(asim_compile_output_dir(workspace))
 
     monkeypatch.setattr(warmup, "get_asim_docker_vols", lambda *_args, **_kwargs: {})
@@ -54,6 +72,7 @@ def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
         "pilates.activitysim.runner._log_activitysim_launch_context",
         lambda **_kwargs: None,
     )
+
     def _run_container(**kwargs):
         assert kwargs["model_name"] == "activitysim_numba_warmup"
         assert kwargs["lineage_mode"] == "none"
@@ -69,7 +88,7 @@ def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
             households_table=tmp_path / "households.csv",
             persons_table=tmp_path / "persons.csv",
         ),
-        workspace,
+        _launch_context(tmp_path),
     )
 
     assert result is None
@@ -125,7 +144,12 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
     )
     def native_activitysim_body(source: Path, ctx) -> None:
         del source
-        runner.run(inputs, workspace, skim_mode="omx")
+        runner.run(
+            inputs,
+            _launch_context(tmp_path / "workspace"),
+            skim_mode="omx",
+            workspace=workspace,
+        )
         ctx.run_dir.mkdir(parents=True, exist_ok=True)
         (ctx.run_dir / "result.txt").write_text("complete\n", encoding="utf-8")
 
@@ -160,11 +184,15 @@ def test_numba_warmup_passes_only_private_zarr_bytes_to_consist_container(
     """The actual Consist call must receive no mount for the selected Zarr."""
     workspace = SimpleNamespace(
         full_path=str(tmp_path / "workspace"),
-        get_asim_output_dir=lambda: str(tmp_path / "workspace" / "activitysim" / "output"),
+        get_asim_output_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "output"
+        ),
         get_asim_runtime_cache_dir=lambda: str(
             tmp_path / "workspace" / "activitysim" / "output" / "cache"
         ),
-        get_asim_mutable_data_dir=lambda: str(tmp_path / "workspace" / "activitysim" / "data"),
+        get_asim_mutable_data_dir=lambda: str(
+            tmp_path / "workspace" / "activitysim" / "data"
+        ),
         get_asim_mutable_configs_dir=lambda: str(
             tmp_path / "workspace" / "activitysim" / "configs"
         ),
@@ -203,7 +231,7 @@ def test_numba_warmup_passes_only_private_zarr_bytes_to_consist_container(
     )
     monkeypatch.setattr(
         "consist.integrations.containers.run_container",
-        lambda **kwargs: (called.update(kwargs) or True),
+        lambda **kwargs: called.update(kwargs) or True,
     )
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
@@ -219,7 +247,7 @@ def test_numba_warmup_passes_only_private_zarr_bytes_to_consist_container(
                     households_table=tmp_path / "households.csv",
                     persons_table=tmp_path / "persons.csv",
                 ),
-                workspace,
+                _launch_context(tmp_path / "workspace"),
                 skim_mode="zarr",
                 zarr_input_path=str(selected_zarr),
             )

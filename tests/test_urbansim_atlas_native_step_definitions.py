@@ -22,7 +22,9 @@ from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
-from pilates.urbansim.outputs import UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs
+from pilates.urbansim.outputs import (
+    UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs,
+)
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
 from pilates.atlas.runner import AtlasLaunchContext
 from pilates.urbansim.runner import UrbanSimLaunchContext

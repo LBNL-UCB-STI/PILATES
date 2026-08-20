@@ -10,6 +10,7 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.activitysim.runner import (
+    ActivitySimLaunchContext,
     ActivitysimRunner,
     asim_runtime_zarr_path,
 )
@@ -36,6 +37,22 @@ def _settings() -> SimpleNamespace:
             num_processes=1,
             chunk_size=None,
         ),
+    )
+
+
+def _launch_context(tmp_path: Path) -> ActivitySimLaunchContext:
+    output_dir = tmp_path / "activitysim" / "output"
+    runtime_cache_dir = output_dir / "cache"
+    return ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "activitysim" / "data",
+        output_dir=output_dir,
+        compile_output_dir=tmp_path / "activitysim" / "compile-output",
+        mutable_configs_dir=tmp_path / "activitysim" / "configs",
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared_cache",
+        shared_tmp_dir=tmp_path / "tmp",
     )
 
 
@@ -82,8 +99,9 @@ def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tm
             households_table=tmp_path / "households.csv",
             persons_table=tmp_path / "persons.csv",
         ),
-        workspace,
+        _launch_context(tmp_path),
         skim_mode="omx",
+        workspace=workspace,
     )
 
     assert outputs.zarr_skims == zarr_path
@@ -127,7 +145,7 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
             households_table=tmp_path / "households.csv",
             persons_table=tmp_path / "persons.csv",
         ),
-        workspace,
+        _launch_context(tmp_path),
         skim_mode="zarr",
         extra_inputs={"zarr_skims": zarr_path},
     )

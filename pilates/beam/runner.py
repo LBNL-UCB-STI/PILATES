@@ -103,7 +103,7 @@ def _beam_container_volumes(
     *,
     input_root: Path,
     output_root: Path,
-    launch_config: BeamLaunchConfig | None,
+    launch_config: BeamLaunchConfig,
 ) -> dict[str, dict[str, str]]:
     """Mount the launch snapshot at its container and configured host paths."""
 
@@ -111,13 +111,25 @@ def _beam_container_volumes(
         str(input_root): {"bind": "/app/input", "mode": "rw"},
         str(output_root): {"bind": "/app/output", "mode": "rw"},
     }
-    if launch_config is not None:
-        host_path_root = input_root.parent
-        volumes[str(host_path_root)] = {
-            "bind": str(host_path_root),
-            "mode": "rw",
-        }
+    host_path_root = input_root.parent
+    volumes[str(host_path_root)] = {
+        "bind": str(host_path_root),
+        "mode": "rw",
+    }
     return volumes
+
+
+def _require_beam_launch_config(
+    launch_config: BeamLaunchConfig | None,
+) -> BeamLaunchConfig:
+    """Require the resolver-produced launch tree for BEAM execution."""
+
+    if not isinstance(launch_config, BeamLaunchConfig):
+        raise RuntimeError(
+            "BEAM runner requires the resolver-produced launch configuration; "
+            "it must not derive material input paths from Workspace."
+        )
+    return launch_config
 
 
 def _select_latest_linkstats_path(
@@ -515,10 +527,10 @@ class BeamRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
-        launch_config: BeamLaunchConfig | None = None,
+        launch_config: BeamLaunchConfig,
     ) -> RecordStore:
+        launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
-        region = settings.run.region
         beam_memory = settings.beam.memory
 
         client = None  # Handled by Consist
@@ -526,16 +538,11 @@ class BeamRunner(GenericRunner):
         travel_model, travel_model_image = self.get_model_and_image(
             settings, "travel_model"
         )
-        if launch_config is None:
-            beam_config = settings.beam.config
-            path_to_beam_config = f"/app/input/{region}/{beam_config}"
-            abs_beam_input = workspace.get_beam_mutable_data_dir()
-        else:
-            config_relative_path = launch_config.primary_config.relative_to(
-                launch_config.root
-            )
-            path_to_beam_config = str(Path("/app/input") / config_relative_path)
-            abs_beam_input = str(launch_config.root)
+        config_relative_path = launch_config.primary_config.relative_to(
+            launch_config.root
+        )
+        path_to_beam_config = str(Path("/app/input") / config_relative_path)
+        abs_beam_input = str(launch_config.root)
         abs_beam_output = workspace.get_beam_output_dir()
 
         # Make sure there's a temp dir for the JVM to use
@@ -749,8 +756,9 @@ class BeamFullSkimRunner(GenericRunner):
         self,
         store: RecordStore,
         workspace: Workspace,
-        launch_config: BeamLaunchConfig | None = None,
+        launch_config: BeamLaunchConfig,
     ) -> RecordStore:
+        launch_config = _require_beam_launch_config(launch_config)
         settings = self.state.full_settings
         region = settings.run.region
         beam_memory = settings.beam.memory
@@ -766,15 +774,11 @@ class BeamFullSkimRunner(GenericRunner):
                 "BEAM full skim requested but beam.full_skim.run_schedule is disabled."
             )
 
-        if launch_config is None:
-            abs_beam_input = workspace.get_beam_mutable_data_dir()
-            path_to_beam_config = f"/app/input/{region}/{settings.beam.config}"
-        else:
-            abs_beam_input = str(launch_config.root)
-            path_to_beam_config = str(
-                Path("/app/input")
-                / launch_config.primary_config.relative_to(launch_config.root)
-            )
+        abs_beam_input = str(launch_config.root)
+        path_to_beam_config = str(
+            Path("/app/input")
+            / launch_config.primary_config.relative_to(launch_config.root)
+        )
         abs_beam_output = workspace.get_beam_output_dir()
 
         output_dir = os.path.join(

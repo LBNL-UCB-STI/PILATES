@@ -23,6 +23,7 @@ from pilates.activitysim.preprocessor import (
 from pilates.activitysim.runner import (
     ActivitysimSkimMode,
     ActivitysimRunner,
+    ActivitySimLaunchContext,
     asim_runtime_zarr_path,
 )
 from pilates.activitysim.outputs import (
@@ -266,6 +267,26 @@ _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES = (
 )
 
 
+def _activitysim_launch_context(workspace: Workspace) -> ActivitySimLaunchContext:
+    """Resolve the model-visible ActivitySim roots once for one invocation."""
+
+    workspace_root = Path(workspace.full_path)
+    mutable_data_dir = Path(workspace.get_asim_mutable_data_dir())
+    output_dir = Path(workspace.get_asim_output_dir())
+    runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
+    return ActivitySimLaunchContext(
+        workspace_root=workspace_root,
+        mutable_data_dir=mutable_data_dir,
+        output_dir=output_dir,
+        compile_output_dir=output_dir.parent / "compile-output",
+        mutable_configs_dir=Path(workspace.get_asim_mutable_configs_dir()),
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=workspace_root / "shared_cache",
+        shared_tmp_dir=workspace_root / "tmp",
+    )
+
+
 def _native_activitysim_resolved_inputs(
     *,
     step_name: str,
@@ -447,6 +468,7 @@ def _activitysim_run_resolver(
         **resolved.metadata,
         _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: skim_mode,
         _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: produces_zarr,
+        "activitysim_launch_context": _activitysim_launch_context(workspace),
     }
     selected = ResolvedStepInputs(
         step_name=resolved.step_name,
@@ -593,6 +615,12 @@ def _activitysim_execution_options(
 
     del settings, state, workspace
     selected_roles = set(resolved_inputs.selected_roles())
+    runtime_kwargs: dict[str, Any] = {}
+    if resolved_inputs.step_name == "activitysim_run":
+        launch_context = resolved_inputs.metadata.get("activitysim_launch_context")
+        if not isinstance(launch_context, ActivitySimLaunchContext):
+            raise RuntimeError("activitysim_run is missing its resolved launch context")
+        runtime_kwargs["activitysim_launch_context"] = launch_context
     return ExecutionOptions(
         input_binding="paths",
         input_paths={
@@ -602,6 +630,7 @@ def _activitysim_execution_options(
         },
         input_materialization="requested",
         input_materialization_mode="copy",
+        runtime_kwargs=runtime_kwargs,
     )
 
 
@@ -941,7 +970,7 @@ def _activitysim_preprocess_callable(
         "activitysim_run", input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT
     ),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs("settings", "state", "workspace", "activitysim_launch_context")
 def _activitysim_run_callable(
     land_use_asim_in: Path,
     households_asim_in: Path,
@@ -952,6 +981,7 @@ def _activitysim_run_callable(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    activitysim_launch_context: ActivitySimLaunchContext | None = None,
 ) -> None:
     """Run ActivitySim from exactly one materialized native skim source."""
 
@@ -967,8 +997,10 @@ def _activitysim_run_callable(
             "activitysim_run requires exactly one materialized skim input: "
             f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
         )
+    if not isinstance(activitysim_launch_context, ActivitySimLaunchContext):
+        raise RuntimeError("activitysim_run is missing its resolved launch context")
     inputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        mutable_data_dir=activitysim_launch_context.mutable_data_dir,
         land_use_table=Path(land_use_asim_in),
         households_table=Path(households_asim_in),
         persons_table=Path(persons_asim_in),
@@ -976,9 +1008,10 @@ def _activitysim_run_callable(
     )
     ModelFactory().get_runner("activitysim", state).run(
         inputs,
-        workspace,
+        activitysim_launch_context,
         skim_mode=skim_mode,
         extra_inputs=extra_inputs,
+        workspace=workspace,
     )
 
 

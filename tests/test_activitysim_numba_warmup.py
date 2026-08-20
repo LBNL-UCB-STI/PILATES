@@ -13,6 +13,7 @@ from pilates.activitysim.outputs import (
     ActivitySimRunOutputs,
 )
 from pilates.activitysim.runner import ActivitysimRunner
+from pilates.activitysim.runner import ActivitySimLaunchContext
 from pilates.workflows.artifact_keys import ZARR_SKIMS
 
 
@@ -31,6 +32,22 @@ class _Workspace:
 
     def get_asim_runtime_cache_dir(self) -> str:
         return str(Path(self.get_asim_output_dir()) / "cache")
+
+
+def _launch_context(root: Path) -> ActivitySimLaunchContext:
+    output_dir = root / "activitysim" / "output"
+    runtime_cache_dir = output_dir / "cache"
+    return ActivitySimLaunchContext(
+        workspace_root=root,
+        mutable_data_dir=root / "activitysim" / "data",
+        output_dir=output_dir,
+        compile_output_dir=root / "activitysim" / "compile-output",
+        mutable_configs_dir=root / "activitysim" / "configs",
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=root / "shared_cache",
+        shared_tmp_dir=root / "tmp",
+    )
 
 
 def test_activitysim_run_outputs_round_trip_generated_zarr(tmp_path: Path) -> None:
@@ -195,9 +212,10 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
 
     runner.run(
         inputs,
-        workspace,
+        _launch_context(tmp_path),
         skim_mode="omx",
         skip_numba_warmup=skip_numba_warmup,
+        workspace=workspace,
     )
 
     assert expected_decision in caplog.text
@@ -267,9 +285,7 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
         "unlink",
         "utime",
     ):
-        monkeypatch.setattr(
-            activitysim_runner.os, operation, guard_mutation(operation)
-        )
+        monkeypatch.setattr(activitysim_runner.os, operation, guard_mutation(operation))
 
     monkeypatch.setattr(
         warmup,
@@ -291,7 +307,7 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
 
     monkeypatch.setattr(warmup, "run_container", run_compile_container)
 
-    warmup.run(_activitysim_inputs(tmp_path), workspace)
+    warmup.run(_activitysim_inputs(tmp_path), _launch_context(tmp_path))
 
     mounted_output = next(
         Path(local)
@@ -342,18 +358,16 @@ def test_numba_warmup_copies_the_selected_zarr_into_private_compile_scratch(
     monkeypatch.setattr(
         warmup,
         "run_container",
-        lambda *_args, **kwargs: (captured_volumes.update(kwargs["volumes"]) or True),
+        lambda *_args, **kwargs: captured_volumes.update(kwargs["volumes"]) or True,
     )
 
     warmup.run(
         _activitysim_inputs(tmp_path),
-        workspace,
+        _launch_context(tmp_path),
         skim_mode="zarr",
         zarr_input_path=str(zarr_path),
     )
 
-    compile_zarr = (
-        tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
-    )
+    compile_zarr = tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
     assert str(zarr_path) not in captured_volumes
     assert (compile_zarr / ".zgroup").read_text(encoding="utf-8") == "{}\n"
