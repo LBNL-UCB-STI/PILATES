@@ -613,10 +613,34 @@ def _mapping_or_empty(value: object, field: str) -> Mapping[str, object]:
     return _mapping(value, field)
 
 
+def initialize_structural_canary_capture(path: Path) -> None:
+    """Create a capture-only manifest for an initial evidence run."""
+
+    if path.exists():
+        raise FileExistsError(f"structural canary manifest already exists: {path}")
+    capture = StructuralCanaryCapture(
+        expected_launches=(),
+        required_evidence=(
+            CanaryEvidence(
+                "consist_snapshot", ".consist/snapshots/latest/provenance.duckdb"
+            ),
+            CanaryEvidence("generated_settings", "generated/settings.yaml"),
+            CanaryEvidence("launch_logs", "logs/launch.log"),
+            CanaryEvidence("action_v2_census", "evidence/action-v2.jsonl"),
+        ),
+    )
+    capture.write(path)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("manifest", type=Path)
-    parser.add_argument("--evidence-root", type=Path, required=True)
+    parser.add_argument("manifest", type=Path, nargs="?")
+    parser.add_argument(
+        "--init-capture",
+        type=Path,
+        help="create an empty capture-only manifest at this path",
+    )
+    parser.add_argument("--evidence-root", type=Path)
     parser.add_argument(
         "--record-evidence",
         action="append",
@@ -626,6 +650,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="append one retained evidence path before checking the manifest",
     )
     args = parser.parse_args(argv)
+    if args.init_capture is not None:
+        if args.manifest is not None or args.evidence_root is not None:
+            parser.error(
+                "--init-capture cannot be combined with a manifest or --evidence-root"
+            )
+        if args.record_evidence:
+            parser.error("--init-capture cannot be combined with --record-evidence")
+        try:
+            initialize_structural_canary_capture(args.init_capture)
+        except FileExistsError as error:
+            parser.error(str(error))
+        print(
+            f"initialized native structural canary capture manifest: {args.init_capture}"
+        )
+        return 0
+    if args.manifest is None or args.evidence_root is None:
+        parser.error(
+            "a manifest and --evidence-root are required unless --init-capture is used"
+        )
     manifest = load_structural_canary(args.manifest)
     if args.record_evidence:
         capture = StructuralCanaryCapture.from_manifest(manifest)

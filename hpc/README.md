@@ -68,6 +68,21 @@ Run the native structural canary with a reviewed seed manifest:
   --native-structural-canary hpc/canaries/seattle-structural.json
 ```
 
+For the initial capture-only run, create the empty seed locally before
+submitting the job:
+
+```bash
+rtk /Users/zaneedell/miniforge3/envs/PILATES/bin/python -m \
+  pilates.runtime.native_canary \
+  --init-capture hpc/canaries/seattle-structural-capture.json
+```
+
+Copy or commit that file into the HPC checkout, then pass its path to
+`--native-structural-canary`. This first run collects actual launch
+observations; it is not a passing structural comparison until those
+observations have been independently reviewed and converted into
+`expected_launches`.
+
 This copies the seed manifest and generated settings into
 `/global/scratch/users/$USER/pilates-canaries/<job-id>/`, then exports that
 copy as `PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST` to the Slurm job. Set
