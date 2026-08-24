@@ -7,6 +7,11 @@ from typing import Any, TypeVar
 from consist import ExecutionOptions, RunResult, StepIdentity
 
 from pilates.runtime.run_output_archive import archive_completed_run
+from pilates.runtime.native_canary import (
+    canary_step_capture,
+    refresh_action_v2_census,
+    resolved_launch_roots,
+)
 from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
@@ -85,42 +90,61 @@ def execute_step(
         },
         inject_context=options.inject_context,
     )
-    result = scenario.run(
-        fn=definition.function,
+    roles = {
+        role: str(resolved.selected_key_by_role.get(role, role))
+        for role in resolved.selected_roles()
+    }
+    with canary_step_capture(
+        step=definition.name,
+        roles=roles,
+        launch_roots=resolved_launch_roots(options.runtime_kwargs or {}),
+    ):
+        result = scenario.run(
+            fn=definition.function,
+            binding=resolved.binding,
+            year=year,
+            iteration=iteration,
+            phase=phase,
+            stage=stage,
+            output_paths=(
+                definition.output_paths(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    resolved_inputs=resolved,
+                )
+                if definition.output_paths is not None
+                else None
+            ),
+            output_sets=(
+                definition.output_sets(
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                    resolved_inputs=resolved,
+                )
+                if definition.output_sets is not None
+                else None
+            ),
+            cache_options=(
+                definition.cache_options(
+                    settings=settings, state=state, workspace=workspace
+                )
+                if definition.cache_options is not None
+                else None
+            ),
+            execution_options=options,
+            step_identity=step_identity,
+        )
+    refresh_action_v2_census(
+        tracker=scenario.tracker,
+        result=result,
+        step=definition.name,
+        input_contract=definition.input_contract,
         binding=resolved.binding,
-        year=year,
-        iteration=iteration,
-        phase=phase,
-        stage=stage,
-        output_paths=(
-            definition.output_paths(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                resolved_inputs=resolved,
-            )
-            if definition.output_paths is not None
-            else None
-        ),
-        output_sets=(
-            definition.output_sets(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                resolved_inputs=resolved,
-            )
-            if definition.output_sets is not None
-            else None
-        ),
-        cache_options=(
-            definition.cache_options(
-                settings=settings, state=state, workspace=workspace
-            )
-            if definition.cache_options is not None
-            else None
-        ),
-        execution_options=options,
-        step_identity=step_identity,
+        selected_roles=resolved.selected_roles(),
+        selected_key_by_role=resolved.selected_key_by_role,
+        source_by_role=resolved.source_by_role,
     )
     if definition.archive_outputs:
         archived_result = archive_completed_run(tracker=scenario.tracker, result=result)

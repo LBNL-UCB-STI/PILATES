@@ -31,6 +31,7 @@ stage_file=""
 partition_arg="lr7"
 account_arg=""
 high_mem=false
+native_structural_canary_seed=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -54,14 +55,23 @@ while [ $# -gt 0 ]; do
         high_mem=true
         shift
         ;;
+    --native-structural-canary)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --native-structural-canary requires a seed manifest path." >&2
+            exit 2
+        fi
+        native_structural_canary_seed="$2"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  --native-structural-canary: copy a reviewed seed manifest into per-job canary evidence."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -163,9 +173,18 @@ stage_path=""
 if [ -n "$stage_file" ]; then
     stage_path="$(resolve_path "$stage_file")"
 fi
+native_structural_canary_seed_path=""
+if [ -n "$native_structural_canary_seed" ]; then
+    native_structural_canary_seed_path="$(resolve_path "$native_structural_canary_seed")"
+fi
 
 if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
+    exit 1
+fi
+if [ -n "$native_structural_canary_seed" ] \
+    && [ ! -f "$native_structural_canary_seed_path" ]; then
+    echo "ERROR: native structural canary seed manifest not found: $native_structural_canary_seed_path"
     exit 1
 fi
 
@@ -178,6 +197,17 @@ else
 fi
 
 export BEAM_MEMORY
+
+if [ -n "$native_structural_canary_seed_path" ]; then
+    canary_root="${PILATES_NATIVE_STRUCTURAL_CANARY_ROOT:-/global/scratch/users/$USER/pilates-canaries}"
+    canary_evidence_dir="${canary_root%/}/$JOB_NAME"
+    canary_manifest_path="$canary_evidence_dir/canary.json"
+    mkdir -p "$canary_evidence_dir/generated"
+    cp "$native_structural_canary_seed_path" "$canary_manifest_path"
+    cp "$generated_settings_path" "$canary_evidence_dir/generated/settings.yaml"
+    export PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST="$canary_manifest_path"
+    echo "Native structural canary: $canary_evidence_dir"
+fi
 
 sbatch_args=(
     --partition="$PARTITION"

@@ -60,6 +60,23 @@ Restart from an existing stage file:
 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -s current_stage_restart.yaml
 ```
 
+Run the native structural canary with a reviewed seed manifest:
+
+```bash
+./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
+  -a <slurm_account> \
+  --native-structural-canary hpc/canaries/seattle-structural.json
+```
+
+This copies the seed manifest and generated settings into
+`/global/scratch/users/$USER/pilates-canaries/<job-id>/`, then exports that
+copy as `PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST` to the Slurm job. Set
+`PILATES_NATIVE_STRUCTURAL_CANARY_ROOT` to choose a different evidence root.
+The native step boundary refreshes `evidence/action-v2.jsonl` there as steps
+complete. After the job, copy the final Consist snapshot and job log under that
+same root, then run the checker described in
+`docs-internal/2026-08-20-native-structural-canary-harness.md`.
+
 Tracked scenario files are copy/edit starting points for the current cluster
 storage posture and model wiring. They are not turnkey machine-independent
 configs; review account-specific paths, data roots, output roots, and model

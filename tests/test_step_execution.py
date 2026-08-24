@@ -1,4 +1,5 @@
 from dataclasses import replace
+import json
 from pathlib import Path
 import shutil
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from consist.core.tracker import Tracker
 from consist.models.artifact import Artifact
 from consist.models.run import Run
 
+from pilates.runtime.native_canary import StructuralCanaryCapture
 from pilates.workflows.binding import build_resolved_binding
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
@@ -800,6 +802,176 @@ def test_execute_step_forwards_a_strict_binding_unchanged(tmp_path: Path) -> Non
     )
 
     assert seen["binding"] is binding
+
+
+def test_execute_step_refreshes_canary_action_v2_census(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Each completed strict boundary refreshes a readable canary census."""
+
+    tracker = Tracker(
+        run_dir=tmp_path / "consist-runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+        hashing_strategy="full",
+    )
+    source = tmp_path / "source.txt"
+    source.write_text("selected\n", encoding="utf-8")
+    with tracker.start_run("seed", "test"):
+        artifact = tracker.log_artifact(source, key="payload", direction="input")
+
+    @define_step(model="example", outputs=[])
+    def example(payload: Path, *, settings, state, workspace) -> None:
+        del payload, settings, state, workspace
+
+    definition = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **kwargs: ResolvedStepInputs(
+            step_name="example",
+            binding=build_resolved_binding(
+                step_name="example",
+                function=example,
+                selected_artifacts={"payload": artifact},
+                logical_destinations={"payload": Path("inputs/payload.txt")},
+                selection_diagnostics={"selection": {"reason": "selected for canary"}},
+                source_by_parameter={"payload": "pinned"},
+                step_identity=kwargs["step_identity"],
+            ),
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+        preflight_identity=True,
+    )
+    manifest_path = tmp_path / "canary.json"
+    StructuralCanaryCapture(expected_launches=(), required_evidence=()).write(
+        manifest_path
+    )
+    monkeypatch.setenv("PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST", str(manifest_path))
+
+    with tracker.scenario("census") as scenario:
+        result, _ = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings="settings",
+            state="state",
+            workspace=tmp_path / "workspace",
+            stage="stage",
+            year=2030,
+            iteration=1,
+            phase="test",
+        )
+
+    census_path = tmp_path / "evidence" / "action-v2.jsonl"
+    records = [
+        json.loads(line)
+        for line in census_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert records == [
+        {
+            "binding_kind": "resolved-binding-content-v1",
+            "cache": {
+                "execution_run_id": result.run.id,
+                "outcome": "miss",
+                "source_run_id": None,
+            },
+            "input_contract": {
+                "config": {"adapter_name": None, "kind": "payload"},
+                "reason": "test-only executable has no closed workspace contract",
+                "status": "incomplete",
+            },
+            "model": "example",
+            "requested_run_id": result.run.id,
+            "roles": [
+                {
+                    "artifact": {
+                        "artifact_id": str(artifact.id),
+                        "artifact_kind": "file",
+                        "identity": f"sha256:file:{artifact.hash}",
+                        "selector": {
+                            "array_path": None,
+                            "driver": "txt",
+                            "table_path": None,
+                        },
+                    },
+                    "destination": "inputs/payload.txt",
+                    "fallback_reason": "selected for canary",
+                    "role": "payload",
+                    "source": "pinned",
+                }
+            ],
+            "schema_version": 1,
+            "step": "example",
+        }
+    ]
+
+    with tracker.scenario("census-second") as scenario:
+        second_result, _ = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings="settings",
+            state="state",
+            workspace=tmp_path / "workspace",
+            stage="stage",
+            year=2030,
+            iteration=1,
+            phase="test",
+        )
+
+    assert second_result.cache_hit
+
+    @define_step(model="ordinary", outputs=[])
+    def ordinary(*, settings, state, workspace) -> None:
+        del settings, state, workspace
+
+    ordinary_definition = StepDefinition(
+        name="ordinary",
+        function=ordinary,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="ordinary", binding=BindingResult(inputs={})
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    with tracker.scenario("census-ordinary") as scenario:
+        ordinary_result, _ = execute_step(
+            scenario=scenario,
+            definition=ordinary_definition,
+            settings="settings",
+            state="state",
+            workspace=tmp_path / "workspace",
+            stage="stage",
+            year=2030,
+            iteration=2,
+            phase="test",
+        )
+
+    updated_records = [
+        json.loads(line)
+        for line in census_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert {record["requested_run_id"] for record in updated_records} == {
+        result.run.id,
+        second_result.run.id,
+        ordinary_result.run.id,
+    }
+    second_record = next(
+        record
+        for record in updated_records
+        if record["requested_run_id"] == second_result.run.id
+    )
+    assert second_record["cache"] == {
+        "outcome": "hit",
+        "execution_run_id": result.run.id,
+        "source_run_id": result.run.id,
+    }
+    ordinary_record = next(
+        record
+        for record in updated_records
+        if record["requested_run_id"] == ordinary_result.run.id
+    )
+    assert ordinary_record["binding_kind"] == "ordinary-binding"
+    assert ordinary_record["roles"] == []
 
 
 def test_execute_step_passes_resolved_inputs_to_output_path_provider() -> None:

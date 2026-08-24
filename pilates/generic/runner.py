@@ -160,6 +160,15 @@ class GenericRunner(
 
         # Handle command + args: Split if string, combine with args
         full_command_list = GenericRunner._build_full_command(command, args)
+        from pilates.runtime.native_canary import record_active_container_launch
+
+        record_active_container_launch(
+            model=model_name,
+            volumes=volumes,
+            command=full_command_list,
+            working_dir=working_dir,
+            output_paths=output_paths if output_paths is not None else (),
+        )
 
         # Determine settings from config
         backend_type = get_setting(
