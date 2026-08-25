@@ -1,0 +1,193 @@
+{
+  "schema_version": 2,
+  "expected_launches": [
+    {
+      "command": "--households_sample_size 2500 -m 1 -g 12000000000 --persist-sharrow-cache -d /activitysim/activitysim/examples/prototype_mtc_clean/data -o /activitysim/activitysim/examples/prototype_mtc_clean/output -c /activitysim/activitysim/examples/prototype_mtc_clean/configs_sh_compile -c /activitysim/activitysim/examples/prototype_mtc_clean/configs",
+      "launch_roots": {
+        "activitysim_launch_context.compile_output_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/compile-output",
+        "activitysim_launch_context.mutable_configs_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs",
+        "activitysim_launch_context.mutable_data_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/data",
+        "activitysim_launch_context.output_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output",
+        "activitysim_launch_context.runtime_cache_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output/cache",
+        "activitysim_launch_context.runtime_zarr_path": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output/cache/skims.zarr",
+        "activitysim_launch_context.shared_cache_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/shared_cache",
+        "activitysim_launch_context.shared_tmp_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/tmp",
+        "activitysim_launch_context.workspace_root": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713"
+      },
+      "model": "activitysim_numba_warmup",
+      "mounts": [
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/data",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/data"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/compile-output",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/output"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_mp",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_sh_compile",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs_sh_compile"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_extended",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/tmp",
+          "target": "/tmp"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/shared_cache",
+          "target": "/app/numba_cache"
+        }
+      ],
+      "output_roots": [
+        "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/compile-output"
+      ],
+      "roles": {
+        "households_asim_in": "households_asim_in",
+        "land_use_asim_in": "land_use_asim_in",
+        "omx_skims": "omx_skims",
+        "persons_asim_in": "persons_asim_in"
+      },
+      "step": "activitysim_run",
+      "working_dir": "activitysim/activitysim/examples/prototype_mtc_clean",
+      "year": 2018,
+      "iteration": 0
+    },
+    {
+      "command": "--households_sample_size 15000 -m 25 -g 12000000000 --persist-sharrow-cache -d /activitysim/activitysim/examples/prototype_mtc_clean/data -o /activitysim/activitysim/examples/prototype_mtc_clean/output -c /activitysim/activitysim/examples/prototype_mtc_clean/configs -c /activitysim/activitysim/examples/prototype_mtc_clean/configs_mp",
+      "launch_roots": {
+        "activitysim_launch_context.compile_output_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/compile-output",
+        "activitysim_launch_context.mutable_configs_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs",
+        "activitysim_launch_context.mutable_data_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/data",
+        "activitysim_launch_context.output_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output",
+        "activitysim_launch_context.runtime_cache_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output/cache",
+        "activitysim_launch_context.runtime_zarr_path": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output/cache/skims.zarr",
+        "activitysim_launch_context.shared_cache_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/shared_cache",
+        "activitysim_launch_context.shared_tmp_dir": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/tmp",
+        "activitysim_launch_context.workspace_root": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713"
+      },
+      "model": "activitysim",
+      "mounts": [
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/data",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/data"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/output"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_mp",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs_mp"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_sh_compile",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs_sh_compile"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/configs/configs_extended",
+          "target": "/activitysim/activitysim/examples/prototype_mtc_clean/configs"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/tmp",
+          "target": "/tmp"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/shared_cache",
+          "target": "/app/numba_cache"
+        }
+      ],
+      "output_roots": [
+        "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/activitysim/output"
+      ],
+      "roles": {
+        "households_asim_in": "households_asim_in",
+        "land_use_asim_in": "land_use_asim_in",
+        "omx_skims": "omx_skims",
+        "persons_asim_in": "persons_asim_in"
+      },
+      "step": "activitysim_run",
+      "working_dir": "activitysim/activitysim/examples/prototype_mtc_clean",
+      "year": 2018,
+      "iteration": 0
+    },
+    {
+      "command": "--config=/app/input/seattle-pilates-base-fasterrail.conf",
+      "launch_roots": {
+        "beam_launch_config.primary_config": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/.pilates-beam-launch-config/y2018/i0/seattle/seattle-pilates-base-fasterrail.conf",
+        "beam_launch_config.root": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/.pilates-beam-launch-config/y2018/i0/seattle"
+      },
+      "model": "beam_run",
+      "mounts": [
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/.pilates-beam-launch-config/y2018/i0/seattle",
+          "target": "/app/input"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/beam/beam_output",
+          "target": "/app/output"
+        },
+        {
+          "mode": "rw",
+          "source": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/.pilates-beam-launch-config/y2018/i0",
+          "target": "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/.pilates-beam-launch-config/y2018/i0"
+        }
+      ],
+      "output_roots": [
+        "/local/job25209213/pilates-workspace/pilates-run--seattle--consist-seattle-fasterrail-tiny--20260824-141713/beam/beam_output/"
+      ],
+      "roles": {
+        "households_beam_in": "households_beam_in",
+        "persons_beam_in": "persons_beam_in",
+        "plans_beam_in": "plans_beam_in",
+        "zarr_skims": "zarr_skims"
+      },
+      "step": "beam_run",
+      "working_dir": "/app",
+      "year": 2018,
+      "iteration": 0
+    }
+  ],
+  "observed_launches": [],
+  "required_evidence": [
+    {
+      "name": "consist_snapshot",
+      "relative_path": ".consist/snapshots/latest/provenance.duckdb"
+    },
+    {
+      "name": "generated_settings",
+      "relative_path": "generated/settings.yaml"
+    },
+    {
+      "name": "launch_logs",
+      "relative_path": "logs/launch.log"
+    },
+    {
+      "name": "action_v2_census",
+      "relative_path": "evidence/action-v2.jsonl"
+    }
+  ],
+  "evidence": []
+}

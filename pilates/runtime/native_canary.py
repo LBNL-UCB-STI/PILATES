@@ -25,7 +25,7 @@ from consist.models.artifact import Artifact
 from consist.models.run import RunBindingInvocation
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 STRUCTURAL_CANARY_MANIFEST_ENV = "PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST"
 _ACTION_V2_CENSUS_RELATIVE_PATH = Path("evidence/action-v2.jsonl")
 _ACTION_V2_CENSUS_SCHEMA_VERSION = 1
@@ -69,6 +69,8 @@ class _ActiveCanaryStep:
     step: str
     roles: Mapping[str, str]
     launch_roots: Mapping[str, str]
+    year: int | None
+    iteration: int | None
 
 
 _ACTIVE_CANARY_STEP: contextvars.ContextVar[_ActiveCanaryStep | None] = (
@@ -128,10 +130,15 @@ class CanaryLaunchObservation:
     command: str
     working_dir: str
     output_roots: tuple[str, ...]
+    year: int | None = None
+    iteration: int | None = None
 
     @property
     def key(self) -> str:
-        return f"{self.model}/{self.step}"
+        base = f"{self.model}/{self.step}"
+        if self.year is None and self.iteration is None:
+            return base
+        return f"{base}/y{self.year}/i{self.iteration}"
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -143,6 +150,8 @@ class CanaryLaunchObservation:
             "command": self.command,
             "working_dir": self.working_dir,
             "output_roots": list(self.output_roots),
+            "year": self.year,
+            "iteration": self.iteration,
         }
 
     @classmethod
@@ -168,6 +177,8 @@ class CanaryLaunchObservation:
             output_roots=tuple(
                 _sequence_strings(output_roots_value, f"{field}.output_roots")
             ),
+            year=_optional_int(mapping, "year", field),
+            iteration=_optional_int(mapping, "iteration", field),
         )
 
 
@@ -193,15 +204,25 @@ class StructuralCanaryManifest:
     def from_dict(cls, value: object) -> "StructuralCanaryManifest":
         mapping = _mapping(value, "manifest")
         version = mapping.get("schema_version")
-        if version != _SCHEMA_VERSION:
+        if version not in (1, _SCHEMA_VERSION):
             raise ValueError(
-                f"manifest.schema_version must be {_SCHEMA_VERSION}, got {version!r}"
+                "manifest.schema_version must be 1 or "
+                f"{_SCHEMA_VERSION}, got {version!r}"
+            )
+        expected_launches = _launches(mapping, "expected_launches")
+        observed_launches = _launches(mapping, "observed_launches")
+        required_evidence = _evidence(mapping, "required_evidence")
+        evidence = _evidence(mapping, "evidence")
+        if version == 1 and (expected_launches or observed_launches or evidence):
+            raise ValueError(
+                "manifest schema v1 with recorded launches or evidence cannot be "
+                "reused; initialize a fresh schema v2 capture manifest"
             )
         return cls(
-            expected_launches=_launches(mapping, "expected_launches"),
-            observed_launches=_launches(mapping, "observed_launches"),
-            required_evidence=_evidence(mapping, "required_evidence"),
-            evidence=_evidence(mapping, "evidence"),
+            expected_launches=expected_launches,
+            observed_launches=observed_launches,
+            required_evidence=required_evidence,
+            evidence=evidence,
         )
 
 
@@ -319,6 +340,8 @@ def canary_step_capture(
     step: str,
     roles: Mapping[str, str],
     launch_roots: Mapping[str, str],
+    year: int | None = None,
+    iteration: int | None = None,
 ) -> Iterator[None]:
     """Activate opt-in collection for containers launched by one native step.
 
@@ -344,6 +367,8 @@ def canary_step_capture(
         step=step,
         roles=dict(roles),
         launch_roots=dict(launch_roots),
+        year=year,
+        iteration=iteration,
     )
     token = _ACTIVE_CANARY_STEP.set(active)
     try:
@@ -376,6 +401,8 @@ def record_active_container_launch(
             command=shlex.join(command),
             working_dir=working_dir or "",
             output_roots=_output_roots(output_paths),
+            year=active.year,
+            iteration=active.iteration,
         )
     )
 
@@ -692,13 +719,19 @@ def _compare_launch(
 ) -> None:
     if dict(expected.roles) != dict(observed.roles):
         errors.append(f"{expected.key} roles mismatch")
-    if dict(expected.launch_roots) != dict(observed.launch_roots):
+    expected_workspace_root = _workspace_root(expected)
+    observed_workspace_root = _workspace_root(observed)
+    if _canonicalize_launch_roots(
+        expected.launch_roots, expected_workspace_root
+    ) != _canonicalize_launch_roots(observed.launch_roots, observed_workspace_root):
         errors.append(f"{expected.key} launch roots mismatch")
     expected_mounts = sorted(
-        (mount.source, mount.target, mount.mode) for mount in expected.mounts
+        _canonicalize_mount(mount, expected_workspace_root)
+        for mount in expected.mounts
     )
     observed_mounts = sorted(
-        (mount.source, mount.target, mount.mode) for mount in observed.mounts
+        _canonicalize_mount(mount, observed_workspace_root)
+        for mount in observed.mounts
     )
     if expected_mounts != observed_mounts:
         errors.append(f"{expected.key} mounts mismatch")
@@ -706,8 +739,62 @@ def _compare_launch(
         errors.append(f"{expected.key} command mismatch")
     if expected.working_dir != observed.working_dir:
         errors.append(f"{expected.key} working directory mismatch")
-    if tuple(expected.output_roots) != tuple(observed.output_roots):
+    if _canonicalize_paths(
+        expected.output_roots, expected_workspace_root
+    ) != _canonicalize_paths(observed.output_roots, observed_workspace_root):
         errors.append(f"{expected.key} output roots mismatch")
+
+
+def _workspace_root(observation: CanaryLaunchObservation) -> str | None:
+    """Find the run-local host root whose identity varies across Slurm jobs."""
+
+    activitysim_root = observation.launch_roots.get(
+        "activitysim_launch_context.workspace_root"
+    )
+    if activitysim_root:
+        return activitysim_root.rstrip("/")
+    marker = "/.pilates-beam-launch-config/"
+    for value in observation.launch_roots.values():
+        if marker in value:
+            return value.split(marker, 1)[0].rstrip("/")
+    return None
+
+
+def _canonicalize_launch_roots(
+    roots: Mapping[str, str], workspace_root: str | None
+) -> dict[str, str]:
+    return {
+        key: _canonicalize_path(value, workspace_root)
+        for key, value in roots.items()
+    }
+
+
+def _canonicalize_mount(
+    mount: CanaryMount, workspace_root: str | None
+) -> tuple[str, str, str]:
+    return (
+        _canonicalize_path(mount.source, workspace_root),
+        mount.target,
+        mount.mode,
+    )
+
+
+def _canonicalize_paths(
+    values: Sequence[str], workspace_root: str | None
+) -> tuple[str, ...]:
+    return tuple(_canonicalize_path(value, workspace_root) for value in values)
+
+
+def _canonicalize_path(value: str, workspace_root: str | None) -> str:
+    if workspace_root is None:
+        return value
+    root = workspace_root.rstrip("/")
+    if value == root:
+        return "<workspace-root>"
+    prefix = f"{root}/"
+    if value.startswith(prefix):
+        return f"<workspace-root>/{value[len(prefix):]}"
+    return value
 
 
 def _canary_mounts(volumes: Mapping[str, object]) -> tuple[CanaryMount, ...]:
@@ -754,6 +841,17 @@ def _string(mapping: Mapping[str, object], key: str, field: str) -> str:
     value = mapping.get(key)
     if not isinstance(value, str) or not value:
         raise ValueError(f"{field}.{key} must be a non-empty string")
+    return value
+
+
+def _optional_int(
+    mapping: Mapping[str, object], key: str, field: str
+) -> int | None:
+    value = mapping.get(key)
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError(f"{field}.{key} must be an integer or null")
     return value
 
 

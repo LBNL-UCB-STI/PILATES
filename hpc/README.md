@@ -65,8 +65,16 @@ Run the native structural canary with a reviewed seed manifest:
 ```bash
 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
   -a <slurm_account> \
-  --native-structural-canary hpc/canaries/seattle-structural.json
+  --native-structural-canary hpc/canaries/seattle-structural-reviewed.json
 ```
+
+The reviewed Seattle seed is based on the first-iteration launch evidence from
+the failed capture run. Its host-local `/local/job...` prefixes are normalized
+by the checker, so a new Slurm allocation does not need to reproduce the old
+job ID or output directory. The new canary must retain its own launch log,
+Consist snapshot, generated settings, and action-v2 census; those artifacts are
+evidence for that new run and are not expected to match the failed run's log
+byte-for-byte.
 
 For the initial capture-only run, create the empty seed locally before
 submitting the job:

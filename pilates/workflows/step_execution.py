@@ -98,6 +98,8 @@ def execute_step(
         step=definition.name,
         roles=roles,
         launch_roots=resolved_launch_roots(options.runtime_kwargs or {}),
+        year=year,
+        iteration=iteration,
     ):
         result = scenario.run(
             fn=definition.function,
