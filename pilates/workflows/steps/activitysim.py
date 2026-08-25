@@ -27,6 +27,7 @@ from pilates.activitysim.runner import (
     asim_runtime_zarr_path,
 )
 from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_keys,
 )
@@ -963,7 +964,11 @@ def _activitysim_preprocess_callable(
     },
     optional_input_keys=_ACTIVITYSIM_RUN_SKIM_ROLES,
     outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
-    schema_outputs=[*ASIM_REQUIRED_RUN_OUTPUT_KEYS, ZARR_SKIMS],
+    schema_outputs=[
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+        ZARR_SKIMS,
+    ],
     input_binding="paths",
     tags=["activitysim", "run"],
     **consist_step_meta(
@@ -1027,12 +1032,17 @@ def _activitysim_run_callable(
     },
     optional_input_keys=(
         *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         USIM_POPULATION_SOURCE_H5,
         USIM_DATASTORE_CURRENT_H5,
         USIM_DATASTORE_BASE_H5,
     ),
     outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
-    schema_outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
+    schema_outputs=[
+        USIM_DATASTORE_H5,
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    ],
     input_binding="paths",
     tags=["activitysim", "postprocess"],
     **consist_step_meta(

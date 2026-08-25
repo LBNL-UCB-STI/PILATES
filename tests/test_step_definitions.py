@@ -9,7 +9,10 @@ import pytest
 
 from consist import BindingResult, resolve_step_contract
 
-from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+)
 from pilates.config.models import BeamArtifactFormatsConfig
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -423,7 +426,11 @@ def test_native_steps_declare_static_consist_metadata() -> None:
                 ASIM_PERSONS_IN,
             },
             "optional": {ZARR_SKIMS, ASIM_OMX_SKIMS},
-            "schema_outputs": {ZARR_SKIMS, *ASIM_REQUIRED_RUN_OUTPUT_KEYS},
+            "schema_outputs": {
+                ZARR_SKIMS,
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            },
         },
         "activitysim_postprocess": {
             "inputs": {
@@ -435,11 +442,16 @@ def test_native_steps_declare_static_consist_metadata() -> None:
             },
             "optional": {
                 *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
                 USIM_POPULATION_SOURCE_H5,
                 USIM_DATASTORE_CURRENT_H5,
                 USIM_DATASTORE_BASE_H5,
             },
-            "schema_outputs": {USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS},
+            "schema_outputs": {
+                USIM_DATASTORE_H5,
+                *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+                *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+            },
         },
         "beam_preprocess": {
             "inputs": {

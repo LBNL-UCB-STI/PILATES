@@ -17,6 +17,12 @@ from typing import (
     TYPE_CHECKING,
 )
 
+from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
+from pilates.workflows.artifact_keys import (
+    BEAM_VEHICLES_IN,
+    FINAL_SKIMS_OMX,
+    LINKSTATS_WARMSTART,
+)
 from pilates.workflows.coupler_namespace import canonical_artifact_key_from_raw_key
 
 if TYPE_CHECKING:
@@ -26,6 +32,14 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class WorkflowStepProvenanceSpec:
     builder_key: str
+
+
+_OPTIONAL_OUTPUT_KEYS_BY_STEP: Dict[str, Tuple[str, ...]] = {
+    "activitysim_run": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    "activitysim_postprocess": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    "beam_preprocess": (LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
+    "beam_postprocess": (FINAL_SKIMS_OMX,),
+}
 
 
 @dataclass(frozen=True)
@@ -93,11 +107,14 @@ class WorkflowStepSpec:
 
     @property
     def output_keys(self) -> Tuple[str, ...]:
-        return self.schema_output_keys
+        optional_keys = set(self.optional_output_keys)
+        return tuple(
+            key for key in self.schema_output_keys if key not in optional_keys
+        )
 
     @property
     def optional_output_keys(self) -> Tuple[str, ...]:
-        return ()
+        return _OPTIONAL_OUTPUT_KEYS_BY_STEP.get(self.step_name, ())
 
 
 @dataclass(frozen=True)

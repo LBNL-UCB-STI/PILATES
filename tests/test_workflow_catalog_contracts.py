@@ -36,8 +36,9 @@ def test_catalog_retains_only_policy_and_references_committed_definitions():
         assert spec.input_keys == _metadata_keys(metadata.inputs)
         assert spec.optional_input_keys == _metadata_keys(metadata.optional_input_keys)
         assert spec.schema_output_keys == _metadata_keys(metadata.schema_outputs)
-        assert spec.output_keys == spec.schema_output_keys
-        assert spec.optional_output_keys == ()
+        assert set(spec.output_keys) | set(spec.optional_output_keys) == set(
+            spec.schema_output_keys
+        )
         assert not hasattr(spec, "model_name")
         assert all(
             not hasattr(spec, field_name) for field_name in removed_dependency_aliases
@@ -63,9 +64,10 @@ def test_workflow_step_contract_export_projects_native_metadata():
         assert contract["optional_input_keys"] == list(
             _metadata_keys(metadata.optional_input_keys)
         )
-        assert contract["output_keys"] == list(_metadata_keys(metadata.schema_outputs))
-        assert contract["schema_outputs"] == contract["output_keys"]
-        assert contract["optional_output_keys"] == []
+        assert contract["output_keys"] == list(spec.output_keys)
+        assert set(contract["output_keys"]) | set(
+            contract["optional_output_keys"]
+        ) == set(contract["schema_outputs"])
         assert contract["depends_on"] == list(spec.depends_on)
 
 

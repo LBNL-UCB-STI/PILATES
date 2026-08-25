@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
+from pilates.activitysim.outputs import ASIM_OPTIONAL_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
+    LINKSTATS_WARMSTART,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
@@ -31,6 +34,8 @@ def _settings(
     replan_iters: int = 0,
     main_configs_dir: str = "configs",
     atlas_scenario: str = "baseline",
+    activitysim_output_tables: tuple[str, ...] = (),
+    write_skims_to_omx: bool = False,
 ):
     return SimpleNamespace(
         run=SimpleNamespace(
@@ -47,8 +52,10 @@ def _settings(
         activitysim=SimpleNamespace(
             replan_iters=replan_iters,
             main_configs_dir=main_configs_dir,
+            output_tables={"tables": list(activitysim_output_tables)},
         ),
         atlas=SimpleNamespace(scenario=atlas_scenario, adscen=atlas_scenario),
+        write_skims_to_omx=write_skims_to_omx,
     )
 
 
@@ -140,6 +147,60 @@ def test_surface_construction_for_full_shape():
         "beam_preprocess",
     }.issubset(surface.enabled_step_names)
     assert surface.step_surface("atlas_run").required_output_keys == ()
+
+
+def test_surface_requires_only_configured_optional_outputs():
+    surface = build_enabled_workflow_surface(
+        _settings(
+            land_use=None,
+            vehicle_ownership=None,
+            activity_demand="activitysim",
+            traffic_assignment="beam",
+            activitysim_output_tables=("accessibility",),
+        )
+    )
+
+    activitysim_run = surface.step_surface("activitysim_run")
+    activitysim_postprocess = surface.step_surface("activitysim_postprocess")
+    beam_preprocess = surface.step_surface("beam_preprocess")
+    beam_postprocess = surface.step_surface("beam_postprocess")
+
+    assert activitysim_run is not None
+    assert activitysim_postprocess is not None
+    assert beam_preprocess is not None
+    assert beam_postprocess is not None
+
+    assert "accessibility_asim_out" in activitysim_run.required_output_keys
+    assert "accessibility_asim_out" in activitysim_postprocess.required_output_keys
+    for key in ASIM_OPTIONAL_RUN_OUTPUT_KEYS:
+        if key == "accessibility_asim_out":
+            continue
+        assert key not in activitysim_run.required_output_keys
+        assert key not in activitysim_postprocess.required_output_keys
+
+    assert LINKSTATS_WARMSTART not in beam_preprocess.required_output_keys
+    assert "vehicles_beam_in" not in beam_preprocess.required_output_keys
+    assert FINAL_SKIMS_OMX not in beam_postprocess.required_output_keys
+
+
+def test_surface_requires_omx_for_downstream_models_or_explicit_export():
+    full_surface = build_enabled_workflow_surface(_settings())
+    assert FINAL_SKIMS_OMX in full_surface.step_surface(
+        "beam_postprocess"
+    ).required_output_keys
+
+    beam_only_surface = build_enabled_workflow_surface(
+        _settings(
+            land_use=None,
+            vehicle_ownership=None,
+            activity_demand=None,
+            traffic_assignment="beam",
+            write_skims_to_omx=True,
+        )
+    )
+    assert FINAL_SKIMS_OMX in beam_only_surface.step_surface(
+        "beam_postprocess"
+    ).required_output_keys
 
 
 def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():

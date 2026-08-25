@@ -3,7 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Mapping, Optional, Sequence, Tuple
 
+from pilates.activitysim.outputs import configured_asim_output_keys
+from pilates.beam.outputs import requires_omx_skim_output
 from pilates.workflows.artifact_keys import (
+    FINAL_SKIMS_OMX,
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_SOURCE_H5,
@@ -137,6 +140,38 @@ def resolve_runtime_input_output_overrides(
             if key not in rule.remove_optional_inputs
         )
     return required, optional
+
+
+def resolve_runtime_output_overrides(
+    *,
+    step_name: str,
+    settings: Any,
+    required_outputs: Tuple[str, ...],
+    optional_outputs: Tuple[str, ...],
+) -> tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """Promote configured optional outputs into the effective run contract.
+
+    Static step metadata describes the complete output vocabulary. The runtime
+    surface promotes only outputs that this configuration actually requests or
+    that a downstream enabled model requires.
+    """
+    promoted: Tuple[str, ...] = ()
+    if step_name in {"activitysim_run", "activitysim_postprocess"}:
+        activitysim_settings = getattr(settings, "activitysim", None)
+        if activitysim_settings is not None:
+            configured = set(configured_asim_output_keys(settings))
+            promoted = tuple(key for key in optional_outputs if key in configured)
+    elif step_name == "beam_postprocess" and requires_omx_skim_output(settings):
+        promoted = (FINAL_SKIMS_OMX,)
+
+    if not promoted:
+        return required_outputs, optional_outputs
+
+    promoted_set = set(promoted)
+    return (
+        _ordered_unique(required_outputs, promoted),
+        tuple(key for key in optional_outputs if key not in promoted_set),
+    )
 
 
 def resolve_runtime_role_policy_overrides(

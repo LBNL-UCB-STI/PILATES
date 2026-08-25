@@ -77,6 +77,15 @@ def test_runtime_properties_forward_to_typed_runtime_container():
     assert settings.runtime.options.allow_rewind_resume is True
 
 
+def test_final_skim_export_setting_is_typed_and_defaults_off():
+    settings = PilatesConfig(**_minimal_config())
+
+    assert settings.write_skims_to_omx is False
+
+    settings.write_skims_to_omx = True
+    assert settings.write_skims_to_omx is True
+
+
 def test_runtime_values_are_excluded_from_model_dump():
     settings = PilatesConfig(**_minimal_config())
     settings.land_use_enabled = True

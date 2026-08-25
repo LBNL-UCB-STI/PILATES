@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 from consist.types import HasConsistFacet
 
 from pilates.config.models import PilatesConfig, admission_policy_fingerprint
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.catalog import provenance_builder_key_for_step_name
 
 
@@ -340,6 +341,9 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "memory": cfg.memory,
         "discard_plans_every_year": cfg.discard_plans_every_year,
         "max_plans_memory": cfg.max_plans_memory,
+        "write_skims_to_omx": bool(
+            get_setting(settings, "write_skims_to_omx", False)
+        ),
         "router_directory": cfg.router_directory,
         "scenario_folder": cfg.scenario_folder,
         "linkstats_admission": (

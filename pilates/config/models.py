@@ -916,6 +916,14 @@ class PilatesConfig(BaseModel):
     _runtime: PilatesRuntime = PrivateAttr(default_factory=PilatesRuntime)
 
     run: RunConfig
+    write_skims_to_omx: bool = Field(
+        False,
+        description=(
+            "Write final BEAM Zarr skims to OMX during BEAM postprocess. "
+            "UrbanSim and ATLAS still enable OMX export automatically because "
+            "their preprocessors consume that handoff."
+        ),
+    )
     shared: SharedConfig
     infrastructure: InfrastructureConfig
     urbansim: Optional[UrbanSimConfig] = None
