@@ -82,6 +82,11 @@ def _beam_workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
         mounts=(
             CanaryMount(config_root, "/app/input", "rw"),
             CanaryMount(f"{workspace_root}/beam/beam_output", "/app/output", "rw"),
+            CanaryMount(
+                f"{workspace_root}/.pilates-beam-launch-config/y2018/i0",
+                f"{workspace_root}/.pilates-beam-launch-config/y2018/i0",
+                "rw",
+            ),
         ),
         command="--config=/app/input/seattle-pilates-base-fasterrail.conf",
         working_dir="/app",

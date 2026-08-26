@@ -774,7 +774,7 @@ def _canonicalize_mount(
 ) -> tuple[str, str, str]:
     return (
         _canonicalize_path(mount.source, workspace_root),
-        mount.target,
+        _canonicalize_path(mount.target, workspace_root),
         mount.mode,
     )
 
