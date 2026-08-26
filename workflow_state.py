@@ -76,6 +76,7 @@ class WorkflowState:
         # Store settings for access by methods that need them
         self._settings = {
             "supply_demand_iters": 1,  # Default, will be updated in from_settings
+            "max_year_intervals": None,
             "land_use_enabled": land_use_enabled,
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
             "activity_demand_enabled": activity_demand_enabled,
@@ -291,6 +292,7 @@ class WorkflowState:
         )
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
+        out._settings["max_year_intervals"] = settings.run.max_year_intervals
 
         # If restarting from a saved state whose major stage is now disabled
         # (common during config/migration changes), reset to the first enabled stage.
@@ -698,7 +700,11 @@ class WorkflowState:
             )
             self._schedule_index = bisect_left(self._year_schedule, current_year)
         next_index = self._schedule_index + 1
-        if next_index < len(self._year_schedule):
+        max_year_intervals = self._settings["max_year_intervals"]
+        if (
+            next_index < len(self._year_schedule)
+            and (max_year_intervals is None or next_index < max_year_intervals)
+        ):
             self.current_year = self._year_schedule[next_index]
             self._schedule_index = next_index
         else:

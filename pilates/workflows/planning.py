@@ -160,6 +160,7 @@ def _iter_planning_years(
     land_use_enabled = surface.stage_enabled("land_use")
     current_year = int(settings.run.start_year)
     end_year = int(settings.run.end_year)
+    max_year_intervals = settings.run.max_year_intervals
 
     while current_year <= end_year:
         if land_use_enabled:
@@ -175,6 +176,8 @@ def _iter_planning_years(
                 "forecast_year": forecast_year,
             }
         )
+        if max_year_intervals is not None and len(years) >= max_year_intervals:
+            break
         if not land_use_enabled:
             break
         if forecast_year <= current_year:

@@ -86,6 +86,18 @@ def test_final_skim_export_setting_is_typed_and_defaults_off():
     assert settings.write_skims_to_omx is True
 
 
+def test_max_year_intervals_is_part_of_initialization_identity():
+    config = _minimal_config()
+    config["run"]["max_year_intervals"] = 1
+
+    settings = PilatesConfig(**config)
+
+    assert (
+        settings.get_initialization_signature()["orchestration"]["max_year_intervals"]
+        == 1
+    )
+
+
 def test_runtime_values_are_excluded_from_model_dump():
     settings = PilatesConfig(**_minimal_config())
     settings.land_use_enabled = True

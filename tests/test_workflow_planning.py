@@ -160,6 +160,23 @@ def test_static_execution_plan_expands_land_use_and_atlas_subyears():
     )
 
 
+def test_static_execution_plan_limits_configured_year_intervals():
+    """A representative canary must end after its first planned interval."""
+
+    settings = load_config(
+        "scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml"
+    )
+    settings.land_use_enabled = True
+    settings.vehicle_ownership_model_enabled = True
+    settings.activity_demand_enabled = True
+    settings.traffic_assignment_enabled = True
+
+    plan = _build_plan(settings, include_postprocessing=False)
+
+    assert plan.metadata["years"] == [{"year": 2017, "forecast_year": 2019}]
+    assert {step.year for step in plan.step_runs} == {2017}
+
+
 def test_static_execution_plan_uses_settings_aware_atlas_scenario_contracts():
     settings = load_config("scenarios/sfbay/settings-sfbay-consist-usim-hpc.yaml")
     settings.land_use_enabled = True

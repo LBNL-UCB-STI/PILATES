@@ -99,6 +99,14 @@ class RunConfig(BaseModel):
     supply_demand_iters: int = Field(
         1, description="Supply-demand loop iterations", ge=1
     )
+    max_year_intervals: Optional[int] = Field(
+        None,
+        description=(
+            "Optional cap on planned land-use forecast intervals; useful for "
+            "bounded representative runs"
+        ),
+        ge=1,
+    )
 
     # Output configuration (METADATA scope)
     output_directory: str = Field(..., description="Where to write outputs")
@@ -1063,6 +1071,7 @@ class PilatesConfig(BaseModel):
             "orchestration": {
                 "use_stubs": self.run.use_stubs,
                 "supply_demand_iters": self.run.supply_demand_iters,
+                "max_year_intervals": self.run.max_year_intervals,
                 "frequencies": {
                     "land_use": self.run.land_use_freq,
                     "travel": self.run.travel_model_freq,
