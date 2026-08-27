@@ -36,6 +36,7 @@ _REQUIRED_INPUTS = (
 )
 _ACCEPTANCE_YEAR = 2019
 _ACCEPTANCE_ITERATION = 0
+_BEAM_COMMON_CONFIG_FILES = ("akka.conf", "metrics.conf", "matsim.conf")
 
 
 def _progress(message: str) -> None:
@@ -347,8 +348,22 @@ def record_body_execution(*, step: str) -> None:
 def _stage_beam_input_tree(
     *, source_root: Path, settings: Any, workspace: Workspace
 ) -> None:
-    destination = Path(workspace.get_beam_mutable_data_dir()) / settings.run.region
+    common_source = source_root.parent / "common"
+    missing_common_files = [
+        name
+        for name in _BEAM_COMMON_CONFIG_FILES
+        if not (common_source / name).is_file()
+    ]
+    if missing_common_files:
+        raise ValueError(
+            "acceptance BEAM input tree is missing shared common configuration "
+            f"beside {source_root}: {missing_common_files}"
+        )
+
+    mutable_input_root = Path(workspace.get_beam_mutable_data_dir())
+    destination = mutable_input_root / settings.run.region
     shutil.copytree(source_root, destination, dirs_exist_ok=True)
+    shutil.copytree(common_source, mutable_input_root / "common", dirs_exist_ok=True)
 
 
 def run_phase(

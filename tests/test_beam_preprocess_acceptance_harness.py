@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -31,6 +32,10 @@ def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
     config_path = beam_root / settings.beam.config
     config_path.parent.mkdir(parents=True)
     config_path.write_text("beam {}\n", encoding="utf-8")
+    common_root = source_root / "common"
+    common_root.mkdir(parents=True)
+    for name in ("akka.conf", "metrics.conf", "matsim.conf"):
+        (common_root / name).write_text("config {}\n", encoding="utf-8")
     inputs: dict[str, str] = {}
     for key, name in (
         ("plans_beam_in", "plans.parquet"),
@@ -53,6 +58,57 @@ def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
         encoding="utf-8",
     )
     return manifest, evidence_root
+
+
+def test_stage_beam_input_tree_preserves_sibling_common_configuration(
+    tmp_path: Path,
+) -> None:
+    """A staged SFBay tree keeps the shared HOCON include root reachable."""
+
+    production_root = tmp_path / "production"
+    source_root = production_root / "sfbay"
+    (source_root / "scenarios").mkdir(parents=True)
+    (source_root / "scenarios" / "acceptance.conf").write_text(
+        'include "../common/akka.conf"\n', encoding="utf-8"
+    )
+    common_root = production_root / "common"
+    for name in ("akka.conf", "metrics.conf", "matsim.conf"):
+        (common_root / name).parent.mkdir(parents=True, exist_ok=True)
+        (common_root / name).write_text("config {}\n", encoding="utf-8")
+    mutable_root = tmp_path / "workspace" / "beam" / "input"
+    workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_root))
+    settings = SimpleNamespace(run=SimpleNamespace(region="sfbay"))
+
+    acceptance._stage_beam_input_tree(
+        source_root=source_root,
+        settings=settings,
+        workspace=workspace,
+    )
+
+    assert (mutable_root / "sfbay" / "scenarios" / "acceptance.conf").is_file()
+    assert (mutable_root / "common" / "akka.conf").is_file()
+    assert (mutable_root / "common" / "metrics.conf").is_file()
+    assert (mutable_root / "common" / "matsim.conf").is_file()
+
+
+def test_stage_beam_input_tree_rejects_missing_sibling_common_configuration(
+    tmp_path: Path,
+) -> None:
+    """The harness fails before hashing when a submitted BEAM tree is incomplete."""
+
+    source_root = tmp_path / "production" / "sfbay"
+    source_root.mkdir(parents=True)
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "workspace" / "beam" / "input")
+    )
+    settings = SimpleNamespace(run=SimpleNamespace(region="sfbay"))
+
+    with pytest.raises(ValueError, match="shared common configuration"):
+        acceptance._stage_beam_input_tree(
+            source_root=source_root,
+            settings=settings,
+            workspace=workspace,
+        )
 
 
 def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(

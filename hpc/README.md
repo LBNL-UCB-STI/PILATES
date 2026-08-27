@@ -85,7 +85,9 @@ roots are distinct: `PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT` holds the
 four already-selected population files, while
 `PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT` is the staged SFBay BEAM
 tree and must contain the configured primary file at
-`scenarios/sfbay-pilates-base-calibrated.conf`. A minimal operator preflight is:
+`scenarios/sfbay-pilates-base-calibrated.conf`. Its sibling `../common/` must
+also hold BEAM's shared HOCON files; the harness stages both directories so the
+scenario's relative includes remain valid. A minimal operator preflight is:
 
 ```bash
 export PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT=/durable/path/to/population
@@ -95,6 +97,9 @@ test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/households.parquet"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/persons.parquet"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/vehicles2_2019.csv.gz"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/scenarios/sfbay-pilates-base-calibrated.conf"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/akka.conf"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/metrics.conf"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/matsim.conf"
 ```
 
 The manifest fixes the direct cohort at 2019 / inner iteration 0. The harness
