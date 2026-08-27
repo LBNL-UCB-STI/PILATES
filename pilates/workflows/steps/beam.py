@@ -1329,7 +1329,9 @@ def _native_beam_preprocess(
     workspace: Workspace,
     _consist_ctx: Any,
     beam_preprocess_context: Mapping[str, Any] | None = None,
+    beam_preprocess_identity_closure: Mapping[str, Any] | None = None,
 ) -> None:
+    del beam_preprocess_identity_closure
     if beam_preprocess_context is None:
         raise RuntimeError(
             "beam_preprocess requires a resolver-owned preprocess context."

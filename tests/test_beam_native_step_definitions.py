@@ -37,8 +37,9 @@ from pilates.workflows.steps.beam import (
     beam_run,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import beam as beam_steps
-from pilates.workflows.steps.shared import BeamRunOutputs
+from pilates.workflows.steps.shared import BeamPreprocessOutputs, BeamRunOutputs
 from pilates.beam import beam_exchange
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.preprocessor import BeamPreprocessor
@@ -137,6 +138,180 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
             },
         },
     }
+
+
+def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Equivalent native preprocessing hydrates outputs into a fresh workspace."""
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": str(tmp_path)},
+    )
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
+    monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda **_kwargs: {"config": {"model": "beam"}, "identity_inputs": []},
+    )
+
+    artifacts: dict[str, object] = {}
+    with tracker.start_run("seed_beam_preprocess_inputs", "test"):
+        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+            source = tmp_path / "sources" / f"{key}.parquet"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"{key}\n", encoding="utf-8")
+            artifacts[key] = tracker.log_artifact(source, key=key, direction="input")
+        warmstart = tmp_path / "sources" / "linkstats_warmstart.parquet"
+        warmstart.write_text("warmstart\n", encoding="utf-8")
+        artifacts[LINKSTATS_WARMSTART] = tracker.log_artifact(
+            warmstart, key=LINKSTATS_WARMSTART, direction="input"
+        )
+
+    calls: list[Path] = []
+
+    def _preprocess(
+        _self: BeamPreprocessor,
+        run_workspace: object,
+        *,
+        beam_preprocess_inputs: dict[str, Path],
+        beam_preprocess_context: object,
+    ) -> BeamPreprocessOutputs:
+        del beam_preprocess_context
+        mutable_data_dir = Path(run_workspace.get_beam_mutable_data_dir())
+        calls.append(mutable_data_dir)
+        prepared: dict[str, Path] = {}
+        for key, source in beam_preprocess_inputs.items():
+            destination = mutable_data_dir / "prepared" / Path(source).name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            prepared[key] = destination
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=mutable_data_dir,
+            prepared_inputs=prepared,
+        )
+
+    monkeypatch.setattr(BeamPreprocessor, "preprocess", _preprocess)
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    def _settings(*, file_format: str = "parquet") -> SimpleNamespace:
+        return SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(
+                config="beam.conf",
+                scenario_folder="",
+                skim_zone_geoid_col="TAZ",
+                admission=None,
+            ),
+            activitysim=SimpleNamespace(file_format=file_format),
+            shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+            vehicle_ownership_model_enabled=False,
+        )
+
+    def _workspace(root: Path) -> SimpleNamespace:
+        mutable_data_dir = root / "beam-input"
+        config = mutable_data_dir / "test-region" / "beam.conf"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("beam {}\n", encoding="utf-8")
+        return SimpleNamespace(
+            full_path=str(root),
+            get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
+        )
+
+    def _execute(
+        *,
+        scenario_name: str,
+        workspace: SimpleNamespace,
+        settings: SimpleNamespace,
+        include_warmstart: bool = False,
+    ) -> tuple[object, BeamPreprocessOutputs]:
+        with tracker.scenario(scenario_name) as scenario:
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                scenario.coupler.set_from_artifact(key, artifacts[key])
+            if include_warmstart:
+                scenario.coupler.set_from_artifact(
+                    LINKSTATS_WARMSTART, artifacts[LINKSTATS_WARMSTART]
+                )
+            return execute_step(
+                scenario=scenario,
+                definition=beam_preprocess,
+                settings=settings,
+                state=SimpleNamespace(
+                    year=2030,
+                    current_inner_iter=0,
+                    full_settings=settings,
+                ),
+                workspace=workspace,
+                stage="traffic_assignment",
+                year=2030,
+                iteration=0,
+                phase="preprocess",
+            )
+
+    cold_workspace = _workspace(tmp_path / "cold-workspace")
+    cold_result, cold_outputs = _execute(
+        scenario_name="beam-preprocess-cold",
+        workspace=cold_workspace,
+        settings=_settings(),
+    )
+    assert not cold_result.cache_hit
+    assert calls == [Path(cold_workspace.get_beam_mutable_data_dir())]
+
+    hit_workspace = _workspace(tmp_path / "fresh-workspace")
+    hit_result, hit_outputs = _execute(
+        scenario_name="beam-preprocess-hit",
+        workspace=hit_workspace,
+        settings=_settings(),
+    )
+    assert hit_result.cache_hit
+    assert calls == [Path(cold_workspace.get_beam_mutable_data_dir())]
+    assert set(hit_result.outputs) == set(cold_result.outputs)
+    assert set(hit_outputs.prepared_inputs) == set(cold_outputs.prepared_inputs)
+    assert all(
+        path.exists() and path.is_relative_to(Path(hit_workspace.full_path))
+        for path in hit_outputs.prepared_inputs.values()
+    )
+
+    optional_role_workspace = _workspace(tmp_path / "optional-role-workspace")
+    optional_role_result, _ = _execute(
+        scenario_name="beam-preprocess-optional-role-miss",
+        workspace=optional_role_workspace,
+        settings=_settings(),
+        include_warmstart=True,
+    )
+    assert not optional_role_result.cache_hit
+    assert calls[-1] == Path(optional_role_workspace.get_beam_mutable_data_dir())
+
+    launch_change_workspace = _workspace(tmp_path / "launch-change-workspace")
+    launch_change_result, _ = _execute(
+        scenario_name="beam-preprocess-launch-change-miss",
+        workspace=launch_change_workspace,
+        settings=_settings(file_format="csv"),
+    )
+    assert not launch_change_result.cache_hit
+    assert calls == [
+        Path(cold_workspace.get_beam_mutable_data_dir()),
+        Path(optional_role_workspace.get_beam_mutable_data_dir()),
+        Path(launch_change_workspace.get_beam_mutable_data_dir()),
+    ]
 
 
 def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
