@@ -1331,6 +1331,9 @@ def _native_beam_preprocess(
     beam_preprocess_context: Mapping[str, Any] | None = None,
     beam_preprocess_identity_closure: Mapping[str, Any] | None = None,
 ) -> None:
+    from pilates.runtime.beam_preprocess_acceptance import record_body_execution
+
+    record_body_execution(step="beam_preprocess")
     del beam_preprocess_identity_closure
     if beam_preprocess_context is None:
         raise RuntimeError(

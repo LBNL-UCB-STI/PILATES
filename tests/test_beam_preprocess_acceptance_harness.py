@@ -1,88 +1,88 @@
-"""Entry-point coverage for the HPC BEAM-preprocess acceptance harness."""
+"""Integration coverage for the HPC BEAM-preprocess acceptance entry point."""
 
 from __future__ import annotations
 
 import json
-from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 
-def test_main_records_cold_and_fresh_semantic_evidence(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    """The real CLI assembles both phases and preserves reviewer-readable evidence."""
+from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.runtime import beam_preprocess_acceptance as acceptance
+from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
+from pilates.workflows.steps import beam as beam_steps
+from pilates.workflows.steps.shared import BeamPreprocessOutputs
 
-    from pilates.runtime import beam_preprocess_acceptance as acceptance
 
-    settings = tmp_path / "settings.yaml"
-    settings.write_text("run: {}\n", encoding="utf-8")
-    beam_input_root = tmp_path / "beam-input"
-    beam_input_root.mkdir()
-    (beam_input_root / "beam.conf").write_text("beam {}\n", encoding="utf-8")
-    inputs = {}
-    for key in ("plans_beam_in", "households_beam_in", "persons_beam_in"):
-        path = tmp_path / f"{key}.parquet"
+def _settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        run=SimpleNamespace(region="sfbay", models=SimpleNamespace(traffic_assignment=None, travel=None), consist_hashing_strategy="full"),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder="", skim_zone_geoid_col="TAZ", admission=None, local_mutable_data_folder="beam-input", local_output_folder="beam-output"),
+        activitysim=SimpleNamespace(file_format="parquet"),
+        shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+        vehicle_ownership_model_enabled=True,
+    )
+
+
+def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real Tracker/resolver/execute_step run hydrates a distinct fresh workspace."""
+
+    settings = _settings()
+    evidence_root = tmp_path / "evidence"
+    manifest = evidence_root / "submitted-input-manifest.json"
+    manifest.parent.mkdir()
+    source_root = tmp_path / "sources"
+    beam_root = source_root / "beam-tree"
+    beam_root.mkdir(parents=True)
+    (beam_root / "beam.conf").write_text("beam {}\n", encoding="utf-8")
+    inputs: dict[str, str] = {}
+    for key, name in (("plans_beam_in", "plans.parquet"), ("households_beam_in", "households.parquet"), ("persons_beam_in", "persons.parquet"), (ATLAS_VEHICLES2_OUTPUT, "vehicles2_2019.csv.gz")):
+        path = source_root / name
         path.write_text(f"{key}\n", encoding="utf-8")
         inputs[key] = str(path)
-    manifest = tmp_path / "inputs.json"
-    manifest.write_text(
-        json.dumps({"beam_input_root": str(beam_input_root), "inputs": inputs}),
-        encoding="utf-8",
-    )
+    manifest.write_text(json.dumps({"beam_input_root": str(beam_root), "inputs": inputs, "cohort": {"year": 2019, "iteration": 0}}), encoding="utf-8")
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("run: {}\n", encoding="utf-8")
+    monkeypatch.setattr(acceptance, "load_config", lambda _path: settings)
+    monkeypatch.setattr(acceptance.WorkflowState, "from_settings", lambda _settings: SimpleNamespace(year=2019, current_inner_iter=0, full_settings=settings))
+    monkeypatch.setattr(beam_steps, "build_enabled_workflow_surface", lambda _settings: SimpleNamespace(profile=SimpleNamespace(vehicle_ownership_model_enabled=True)))
+    monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
+    monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr("pilates.workflows.step_consist_meta.build_step_consist_kwargs", lambda **_kwargs: {"config": {"model": "beam"}, "identity_inputs": []})
+    calls: list[Path] = []
 
-    calls: list[tuple[str, Path]] = []
+    def fake_preprocess(self, workspace, *, beam_preprocess_inputs, beam_preprocess_context):
+        del self, beam_preprocess_context
+        mutable = Path(workspace.get_beam_mutable_data_dir())
+        calls.append(mutable)
+        prepared = {}
+        for key, source in beam_preprocess_inputs.items():
+            destination = mutable / "prepared" / Path(source).name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(Path(source).read_text(encoding="utf-8"), encoding="utf-8")
+            prepared[key] = destination
+        return BeamPreprocessOutputs(beam_mutable_data_dir=mutable, prepared_inputs=prepared)
 
-    def fake_run_phase(*, phase, workspace_root, **_kwargs):
-        calls.append((phase, workspace_root))
-        output = workspace_root / ".pilates-consist-outputs" / "beam_preprocess" / "plans_beam_in.parquet"
-        output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text("plans\n", encoding="utf-8")
-        return acceptance.PhaseExecution(
-            cache_hit=phase == "fresh",
-            run_id=f"{phase}-run",
-            source_run_id="cold-run" if phase == "fresh" else None,
-            declared_outputs={"plans_beam_in": output},
-            selected_roles={"plans_beam_in": "plans_beam_in"},
-            source_bindings={"plans_beam_in": "seed-input"},
-            input_identities={"plans_beam_in": "input-sha"},
-            config_identity="config-sha",
-            snapshot_reference="provenance.duckdb",
-        )
-
-    monkeypatch.setattr(acceptance, "run_phase", fake_run_phase)
-    fake_tracker = SimpleNamespace(
-        start_run=lambda *_args: nullcontext(),
-        log_artifact=lambda path, **_kwargs: SimpleNamespace(path=path),
-    )
-    monkeypatch.setattr(acceptance, "load_config", lambda _path: SimpleNamespace())
-    monkeypatch.setattr(
-        acceptance.WorkflowState,
-        "from_settings",
-        lambda _settings: SimpleNamespace(),
-    )
-    monkeypatch.setattr(acceptance.cr, "create_tracker", lambda **_kwargs: fake_tracker)
-
-    evidence_root = tmp_path / "evidence"
-    assert acceptance.main(
-        [
-            "--settings",
-            str(settings),
-            "--manifest",
-            str(manifest),
-            "--evidence-root",
-            str(evidence_root),
-        ]
-    ) == 0
-
-    assert [phase for phase, _ in calls] == ["cold", "fresh"]
-    assert calls[0][1] != calls[1][1]
+    monkeypatch.setattr(BeamPreprocessor, "preprocess", fake_preprocess)
+    assert acceptance.main(["--settings", str(settings_path), "--manifest", str(manifest), "--evidence-root", str(evidence_root)]) == 0
+    assert len(calls) == 1
     cold = json.loads((evidence_root / "phases" / "cold.json").read_text())
     fresh = json.loads((evidence_root / "phases" / "fresh.json").read_text())
     verdict = json.loads((evidence_root / "semantic-validation.json").read_text())
-    assert cold["cache_hit"] is False
-    assert fresh["cache_hit"] is True
-    assert fresh["source_run_id"] == "cold-run"
+    assert cold["cache_hit"] is False and fresh["cache_hit"] is True
+    assert cold["cohort"] == {"year": 2019, "iteration": 0}
+    assert fresh["body_executions_after"] == cold["body_executions_after"]
+    assert ATLAS_VEHICLES2_OUTPUT in cold["selected_roles"]
     assert verdict["valid"] is True
-    assert verdict["expected_workspace_differences"]
+    assert json.loads((evidence_root / "effective-input-manifest.json").read_text())["cohort"]["year"] == 2019
+
+
+def test_semantic_validation_rejects_symmetric_missing_outputs() -> None:
+    """Equal missing output maps are not accepted as equivalent products."""
+
+    phase = {"selected_roles": {}, "source_bindings": {}, "input_identities": {}, "config_identity": "same", "workspace_root": "cold", "declared_outputs": {"plans": {"present": False, "type": "missing"}}, "body_executions_before": 0, "body_executions_after": 1}
+    fresh = {**phase, "workspace_root": "fresh", "body_executions_before": 1, "body_executions_after": 1}
+    verdict = acceptance._validate(phase, fresh)
+    assert verdict["valid"] is False
+    assert verdict["declared_outputs_present"] is False

@@ -125,6 +125,13 @@ acceptance_mode=false
 if [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
     acceptance_mode=true
     shift
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: $0 --beam-preprocess-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+        exit 2
+    fi
+elif [ "$#" -gt 2 ]; then
+    echo "Usage: $0 <settings_file> [stage_file]" >&2
+    exit 2
 fi
 
 if [ "${1:-}" = "" ]; then
@@ -181,6 +188,7 @@ if [ "$acceptance_mode" = true ]; then
         --settings "$CONFIG_FILE" \
         --manifest "$STAGE_FILE" \
         --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    exit 0
 elif [ -n "$STAGE_FILE" ]; then
     echo "Stage: $STAGE_FILE"
 else

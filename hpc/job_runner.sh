@@ -206,6 +206,10 @@ if [ -n "$beam_preprocess_acceptance_manifest" ] \
     echo "ERROR: --beam-preprocess-acceptance cannot be combined with --native-structural-canary." >&2
     exit 2
 fi
+if [ -n "$beam_preprocess_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --beam-preprocess-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
 if [ -n "$native_structural_canary_seed" ] \
     && [ ! -f "$native_structural_canary_seed_path" ]; then
     echo "ERROR: native structural canary seed manifest not found: $native_structural_canary_seed_path"
@@ -238,7 +242,7 @@ beam_preprocess_acceptance_evidence_manifest=""
 if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
     acceptance_root="${PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
     beam_preprocess_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
-    beam_preprocess_acceptance_evidence_manifest="$beam_preprocess_acceptance_evidence_dir/input-manifest.json"
+    beam_preprocess_acceptance_evidence_manifest="$beam_preprocess_acceptance_evidence_dir/submitted-input-manifest.json"
     mkdir -p "$beam_preprocess_acceptance_evidence_dir"
     cp "$beam_preprocess_acceptance_manifest_path" "$beam_preprocess_acceptance_evidence_manifest"
     cp "$generated_settings_path" "$beam_preprocess_acceptance_evidence_dir/generated-settings.yaml"
@@ -262,7 +266,7 @@ if [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --beam-preprocess-acceptance
         "$generated_settings_path"
-        "$beam_preprocess_acceptance_evidence_manifest"
+        "$beam_preprocess_acceptance_manifest_path"
         "$beam_preprocess_acceptance_evidence_dir"
     )
 else

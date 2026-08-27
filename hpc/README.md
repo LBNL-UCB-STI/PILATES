@@ -83,13 +83,15 @@ Before submission, copy `hpc/beam-preprocess-acceptance-inputs.json.template`
 to the untracked `hpc/beam-preprocess-acceptance-inputs.json` and set
 `PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT` to a durable directory holding
 the already-selected `plans.parquet`, `households.parquet`, `persons.parquet`,
-and the staged SFBay BEAM input tree (including the configured primary BEAM
-config). The harness creates one evidence root under
+and `vehicles2_2019.csv.gz`, plus the staged SFBay BEAM input tree (including
+the configured primary BEAM config). The manifest fixes the direct cohort at
+2019 / inner iteration 0. The harness creates one evidence root under
 `/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
 override that parent with `PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT`.
 
 It retains `generated-settings.yaml`, `input-manifest.json`,
-`phases/cold.json`, `phases/fresh.json`, `semantic-validation.json`, the shared
+`effective-input-manifest.json`, `body-executions.jsonl`, `phases/cold.json`,
+`phases/fresh.json`, `semantic-validation.json`, the shared
 `provenance.duckdb`, and `consist-runs/`. The phase records contain declared
 output destinations, selected roles and source bindings, cache status/source
 run ID, identities, and semantic file/directory details. It fails before the

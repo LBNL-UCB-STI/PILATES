@@ -3,6 +3,8 @@
   "inputs": {
     "plans_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/plans.parquet",
     "households_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/households.parquet",
-    "persons_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/persons.parquet"
-  }
+    "persons_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/persons.parquet",
+    "atlas_vehicles2_output": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/vehicles2_2019.csv.gz"
+  },
+  "cohort": {"year": 2019, "iteration": 0}
 }
