@@ -14,6 +14,7 @@ from pilates.runtime import beam_preprocess_acceptance as acceptance
 from pilates.workflows.artifact_keys import ATLAS_VEHICLES2_OUTPUT
 from pilates.workflows.steps import beam as beam_steps
 from pilates.workflows.steps.shared import BeamPreprocessOutputs
+from workflow_state import WorkflowState
 
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,30 @@ _ACCEPTANCE_SETTINGS = (
     _PROJECT_ROOT
     / "scenarios/sfbay/settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml"
 )
+
+
+def test_acceptance_settings_name_the_workflow_and_forecast_years_separately() -> None:
+    """The reviewed 2019 ATLAS artifact belongs to the 2017→2019 interval."""
+
+    state = WorkflowState.from_settings(load_config(str(_ACCEPTANCE_SETTINGS)))
+
+    assert state.year == 2017
+    assert state.forecast_year == 2019
+    assert state.current_inner_iter == 0
+
+
+def test_acceptance_state_rejects_a_correct_workflow_year_with_wrong_forecast_year() -> (
+    None
+):
+    """The 2017 workflow state must not silently consume a 2019 artifact for 2021."""
+
+    state = SimpleNamespace(year=2017, forecast_year=2021, current_inner_iter=0)
+
+    with pytest.raises(
+        ValueError,
+        match="workflow_year=2017, forecast_year=2019, iteration=0",
+    ):
+        acceptance._validate_acceptance_state(state)
 
 
 def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
@@ -41,7 +66,7 @@ def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
         ("plans_beam_in", "plans.parquet"),
         ("households_beam_in", "households.parquet"),
         ("persons_beam_in", "persons.parquet"),
-        (ATLAS_VEHICLES2_OUTPUT, "vehicles2_2019.csv.gz"),
+        (ATLAS_VEHICLES2_OUTPUT, "vehicles2_2019.csv"),
     ):
         path = source_root / name
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,7 +77,11 @@ def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
             {
                 "beam_input_root": str(beam_root),
                 "inputs": inputs,
-                "cohort": {"year": 2019, "iteration": 0},
+                "cohort": {
+                    "workflow_year": 2017,
+                    "forecast_year": 2019,
+                    "iteration": 0,
+                },
             }
         ),
         encoding="utf-8",
@@ -166,7 +195,11 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
     fresh = json.loads((evidence_root / "phases" / "fresh.json").read_text())
     verdict = json.loads((evidence_root / "semantic-validation.json").read_text())
     assert cold["cache_hit"] is False and fresh["cache_hit"] is True
-    assert cold["cohort"] == {"year": 2019, "iteration": 0}
+    assert cold["cohort"] == {
+        "workflow_year": 2017,
+        "forecast_year": 2019,
+        "iteration": 0,
+    }
     assert fresh["body_executions_after"] == cold["body_executions_after"]
     assert ATLAS_VEHICLES2_OUTPUT in cold["selected_roles"]
     assert cold["persisted_run"]["binding_kind"] == "ordinary-binding"
@@ -207,7 +240,7 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
     assert (
         json.loads((evidence_root / "effective-input-manifest.json").read_text())[
             "cohort"
-        ]["year"]
+        ]["forecast_year"]
         == 2019
     )
     progress = capsys.readouterr().out

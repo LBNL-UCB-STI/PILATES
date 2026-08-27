@@ -370,6 +370,12 @@ checker-independent cache evidence; it does not alter the structural-canary
 verdict, migrate the production boundary to strict binding, or claim HDF5
 promotion/persistence evidence.
 
+The harness names this selected canary interval explicitly: `workflow_year=2017`,
+`forecast_year=2019`, and `iteration=0`. The direct
+`atlas_vehicles2_output` is `vehicles2_2019.csv`, which is an output of the
+2017→2019 interval. The manifest and driver reject an ambiguous single `year`
+field or a state whose forecast year is not 2019.
+
 - [ ] **Step 1: Run one cold BEAM-preprocess invocation on HPC.**
 
   Use the normal SFBay workflow wrapper narrowed to the selected boundary and

@@ -34,7 +34,8 @@ _REQUIRED_INPUTS = (
     BEAM_PERSONS_IN,
     ATLAS_VEHICLES2_OUTPUT,
 )
-_ACCEPTANCE_YEAR = 2019
+_ACCEPTANCE_WORKFLOW_YEAR = 2017
+_ACCEPTANCE_FORECAST_YEAR = 2019
 _ACCEPTANCE_ITERATION = 0
 _BEAM_COMMON_CONFIG_FILES = ("akka.conf", "metrics.conf", "matsim.conf")
 
@@ -62,7 +63,8 @@ class PhaseExecution:
     persisted_run_meta: Mapping[str, Any] | None = None
     body_executions_before: int = 0
     body_executions_after: int = 0
-    cohort_year: int = _ACCEPTANCE_YEAR
+    workflow_year: int = _ACCEPTANCE_WORKFLOW_YEAR
+    forecast_year: int = _ACCEPTANCE_FORECAST_YEAR
     cohort_iteration: int = _ACCEPTANCE_ITERATION
     persisted_run: Mapping[str, Any] | None = None
 
@@ -136,16 +138,37 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Path], dict[str, Any]]:
             f"acceptance beam_input_root is not a directory: {beam_input_root}"
         )
     cohort = raw.get("cohort")
-    if cohort != {"year": _ACCEPTANCE_YEAR, "iteration": _ACCEPTANCE_ITERATION}:
-        raise ValueError(
-            "acceptance manifest cohort must be {'year': 2019, 'iteration': 0}"
-        )
+    expected_cohort = {
+        "workflow_year": _ACCEPTANCE_WORKFLOW_YEAR,
+        "forecast_year": _ACCEPTANCE_FORECAST_YEAR,
+        "iteration": _ACCEPTANCE_ITERATION,
+    }
+    if cohort != expected_cohort:
+        raise ValueError(f"acceptance manifest cohort must be {expected_cohort}")
     effective = {
         "beam_input_root": str(beam_input_root.resolve()),
         "inputs": {key: str(value.resolve()) for key, value in inputs.items()},
         "cohort": cohort,
     }
     return beam_input_root, inputs, effective
+
+
+def _validate_acceptance_state(state: Any) -> None:
+    """Require the exact 2017 workflow state that forecasts the 2019 input year."""
+
+    expected = (
+        _ACCEPTANCE_WORKFLOW_YEAR,
+        _ACCEPTANCE_FORECAST_YEAR,
+        _ACCEPTANCE_ITERATION,
+    )
+    actual = (state.year, state.forecast_year, state.current_inner_iter)
+    if actual != expected:
+        raise ValueError(
+            "acceptance settings must initialize WorkflowState at "
+            "workflow_year=2017, forecast_year=2019, iteration=0; "
+            f"received workflow_year={actual[0]}, forecast_year={actual[1]}, "
+            f"iteration={actual[2]}"
+        )
 
 
 def _body_execution_count(path: Path) -> int:
@@ -450,7 +473,8 @@ def run_phase(
         persisted_run_meta=run_meta,
         body_executions_before=before,
         body_executions_after=after,
-        cohort_year=state.year,
+        workflow_year=state.year,
+        forecast_year=state.forecast_year,
         cohort_iteration=state.current_inner_iter,
         persisted_run=persisted,
     )
@@ -488,7 +512,8 @@ def _phase_record(execution: PhaseExecution, workspace_root: Path) -> dict[str, 
         "body_executions_before": execution.body_executions_before,
         "body_executions_after": execution.body_executions_after,
         "cohort": {
-            "year": execution.cohort_year,
+            "workflow_year": execution.workflow_year,
+            "forecast_year": execution.forecast_year,
             "iteration": execution.cohort_iteration,
         },
     }
@@ -618,13 +643,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     _write_json(evidence_root / "effective-input-manifest.json", effective_manifest)
     settings = load_config(str(args.settings))
     state = WorkflowState.from_settings(settings)
-    if (
-        state.year != _ACCEPTANCE_YEAR
-        or state.current_inner_iter != _ACCEPTANCE_ITERATION
-    ):
-        raise ValueError(
-            "acceptance settings must initialize WorkflowState at 2019 / iteration 0"
-        )
+    _validate_acceptance_state(state)
     _progress("acceptance settings and state validated")
     tracker = cr.create_tracker(
         settings=settings,

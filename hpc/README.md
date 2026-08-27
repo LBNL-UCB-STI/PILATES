@@ -95,14 +95,16 @@ export PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT=/durable/path/to/beam-
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/plans.parquet"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/households.parquet"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/persons.parquet"
-test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/vehicles2_2019.csv.gz"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/vehicles2_2019.csv"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/scenarios/sfbay-pilates-base-calibrated.conf"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/akka.conf"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/metrics.conf"
 test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/../common/matsim.conf"
 ```
 
-The manifest fixes the direct cohort at 2019 / inner iteration 0. The harness
+The manifest fixes the direct cohort at workflow year 2017, forecast year 2019,
+and inner iteration 0. `vehicles2_2019.csv` is therefore an exact forecast-year
+ATLAS input, not a workflow-start-year input. The harness
 creates one evidence root under
 `/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
 override that parent with `PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT`.
