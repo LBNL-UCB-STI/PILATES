@@ -24,6 +24,7 @@ from pilates.workflows.steps.beam import (
     _beam_preprocess_native_output_paths,
     _beam_run_native_output_paths,
     _materialize_native_outputs,
+    _native_beam_preprocess,
     _native_beam_run,
     _project_beam_run_outputs,
     _resolve_beam_preprocess_inputs,
@@ -37,7 +38,10 @@ from pilates.workflows.steps.beam import (
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import beam as beam_steps
 from pilates.workflows.steps.shared import BeamRunOutputs
+from pilates.beam import beam_exchange
 from pilates.beam.launch_config import BeamLaunchConfig
+from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.generic.records import RecordStore
 
 
 def _empty_resolved_inputs() -> ResolvedStepInputs:
@@ -612,8 +616,10 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
     )
     settings = SimpleNamespace(
         run=SimpleNamespace(
+            region="test-region",
             models=SimpleNamespace(traffic_assignment=None, travel=None),
-        )
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
     )
     monkeypatch.setattr(
         beam_steps,
@@ -686,7 +692,13 @@ def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
     )
 
     resolved = _resolve_beam_preprocess_inputs(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        ),
         state=SimpleNamespace(year=2017, forecast_year=2019, current_inner_iter=0),
         workspace=workspace,
         coupler=Coupler(),
@@ -745,7 +757,13 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
     )
 
     resolved = _resolve_beam_preprocess_inputs(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        ),
         state=SimpleNamespace(year=2030, current_inner_iter=0),
         workspace=SimpleNamespace(
             get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
@@ -755,6 +773,259 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
 
     with pytest.raises(RuntimeError, match="atlas_vehicles2_output"):
         resolved.require_complete()
+
+
+@pytest.mark.parametrize(
+    ("include_warmstart", "include_atlas_vehicles"),
+    (
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ),
+)
+def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_warmstart: bool,
+    include_atlas_vehicles: bool,
+) -> None:
+    """Execution uses the frozen resolver context across optional input surfaces."""
+
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    if include_warmstart:
+        inputs[LINKSTATS_WARMSTART] = tmp_path / "linkstats.parquet"
+    if include_atlas_vehicles:
+        inputs[ATLAS_VEHICLES2_OUTPUT] = tmp_path / "vehicles2_2030.csv"
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    resolved_mutable_root = tmp_path / "resolved-beam-input"
+    (resolved_mutable_root / "test-region").mkdir(parents=True)
+    primary_config = resolved_mutable_root / "test-region" / "beam.conf"
+    primary_config.write_text("beam {}\n", encoding="utf-8")
+    active_mutable_root = resolved_mutable_root
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(active_mutable_root),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+    observed_context: dict[str, object] = {}
+
+    def _capture_preprocess(*_args, **kwargs):
+        observed_context.update(kwargs["beam_preprocess_context"])
+        return SimpleNamespace(prepared_inputs={})
+
+    monkeypatch.setattr(BeamPreprocessor, "preprocess", _capture_preprocess)
+    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None)
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2030, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+    resolved.require_complete()
+    assert resolved.metadata["beam_preprocess_context"]["primary_config"] == primary_config
+    execution_options = beam_preprocess.execution_options(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=workspace,
+        resolved_inputs=resolved,
+    )
+    assert execution_options.runtime_kwargs["beam_preprocess_context"] == dict(
+        resolved.metadata["beam_preprocess_context"]
+    )
+
+    active_mutable_root = tmp_path / "poisoned-beam-input"
+    _native_beam_preprocess(
+        **dict(resolved.binding.inputs or {}),
+        settings=settings,
+        state=SimpleNamespace(full_settings=settings),
+        workspace=workspace,
+        _consist_ctx=object(),
+        beam_preprocess_context=execution_options.runtime_kwargs[
+            "beam_preprocess_context"
+        ],
+    )
+    assert observed_context["primary_config"] == primary_config
+    assert observed_context["exchange_scenario_folder"] == (
+        resolved_mutable_root / "test-region"
+    )
+
+
+def test_beam_preprocess_resolver_does_not_close_canonical_zone_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid resolver-selected zone source fails before preprocessing."""
+
+    poisoned_zone_source = tmp_path / "poisoned-zones.geojson"
+    mutable_root = tmp_path / "beam-input"
+    config_path = mutable_root / "test-region" / "beam.conf"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="",
+            skim_zone_geoid_col="TAZ",
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(poisoned_zone_source),
+                    canonical_id_col="zone_id",
+                    activitysim_index_col="TAZ",
+                )
+            )
+        ),
+        vehicle_ownership_model_enabled=False,
+    )
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    with pytest.raises(FileNotFoundError, match="poisoned-zones.geojson"):
+        _resolve_beam_preprocess_inputs(
+            settings=settings,
+            state=SimpleNamespace(year=2030, current_inner_iter=0),
+            workspace=SimpleNamespace(
+                get_beam_mutable_data_dir=lambda: str(mutable_root)
+            ),
+            coupler=Coupler(),
+        )
+
+
+def test_beam_preprocess_resolver_does_not_close_exchange_config_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preprocessing uses the resolver-selected exchange path without rediscovery."""
+
+    mutable_root = tmp_path / "beam-input"
+    config_path = mutable_root / "test-region" / "beam.conf"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        'beam.exchange.scenario.folder = ${beam.inputDirectory}"/resolved-exchange"\n',
+        encoding="utf-8",
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="fallback-exchange",
+        ),
+        shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+        vehicle_ownership_model_enabled=False,
+    )
+    state = SimpleNamespace(
+        full_settings=settings,
+        current_inner_iter=0,
+        set_sub_stage_progress=lambda _progress: None,
+    )
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(mutable_root),
+    )
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2030, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+    context = resolved.metadata["beam_preprocess_context"]
+    observed_exchange_path: list[str] = []
+    preprocessor = BeamPreprocessor("beam_preprocess", state)
+    monkeypatch.setattr(
+        preprocessor,
+        "_preprocess",
+        lambda _workspace, _records: (
+            observed_exchange_path.append(
+                preprocessor._resolve_beam_exchange_scenario_folder(_workspace)
+            )
+            or RecordStore()
+        ),
+    )
+    monkeypatch.setattr(
+        beam_exchange,
+        "resolve_beam_exchange_scenario_folder",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preprocess must not rediscover the exchange scenario folder"
+        ),
+    )
+
+    preprocessor.preprocess(
+        workspace,
+        beam_preprocess_inputs=inputs,
+        beam_preprocess_context=context,
+    )
+
+    assert observed_exchange_path == [
+        str(mutable_root / "test-region" / "resolved-exchange")
+    ]
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(

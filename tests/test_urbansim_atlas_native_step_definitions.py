@@ -5,10 +5,13 @@ from pathlib import Path
 import shutil
 from types import SimpleNamespace
 from typing import cast
+from uuid import UUID
 
+import consist
 import pandas as pd
 import pytest
 from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
+from consist.models.artifact import Artifact
 
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -1154,6 +1157,96 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
     assert snapshot.is_relative_to(tmp_path / "consist-runs" / ".resolved-bindings")
     assert output.read_bytes() == source.read_bytes()
     assert projected == result.outputs
+
+
+def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reopen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A later untrusted HDF5 observation must not rewrite the bound artifact."""
+    source = tmp_path / "source" / "urbansim-data.h5"
+    source.parent.mkdir()
+    source.write_bytes(b"tracked HDF5 bytes\n")
+    output = tmp_path / "workspace" / "outputs" / "processed.h5"
+    run_dir = tmp_path / "consist-runs"
+    db_path = tmp_path / "provenance.duckdb"
+    tracker = Tracker(
+        run_dir=run_dir,
+        db_path=str(db_path),
+        hashing_strategy="full",
+    )
+    with tracker.start_run("seed", "test"):
+        trusted = tracker.log_artifact(
+            source,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+    trusted_identity = consist.ArtifactIdentity.from_artifact(trusted)
+
+    observed_override: dict[str, Artifact] = {}
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(self, outputs: object, _workspace: object) -> None:
+            snapshot = outputs.usim_datastore_h5
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(snapshot.read_bytes())
+            observed_override["artifact"] = tracker.log_artifact(
+                trusted,
+                key=USIM_DATASTORE_H5,
+                direction="input",
+                content_hash=trusted.hash,
+                force_hash_override=True,
+            )
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "ensure_usim_population_year_table_aliases",
+        lambda **_kwargs: {},
+    )
+    definition = replace(
+        URBANSIM_POSTPROCESS,
+        output_paths=lambda **_kwargs: {USIM_DATASTORE_H5: output},
+        project_outputs=lambda outputs, **_kwargs: outputs,
+    )
+    settings = _settings()
+    state = _state()
+    workspace = _workspace(tmp_path / "workspace")
+
+    with tracker.scenario("urbansim") as scenario:
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, trusted)
+        result, _ = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="land_use",
+            year=state.year,
+            iteration=1,
+            phase="postprocess",
+        )
+
+    override = observed_override["artifact"]
+    assert override.id != trusted.id
+    assert override.run_id is None
+    assert override.meta["hash_semantics"]["source"] == "caller_supplied"
+
+    input_identity = result.run.meta["input_identity"]
+    assert input_identity["mode"] == "action-v2"
+    assert input_identity["strict_input_count"] == 1
+    assert input_identity["strict_binding_identity"]
+    assert input_identity["bindings"] == []
+    assert output.read_bytes() == source.read_bytes()
+
+    tracker.db.engine.dispose()
+    reopened = Tracker(run_dir=run_dir, db_path=str(db_path), hashing_strategy="full")
+    persisted = reopened.db.get_artifact(UUID(str(trusted.id)))
+
+    assert persisted is not None
+    assert consist.ArtifactIdentity.from_artifact(persisted) == trusted_identity
 
 
 def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(

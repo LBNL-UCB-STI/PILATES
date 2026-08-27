@@ -27,6 +27,7 @@ from consist import (
     define_step,
 )
 
+from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
     beam_primary_config_path,
 )
@@ -47,6 +48,7 @@ from pilates.utils.coupler_helpers import (
     artifact_to_path,
     enqueue_archive_copy,
 )
+from pilates.utils.zone_utils import resolve_canonical_zone_source
 from pilates.workflows.coupler_namespace import (
     coupler_storage_keys,
     coupler_storage_value,
@@ -756,6 +758,10 @@ def _native_execution_options(
 ) -> ExecutionOptions:
     del settings, state, workspace
     runtime_kwargs: dict[str, Any] = {}
+    if "beam_preprocess_context" in resolved_inputs.metadata:
+        runtime_kwargs["beam_preprocess_context"] = dict(
+            resolved_inputs.metadata["beam_preprocess_context"]
+        )
     if "beam_postprocess_dynamic_paths" in resolved_inputs.metadata:
         runtime_kwargs["beam_run_dynamic_paths"] = dict(
             resolved_inputs.metadata["beam_postprocess_dynamic_paths"]
@@ -826,6 +832,33 @@ def _beam_preprocess_output_cache(
 def _resolve_beam_preprocess_inputs(
     *, settings: Any, state: Any, workspace: Any, coupler: Any
 ) -> ResolvedStepInputs:
+    primary_config = _require_primary_beam_config(settings, workspace)
+    exchange_scenario_folder = beam_exchange.resolve_beam_exchange_scenario_folder(
+        settings, workspace
+    )
+    geography = getattr(getattr(settings, "shared", None), "geography", None)
+    zones = getattr(geography, "zones", None)
+    preprocess_context: dict[str, Any] = {
+        "primary_config": primary_config,
+        "exchange_scenario_folder": Path(exchange_scenario_folder),
+    }
+    if zones is not None:
+        canonical_zone_source, zone_source = resolve_canonical_zone_source(
+            settings, workspace
+        )
+        preprocess_context.update(
+            {
+                "canonical_zone_source": Path(canonical_zone_source),
+                "canonical_zone_id_column": zone_source["canonical_id_col"],
+                "canonical_zone_index_column": zone_source["activitysim_index_col"],
+                "zone_output_path": (
+                    Path(workspace.get_beam_mutable_data_dir())
+                    / settings.run.region
+                    / "shape"
+                    / "canonical_zones_sorted.geojson"
+                ),
+            }
+        )
     surface = build_enabled_workflow_surface(settings)
     requires_atlas_vehicles = (
         surface.profile.vehicle_ownership_model_enabled
@@ -871,6 +904,7 @@ def _resolve_beam_preprocess_inputs(
         selected_key_by_role=resolved.selected_key_by_role,
         logical_destinations=logical_destinations,
         metadata={
+            "beam_preprocess_context": MappingProxyType(preprocess_context),
             "native_output_keys": tuple(
                 key
                 for key in (
@@ -1198,7 +1232,7 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
 
 _BEAM_PREPROCESS_INPUT_CONTRACT = InputContract(
     status="incomplete",
-    reason="mutable BEAM config tree, zone preparation, and workspace exchange reads",
+    reason="portable BEAM-preprocess identity closure is still pending",
     config_contract=ConfigContract.adapter("beam"),
 )
 _BEAM_RUN_INPUT_CONTRACT = InputContract(
@@ -1251,8 +1285,18 @@ def _native_beam_preprocess(
     state: Any,
     workspace: Workspace,
     _consist_ctx: Any,
+    beam_preprocess_context: Mapping[str, Any] | None = None,
 ) -> None:
-    _require_primary_beam_config(settings, workspace)
+    if beam_preprocess_context is None:
+        raise RuntimeError(
+            "beam_preprocess requires a resolver-owned preprocess context."
+        )
+    primary_config = beam_preprocess_context.get("primary_config")
+    if not isinstance(primary_config, Path) or not primary_config.exists():
+        raise FileNotFoundError(
+            "BEAM resolver-selected primary config file is missing: "
+            f"{primary_config}."
+        )
     from pilates.beam.preprocessor import BeamPreprocessor
 
     inputs = {
@@ -1267,6 +1311,7 @@ def _native_beam_preprocess(
     produced = BeamPreprocessor("beam_preprocess", state).preprocess(
         workspace,
         beam_preprocess_inputs=inputs,
+        beam_preprocess_context=beam_preprocess_context,
     )
     _validate_native_outputs(
         produced,
