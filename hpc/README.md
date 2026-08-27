@@ -80,23 +80,43 @@ CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist \
 ```
 
 Before submission, copy `hpc/beam-preprocess-acceptance-inputs.json.template`
-to the untracked `hpc/beam-preprocess-acceptance-inputs.json` and set
-`PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT` to a durable directory holding
-the already-selected `plans.parquet`, `households.parquet`, `persons.parquet`,
-and `vehicles2_2019.csv.gz`, plus the staged SFBay BEAM input tree (including
-the configured primary BEAM config). The manifest fixes the direct cohort at
-2019 / inner iteration 0. The harness creates one evidence root under
+to the untracked `hpc/beam-preprocess-acceptance-inputs.json`. The two manifest
+roots are distinct: `PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT` holds the
+four already-selected population files, while
+`PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT` is the staged SFBay BEAM
+tree and must contain the configured primary file at
+`scenarios/sfbay-pilates-base-calibrated.conf`. A minimal operator preflight is:
+
+```bash
+export PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT=/durable/path/to/population
+export PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT=/durable/path/to/beam-input
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/plans.parquet"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/households.parquet"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/persons.parquet"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT/vehicles2_2019.csv.gz"
+test -f "$PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT/scenarios/sfbay-pilates-base-calibrated.conf"
+```
+
+The manifest fixes the direct cohort at 2019 / inner iteration 0. The harness
+creates one evidence root under
 `/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
 override that parent with `PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT`.
 
-It retains `generated-settings.yaml`, `input-manifest.json`,
-`effective-input-manifest.json`, `body-executions.jsonl`, `phases/cold.json`,
-`phases/fresh.json`, `semantic-validation.json`, the shared
-`provenance.duckdb`, and `consist-runs/`. The phase records contain declared
-output destinations, selected roles and source bindings, cache status/source
-run ID, identities, and semantic file/directory details. It fails before the
-fresh phase when cold is a hit, and fails when fresh misses, declared outputs
-are absent, or the non-workspace semantic comparison differs.
+It retains `generated-settings.yaml`, `submitted-input-manifest.json`,
+`effective-input-manifest.json`, `body-executions.jsonl`,
+`persisted-runs/{cold,fresh}.json`, `phases/{cold,fresh}.json`,
+`semantic-validation.json`, the shared `provenance.duckdb`, and
+`consist-runs/`. The phase records identify the distinct requested Run IDs and
+the fresh Run's actual persisted cache source; they also retain ordinary
+action-v2 input binding/identity records, selectors, linked artifacts,
+canonical BEAM adapter/config identity, requested staging paths, hydrated
+output paths, and semantic file/directory details. `beam_preprocess` uses an
+ordinary `BindingResult`, so this bundle's authority is the persisted Run,
+full Run snapshot, and linked artifacts rather than a strict-binding invocation
+record. It fails before the fresh phase when cold is a hit, and fails when
+fresh misses, declared outputs are absent, the callable executes twice, the
+fresh source is not the cold requested Run, hydration destinations differ, or
+the non-workspace persisted identity/semantic-product comparison differs.
 
 The reviewed Seattle seed is based on the first-iteration launch evidence from
 the failed capture run. Its host-local `/local/job...` prefixes are normalized

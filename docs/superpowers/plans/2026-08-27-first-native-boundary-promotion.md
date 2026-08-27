@@ -355,20 +355,28 @@ comparison, and the relevant Consist snapshot/action-v2 rows.
 dedicated `settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml`
 through `hpc/job_runner.sh --beam-preprocess-acceptance` with an operator-made
 input manifest and explicit `CONSIST_SRC_DIR`. The one-allocation harness
-retains generated settings, its input manifest, one shared provenance DB and
-Consist run directory, cold/fresh phase JSON, and semantic validation below
-`pilates-boundary-promotions/<job-id>/`. Its failure gates are cold cache hit,
-fresh cache miss/body execution, missing declared output, and any
-non-workspace identity or semantic-product mismatch. This is
+retains generated settings, submitted and environment-expanded input
+manifests, one shared provenance DB and Consist run directory, full persisted
+Run snapshots, cold/fresh phase JSON, and semantic validation below
+`pilates-boundary-promotions/<job-id>/`. `beam_preprocess` intentionally uses an
+ordinary `BindingResult`: its evidence authority is therefore each persisted
+Run, its action-v2 identity/configuration metadata, and its linked artifacts,
+not a `RunBindingInvocation`. The validation requires distinct requested Run
+IDs, a cold miss, the fresh persisted cache source/execution Run equal to the
+cold requested Run, equal non-workspace action/config identities and artifact
+links, normalized requested staging paths, exact fresh hydration destinations,
+one body call total, and present/equivalent semantic products. This is
 checker-independent cache evidence; it does not alter the structural-canary
-verdict or claim HDF5 promotion/persistence evidence.
+verdict, migrate the production boundary to strict binding, or claim HDF5
+promotion/persistence evidence.
 
 - [ ] **Step 1: Run one cold BEAM-preprocess invocation on HPC.**
 
   Use the normal SFBay workflow wrapper narrowed to the selected boundary and
-  retain the generated settings, run log, Consist snapshot, action-v2 census,
-  selected-role record, and declared output list. The run must execute rather
-  than reuse.
+  retain the generated settings, submitted/effective manifests, run log,
+  Consist snapshot, persisted ordinary Run snapshot/action-v2 identity,
+  selected-role record, linked artifacts, and declared output list. The run
+  must execute rather than reuse.
 
 - [ ] **Step 2: Run the equivalent invocation from a fresh workspace.**
 
