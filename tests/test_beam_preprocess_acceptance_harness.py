@@ -58,6 +58,7 @@ def _acceptance_inputs(tmp_path: Path) -> tuple[Path, Path]:
 def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     """A real state/adapter/Tracker run hydrates a distinct fresh workspace."""
 
@@ -152,6 +153,22 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
             "cohort"
         ]["year"]
         == 2019
+    )
+    progress = capsys.readouterr().out
+    expected_milestones = (
+        "acceptance driver started",
+        "acceptance manifest validated",
+        "acceptance settings and state validated",
+        "acceptance tracker created",
+        "acceptance input artifacts logged",
+        "cold acceptance phase started",
+        "cold acceptance phase completed",
+        "fresh acceptance phase started",
+        "fresh acceptance phase completed",
+        "acceptance semantic validation completed",
+    )
+    assert [progress.index(milestone) for milestone in expected_milestones] == sorted(
+        progress.index(milestone) for milestone in expected_milestones
     )
 
 

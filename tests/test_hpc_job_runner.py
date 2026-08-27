@@ -270,10 +270,10 @@ printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
     driver_calls = [
         call
         for call in python_calls
-        if call.startswith("-m pilates.runtime.beam_preprocess_acceptance ")
+        if call.startswith("-u -m pilates.runtime.beam_preprocess_acceptance ")
     ]
     assert driver_calls == [
-        "-m pilates.runtime.beam_preprocess_acceptance "
+        "-u -m pilates.runtime.beam_preprocess_acceptance "
         f"--settings {settings} --manifest {manifest} --evidence-root {evidence_root}"
     ]
     assert not any("run.py" in call for call in python_calls)

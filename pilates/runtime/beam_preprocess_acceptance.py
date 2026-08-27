@@ -38,6 +38,12 @@ _ACCEPTANCE_YEAR = 2019
 _ACCEPTANCE_ITERATION = 0
 
 
+def _progress(message: str) -> None:
+    """Emit an immediately visible HPC acceptance milestone."""
+
+    print(f"[beam-preprocess-acceptance] {message}", flush=True)
+
+
 @dataclass(frozen=True)
 class PhaseExecution:
     """Reviewer-facing result of one exact native boundary invocation."""
@@ -582,12 +588,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--evidence-root", required=True, type=Path)
     args = parser.parse_args(argv)
 
+    _progress("acceptance driver started")
     evidence_root = args.evidence_root.resolve()
     evidence_root.mkdir(parents=True, exist_ok=True)
     os.environ["PILATES_LOCAL_RUN_DIR"] = str(evidence_root)
     os.environ["PILATES_ARCHIVE_RUN_DIR"] = str(evidence_root)
     os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1"
     beam_input_root, input_paths, effective_manifest = _load_manifest(args.manifest)
+    _progress("acceptance manifest validated")
     shutil.copy2(args.settings, evidence_root / "generated-settings.yaml")
     submitted_manifest = evidence_root / "submitted-input-manifest.json"
     if args.manifest.resolve() != submitted_manifest.resolve():
@@ -602,6 +610,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise ValueError(
             "acceptance settings must initialize WorkflowState at 2019 / iteration 0"
         )
+    _progress("acceptance settings and state validated")
     tracker = cr.create_tracker(
         settings=settings,
         run_dir=str(evidence_root / "consist-runs"),
@@ -611,10 +620,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     if tracker is None:
         raise RuntimeError("acceptance harness could not create a Consist tracker")
+    _progress("acceptance tracker created")
     artifacts: dict[str, Artifact] = {}
     with tracker.start_run("beam-preprocess-acceptance-inputs", "acceptance"):
         for key, path in input_paths.items():
             artifacts[key] = tracker.log_artifact(path, key=key, direction="input")
+    _progress("acceptance input artifacts logged")
 
     cold_root = evidence_root / "workspaces" / "cold"
     fresh_root = evidence_root / "workspaces" / "fresh"
@@ -629,6 +640,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "evidence_root": evidence_root,
         "body_log": body_log,
     }
+    _progress("cold acceptance phase started")
     cold_execution = run_phase(phase="cold", workspace_root=cold_root, **common)
     cold = _phase_record(cold_execution, cold_root)
     _write_json(evidence_root / "phases" / "cold.json", cold)
@@ -636,7 +648,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             "cold beam_preprocess acceptance invocation unexpectedly hit cache"
         )
+    _progress("cold acceptance phase completed")
 
+    _progress("fresh acceptance phase started")
     fresh_execution = run_phase(phase="fresh", workspace_root=fresh_root, **common)
     fresh = _phase_record(fresh_execution, fresh_root)
     _write_json(evidence_root / "phases" / "fresh.json", fresh)
@@ -644,11 +658,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         raise RuntimeError(
             "fresh beam_preprocess acceptance invocation missed cache or executed the body"
         )
+    _progress("fresh acceptance phase completed")
 
     validation = _validate(cold, fresh)
     _write_json(evidence_root / "semantic-validation.json", validation)
     if not validation["valid"]:
         raise RuntimeError("beam_preprocess acceptance semantic validation failed")
+    _progress("acceptance semantic validation completed")
     return 0
 
 

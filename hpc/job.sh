@@ -184,7 +184,8 @@ if [ "$acceptance_mode" = true ]; then
         echo "ERROR: acceptance mode requires settings, input manifest, and evidence root." >&2
         exit 2
     fi
-    python3 -m pilates.runtime.beam_preprocess_acceptance \
+    echo "Launching BEAM-preprocess acceptance driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.beam_preprocess_acceptance \
         --settings "$CONFIG_FILE" \
         --manifest "$STAGE_FILE" \
         --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
