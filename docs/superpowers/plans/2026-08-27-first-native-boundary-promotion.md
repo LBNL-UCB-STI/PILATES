@@ -351,10 +351,12 @@ evidence bundle.
 the equivalent fresh-workspace hit, the checker-independent model-aware output
 comparison, and the relevant Consist snapshot/action-v2 rows.
 
-**Harness prepared 2026-08-27; no HPC evidence has been run.** Submit the
-dedicated `settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml`
-through `hpc/job_runner.sh --beam-preprocess-acceptance` with an operator-made
-input manifest and explicit `CONSIST_SRC_DIR`. The one-allocation harness
+**HPC execution verified 2026-08-27; archival/revision handoff remains.** The
+successful evidence bundle is currently retained at
+`/global/scratch/users/zaneedell/pilates-boundary-promotions/HQXPR3MO.2026.08.27-14.47.45`.
+The dedicated `settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml`
+ran through `hpc/job_runner.sh --beam-preprocess-acceptance` with an
+operator-made input manifest and editable `CONSIST_SRC_DIR`. The one-allocation harness
 retains generated settings, submitted and environment-expanded input
 manifests, one shared provenance DB and Consist run directory, full persisted
 Run snapshots, cold/fresh phase JSON, and semantic validation below
@@ -376,7 +378,15 @@ The harness names this selected canary interval explicitly: `workflow_year=2017`
 2017→2019 interval. The manifest and driver reject an ambiguous single `year`
 field or a state whose forecast year is not 2019.
 
-- [ ] **Step 1: Run one cold BEAM-preprocess invocation on HPC.**
+The retained result is a positive acceptance verdict: all ten semantic,
+ordinary-binding, persisted-identity, artifact-link, staging, hydration, and
+single-body-execution validations are `true`. The cold requested Run
+`beam-preprocess-acceptance-cold_beam_preprocess__y2017__i0__phase_preprocess_62e7f91e`
+was a miss and executed the body once. The distinct fresh requested Run
+`beam-preprocess-acceptance-fresh_beam_preprocess__y2017__i0__phase_preprocess_b79821c1`
+was a hit whose persisted source and execution Run both equal the cold Run.
+
+- [x] **Step 1: Run one cold BEAM-preprocess invocation on HPC.**
 
   Use the normal SFBay workflow wrapper narrowed to the selected boundary and
   retain the generated settings, submitted/effective manifests, run log,
@@ -384,14 +394,14 @@ field or a state whose forecast year is not 2019.
   selected-role record, linked artifacts, and declared output list. The run
   must execute rather than reuse.
 
-- [ ] **Step 2: Run the equivalent invocation from a fresh workspace.**
+- [x] **Step 2: Run the equivalent invocation from a fresh workspace.**
 
   Keep the code, selected roles, canonical configuration, and artifact bytes
   equivalent. Change only the run-local workspace/allocation path. Retain the
   same evidence, and show that the body was skipped and all declared outputs
   hydrated at the fresh destinations.
 
-- [ ] **Step 3: Perform model-aware validation.**
+- [x] **Step 3: Perform model-aware validation.**
 
   Compare the BEAM-preprocess semantic products and configuration/staging
   diagnostics, not raw BEAM output bytes. Record expected path/allocation
