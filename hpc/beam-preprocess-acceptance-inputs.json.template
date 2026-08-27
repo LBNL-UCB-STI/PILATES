@@ -1,0 +1,8 @@
+{
+  "beam_input_root": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT}",
+  "inputs": {
+    "plans_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/plans.parquet",
+    "households_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/households.parquet",
+    "persons_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/persons.parquet"
+  }
+}

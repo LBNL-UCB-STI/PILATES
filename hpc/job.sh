@@ -121,13 +121,20 @@ normalize_path() {
     fi
 }
 
+acceptance_mode=false
+if [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
+    acceptance_mode=true
+    shift
+fi
+
 if [ "${1:-}" = "" ]; then
-    echo "Usage: $0 <settings_file> [stage_file]"
+    echo "Usage: $0 [--beam-preprocess-acceptance] <settings_file> [stage_file]"
     exit 2
 fi
 
 CONFIG_FILE="$(normalize_path "$1")"
 STAGE_FILE="$(normalize_path "${2:-}")"
+ACCEPTANCE_EVIDENCE_ROOT="$(normalize_path "${3:-}")"
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
@@ -165,7 +172,16 @@ install_consist "$REQUIREMENTS_FILE"
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
 echo "Config: $CONFIG_FILE"
-if [ -n "$STAGE_FILE" ]; then
+if [ "$acceptance_mode" = true ]; then
+    if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
+        echo "ERROR: acceptance mode requires settings, input manifest, and evidence root." >&2
+        exit 2
+    fi
+    python3 -m pilates.runtime.beam_preprocess_acceptance \
+        --settings "$CONFIG_FILE" \
+        --manifest "$STAGE_FILE" \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+elif [ -n "$STAGE_FILE" ]; then
     echo "Stage: $STAGE_FILE"
 else
     echo "Stage: <fresh run>"

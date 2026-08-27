@@ -32,6 +32,7 @@ partition_arg="lr7"
 account_arg=""
 high_mem=false
 native_structural_canary_seed=""
+beam_preprocess_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -63,15 +64,24 @@ while [ $# -gt 0 ]; do
         native_structural_canary_seed="$2"
         shift 2
         ;;
+    --beam-preprocess-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --beam-preprocess-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        beam_preprocess_acceptance_manifest="$2"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --native-structural-canary: copy a reviewed seed manifest into per-job canary evidence."
+        echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -177,10 +187,24 @@ native_structural_canary_seed_path=""
 if [ -n "$native_structural_canary_seed" ]; then
     native_structural_canary_seed_path="$(resolve_path "$native_structural_canary_seed")"
 fi
+beam_preprocess_acceptance_manifest_path=""
+if [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    beam_preprocess_acceptance_manifest_path="$(resolve_path "$beam_preprocess_acceptance_manifest")"
+fi
 
 if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
     exit 1
+fi
+if [ -n "$beam_preprocess_acceptance_manifest" ] \
+    && [ ! -f "$beam_preprocess_acceptance_manifest_path" ]; then
+    echo "ERROR: beam preprocess acceptance input manifest not found: $beam_preprocess_acceptance_manifest_path" >&2
+    exit 1
+fi
+if [ -n "$beam_preprocess_acceptance_manifest" ] \
+    && [ -n "$native_structural_canary_seed" ]; then
+    echo "ERROR: --beam-preprocess-acceptance cannot be combined with --native-structural-canary." >&2
+    exit 2
 fi
 if [ -n "$native_structural_canary_seed" ] \
     && [ ! -f "$native_structural_canary_seed_path" ]; then
@@ -209,6 +233,18 @@ if [ -n "$native_structural_canary_seed_path" ]; then
     echo "Native structural canary: $canary_evidence_dir"
 fi
 
+beam_preprocess_acceptance_evidence_dir=""
+beam_preprocess_acceptance_evidence_manifest=""
+if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    beam_preprocess_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    beam_preprocess_acceptance_evidence_manifest="$beam_preprocess_acceptance_evidence_dir/input-manifest.json"
+    mkdir -p "$beam_preprocess_acceptance_evidence_dir"
+    cp "$beam_preprocess_acceptance_manifest_path" "$beam_preprocess_acceptance_evidence_manifest"
+    cp "$generated_settings_path" "$beam_preprocess_acceptance_evidence_dir/generated-settings.yaml"
+    echo "BEAM preprocess acceptance evidence: $beam_preprocess_acceptance_evidence_dir"
+fi
+
 sbatch_args=(
     --partition="$PARTITION"
     --exclusive
@@ -221,8 +257,17 @@ sbatch_args=(
     --time="$EXPECTED_EXECUTION_DURATION"
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
-    "$generated_settings_path"
 )
+if [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
+    sbatch_args+=(
+        --beam-preprocess-acceptance
+        "$generated_settings_path"
+        "$beam_preprocess_acceptance_evidence_manifest"
+        "$beam_preprocess_acceptance_evidence_dir"
+    )
+else
+    sbatch_args+=("$generated_settings_path")
+fi
 if [ -n "$stage_path" ]; then
     sbatch_args+=("$stage_path")
 fi

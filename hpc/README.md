@@ -68,6 +68,34 @@ Run the native structural canary with a reviewed seed manifest:
   --native-structural-canary hpc/canaries/seattle-structural-reviewed.json
 ```
 
+Run the isolated BEAM-preprocess cold-to-fresh acceptance harness (this is
+separate from, and must not be combined with, the structural canary):
+
+```bash
+CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist \
+./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml \
+  -a <slurm_account> --high-mem \
+  --beam-preprocess-acceptance hpc/beam-preprocess-acceptance-inputs.json
+```
+
+Before submission, copy `hpc/beam-preprocess-acceptance-inputs.json.template`
+to the untracked `hpc/beam-preprocess-acceptance-inputs.json` and set
+`PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT` to a durable directory holding
+the already-selected `plans.parquet`, `households.parquet`, `persons.parquet`,
+and the staged SFBay BEAM input tree (including the configured primary BEAM
+config). The harness creates one evidence root under
+`/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
+override that parent with `PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT`.
+
+It retains `generated-settings.yaml`, `input-manifest.json`,
+`phases/cold.json`, `phases/fresh.json`, `semantic-validation.json`, the shared
+`provenance.duckdb`, and `consist-runs/`. The phase records contain declared
+output destinations, selected roles and source bindings, cache status/source
+run ID, identities, and semantic file/directory details. It fails before the
+fresh phase when cold is a hit, and fails when fresh misses, declared outputs
+are absent, or the non-workspace semantic comparison differs.
+
 The reviewed Seattle seed is based on the first-iteration launch evidence from
 the failed capture run. Its host-local `/local/job...` prefixes are normalized
 by the checker, so a new Slurm allocation does not need to reproduce the old
