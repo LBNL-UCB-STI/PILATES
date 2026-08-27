@@ -757,7 +757,24 @@ def _workspace_root(observation: CanaryLaunchObservation) -> str | None:
     for value in observation.launch_roots.values():
         if marker in value:
             return value.split(marker, 1)[0].rstrip("/")
+    for value in observation.launch_roots.values():
+        workspace_root = _run_local_workspace_root(value)
+        if workspace_root is not None:
+            return workspace_root
     return None
+
+
+def _run_local_workspace_root(value: str) -> str | None:
+    """Extract one Slurm-local PILATES workspace root from a launch path."""
+
+    marker = "/pilates-workspace/"
+    prefix, separator, remainder = value.partition(marker)
+    if not separator or not prefix.startswith("/local/job"):
+        return None
+    run_name, _, _ = remainder.partition("/")
+    if not run_name:
+        return None
+    return f"{prefix}{marker}{run_name}"
 
 
 def _canonicalize_launch_roots(

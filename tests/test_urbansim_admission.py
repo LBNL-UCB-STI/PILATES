@@ -185,6 +185,28 @@ def test_verified_declared_digest_writes_sidecar_and_merges_report_metadata(
     }
 
 
+def test_declared_digest_compatibility_report_preserves_external_identity_semantics(
+    tmp_path: Path,
+) -> None:
+    from pilates.urbansim import admission
+
+    workspace_path = tmp_path / "workspace"
+    staged = _staged_datastore(workspace_path)
+    report = admission.preflight_bootstrap_urbansim_datastore_admission(
+        settings=_settings(identity=_identity(b"observed")),
+        metadata_logger=_MetadataLogger(),
+        workspace_path=workspace_path,
+        report_dir=tmp_path / "run-a",
+    )
+
+    assert report is not None
+    assert report.outcome == "verified"
+    assert report.artifact_key is None
+    assert report.expected_source == "declared_digest"
+    assert report.expected_run_id is None
+    assert report.observed_artifact_id == _identity(staged.read_bytes())
+
+
 def test_strict_mismatch_writes_evidence_before_rejecting(
     tmp_path: Path,
 ) -> None:
@@ -233,8 +255,8 @@ def test_absent_policy_does_not_call_consist(
     from pilates.urbansim import admission
 
     monkeypatch.setattr(
-        admission.consist,
-        "check_admission_reference_expected_identity",
+        admission,
+        "_check_declared_digest",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("must not check")),
     )
 

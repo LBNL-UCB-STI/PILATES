@@ -96,6 +96,48 @@ def _beam_workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
     )
 
 
+def _urbansim_workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
+    data_dir = f"{workspace_root}/urbansim/data"
+    return CanaryLaunchObservation(
+        model="urbansim",
+        step="urbansim_run",
+        roles={"usim_datastore_h5": "usim_datastore_h5"},
+        launch_roots={
+            "urbansim_launch_context.mutable_data_dir": data_dir,
+            "urbansim_launch_context.output_datastore": f"{data_dir}/model_data_2019.h5",
+        },
+        mounts=(CanaryMount(data_dir, "/base/demos_urbansim/data/", "rw"),),
+        command="-r 06197001 -i 2017 -y 2019",
+        working_dir="/base/demos_urbansim",
+        output_roots=(data_dir,),
+        year=2017,
+        iteration=0,
+    )
+
+
+def _atlas_workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
+    input_root = f"{workspace_root}/atlas/atlas_input"
+    output_root = f"{workspace_root}/atlas/atlas_output"
+    return CanaryLaunchObservation(
+        model="atlas",
+        step="atlas_run",
+        roles={"atlas_households_csv": "atlas_households_csv"},
+        launch_roots={
+            "atlas_launch_context.input_root": input_root,
+            "atlas_launch_context.output_root": output_root,
+        },
+        mounts=(
+            CanaryMount(input_root, "/atlas_input", "rw"),
+            CanaryMount(output_root, "/atlas_output", "rw"),
+        ),
+        command="--freq 2 --outyear 2019",
+        working_dir="/atlas",
+        output_roots=(output_root,),
+        year=2019,
+        iteration=0,
+    )
+
+
 def _capture(tmp_path: Path) -> StructuralCanaryCapture:
     required = (
         CanaryEvidence(
@@ -169,6 +211,26 @@ def test_structural_canary_normalizes_beam_run_local_workspace_identity(
 ) -> None:
     expected = _beam_workspace_launch("/local/job111/pilates-workspace/run-a")
     observed = _beam_workspace_launch("/local/job222/pilates-workspace/run-b")
+    capture = StructuralCanaryCapture(
+        expected_launches=(expected,), required_evidence=()
+    )
+    capture.record_launch(observed)
+
+    report = check_structural_canary(capture.manifest(), evidence_root=tmp_path)
+
+    assert report.ok
+
+
+@pytest.mark.parametrize(
+    "launch_factory",
+    (_urbansim_workspace_launch, _atlas_workspace_launch),
+)
+def test_structural_canary_normalizes_typed_model_run_local_workspace_identity(
+    tmp_path: Path,
+    launch_factory,
+) -> None:
+    expected = launch_factory("/local/job111/pilates-workspace/run-a")
+    observed = launch_factory("/local/job222/pilates-workspace/run-b")
     capture = StructuralCanaryCapture(
         expected_launches=(expected,), required_evidence=()
     )

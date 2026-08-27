@@ -35,6 +35,8 @@ class WorkflowStepProvenanceSpec:
 
 
 _OPTIONAL_OUTPUT_KEYS_BY_STEP: Dict[str, Tuple[str, ...]] = {
+    "urbansim_run": ("usim_forecast_output",),
+    "atlas_preprocess": ("atlas_accessibility_csv",),
     "activitysim_run": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     "activitysim_postprocess": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     "beam_preprocess": (LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),

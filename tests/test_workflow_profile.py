@@ -32,7 +32,10 @@ def _settings(
         ),
         warm_start_skims=warm_start_skims,
         static_skims=static_skims,
-        activitysim=SimpleNamespace(replan_iters=replan_iters),
+        activitysim=SimpleNamespace(
+            replan_iters=replan_iters,
+            output_tables={"tables": []},
+        ),
     )
 
 

@@ -118,8 +118,13 @@ def test_catalog_contract_uses_native_schema_outputs():
     expected = list(
         STEP_DEFINITIONS["atlas_preprocess"].function.__consist_step__.schema_outputs
     )
-    assert declared == expected
-    assert contract["optional_output_keys"] == []
+    assert declared == [
+        key
+        for key in expected
+        if key not in contract["optional_output_keys"]
+    ]
+    assert "atlas_accessibility_csv" in expected
+    assert contract["optional_output_keys"] == ["atlas_accessibility_csv"]
 
 
 def test_catalog_contract_retains_atlas_dynamic_output_policy():

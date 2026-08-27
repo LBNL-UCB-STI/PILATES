@@ -54,7 +54,11 @@ def _settings(
             main_configs_dir=main_configs_dir,
             output_tables={"tables": list(activitysim_output_tables)},
         ),
-        atlas=SimpleNamespace(scenario=atlas_scenario, adscen=atlas_scenario),
+        atlas=SimpleNamespace(
+            scenario=atlas_scenario,
+            adscen=atlas_scenario,
+            beamac=0,
+        ),
         write_skims_to_omx=write_skims_to_omx,
     )
 
