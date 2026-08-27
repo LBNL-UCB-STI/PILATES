@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from types import SimpleNamespace
 
-from consist import Tracker
+from consist import BindingResult, Tracker
 from pilates.config.models import BeamArtifactFormatsConfig
 
 
@@ -568,3 +568,152 @@ def test_beam_preprocess_adapter_defers_generated_vehicles_destination(
             plan_only=True,
             strict=True,
         )
+
+
+def test_beam_preprocess_adapter_identity_is_portable_and_content_sensitive(
+    tmp_path: Path,
+) -> None:
+    """Equivalent staged config trees retain one adapter identity across roots."""
+    from consist.core.step_context import StepContext
+
+    from pilates.workflows.step_consist_meta import consist_step_meta
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    def adapter_identity(root: Path) -> str:
+        workspace = SimpleNamespace(
+            full_path=root.parent.parent.parent,
+            get_beam_mutable_data_dir=lambda: str(root.parent),
+        )
+        adapter = consist_step_meta("beam_preprocess")["adapter"](
+            StepContext(
+                func_name="beam_preprocess",
+                model="beam_preprocess",
+                runtime_kwargs={"settings": _settings(), "workspace": workspace},
+            )
+        )
+        assert adapter is not None
+        canonical = adapter.canonicalize(
+            adapter.discover([root], identity=tracker.identity),
+            tracker=tracker,
+            plan_only=True,
+            strict=True,
+        )
+        return canonical.identity.identity_hash
+
+    first_root = tmp_path / "workspace-a" / "beam" / "input" / "seattle"
+    second_root = tmp_path / "workspace-b" / "beam" / "input" / "seattle"
+    for root in (first_root, second_root):
+        _write_base_config(root)
+        (root / "scenario").mkdir()
+
+    first_identity = adapter_identity(first_root)
+    assert first_identity == adapter_identity(second_root)
+
+    with (second_root / "beam.conf").open("a", encoding="utf-8") as config_file:
+        config_file.write("\nbeam.sampleSizeAsFractionOfPopulation = 0.5\n")
+    assert first_identity != adapter_identity(second_root)
+
+
+def test_beam_preprocess_step_identity_uses_portable_closure_shape(
+    tmp_path: Path,
+) -> None:
+    """Role shape and launch choices matter; workspace/scheduler paths do not."""
+    from consist.core.step_context import StepContext
+
+    from pilates.workflows.resolved_inputs import ResolvedStepInputs
+    from pilates.workflows.step_consist_meta import consist_step_meta
+    from pilates.workflows.steps.beam import (
+        _beam_preprocess_identity_payload,
+    )
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+    roots = []
+    for workspace_name in ("workspace-a", "workspace-b"):
+        root = tmp_path / workspace_name / "beam" / "input" / "seattle"
+        _write_base_config(root)
+        (root / "scenario").mkdir()
+        roots.append(root)
+
+    def step_identity(
+        root: Path,
+        *,
+        include_warmstart: bool = False,
+        file_format: str = "parquet",
+        scheduler_allocation: str,
+        output_destination: Path,
+    ) -> dict[str, object]:
+        settings = _settings()
+        settings.activitysim = SimpleNamespace(file_format=file_format)
+        settings.beam.skim_zone_geoid_col = "TAZ"
+        inputs = {
+            "plans_beam_in": root / "plans.parquet",
+            "households_beam_in": root / "households.parquet",
+            "persons_beam_in": root / "persons.parquet",
+        }
+        if include_warmstart:
+            inputs["linkstats_warmstart"] = root / "linkstats.parquet"
+        resolved = ResolvedStepInputs(
+            step_name="beam_preprocess",
+            binding=BindingResult(inputs=inputs),
+            metadata={
+                "beam_preprocess_context": {
+                    "primary_config": root / "beam.conf",
+                    "exchange_scenario_folder": root / "scenario",
+                }
+            },
+        )
+        workspace = SimpleNamespace(
+            full_path=root.parent.parent.parent,
+            get_beam_mutable_data_dir=lambda: str(root.parent),
+        )
+        runtime_kwargs = {
+            "settings": settings,
+            "workspace": workspace,
+            "beam_preprocess_context": dict(
+                resolved.metadata["beam_preprocess_context"]
+            ),
+            "beam_preprocess_identity_closure": _beam_preprocess_identity_payload(
+                settings=settings,
+                resolved_inputs=resolved,
+            ),
+            "scheduler_allocation": scheduler_allocation,
+            "output_destination": output_destination,
+        }
+        config = consist_step_meta("beam_preprocess")["config"](
+            StepContext(
+                func_name="beam_preprocess",
+                model="beam_preprocess",
+                runtime_kwargs=runtime_kwargs,
+            )
+        )
+        return config["beam_preprocess_identity"]
+
+    first = step_identity(
+        roots[0],
+        scheduler_allocation="12345",
+        output_destination=tmp_path / "workspace-a" / "outputs",
+    )
+    assert first == step_identity(
+        roots[1],
+        scheduler_allocation="67890",
+        output_destination=tmp_path / "workspace-b" / "other-outputs",
+    )
+    assert first != step_identity(
+        roots[1],
+        include_warmstart=True,
+        scheduler_allocation="67890",
+        output_destination=tmp_path / "workspace-b" / "other-outputs",
+    )
+    assert first != step_identity(
+        roots[1],
+        file_format="csv",
+        scheduler_allocation="67890",
+        output_destination=tmp_path / "workspace-b" / "other-outputs",
+    )

@@ -756,11 +756,17 @@ def _native_execution_options(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
 ) -> ExecutionOptions:
-    del settings, state, workspace
+    del state, workspace
     runtime_kwargs: dict[str, Any] = {}
     if "beam_preprocess_context" in resolved_inputs.metadata:
         runtime_kwargs["beam_preprocess_context"] = dict(
             resolved_inputs.metadata["beam_preprocess_context"]
+        )
+        runtime_kwargs["beam_preprocess_identity_closure"] = (
+            _beam_preprocess_identity_payload(
+                settings=settings,
+                resolved_inputs=resolved_inputs,
+            )
         )
     if "beam_postprocess_dynamic_paths" in resolved_inputs.metadata:
         runtime_kwargs["beam_run_dynamic_paths"] = dict(
@@ -827,6 +833,44 @@ def _beam_preprocess_output_cache(
         cache_hydration_failure="miss",
         cache_version=2,
     )
+
+
+def _beam_preprocess_identity_payload(
+    *, settings: Any, resolved_inputs: ResolvedStepInputs
+) -> dict[str, Any]:
+    """Return BEAM-preprocess's portable, resolver-owned identity closure.
+
+    Artifact bytes are carried by the binding and configuration-tree content by
+    the BEAM adapter. This payload records only the remaining executable shape
+    and scalar launch choices; resolver paths and output destinations are not
+    identity inputs.
+    """
+
+    preprocess_context = resolved_inputs.metadata.get("beam_preprocess_context", {})
+    zones_enabled = "canonical_zone_source" in preprocess_context
+    activitysim = getattr(settings, "activitysim", None)
+    beam_settings = getattr(settings, "beam", None)
+    return {
+        "schema_version": "beam_preprocess_identity_v1",
+        "input_contract": {
+            "status": "complete",
+            "config_contract": "adapter:beam",
+        },
+        "selected_roles": tuple(sorted(resolved_inputs.binding.inputs or {})),
+        "launch": {
+            "activitysim_file_format": getattr(activitysim, "file_format", None),
+            "zone_preparation": {
+                "enabled": zones_enabled,
+                "canonical_id_column": preprocess_context.get(
+                    "canonical_zone_id_column"
+                ),
+                "canonical_index_column": preprocess_context.get(
+                    "canonical_zone_index_column"
+                ),
+                "beam_sort_column": getattr(beam_settings, "skim_zone_geoid_col", None),
+            },
+        },
+    }
 
 
 def _resolve_beam_preprocess_inputs(
@@ -1231,8 +1275,7 @@ def _log_direct_beam_zarr_outputs(*, sources: Mapping[str, Path], context: Any) 
 
 
 _BEAM_PREPROCESS_INPUT_CONTRACT = InputContract(
-    status="incomplete",
-    reason="portable BEAM-preprocess identity closure is still pending",
+    status="complete",
     config_contract=ConfigContract.adapter("beam"),
 )
 _BEAM_RUN_INPUT_CONTRACT = InputContract(

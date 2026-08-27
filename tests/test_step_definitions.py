@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 from consist import BindingResult, resolve_step_contract
+from consist.core.step_context import StepContext
 
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
@@ -245,7 +246,7 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
 
 
 def test_native_step_definitions_classify_every_executable_input_contract() -> None:
-    """Every native step starts report-only and names its config contract form."""
+    """Only the proven BEAM-preprocess boundary is cacheable."""
 
     expected_config_kinds = {
         "beam_preprocess": "adapter",
@@ -267,8 +268,12 @@ def test_native_step_definitions_classify_every_executable_input_contract() -> N
     for name, definition in STEP_DEFINITIONS.items():
         contract = definition.input_contract
 
-        assert contract.status == "incomplete"
-        assert contract.reason
+        if name == "beam_preprocess":
+            assert contract.status == "complete"
+            assert contract.reason is None
+        else:
+            assert contract.status == "incomplete"
+            assert contract.reason
         assert contract.config_contract is not None
         assert contract.config_contract.kind == expected_config_kinds[name]
 
@@ -324,6 +329,39 @@ def test_report_mode_records_contract_without_changing_decorated_config(
                 "available": False,
             },
         },
+    }
+
+
+def test_beam_preprocess_merges_only_its_resolver_owned_identity_closure(
+    monkeypatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda *_args, **_kwargs: {"config": {"existing": "adapter-input"}},
+    )
+    closure = {
+        "schema_version": "beam_preprocess_identity_v1",
+        "selected_roles": (BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN, BEAM_PLANS_IN),
+        "launch": {"activitysim_file_format": "parquet"},
+    }
+
+    config = consist_step_meta("beam_preprocess")["config"](
+        StepContext(
+            func_name="beam_preprocess",
+            model="beam_preprocess",
+            runtime_kwargs={
+                "settings": _settings(),
+                "workspace": _workspace(tmp_path / "different-workspace"),
+                "beam_preprocess_identity_closure": closure,
+                "scheduler_allocation": "12345",
+                "output_destination": str(tmp_path / "different-workspace" / "out"),
+            },
+        )
+    )
+
+    assert config == {
+        "existing": "adapter-input",
+        "beam_preprocess_identity": closure,
     }
 
 

@@ -21,6 +21,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.steps.beam import (
+    _beam_preprocess_identity_payload,
     _beam_preprocess_native_output_paths,
     _beam_run_native_output_paths,
     _materialize_native_outputs,
@@ -49,6 +50,93 @@ def _empty_resolved_inputs() -> ResolvedStepInputs:
         step_name="test",
         binding=BindingResult(inputs={}),
     )
+
+
+def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> None:
+    """The closure names material choices, never run-local destinations."""
+
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(file_format="parquet"),
+        beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
+    )
+    base = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                BEAM_PLANS_IN: Path("/workspace-a/plans.parquet"),
+                BEAM_HOUSEHOLDS_IN: Path("/workspace-a/households.parquet"),
+                BEAM_PERSONS_IN: Path("/workspace-a/persons.parquet"),
+            }
+        ),
+        logical_destinations={BEAM_PLANS_IN: Path("/workspace-a/output/plans.parquet")},
+        metadata={
+            "beam_preprocess_context": {
+                "primary_config": Path("/workspace-a/beam.conf"),
+                "exchange_scenario_folder": Path("/workspace-a/scenario"),
+            }
+        },
+    )
+    equivalent_other_workspace = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                BEAM_PLANS_IN: Path("/workspace-b/plans.parquet"),
+                BEAM_HOUSEHOLDS_IN: Path("/workspace-b/households.parquet"),
+                BEAM_PERSONS_IN: Path("/workspace-b/persons.parquet"),
+            }
+        ),
+        logical_destinations={BEAM_PLANS_IN: Path("/workspace-b/other-output/plans.parquet")},
+        metadata={
+            "beam_preprocess_context": {
+                "primary_config": Path("/workspace-b/beam.conf"),
+                "exchange_scenario_folder": Path("/workspace-b/scenario"),
+            }
+        },
+    )
+    with_warmstart = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                **dict(base.binding.inputs or {}),
+                LINKSTATS_WARMSTART: Path("/workspace-a/linkstats.parquet"),
+            }
+        ),
+    )
+
+    payload = _beam_preprocess_identity_payload(settings=settings, resolved_inputs=base)
+
+    assert payload == _beam_preprocess_identity_payload(
+        settings=settings, resolved_inputs=equivalent_other_workspace
+    )
+    assert payload != _beam_preprocess_identity_payload(
+        settings=settings, resolved_inputs=with_warmstart
+    )
+    assert payload != _beam_preprocess_identity_payload(
+        settings=SimpleNamespace(
+            activitysim=SimpleNamespace(file_format="csv"),
+            beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
+        ),
+        resolved_inputs=base,
+    )
+    assert "/workspace-a" not in repr(payload)
+    assert payload == {
+        "schema_version": "beam_preprocess_identity_v1",
+        "input_contract": {"status": "complete", "config_contract": "adapter:beam"},
+        "selected_roles": (
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_PLANS_IN,
+        ),
+        "launch": {
+            "activitysim_file_format": "parquet",
+            "zone_preparation": {
+                "enabled": False,
+                "canonical_id_column": None,
+                "canonical_index_column": None,
+                "beam_sort_column": "TAZ",
+            },
+        },
+    }
 
 
 def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:

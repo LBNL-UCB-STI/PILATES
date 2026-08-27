@@ -549,6 +549,13 @@ def consist_step_meta(
                 resolved["identity_inputs"] = identity_inputs
             else:
                 resolved.pop("identity_inputs", None)
+        if model == "beam_preprocess":
+            closure = _runtime_value(ctx, "beam_preprocess_identity_closure")
+            if isinstance(closure, dict):
+                resolved["config"] = {
+                    **dict(resolved.get("config") or {}),
+                    "beam_preprocess_identity": closure,
+                }
         contract_report = _contract_report(
             adapter=adapter,
             payload=resolved.get("config"),
