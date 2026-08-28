@@ -1,7 +1,11 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.activitysim.runner import (
+    ActivitySimLaunchContext,
     ActivitysimNumbaWarmup,
     ActivitysimRunner,
     _asim_container_environment,
@@ -41,6 +45,68 @@ def test_activitysim_docker_vols_include_configs_mp_mount():
     assert expected_local in vols
     assert vols[expected_local]["bind"] == expected_bind
     assert vols[expected_local]["mode"] == "rw"
+
+
+def test_activitysim_docker_vols_mount_only_the_resolved_staged_launch_tree(
+    tmp_path: Path,
+) -> None:
+    """A native launch must not rediscover poisoned workspace input roots."""
+    settings = _settings()
+    staged_data = tmp_path / "native-launch" / "data"
+    staged_configs = tmp_path / "native-launch" / "configs"
+    for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
+        (staged_configs / dirname).mkdir(parents=True)
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=staged_data,
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+    )
+    poisoned_working_dir = tmp_path / "poisoned-workspace"
+
+    vols = ActivitysimRunner.get_asim_docker_vols(
+        settings,
+        working_dir=str(poisoned_working_dir),
+        launch_context=launch_context,
+    )
+
+    assert str(poisoned_working_dir) not in " ".join(vols)
+    assert vols[os.path.abspath(staged_data)]["mode"] == "ro"
+    for dirname in ("configs_extended", "configs_mp", "configs_sh_compile"):
+        assert vols[os.path.abspath(staged_configs / dirname)]["mode"] == "ro"
+    assert vols[os.path.abspath(launch_context.output_dir)]["mode"] == "rw"
+
+
+def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
+    tmp_path: Path,
+) -> None:
+    """A missing staged overlay must fail instead of falling back to workspace."""
+    settings = _settings()
+    staged_configs = tmp_path / "native-launch" / "configs"
+    (staged_configs / "configs_extended").mkdir(parents=True)
+    (staged_configs / "configs_mp").mkdir()
+    source = tmp_path / "identity-configs" / "configs_extended"
+    source.mkdir(parents=True)
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "native-launch" / "data",
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        config_source_roots=(source,),
+    )
+
+    with pytest.raises(RuntimeError, match="missing staged configuration directory"):
+        ActivitysimRunner.get_asim_docker_vols(settings, launch_context=launch_context)
 
 
 def test_activitysim_numba_warmup_args_skip_configs_mp():

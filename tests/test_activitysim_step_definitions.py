@@ -1203,6 +1203,84 @@ def test_activitysim_execution_options_carry_resolved_launch_context() -> None:
     assert options.runtime_kwargs == {"activitysim_launch_context": launch_context}
 
 
+def test_activitysim_launch_context_uses_explicit_staged_model_inputs(
+    tmp_path: Path,
+) -> None:
+    """Changing ambient model roots cannot change a resolver-owned launch tree."""
+    staged_data = tmp_path / "activitysim" / "native-launch" / "data"
+    staged_configs = tmp_path / "activitysim" / "native-launch" / "configs"
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: pytest.fail("ambient data root was read"),
+        get_asim_mutable_configs_dir=lambda: pytest.fail("ambient config root was read"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
+    )
+
+    context = activitysim._activitysim_launch_context(
+        workspace,
+        staged_data_dir=staged_data,
+        staged_configs_dir=staged_configs,
+        config_source_roots=(tmp_path / "identity-configs" / "configs",),
+    )
+
+    assert context.mutable_data_dir == staged_data
+    assert context.mutable_configs_dir == staged_configs
+
+
+def test_activitysim_run_callable_stages_adapter_selected_config_roots(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The run body copies the identity-selected config bytes into its launch tree."""
+    source_root = tmp_path / "identity-configs"
+    sources = []
+    for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
+        source = source_root / dirname
+        source.mkdir(parents=True)
+        (source / "settings.yaml").write_text(f"root: {dirname}\n", encoding="utf-8")
+        sources.append(source)
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "activitysim" / "native-launch" / "data",
+        output_dir=tmp_path / "activitysim" / "output",
+        compile_output_dir=tmp_path / "activitysim" / "compile-output",
+        mutable_configs_dir=tmp_path / "activitysim" / "native-launch" / "configs",
+        runtime_cache_dir=tmp_path / "activitysim" / "output" / "cache",
+        runtime_zarr_path=tmp_path / "activitysim" / "output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        config_source_roots=tuple(sources),
+    )
+    captured: dict[str, object] = {}
+
+    class Runner:
+        def run(self, _inputs, context, **_kwargs):
+            captured["context"] = context
+
+    monkeypatch.setattr(
+        activitysim.ModelFactory,
+        "get_runner",
+        lambda _self, *_args: Runner(),
+    )
+
+    activitysim._activitysim_run_callable(
+        tmp_path / "land_use.csv",
+        tmp_path / "households.csv",
+        tmp_path / "persons.csv",
+        omx_skims=tmp_path / "skims.omx",
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        activitysim_launch_context=launch_context,
+    )
+
+    assert captured["context"] == launch_context
+    assert (
+        launch_context.mutable_configs_dir / "configs_extended" / "settings.yaml"
+    ).read_text(encoding="utf-8") == "root: configs_extended\n"
+
+
 @pytest.mark.parametrize(
     ("zarr_skims", "omx_skims", "expected_mode", "expected_extra_key"),
     [

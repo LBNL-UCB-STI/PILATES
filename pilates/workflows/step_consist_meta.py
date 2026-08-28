@@ -76,6 +76,27 @@ from pilates.workflows.step_definition import InputContract
 _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
 
+def activitysim_config_root_dirs(
+    settings: Any,
+    mutable_configs_root: Path,
+) -> tuple[Path, ...]:
+    """Return ActivitySim config roots in the same order used for identity."""
+    activitysim_settings = getattr(settings, "activitysim", None)
+    main_configs_dir = (
+        getattr(activitysim_settings, "main_configs_dir", None) or "configs"
+    )
+    candidates = (
+        main_configs_dir,
+        "configs",
+        "configs_extended",
+        "configs_mp",
+        "configs_sh_compile",
+    )
+    return tuple(
+        mutable_configs_root / dirname for dirname in dict.fromkeys(candidates)
+    )
+
+
 def _adapter_covered_identity_input(item: Any, *, model: str) -> bool:
     if not isinstance(item, tuple) or not item:
         return False
@@ -249,32 +270,16 @@ def consist_step_meta(
         if mutable_configs_root is None:
             return None
 
-        main_configs_dir = getattr(activitysim_settings, "main_configs_dir", "configs")
-        candidates = [
-            main_configs_dir,
-            "configs",
-            "configs_extended",
-            "configs_mp",
-            "configs_sh_compile",
-        ]
-        seen = set()
-        ordered_unique_candidates = []
-        for name in candidates:
-            if name in seen:
-                continue
-            seen.add(name)
-            ordered_unique_candidates.append(name)
+        config_roots = activitysim_config_root_dirs(settings, mutable_configs_root)
+        missing_roots = [candidate for candidate in config_roots if not candidate.is_dir()]
+        if missing_roots:
+            missing = ", ".join(str(candidate) for candidate in missing_roots)
+            raise RuntimeError(
+                "ActivitySim configuration identity is incomplete; missing roots: "
+                f"{missing}"
+            )
 
-        config_roots = []
-        for dirname in ordered_unique_candidates:
-            candidate = mutable_configs_root / dirname
-            if candidate.exists():
-                config_roots.append(candidate)
-
-        if not config_roots:
-            return None
-
-        return ActivitySimConfigAdapter(root_dirs=config_roots)
+        return ActivitySimConfigAdapter(root_dirs=list(config_roots))
 
     def _beam_adapter(ctx: StepContext) -> Any:
         if os.environ.get(_DISABLE_BEAM_CONFIG_ADAPTER_ENV, "").lower() in {

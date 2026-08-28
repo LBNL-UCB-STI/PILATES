@@ -26,6 +26,7 @@ from pilates.activitysim.runner import (
     ActivitysimRunner,
     ActivitySimLaunchContext,
     asim_runtime_zarr_path,
+    stage_activitysim_config_roots,
     validate_activitysim_zarr_skims,
 )
 from pilates.activitysim.outputs import (
@@ -53,7 +54,10 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
-from pilates.workflows.step_consist_meta import consist_step_meta
+from pilates.workflows.step_consist_meta import (
+    activitysim_config_root_dirs,
+    consist_step_meta,
+)
 from pilates.workflows.step_definition import (
     ConfigContract,
     InputContract,
@@ -246,7 +250,7 @@ _ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT = InputContract(
 )
 _ACTIVITYSIM_RUN_INPUT_CONTRACT = InputContract(
     status="incomplete",
-    reason="mutable configs, runtime cache and warmup, and model data roots",
+    reason="runtime cache, warmup, and model output closure",
     config_contract=ConfigContract.adapter("activitysim"),
 )
 _ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
@@ -272,23 +276,29 @@ _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES = (
 )
 
 
-def _activitysim_launch_context(workspace: Workspace) -> ActivitySimLaunchContext:
-    """Resolve the model-visible ActivitySim roots once for one invocation."""
+def _activitysim_launch_context(
+    workspace: Workspace,
+    *,
+    staged_data_dir: Path,
+    staged_configs_dir: Path,
+    config_source_roots: tuple[Path, ...],
+) -> ActivitySimLaunchContext:
+    """Build one launch tree from resolver-owned model input destinations."""
 
-    workspace_root = Path(workspace.full_path)
-    mutable_data_dir = Path(workspace.get_asim_mutable_data_dir())
+    workspace_root = Path(getattr(workspace, "full_path", "."))
     output_dir = Path(workspace.get_asim_output_dir())
     runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
     return ActivitySimLaunchContext(
         workspace_root=workspace_root,
-        mutable_data_dir=mutable_data_dir,
+        mutable_data_dir=staged_data_dir,
         output_dir=output_dir,
         compile_output_dir=output_dir.parent / "compile-output",
-        mutable_configs_dir=Path(workspace.get_asim_mutable_configs_dir()),
+        mutable_configs_dir=staged_configs_dir,
         runtime_cache_dir=runtime_cache_dir,
         runtime_zarr_path=runtime_cache_dir / "skims.zarr",
         shared_cache_dir=workspace_root / "shared_cache",
         shared_tmp_dir=workspace_root / "tmp",
+        config_source_roots=config_source_roots,
     )
 
 
@@ -417,6 +427,10 @@ def _activitysim_run_resolver(
         settings=settings,
         state=state,
     )
+    workspace_root = Path(getattr(workspace, "full_path", "."))
+    staged_launch_root = workspace_root / "activitysim" / "native-launch"
+    staged_data_dir = staged_launch_root / "data"
+    staged_configs_dir = staged_launch_root / "configs"
     required_roles = (
         *_ACTIVITYSIM_RUN_REQUIRED_ROLES,
         *((ZARR_SKIMS,) if requires_beam_skim else ()),
@@ -426,9 +440,13 @@ def _activitysim_run_resolver(
         step_name="activitysim_run",
         required_roles=required_roles,
         optional_roles=optional_roles,
-        logical_destinations=ActivitysimRunner.declared_expected_inputs(
-            settings, state, workspace
-        ),
+        logical_destinations={
+            ASIM_LAND_USE_IN: staged_data_dir / "land_use.csv",
+            ASIM_HOUSEHOLDS_IN: staged_data_dir / "households.csv",
+            ASIM_PERSONS_IN: staged_data_dir / "persons.csv",
+            ASIM_OMX_SKIMS: staged_data_dir / "skims.omx",
+            ZARR_SKIMS: staged_data_dir / "skims.zarr",
+        },
         settings=settings,
         state=state,
         workspace=workspace,
@@ -502,7 +520,15 @@ def _activitysim_run_resolver(
         _ACTIVITYSIM_SKIM_DECISION_METADATA_KEY: decision,
         _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: decision.mode,
         _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: decision.produces_zarr,
-        "activitysim_launch_context": _activitysim_launch_context(workspace),
+        "activitysim_launch_context": _activitysim_launch_context(
+            workspace,
+            staged_data_dir=staged_data_dir,
+            staged_configs_dir=staged_configs_dir,
+            config_source_roots=activitysim_config_root_dirs(
+                settings,
+                Path(workspace.get_asim_mutable_configs_dir()),
+            ),
+        ),
     }
     selected = ResolvedStepInputs(
         step_name=resolved.step_name,
@@ -1037,6 +1063,8 @@ def _activitysim_run_callable(
         )
     if not isinstance(activitysim_launch_context, ActivitySimLaunchContext):
         raise RuntimeError("activitysim_run is missing its resolved launch context")
+    if activitysim_launch_context.config_source_roots:
+        stage_activitysim_config_roots(activitysim_launch_context)
     inputs = ActivitySimPreprocessOutputs(
         mutable_data_dir=activitysim_launch_context.mutable_data_dir,
         land_use_table=Path(land_use_asim_in),

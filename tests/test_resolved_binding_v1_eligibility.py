@@ -10,6 +10,8 @@ from typing import Any
 
 import pytest
 from consist import ExecutionOptions, ResolvedBinding, Tracker
+from consist.core.identity import IdentityManager
+from consist.integrations.activitysim import ActivitySimConfigAdapter
 
 from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
 from pilates.workflows.artifact_keys import (
@@ -30,6 +32,7 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.steps import STEP_DEFINITIONS
+from pilates.workflows.step_consist_meta import activitysim_config_root_dirs
 
 
 @dataclass(frozen=True)
@@ -100,6 +103,57 @@ ELIGIBILITY_MATRIX = (
         "workspace-only execution inputs",
     ),
 )
+
+
+def test_activitysim_config_identity_roots_use_stable_adapter_order(
+    tmp_path: Path,
+) -> None:
+    roots = activitysim_config_root_dirs(
+        SimpleNamespace(activitysim=SimpleNamespace(main_configs_dir="configs_extended")),
+        tmp_path / "activitysim" / "configs",
+    )
+
+    assert tuple(path.name for path in roots) == (
+        "configs_extended",
+        "configs",
+        "configs_mp",
+        "configs_sh_compile",
+    )
+
+
+def test_activitysim_config_adapter_identity_is_portable_and_content_sensitive(
+    tmp_path: Path,
+) -> None:
+    """Equivalent staged config trees retain identity across workspace roots."""
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(main_configs_dir="configs_extended")
+    )
+
+    def make_roots(workspace_name: str) -> tuple[Path, ...]:
+        root = tmp_path / workspace_name / "activitysim" / "configs"
+        roots = activitysim_config_root_dirs(settings, root)
+        for config_root in roots:
+            config_root.mkdir(parents=True)
+            (config_root / "settings.yaml").write_text(
+                "models: []\nchunk_size: 0\n", encoding="utf-8"
+            )
+        return roots
+
+    first_roots = make_roots("workspace-a")
+    second_roots = make_roots("workspace-b")
+    adapter = ActivitySimConfigAdapter()
+    first = adapter.discover(
+        list(first_roots), identity=IdentityManager(project_root=tmp_path)
+    )
+    portable_closure = tuple(path.name for path in first_roots)
+    assert portable_closure == tuple(path.name for path in second_roots)
+    (second_roots[0] / "settings.yaml").write_text(
+        "models: []\nchunk_size: 1\n", encoding="utf-8"
+    )
+    changed = adapter.discover(
+        list(second_roots), identity=IdentityManager(project_root=tmp_path)
+    )
+    assert changed.content_hash != first.content_hash
 
 
 def test_matrix_covers_each_native_step_definition_once() -> None:
