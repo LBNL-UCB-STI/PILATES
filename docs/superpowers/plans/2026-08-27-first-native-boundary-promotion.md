@@ -385,6 +385,10 @@ single-body-execution validations are `true`. The cold requested Run
 was a miss and executed the body once. The distinct fresh requested Run
 `beam-preprocess-acceptance-fresh_beam_preprocess__y2017__i0__phase_preprocess_b79821c1`
 was a hit whose persisted source and execution Run both equal the cold Run.
+The job was Slurm `25303992` (`COMPLETED`, exit `0:0`,
+2026-08-27 14:49:04–15:45:48). Its recorded revisions are PILATES
+`141fb60c56918f48371a56504d96758d52d55f08` and editable Consist
+`c01335d01aa2f803a50c1effba41b994bebe4dcf`.
 
 - [x] **Step 1: Run one cold BEAM-preprocess invocation on HPC.**
 
@@ -410,9 +414,11 @@ was a hit whose persisted source and execution Run both equal the cold Run.
 - [ ] **Step 4: Update this evidence section with immutable locations and
   verdict.**
 
-  Add the archive paths, the two run IDs, checker/Consist/PILATES revisions,
-  the cache-hit evidence, and the output-validation verdict. Do not update the
-  SFBay structural-canary verdict or reinterpret the Seattle schema-v1 bundle.
+  The scratch evidence location, run IDs, revisions, zero-exit job record,
+  cache-hit evidence, and output-validation verdict are recorded above. Finish
+  this step only after the NFS archive copy and its checksum verification have
+  completed. Do not update the SFBay structural-canary verdict or reinterpret
+  the Seattle schema-v1 bundle.
 
 ## Completion criteria
 
