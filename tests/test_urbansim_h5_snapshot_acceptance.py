@@ -5,12 +5,20 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import h5py
 import pandas as pd
 import pytest
 
 from pilates.runtime import urbansim_h5_snapshot_acceptance as acceptance
+
+
+_SETTINGS = (
+    Path(__file__).parents[1]
+    / "scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml"
+)
 
 
 def _write_population_h5(path: Path, tables: tuple[str, ...]) -> Path:
@@ -32,6 +40,103 @@ def _write_manifest(path: Path, *, source: Path, cohort: Mapping[str, object]) -
         encoding="utf-8",
     )
     return path
+
+
+def _read_json(path: Path) -> dict[str, object]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _real_h5_manifest(tmp_path: Path) -> tuple[Path, Path]:
+    source = _write_population_h5(
+        tmp_path / "source.h5", ("households", "persons", "jobs", "blocks")
+    )
+    return source, _write_manifest(
+        tmp_path / "inputs.json",
+        source=source,
+        cohort={"workflow_year": 2017, "forecast_year": 2019, "iteration": 0},
+    )
+
+
+def _run_module(*arguments: str) -> None:
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pilates.runtime.urbansim_h5_snapshot_acceptance",
+            *arguments,
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+
+
+def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
+    tmp_path: Path,
+) -> None:
+    _source, manifest = _real_h5_manifest(tmp_path)
+    evidence = tmp_path / "evidence"
+    _run_module(
+        "capture",
+        "--settings",
+        str(_SETTINGS),
+        "--manifest",
+        str(manifest),
+        "--evidence-root",
+        str(evidence),
+    )
+    (evidence / "provenance.duckdb").unlink()
+    _run_module("reconcile", "--evidence-root", str(evidence))
+
+    validation = _read_json(evidence / "validation.json")
+    assert validation == {
+        **validation,
+        "source_h5_valid": True,
+        "strict_binding_valid": True,
+        "override_is_unowned": True,
+        "snapshot_created": True,
+        "fresh_snapshot_readable": True,
+        "persisted_identity_unchanged": True,
+        "output_h5_aliases_valid": True,
+        "valid": True,
+    }
+    assert _read_json(evidence / "capture.json")["trusted_identity"] == _read_json(
+        evidence / "reconciliation.json"
+    )["persisted_identity"]
+
+
+def test_reconciliation_requires_tracker_snapshot_before_opening_tracker(
+    tmp_path: Path,
+) -> None:
+    _source, manifest = _real_h5_manifest(tmp_path)
+    evidence = tmp_path / "evidence"
+    _run_module(
+        "capture",
+        "--settings",
+        str(_SETTINGS),
+        "--manifest",
+        str(manifest),
+        "--evidence-root",
+        str(evidence),
+    )
+    (evidence / "snapshots/tracker.duckdb").unlink()
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pilates.runtime.urbansim_h5_snapshot_acceptance",
+            "reconcile",
+            "--evidence-root",
+            str(evidence),
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    assert completed.returncode != 0
+    assert "snapshots/tracker.duckdb" in completed.stderr
 
 
 def test_load_manifest_rejects_ambiguous_or_incomplete_cohort(tmp_path: Path) -> None:
