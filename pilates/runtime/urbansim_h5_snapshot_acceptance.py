@@ -8,15 +8,21 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
-from typing import Any, Sequence
+import shutil
+from typing import Sequence
 
 import consist
 import h5py
 from consist import ExecutionOptions, Tracker
 
 from pilates.config import load_config
+from pilates.urbansim.outputs import UrbanSimPostprocessOutputs, UrbanSimRunOutputs
 from pilates.workspace import Workspace
-from pilates.workflows.artifact_keys import USIM_DATASTORE_H5
+from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_H5,
+    USIM_INPUT_ARCHIVE_PREFIX,
+    USIM_INPUT_MERGED_PREFIX,
+)
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import urbansim_atlas
 from pilates.workflows.steps.urbansim_atlas import URBANSIM_POSTPROCESS
@@ -144,27 +150,32 @@ def _write_json(path: Path, record: Mapping[str, object]) -> None:
     )
 
 
-class _AcceptanceUrbansimPostprocessor:
-    """Keep the native wrapper's declared paths while suppressing model work."""
+class _AcceptanceUrbansimPostprocessor(urbansim_atlas.UrbansimPostprocessor):
+    """Materialize native postprocess outputs without invoking UrbanSim logic."""
 
-    def __init__(self, _model_name: str, state: Any) -> None:
-        self._state = state
-
-    @staticmethod
-    def expected_outputs(
-        settings: Any, state: Any, workspace: Any
-    ) -> dict[str, Any]:
-        return {
-            USIM_DATASTORE_H5: Path(workspace.get_usim_mutable_data_dir())
-            / settings.urbansim.input_file_template.format(
-                region_id=settings.urbansim.region_mappings["region_to_region_id"][
-                    settings.run.region
-                ]
-            )
-        }
-
-    def postprocess(self, outputs: Any, workspace: Any) -> None:
-        del outputs, workspace
+    def postprocess(
+        self,
+        raw_outputs: UrbanSimRunOutputs,
+        workspace: Workspace,
+        model_run_hash: str | None = None,
+    ) -> UrbanSimPostprocessOutputs:
+        del model_run_hash
+        settings = self.state.full_settings
+        declared = self.expected_outputs(settings, self.state, workspace)
+        merged = Path(declared[USIM_DATASTORE_H5])
+        archive = merged.with_name(
+            f"input_data_for_{self.state.forecast_year}_outputs.h5"
+        )
+        for destination in (merged, archive):
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(raw_outputs.usim_datastore_h5, destination)
+        return UrbanSimPostprocessOutputs(
+            usim_datastore_h5=merged,
+            processed_outputs={
+                f"{USIM_INPUT_MERGED_PREFIX}{self.state.forecast_year}": merged,
+                f"{USIM_INPUT_ARCHIVE_PREFIX}{self.state.forecast_year}": archive,
+            },
+        )
 
 
 def _relative_to_evidence(path: Path, *, evidence_root: Path) -> str:
@@ -195,11 +206,19 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
     }
     _validate_state(observed_cohort)
     workspace = Workspace(settings, str(evidence_root / "workspaces"), "capture")
-    declared_output = _AcceptanceUrbansimPostprocessor.expected_outputs(
-        settings, state, workspace
-    )[USIM_DATASTORE_H5]
-    declared_output.parent.mkdir(parents=True, exist_ok=True)
-    os.link(manifest.usim_datastore_h5, declared_output)
+    declared_outputs = {
+        key: Path(value)
+        for key, value in URBANSIM_POSTPROCESS.output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ).items()
+    }
+    declared_outputs_before = {
+        key: path.exists() for key, path in declared_outputs.items()
+    }
+    if any(declared_outputs_before.values()):
+        raise RuntimeError("acceptance declared outputs unexpectedly exist before execution")
     tracker = Tracker(
         run_dir=evidence_root / "consist-runs",
         db_path=evidence_root / "provenance.duckdb",
@@ -275,6 +294,11 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
         output_descriptor = _record_output_descriptor(
             output=output_path, year=manifest.forecast_year
         )
+        declared_outputs_after = {
+            key: path.is_file() for key, path in declared_outputs.items()
+        }
+        if not all(declared_outputs_after.values()):
+            raise RuntimeError("native postprocess did not produce every declared output")
         with tracker.start_run("urbansim-h5-acceptance-override", "acceptance"):
             override = tracker.log_artifact(
                 trusted,
@@ -304,6 +328,8 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
                 "completed_run_snapshot": run_snapshot.model_dump(
                     mode="json", warnings=False
                 ),
+                "declared_outputs_after": declared_outputs_after,
+                "declared_outputs_before": declared_outputs_before,
                 "input_identity": dict(input_identity),
                 "override_artifact_id": str(override.id),
                 "output_descriptor": output_descriptor,

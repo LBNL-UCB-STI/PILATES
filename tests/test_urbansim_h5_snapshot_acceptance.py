@@ -85,6 +85,33 @@ def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
         "--evidence-root",
         str(evidence),
     )
+    capture = _read_json(evidence / "capture.json")
+    assert capture["declared_outputs_before"] == {
+        "usim_datastore_h5": False,
+        "usim_input_merged_2019": False,
+        "usim_input_archive_2019": False,
+        "usim_population_source_h5": False,
+    }
+    assert capture["declared_outputs_after"] == {
+        "usim_datastore_h5": True,
+        "usim_input_merged_2019": True,
+        "usim_input_archive_2019": True,
+        "usim_population_source_h5": True,
+    }
+    completed_run = capture["completed_run_snapshot"]["run"]
+    assert completed_run["model_name"] == "urbansim_postprocess"
+    assert completed_run["status"] == "completed"
+    output_path = evidence / capture["output_h5_path"]
+    output_descriptor = capture["output_descriptor"]
+    assert output_descriptor["year_aliases"] == [
+        "/2019/households",
+        "/2019/persons",
+        "/2019/jobs",
+        "/2019/blocks",
+    ]
+    with h5py.File(output_path, "r") as handle:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert handle[f"2019/{table_name}"].id == handle[table_name].id
     (evidence / "provenance.duckdb").unlink()
     _run_module("reconcile", "--evidence-root", str(evidence))
 
@@ -100,9 +127,9 @@ def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
         "output_h5_aliases_valid": True,
         "valid": True,
     }
-    assert _read_json(evidence / "capture.json")["trusted_identity"] == _read_json(
-        evidence / "reconciliation.json"
-    )["persisted_identity"]
+    assert capture["trusted_identity"] == _read_json(evidence / "reconciliation.json")[
+        "persisted_identity"
+    ]
 
 
 def test_reconciliation_requires_tracker_snapshot_before_opening_tracker(
