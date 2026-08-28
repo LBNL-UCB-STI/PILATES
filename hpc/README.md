@@ -125,6 +125,64 @@ fresh misses, declared outputs are absent, the callable executes twice, the
 fresh source is not the cold requested Run, hydration destinations differ, or
 the non-workspace persisted identity/semantic-product comparison differs.
 
+## ActivitySim Run Cold-to-Fresh Acceptance
+
+Use this one-boundary harness only after the local ActivitySim closure audit has
+passed. It runs `activitysim_run` once from a cold workspace and once from a
+separate empty workspace against the same Tracker/provenance store. It is not a
+whole-workflow canary, does not alter cache policy, and does not make the
+ActivitySim input contract complete.
+
+Create an operator-owned, untracked manifest with exactly the three selected
+table inputs and one selected skim. The driver expands environment variables,
+rejects extra roles, and requires the fixed workflow-year 2017, forecast-year
+2019, iteration-0 cohort. Use either `zarr_skims` (a structurally valid Zarr
+directory) or `omx_skims` (one readable OMX file), never both:
+
+```json
+{
+  "inputs": {
+    "land_use_asim_in": "${PILATES_ACTIVITYSIM_LAND_USE}",
+    "households_asim_in": "${PILATES_ACTIVITYSIM_HOUSEHOLDS}",
+    "persons_asim_in": "${PILATES_ACTIVITYSIM_PERSONS}",
+    "zarr_skims": "${PILATES_ACTIVITYSIM_ZARR_SKIMS}"
+  },
+  "cohort": {
+    "workflow_year": 2017,
+    "forecast_year": 2019,
+    "iteration": 0
+  }
+}
+```
+
+Before submitting, check all four declared paths and use the released Consist
+replay when it is available; an editable checkout is implementation evidence,
+not a substitute for release proof. The settings file must identify the normal
+SFBay ActivitySim configuration bundle, which the driver copies into each
+otherwise empty workspace so the adapter can establish the same config identity
+in both phases.
+
+```bash
+./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-hpc-2019-canary.yaml \
+  -a <slurm_account> \
+  --activitysim-run-acceptance hpc/activitysim-run-acceptance-inputs.json
+```
+
+The wrapper retains the submitted manifest and generated settings below
+`/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
+override the parent with `PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT`. A valid
+bundle contains the shared Tracker and run store, persisted cold/fresh Run
+snapshots, phase records, model-aware semantic validation, and `checksums.json`.
+The semantic checks validate ActivitySim final-pipeline table placement, column
+schema, and row counts (plus selected Zarr structure), rather than treating
+byte equality as model correctness. Accept the boundary evidence only if cold
+is a miss with one body/preparation entry, fresh is a hit with no additional
+entry, the persisted source is the cold Run, every declared output is hydrated,
+and `semantic-validation.json` reports `valid: true`. Preserve the checksums
+with the evidence bundle; do not update a contract or promotion plan until that
+operator result has been independently reviewed.
+
 ## UrbanSim HDF5 Snapshot-Reconciliation Acceptance
 
 Use this narrow, pre-merge acceptance only to establish merge-confidence

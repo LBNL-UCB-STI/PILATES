@@ -209,6 +209,13 @@ elif [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
         echo "Usage: $0 --beam-preprocess-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
         exit 2
     fi
+elif [ "${1:-}" = "--activitysim-run-acceptance" ]; then
+    acceptance_mode="activitysim-run"
+    shift
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: $0 --activitysim-run-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+        exit 2
+    fi
 elif [ "$#" -gt 2 ]; then
     echo "Usage: $0 <settings_file> [stage_file]" >&2
     exit 2
@@ -284,6 +291,17 @@ elif [ "$acceptance_mode" = "beam-preprocess" ]; then
     fi
     echo "Launching BEAM-preprocess acceptance driver with unbuffered output..."
     PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.beam_preprocess_acceptance \
+        --settings "$CONFIG_FILE" \
+        --manifest "$STAGE_FILE" \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    exit 0
+elif [ "$acceptance_mode" = "activitysim-run" ]; then
+    if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
+        echo "ERROR: ActivitySim run acceptance mode requires settings, input manifest, and evidence root." >&2
+        exit 2
+    fi
+    echo "Launching ActivitySim-run acceptance driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.activitysim_run_acceptance \
         --settings "$CONFIG_FILE" \
         --manifest "$STAGE_FILE" \
         --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"

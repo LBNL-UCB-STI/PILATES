@@ -179,6 +179,76 @@ printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
     assert submitted_args[selector_index + 3] == str(evidence_dir)
 
 
+def test_job_runner_assembles_activitysim_run_acceptance_submission(
+    tmp_path: Path,
+) -> None:
+    """The wrapper preserves one four-role manifest and one evidence root."""
+
+    pilates_dir = tmp_path / "pilates"
+    pilates_dir.mkdir()
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run:\n  label: activitysim-acceptance\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text('{"inputs": {}}\n', encoding="utf-8")
+    evidence_root = tmp_path / "activitysim-acceptance-evidence"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_args = tmp_path / "captured-sbatch-args"
+    _write_executable(
+        fake_bin / "mkdir",
+        """#!/bin/sh
+if [ "$2" = "/global/scratch/users/activitysim-acceptance-user/pilates_logs" ]; then
+    exit 0
+fi
+exec /bin/mkdir "$@"
+""",
+    )
+    _write_executable(
+        fake_bin / "sbatch",
+        """#!/bin/sh
+printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
+""",
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PILATES_DIR": str(pilates_dir),
+        "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT": str(evidence_root),
+        "SBATCH_ARGS_FILE": str(captured_args),
+        "USER": "activitysim-acceptance-user",
+    }
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job_runner.sh"),
+            "-c",
+            "settings.yaml",
+            "-a",
+            "test-account",
+            "--activitysim-run-acceptance",
+            "inputs.json",
+        ],
+        cwd=_PROJECT_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    evidence_dirs = [path for path in evidence_root.iterdir() if path.is_dir()]
+    assert len(evidence_dirs) == 1
+    evidence_dir = evidence_dirs[0]
+    assert (evidence_dir / "submitted-input-manifest.json").read_text(
+        encoding="utf-8"
+    ) == manifest.read_text(encoding="utf-8")
+    submitted_args = captured_args.read_text(encoding="utf-8").splitlines()
+    selector_index = submitted_args.index("--activitysim-run-acceptance")
+    assert submitted_args[selector_index + 2] == str(manifest)
+    assert submitted_args[selector_index + 3] == str(evidence_dir)
+
+
 def test_job_runner_assembles_urbansim_h5_snapshot_acceptance_submission(
     tmp_path: Path,
 ) -> None:
@@ -189,7 +259,9 @@ def test_job_runner_assembles_urbansim_h5_snapshot_acceptance_submission(
     settings = pilates_dir / "settings.yaml"
     settings.write_text("run:\n  label: h5-acceptance\n", encoding="utf-8")
     manifest = pilates_dir / "inputs.json"
-    manifest.write_text('{"inputs": {"usim_datastore_h5": "input.h5"}}\n', encoding="utf-8")
+    manifest.write_text(
+        '{"inputs": {"usim_datastore_h5": "input.h5"}}\n', encoding="utf-8"
+    )
     evidence_root = tmp_path / "h5-acceptance-evidence"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
@@ -249,7 +321,10 @@ printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
     submitted_args = captured_args.read_text(encoding="utf-8").splitlines()
     selector_index = submitted_args.index("--urbansim-h5-snapshot-acceptance")
     assert submitted_args[selector_index + 1 :] == [
-        str(settings.parent / next(path.name for path in pilates_dir.glob("settings_*.yaml"))),
+        str(
+            settings.parent
+            / next(path.name for path in pilates_dir.glob("settings_*.yaml"))
+        ),
         str(manifest),
         str(evidence_dir),
     ]

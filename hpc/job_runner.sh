@@ -33,6 +33,7 @@ account_arg=""
 high_mem=false
 native_structural_canary_seed=""
 beam_preprocess_acceptance_manifest=""
+activitysim_run_acceptance_manifest=""
 urbansim_h5_snapshot_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
@@ -73,6 +74,14 @@ while [ $# -gt 0 ]; do
         beam_preprocess_acceptance_manifest="$2"
         shift 2
         ;;
+    --activitysim-run-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --activitysim-run-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        activitysim_run_acceptance_manifest="$2"
+        shift 2
+        ;;
     --urbansim-h5-snapshot-acceptance)
         if [ -z "${2:-}" ]; then
             echo "ERROR: --urbansim-h5-snapshot-acceptance requires an input manifest path." >&2
@@ -82,16 +91,17 @@ while [ $# -gt 0 ]; do
         shift 2
         ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --native-structural-canary: copy a reviewed seed manifest into per-job canary evidence."
         echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
+        echo "  --activitysim-run-acceptance: run the isolated cold-to-fresh ActivitySim run acceptance harness."
         echo "  --urbansim-h5-snapshot-acceptance: capture and reconcile the UrbanSim HDF5 snapshot acceptance harness."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -201,6 +211,10 @@ beam_preprocess_acceptance_manifest_path=""
 if [ -n "$beam_preprocess_acceptance_manifest" ]; then
     beam_preprocess_acceptance_manifest_path="$(resolve_path "$beam_preprocess_acceptance_manifest")"
 fi
+activitysim_run_acceptance_manifest_path=""
+if [ -n "$activitysim_run_acceptance_manifest" ]; then
+    activitysim_run_acceptance_manifest_path="$(resolve_path "$activitysim_run_acceptance_manifest")"
+fi
 urbansim_h5_snapshot_acceptance_manifest_path=""
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ]; then
     urbansim_h5_snapshot_acceptance_manifest_path="$(resolve_path "$urbansim_h5_snapshot_acceptance_manifest")"
@@ -213,6 +227,11 @@ fi
 if [ -n "$beam_preprocess_acceptance_manifest" ] \
     && [ ! -f "$beam_preprocess_acceptance_manifest_path" ]; then
     echo "ERROR: beam preprocess acceptance input manifest not found: $beam_preprocess_acceptance_manifest_path" >&2
+    exit 1
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ ! -f "$activitysim_run_acceptance_manifest_path" ]; then
+    echo "ERROR: ActivitySim run acceptance input manifest not found: $activitysim_run_acceptance_manifest_path" >&2
     exit 1
 fi
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
@@ -230,13 +249,32 @@ if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
     echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with --beam-preprocess-acceptance." >&2
     exit 2
 fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with --beam-preprocess-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ -n "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with --urbansim-h5-snapshot-acceptance." >&2
+    exit 2
+fi
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
     && [ -n "$native_structural_canary_seed" ]; then
     echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with --native-structural-canary." >&2
     exit 2
 fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ -n "$native_structural_canary_seed" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with --native-structural-canary." >&2
+    exit 2
+fi
 if [ -n "$beam_preprocess_acceptance_manifest" ] && [ -n "$stage_file" ]; then
     echo "ERROR: --beam-preprocess-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with -s/--stage." >&2
     exit 2
 fi
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] && [ -n "$stage_file" ]; then
@@ -286,6 +324,16 @@ if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
     echo "BEAM preprocess acceptance evidence: $beam_preprocess_acceptance_evidence_dir"
 fi
 
+activitysim_run_acceptance_evidence_dir=""
+if [ -n "$activitysim_run_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    activitysim_run_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    mkdir -p "$activitysim_run_acceptance_evidence_dir"
+    cp "$activitysim_run_acceptance_manifest_path" "$activitysim_run_acceptance_evidence_dir/submitted-input-manifest.json"
+    cp "$generated_settings_path" "$activitysim_run_acceptance_evidence_dir/generated-settings.yaml"
+    echo "ActivitySim run acceptance evidence: $activitysim_run_acceptance_evidence_dir"
+fi
+
 urbansim_h5_snapshot_acceptance_evidence_dir=""
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
     acceptance_root="${PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
@@ -309,7 +357,14 @@ sbatch_args=(
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
 )
-if [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
+if [ -n "$activitysim_run_acceptance_evidence_dir" ]; then
+    sbatch_args+=(
+        --activitysim-run-acceptance
+        "$generated_settings_path"
+        "$activitysim_run_acceptance_manifest_path"
+        "$activitysim_run_acceptance_evidence_dir"
+    )
+elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --urbansim-h5-snapshot-acceptance
         "$generated_settings_path"
