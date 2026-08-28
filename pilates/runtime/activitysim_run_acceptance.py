@@ -1114,6 +1114,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "editable ActivitySim acceptance requires --editable-consist; "
                 "inspect runtime-environment.json"
             )
+        if not args.editable_consist.is_absolute():
+            raise ValueError(
+                "editable ActivitySim acceptance --editable-consist must be an "
+                "absolute path"
+            )
         consist_preflight = preflight_editable_consist(args.editable_consist)
         preflight_label = "editable Consist"
     else:

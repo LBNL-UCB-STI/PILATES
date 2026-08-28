@@ -571,6 +571,48 @@ def test_activitysim_run_editable_preflight_records_exact_checkout_provenance(
     }
 
 
+def test_activitysim_run_driver_rejects_relative_editable_consist_source(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """The driver must not turn a relative checkout argument into an absolute one."""
+
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("run: {}\n", encoding="utf-8")
+    manifest_path = tmp_path / "inputs.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    manifest = activitysim_run_acceptance.AcceptanceManifest(
+        inputs={},
+        selected_skim_role=ZARR_SKIMS,
+        workflow_year=2017,
+        forecast_year=2019,
+        iteration=0,
+        consist_install_mode="editable",
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance, "load_manifest", lambda _path: manifest
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "preflight_editable_consist",
+        lambda _path: pytest.fail("relative source reached editable preflight"),
+    )
+
+    with pytest.raises(ValueError, match="must be an absolute path"):
+        activitysim_run_acceptance.main(
+            [
+                "--settings",
+                str(settings_path),
+                "--manifest",
+                str(manifest_path),
+                "--evidence-root",
+                str(tmp_path / "evidence"),
+                "--editable-consist",
+                "relative-consist",
+            ]
+        )
+
+
 @pytest.mark.parametrize(
     (
         "direct_url",
