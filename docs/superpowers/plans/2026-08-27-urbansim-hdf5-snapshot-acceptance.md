@@ -5,6 +5,10 @@
 > superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** completed as editable-branch merge-confidence evidence on
+2026-08-27. A released-Consist replay and any boundary-specific cache proof
+remain separate pending work.
+
 **Goal:** Add a narrow HPC acceptance that proves Consist PR #225 preserves a
 real, strictly bound UrbanSim HDF5 input through a checkpointed Tracker snapshot
 and separate-process read-only reconciliation.
@@ -467,7 +471,7 @@ retained real source artifact on HPC; an editable checkout of Consist PR #225.
 **Produces:** reproducible operator instructions and, only after success, one
 immutable pre-merge evidence record with a checksum-verified NFS copy.
 
-- [ ] **Step 1: Write the HPC README section.**
+- [x] **Step 1: Write the HPC README section.**
 
   Document this exact preflight pattern, replacing the value only with the
   current retained artifact path on HPC:
@@ -482,7 +486,7 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
   form and the two-phase evidence records. State plainly that success is not a
   cache hit or HDF5 promotion.
 
-- [ ] **Step 2: Run the documentation and focused regression gate.**
+- [x] **Step 2: Run the documentation and focused regression gate.**
 
   Run:
 
@@ -498,14 +502,14 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
   Expected: all focused tests pass and the working-tree diff is whitespace
   clean.
 
-- [ ] **Step 3: Commit the operator documentation.**
+- [x] **Step 3: Commit the operator documentation.**
 
   ```bash
   rtk git add hpc/README.md
   rtk git commit -m "docs: explain HDF5 snapshot acceptance"
   ```
 
-- [ ] **Step 4: Run the HPC acceptance against the editable Consist checkout.**
+- [x] **Step 4: Run the HPC acceptance against the editable Consist checkout.**
 
   On HPC, copy the template to an operator-owned manifest, set the source
   variable above, and submit with the ordinary node shape:
@@ -522,7 +526,7 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
   Record the submitted job ID and evidence root printed by the wrapper. Do not
   request `--high-mem` and do not append `-s`.
 
-- [ ] **Step 5: Verify and archive a successful evidence bundle.**
+- [x] **Step 5: Verify and archive a successful evidence bundle.**
 
   Require Slurm `COMPLETED` and `validation.json` with every named check and
   `valid` true. Copy the evidence root to the established NFS
@@ -530,7 +534,7 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
   and destination, and compare them before treating the archive as retained
   evidence. Capture PILATES and Consist revisions from the evidence record.
 
-- [ ] **Step 6: Append only verified evidence to the boundary-promotion plan.**
+- [x] **Step 6: Append only verified evidence to the boundary-promotion plan.**
 
   Add the scratch and NFS paths, Slurm outcome, revisions, validation verdict,
   and checksum result beneath the existing HDF5 pre-merge evidence heading in
@@ -538,7 +542,7 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
   editable-branch merge-confidence evidence and that HDF5 contract completion
   still requires a released-version replay plus boundary-specific cache proof.
 
-- [ ] **Step 7: Commit the verified evidence record.**
+- [x] **Step 7: Commit the verified evidence record.**
 
   ```bash
   rtk git add docs/superpowers/plans/2026-08-27-first-native-boundary-promotion.md
@@ -547,13 +551,13 @@ immutable pre-merge evidence record with a checksum-verified NFS copy.
 
 ## Final verification checklist
 
-- [ ] The local driver suite passes with a real small HDF5 and a second Python
+- [x] The local driver suite passes with a real small HDF5 and a second Python
   process opening the checkpoint read-only.
-- [ ] The existing native HDF5 override regression still passes.
-- [ ] The full HPC wrapper test file passes, proving the normal workflow cannot
+- [x] The existing native HDF5 override regression still passes.
+- [x] The full HPC wrapper test file passes, proving the normal workflow cannot
   accidentally fall through into this acceptance mode or vice versa.
-- [ ] The HPC run records a real retained SFBay HDF5 source, the editable
+- [x] The HPC run records a real retained SFBay HDF5 source, the editable
   Consist revision, a valid two-process verdict, and a checksum-verified NFS
   evidence copy.
-- [ ] Documentation labels the run pre-merge evidence only; no HDF5 consumer
+- [x] Documentation labels the run pre-merge evidence only; no HDF5 consumer
   `InputContract` is marked complete and no cache policy changes.

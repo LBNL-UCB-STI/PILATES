@@ -64,6 +64,29 @@ HPC snapshot, or prove a cold/fresh-workspace cache hit for an HDF5 consumer.
 Keep every HDF5-consuming boundary incomplete until those separate conditions
 are met.
 
+**Completed HPC acceptance:** Slurm job `25316361`
+(`TGUO0BVR.2026.08.27-21.57.32`) finished `COMPLETED` with exit `0:0` in
+2 minutes 47 seconds. It ran the real retained SFBay HDF5 at cohort
+`workflow_year=2017`, `forecast_year=2019`, `iteration=0`, using PILATES
+`1490f380440989cbc3fd2c98a55d51c6727e0de7` and the editable Consist checkout
+at `c01335d01aa2f803a50c1effba41b994bebe4dcf`. Capture recorded one strict
+action-v2 input and trusted identity
+`sha256:file:79a3a208b3ad3b1df4c4a381d9e6af4188b3278927ed0c0627627eba481a4960`;
+the separately launched reconciliation process reopened the checkpoint and
+confirmed the same trusted strict link.
+
+The scratch evidence root is
+`/global/scratch/users/zaneedell/pilates-boundary-promotions/TGUO0BVR.2026.08.27-21.57.32`.
+Its checksum-verified NFS copy is
+`/clusterfs/beem-core-data-nfs/pilates-boundary-promotions/urbansim-h5-snapshot-acceptance-TGUO0BVR.2026.08.27-21.57.32`.
+Source and destination `SHA256SUMS` manifests verified every retained regular
+file, and the recomputed destination manifest matched the source manifest
+exactly. `validation.json` reported every named check, including `valid`, as
+true. This closes the editable-branch HDF5 snapshot-reconciliation evidence
+handoff only; it does not complete an HDF5 `InputContract`, authorize cache
+promotion, or substitute for the required released-Consist replay and later
+boundary-specific cold-miss/fresh-workspace-hit proof.
+
 **Selected first candidate:** `beam_preprocess`.
 
 This is the narrowest currently plausible non-HDF5 consumer boundary: it takes
