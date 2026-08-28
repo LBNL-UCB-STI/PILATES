@@ -390,10 +390,10 @@ def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_contain
     assert str(epoch_path) not in str(definition.execution_options())
 
 
-def test_numba_warmup_passes_selected_and_generated_zarr_mount_modes_to_consist(
+def test_numba_warmup_forwards_only_nondefault_mount_modes_to_consist(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """The actual Consist call preserves selected and generated Zarr modes."""
+    """The actual Consist call preserves only an explicit read-only mount."""
     workspace = SimpleNamespace(
         full_path=str(tmp_path / "workspace"),
         get_asim_output_dir=lambda: str(
@@ -472,7 +472,8 @@ def test_numba_warmup_passes_selected_and_generated_zarr_mount_modes_to_consist(
     assert volumes[str(selected_zarr.parent)].endswith("/output/cache")
     assert volumes[str(asim_compile_output_dir(workspace))].endswith("/output")
     assert volume_modes[str(selected_zarr.parent)] == "ro"
-    assert volume_modes[str(asim_compile_output_dir(workspace))] == "rw"
+    assert all(mode == "ro" for mode in volume_modes.values())
+    assert str(asim_compile_output_dir(workspace)) not in volume_modes
     command = called["command"]
     assert command.count("-o") == 1
     assert command[command.index("-o") + 1].endswith("/output")
@@ -492,5 +493,5 @@ def test_numba_warmup_passes_selected_and_generated_zarr_mount_modes_to_consist(
             )
 
     omx_volume_modes = called["volume_modes"]
-    assert omx_volume_modes[str(launch_context.runtime_cache_dir)] == "rw"
-    assert omx_volume_modes[str(asim_compile_output_dir(workspace))] == "rw"
+    assert str(launch_context.runtime_cache_dir) not in omx_volume_modes
+    assert all(mode == "ro" for mode in omx_volume_modes.values())

@@ -156,7 +156,12 @@ class GenericRunner(
 
         mounts = GenericRunner._extract_mounts(volumes)
         consist_volumes = {host: container for host, container, _mode in mounts}
-        consist_volume_modes = {host: mode for host, _container, mode in mounts}
+        consist_volume_modes = {
+            host: mode for host, _container, mode in mounts if mode != "rw"
+        }
+        volume_mode_kwargs: dict[str, dict[str, str]] = {}
+        if consist_volume_modes:
+            volume_mode_kwargs["volume_modes"] = consist_volume_modes
         runtime_tmp_base = GenericRunner._resolve_runtime_tmp_base(mounts)
 
         # Handle command + args: Split if string, combine with args
@@ -247,7 +252,7 @@ class GenericRunner(
                 image=image,
                 command=full_command_list,
                 volumes=consist_volumes,
-                volume_modes=consist_volume_modes,
+                **volume_mode_kwargs,
                 inputs=input_artifacts or [],
                 outputs=output_paths if output_paths is not None else [],
                 environment=environment or {},
