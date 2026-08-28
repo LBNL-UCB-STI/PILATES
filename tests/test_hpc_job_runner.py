@@ -662,6 +662,36 @@ def test_job_acceptance_mode_requires_exact_arity() -> None:
     assert "<settings_file> <input_manifest> <evidence_root>" in completed.stderr
 
 
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ("settings.yaml", "inputs.json"),
+        ("settings.yaml", "inputs.json", "evidence", "unexpected"),
+    ],
+)
+def test_hdf5_snapshot_acceptance_requires_exact_arity(
+    arguments: tuple[str, ...],
+) -> None:
+    """Malformed HDF5 acceptance invocation fails before runtime setup."""
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--urbansim-h5-snapshot-acceptance",
+            *arguments,
+        ],
+        cwd=_PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "<settings_file> <input_manifest> <evidence_root>" in completed.stderr
+    assert "Setting up HPC runtime environment" not in completed.stdout
+
+
 def _write_executable(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
     path.chmod(0o755)
