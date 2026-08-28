@@ -1026,8 +1026,7 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
     )
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
-    (invalid_zarr / ".zgroup").unlink()
-    (invalid_zarr / "not-zarr.txt").write_text("not a Zarr store\n", encoding="utf-8")
+    (invalid_zarr / ".zgroup").write_text("{}\n", encoding="utf-8")
     base_resolution = ResolvedStepInputs(
         step_name="activitysim_run",
         binding=BindingResult(inputs=selected_artifacts),
@@ -1095,7 +1094,7 @@ def test_activitysim_run_resolver_rejects_invalid_zarr_without_omx_before_execut
     all_roles = (*activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES, activitysim.ZARR_SKIMS)
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
-    (invalid_zarr / ".zgroup").unlink()
+    (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
     base_resolution = ResolvedStepInputs(
         step_name="activitysim_run",
         binding=BindingResult(inputs=selected_artifacts),
@@ -1119,7 +1118,7 @@ def test_activitysim_run_resolver_rejects_invalid_zarr_without_omx_before_execut
         staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
     )
 
-    with pytest.raises(RuntimeError, match="zarr_skims.*missing Zarr metadata"):
+    with pytest.raises(RuntimeError, match="zarr_skims.*must declare zarr_format 2"):
         activitysim._activitysim_run_resolver(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),
@@ -1139,7 +1138,7 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
     )
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
-    (invalid_zarr / ".zgroup").unlink()
+    (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
     base_resolution = ResolvedStepInputs(
         step_name="activitysim_run",
         binding=BindingResult(inputs=selected_artifacts),
@@ -1165,7 +1164,7 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
         staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
     )
 
-    with pytest.raises(RuntimeError, match="zarr_skims.*missing Zarr metadata"):
+    with pytest.raises(RuntimeError, match="zarr_skims.*must declare zarr_format 2"):
         activitysim._activitysim_run_resolver(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),

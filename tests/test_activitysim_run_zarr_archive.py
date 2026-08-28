@@ -87,6 +87,66 @@ def test_zarr_validation_is_read_only_for_a_structurally_valid_store(
     assert after == before
 
 
+@pytest.mark.parametrize(
+    ("metadata_name", "metadata", "rejection"),
+    [
+        (".zgroup", "{}\n", ".zgroup must declare zarr_format 2"),
+        (
+            ".zgroup",
+            '{"zarr_format": 1}\n',
+            ".zgroup must declare zarr_format 2",
+        ),
+        (
+            "zarr.json",
+            '{"zarr_format": 2, "node_type": "group"}\n',
+            "zarr.json must declare zarr_format 3",
+        ),
+        (
+            "zarr.json",
+            '{"zarr_format": 3, "node_type": "array"}\n',
+            "zarr.json root node_type must be 'group'",
+        ),
+    ],
+)
+def test_zarr_validation_rejects_json_with_an_invalid_root_format(
+    tmp_path: Path,
+    metadata_name: str,
+    metadata: str,
+    rejection: str,
+) -> None:
+    zarr_path = tmp_path / "selected" / "skims.zarr"
+    zarr_path.mkdir(parents=True)
+    (zarr_path / metadata_name).write_text(metadata, encoding="utf-8")
+
+    assert validate_activitysim_zarr_skims(zarr_path) == rejection
+
+
+def test_zarr_validation_accepts_a_v3_group_root(tmp_path: Path) -> None:
+    zarr_path = tmp_path / "selected" / "skims.zarr"
+    zarr_path.mkdir(parents=True)
+    (zarr_path / "zarr.json").write_text(
+        '{"attributes": {}, "zarr_format": 3, "node_type": "group"}\n',
+        encoding="utf-8",
+    )
+
+    assert validate_activitysim_zarr_skims(zarr_path) is None
+
+
+def test_zarr_validation_rejects_ambiguous_v2_and_v3_root_metadata(
+    tmp_path: Path,
+) -> None:
+    zarr_path = tmp_path / "selected" / "skims.zarr"
+    zarr_path.mkdir(parents=True)
+    (zarr_path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    (zarr_path / "zarr.json").write_text(
+        '{"zarr_format": 3, "node_type": "group"}\n', encoding="utf-8"
+    )
+
+    assert validate_activitysim_zarr_skims(zarr_path) == (
+        "ambiguous Zarr root metadata (.zgroup and zarr.json)"
+    )
+
+
 def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tmp_path):
     workspace = _workspace(tmp_path)
     settings = _settings()

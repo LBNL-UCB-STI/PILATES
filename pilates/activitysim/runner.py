@@ -58,16 +58,16 @@ def validate_activitysim_zarr_skims(path: str | Path) -> str | None:
     if not zarr_path.is_dir():
         return "path is not a directory"
 
-    metadata_path = next(
-        (
-            candidate
-            for candidate in (zarr_path / ".zgroup", zarr_path / "zarr.json")
-            if candidate.exists()
-        ),
-        None,
+    metadata_paths = tuple(
+        candidate
+        for candidate in (zarr_path / ".zgroup", zarr_path / "zarr.json")
+        if candidate.exists()
     )
-    if metadata_path is None:
+    if not metadata_paths:
         return "missing Zarr metadata (.zgroup or zarr.json)"
+    if len(metadata_paths) > 1:
+        return "ambiguous Zarr root metadata (.zgroup and zarr.json)"
+    metadata_path = metadata_paths[0]
     if not metadata_path.is_file():
         return f"Zarr metadata is not a file: {metadata_path.name}"
     try:
@@ -76,6 +76,14 @@ def validate_activitysim_zarr_skims(path: str | Path) -> str | None:
         return f"invalid Zarr metadata {metadata_path.name}: {error}"
     if not isinstance(metadata, dict):
         return f"invalid Zarr metadata {metadata_path.name}: expected an object"
+    if metadata_path.name == ".zgroup":
+        if metadata.get("zarr_format") != 2:
+            return ".zgroup must declare zarr_format 2"
+    else:
+        if metadata.get("zarr_format") != 3:
+            return "zarr.json must declare zarr_format 3"
+        if metadata.get("node_type") != "group":
+            return "zarr.json root node_type must be 'group'"
     return None
 
 
