@@ -68,7 +68,11 @@ def load_manifest(path: Path) -> AcceptanceManifest:
 
 def _validate_state(state: Mapping[str, object]) -> None:
     """Reject every cohort except the one acceptance cohort."""
-    if dict(state) != _COHORT:
+    if set(state) != set(_COHORT) or any(
+        type(state[field_name]) is not int
+        or state[field_name] != expected_value
+        for field_name, expected_value in _COHORT.items()
+    ):
         raise ValueError(f"acceptance cohort must be {_EXPECTED_COHORT}")
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from pathlib import Path
 
@@ -20,7 +21,7 @@ def _write_population_h5(path: Path, tables: tuple[str, ...]) -> Path:
     return path
 
 
-def _write_manifest(path: Path, *, source: Path, cohort: dict[str, int]) -> Path:
+def _write_manifest(path: Path, *, source: Path, cohort: Mapping[str, object]) -> Path:
     path.write_text(
         json.dumps(
             {
@@ -84,6 +85,40 @@ def test_load_manifest_expands_source_environment_variables(tmp_path: Path, monk
     )
 
 
+@pytest.mark.parametrize(
+    ("field_name", "invalid_value"),
+    [
+        ("workflow_year", True),
+        ("workflow_year", 2017.0),
+        ("forecast_year", True),
+        ("forecast_year", 2019.0),
+        ("iteration", False),
+        ("iteration", 0.0),
+    ],
+)
+def test_load_manifest_rejects_boolean_and_float_cohort_values(
+    tmp_path: Path, field_name: str, invalid_value: object
+) -> None:
+    source = _write_population_h5(
+        tmp_path / "source.h5", ("households", "persons", "jobs", "blocks")
+    )
+    cohort: dict[str, object] = {
+        "workflow_year": 2017,
+        "forecast_year": 2019,
+        "iteration": 0,
+    }
+    cohort[field_name] = invalid_value
+    manifest = _write_manifest(
+        tmp_path / "inputs.json", source=source, cohort=cohort
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="workflow_year=2017, forecast_year=2019, iteration=0",
+    ):
+        acceptance.load_manifest(manifest)
+
+
 def test_describe_population_h5_rejects_missing_root_table(tmp_path: Path) -> None:
     source = _write_population_h5(
         tmp_path / "source.h5", ("households", "persons", "jobs")
@@ -142,6 +177,19 @@ def test_describe_population_h5_records_verified_year_aliases(tmp_path: Path) ->
         "/2019/jobs",
         "/2019/blocks",
     ]
+
+
+def test_describe_population_h5_rejects_copied_year_tables(tmp_path: Path) -> None:
+    source = _write_population_h5(
+        tmp_path / "source.h5", ("households", "persons", "jobs", "blocks")
+    )
+    with h5py.File(source, "r+") as handle:
+        aliases = handle.require_group("2019")
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            handle.copy(table_name, aliases, name=table_name)
+
+    with pytest.raises(ValueError, match="missing exact year population aliases"):
+        acceptance.describe_population_h5(source, year=2019, require_year_aliases=True)
 
 
 def test_write_json_creates_the_destination_parent_and_round_trips_data(
