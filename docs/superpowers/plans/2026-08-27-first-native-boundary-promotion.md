@@ -351,9 +351,11 @@ evidence bundle.
 the equivalent fresh-workspace hit, the checker-independent model-aware output
 comparison, and the relevant Consist snapshot/action-v2 rows.
 
-**HPC execution verified 2026-08-27; archival/revision handoff remains.** The
-successful evidence bundle is currently retained at
+**HPC execution and evidence handoff verified 2026-08-27.** The successful
+scratch evidence bundle is retained at
 `/global/scratch/users/zaneedell/pilates-boundary-promotions/HQXPR3MO.2026.08.27-14.47.45`.
+Its checksum-verified durable archive is
+`/clusterfs/beem-core-data-nfs/pilates-boundary-promotions/HQXPR3MO.2026.08.27-14.47.45`.
 The dedicated `settings-sfbay-consist-beam-preprocess-hpc-2019-acceptance.yaml`
 ran through `hpc/job_runner.sh --beam-preprocess-acceptance` with an
 operator-made input manifest and editable `CONSIST_SRC_DIR`. The one-allocation harness
@@ -411,14 +413,13 @@ The job was Slurm `25303992` (`COMPLETED`, exit `0:0`,
   diagnostics, not raw BEAM output bytes. Record expected path/allocation
   differences separately from behavior differences.
 
-- [ ] **Step 4: Update this evidence section with immutable locations and
+- [x] **Step 4: Update this evidence section with immutable locations and
   verdict.**
 
   The scratch evidence location, run IDs, revisions, zero-exit job record,
-  cache-hit evidence, and output-validation verdict are recorded above. Finish
-  this step only after the NFS archive copy and its checksum verification have
-  completed. Do not update the SFBay structural-canary verdict or reinterpret
-  the Seattle schema-v1 bundle.
+  cache-hit evidence, output-validation verdict, and checksum-verified NFS
+  archive are recorded above. Do not update the SFBay structural-canary verdict
+  or reinterpret the Seattle schema-v1 bundle.
 
 ## Completion criteria
 
@@ -430,3 +431,8 @@ cold execution followed by an equivalent fresh-workspace cache hit with exact
 declared-output hydration; and (4) model-aware output validation accepts the
 two executions. Failure of any condition leaves the contract `incomplete` and
 does not authorize a substitute boundary or broader cache change.
+
+**Completion recorded 2026-08-27:** all four criteria are satisfied for
+`beam_preprocess`; it is the first completed non-HDF5 consumer boundary. This
+does not complete or promote any other boundary, alter global cache policy, or
+lift the separate HDF5 persistence gate.
