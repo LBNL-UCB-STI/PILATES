@@ -33,6 +33,7 @@ account_arg=""
 high_mem=false
 native_structural_canary_seed=""
 beam_preprocess_acceptance_manifest=""
+urbansim_h5_snapshot_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -72,16 +73,25 @@ while [ $# -gt 0 ]; do
         beam_preprocess_acceptance_manifest="$2"
         shift 2
         ;;
+    --urbansim-h5-snapshot-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --urbansim-h5-snapshot-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        urbansim_h5_snapshot_acceptance_manifest="$2"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --native-structural-canary: copy a reviewed seed manifest into per-job canary evidence."
         echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
+        echo "  --urbansim-h5-snapshot-acceptance: capture and reconcile the UrbanSim HDF5 snapshot acceptance harness."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -191,6 +201,10 @@ beam_preprocess_acceptance_manifest_path=""
 if [ -n "$beam_preprocess_acceptance_manifest" ]; then
     beam_preprocess_acceptance_manifest_path="$(resolve_path "$beam_preprocess_acceptance_manifest")"
 fi
+urbansim_h5_snapshot_acceptance_manifest_path=""
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    urbansim_h5_snapshot_acceptance_manifest_path="$(resolve_path "$urbansim_h5_snapshot_acceptance_manifest")"
+fi
 
 if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
@@ -201,13 +215,36 @@ if [ -n "$beam_preprocess_acceptance_manifest" ] \
     echo "ERROR: beam preprocess acceptance input manifest not found: $beam_preprocess_acceptance_manifest_path" >&2
     exit 1
 fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
+    && [ ! -f "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
+    echo "ERROR: UrbanSim HDF5 snapshot acceptance input manifest not found: $urbansim_h5_snapshot_acceptance_manifest_path" >&2
+    exit 1
+fi
 if [ -n "$beam_preprocess_acceptance_manifest" ] \
     && [ -n "$native_structural_canary_seed" ]; then
     echo "ERROR: --beam-preprocess-acceptance cannot be combined with --native-structural-canary." >&2
     exit 2
 fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
+    && [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with --beam-preprocess-acceptance." >&2
+    exit 2
+fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
+    && [ -n "$native_structural_canary_seed" ]; then
+    echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with --native-structural-canary." >&2
+    exit 2
+fi
 if [ -n "$beam_preprocess_acceptance_manifest" ] && [ -n "$stage_file" ]; then
     echo "ERROR: --beam-preprocess-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
+if [ -n "$native_structural_canary_seed" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --native-structural-canary cannot be combined with -s/--stage." >&2
     exit 2
 fi
 if [ -n "$native_structural_canary_seed" ] \
@@ -249,6 +286,16 @@ if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
     echo "BEAM preprocess acceptance evidence: $beam_preprocess_acceptance_evidence_dir"
 fi
 
+urbansim_h5_snapshot_acceptance_evidence_dir=""
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    urbansim_h5_snapshot_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    mkdir -p "$urbansim_h5_snapshot_acceptance_evidence_dir"
+    cp "$urbansim_h5_snapshot_acceptance_manifest_path" "$urbansim_h5_snapshot_acceptance_evidence_dir/submitted-input-manifest.json"
+    cp "$generated_settings_path" "$urbansim_h5_snapshot_acceptance_evidence_dir/generated-settings.yaml"
+    echo "UrbanSim HDF5 snapshot acceptance evidence: $urbansim_h5_snapshot_acceptance_evidence_dir"
+fi
+
 sbatch_args=(
     --partition="$PARTITION"
     --exclusive
@@ -262,7 +309,14 @@ sbatch_args=(
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
 )
-if [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
+if [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
+    sbatch_args+=(
+        --urbansim-h5-snapshot-acceptance
+        "$generated_settings_path"
+        "$urbansim_h5_snapshot_acceptance_manifest_path"
+        "$urbansim_h5_snapshot_acceptance_evidence_dir"
+    )
+elif [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --beam-preprocess-acceptance
         "$generated_settings_path"

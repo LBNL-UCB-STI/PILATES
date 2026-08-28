@@ -121,9 +121,16 @@ normalize_path() {
     fi
 }
 
-acceptance_mode=false
-if [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
-    acceptance_mode=true
+acceptance_mode=""
+if [ "${1:-}" = "--urbansim-h5-snapshot-acceptance" ]; then
+    acceptance_mode="urbansim-h5-snapshot"
+    shift
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: $0 --urbansim-h5-snapshot-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+        exit 2
+    fi
+elif [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
+    acceptance_mode="beam-preprocess"
     shift
     if [ "$#" -ne 3 ]; then
         echo "Usage: $0 --beam-preprocess-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
@@ -179,7 +186,21 @@ install_consist "$REQUIREMENTS_FILE"
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
 echo "Config: $CONFIG_FILE"
-if [ "$acceptance_mode" = true ]; then
+if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
+    if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance mode requires settings, input manifest, and evidence root." >&2
+        exit 2
+    fi
+    echo "Launching UrbanSim HDF5 snapshot capture driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.urbansim_h5_snapshot_acceptance capture \
+        --settings "$CONFIG_FILE" \
+        --manifest "$STAGE_FILE" \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    echo "Launching UrbanSim HDF5 snapshot reconciliation driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.urbansim_h5_snapshot_acceptance reconcile \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    exit 0
+elif [ "$acceptance_mode" = "beam-preprocess" ]; then
     if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
         echo "ERROR: acceptance mode requires settings, input manifest, and evidence root." >&2
         exit 2
