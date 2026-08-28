@@ -102,7 +102,7 @@ def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
         runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
         shared_cache_dir=tmp_path / "shared-cache",
         shared_tmp_dir=tmp_path / "tmp",
-        config_source_roots=(source,),
+        requires_staged_config_dirs=True,
     )
 
     with pytest.raises(RuntimeError, match="missing staged configuration directory"):

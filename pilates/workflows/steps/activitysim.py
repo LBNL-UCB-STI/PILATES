@@ -24,6 +24,7 @@ from pilates.activitysim.runner import (
     ActivitySimSkimDecision,
     ActivitysimSkimMode,
     ActivitysimRunner,
+    ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
     asim_runtime_zarr_path,
     stage_activitysim_config_roots,
@@ -281,11 +282,10 @@ def _activitysim_launch_context(
     *,
     staged_data_dir: Path,
     staged_configs_dir: Path,
-    config_source_roots: tuple[Path, ...],
 ) -> ActivitySimLaunchContext:
     """Build one launch tree from resolver-owned model input destinations."""
 
-    workspace_root = Path(getattr(workspace, "full_path", "."))
+    workspace_root = Path(workspace.full_path)
     output_dir = Path(workspace.get_asim_output_dir())
     runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
     return ActivitySimLaunchContext(
@@ -298,7 +298,7 @@ def _activitysim_launch_context(
         runtime_zarr_path=runtime_cache_dir / "skims.zarr",
         shared_cache_dir=workspace_root / "shared_cache",
         shared_tmp_dir=workspace_root / "tmp",
-        config_source_roots=config_source_roots,
+        requires_staged_config_dirs=True,
     )
 
 
@@ -427,10 +427,6 @@ def _activitysim_run_resolver(
         settings=settings,
         state=state,
     )
-    workspace_root = Path(getattr(workspace, "full_path", "."))
-    staged_launch_root = workspace_root / "activitysim" / "native-launch"
-    staged_data_dir = staged_launch_root / "data"
-    staged_configs_dir = staged_launch_root / "configs"
     required_roles = (
         *_ACTIVITYSIM_RUN_REQUIRED_ROLES,
         *((ZARR_SKIMS,) if requires_beam_skim else ()),
@@ -440,13 +436,9 @@ def _activitysim_run_resolver(
         step_name="activitysim_run",
         required_roles=required_roles,
         optional_roles=optional_roles,
-        logical_destinations={
-            ASIM_LAND_USE_IN: staged_data_dir / "land_use.csv",
-            ASIM_HOUSEHOLDS_IN: staged_data_dir / "households.csv",
-            ASIM_PERSONS_IN: staged_data_dir / "persons.csv",
-            ASIM_OMX_SKIMS: staged_data_dir / "skims.omx",
-            ZARR_SKIMS: staged_data_dir / "skims.zarr",
-        },
+        logical_destinations=ActivitysimRunner.declared_expected_inputs(
+            settings, state, workspace
+        ),
         settings=settings,
         state=state,
         workspace=workspace,
@@ -520,15 +512,6 @@ def _activitysim_run_resolver(
         _ACTIVITYSIM_SKIM_DECISION_METADATA_KEY: decision,
         _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: decision.mode,
         _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: decision.produces_zarr,
-        "activitysim_launch_context": _activitysim_launch_context(
-            workspace,
-            staged_data_dir=staged_data_dir,
-            staged_configs_dir=staged_configs_dir,
-            config_source_roots=activitysim_config_root_dirs(
-                settings,
-                Path(workspace.get_asim_mutable_configs_dir()),
-            ),
-        ),
     }
     selected = ResolvedStepInputs(
         step_name=resolved.step_name,
@@ -673,14 +656,35 @@ def _activitysim_execution_options(
 ) -> ExecutionOptions:
     """Request Consist materialization at the one deterministic path per role."""
 
-    del settings, state, workspace
+    del state
     selected_roles = set(resolved_inputs.selected_roles())
     runtime_kwargs: dict[str, Any] = {}
     if resolved_inputs.step_name == "activitysim_run":
-        launch_context = resolved_inputs.metadata.get("activitysim_launch_context")
-        if not isinstance(launch_context, ActivitySimLaunchContext):
-            raise RuntimeError("activitysim_run is missing its resolved launch context")
+        staged_destinations = {
+            Path(resolved_inputs.logical_destinations[role]).parent
+            for role in selected_roles
+        }
+        if len(staged_destinations) != 1:
+            raise RuntimeError(
+                "activitysim_run materialized inputs must share one staged data root"
+            )
+        activitysim_settings = settings.activitysim
+        if activitysim_settings is None:
+            raise RuntimeError("activitysim_run requires ActivitySim settings")
+        staged_data_dir = staged_destinations.pop()
+        workspace_root = Path(workspace.full_path)
+        launch_context = _activitysim_launch_context(
+            workspace,
+            staged_data_dir=staged_data_dir,
+            staged_configs_dir=workspace_root / "activitysim" / "native-launch" / "configs",
+        )
         runtime_kwargs["activitysim_launch_context"] = launch_context
+        runtime_kwargs["activitysim_config_staging_plan"] = ActivitySimConfigStagingPlan(
+            source_roots=activitysim_config_root_dirs(
+                activitysim_settings,
+                Path(workspace.get_asim_mutable_configs_dir()),
+            )
+        )
     return ExecutionOptions(
         input_binding="paths",
         input_paths={
@@ -1034,7 +1038,13 @@ def _activitysim_preprocess_callable(
         "activitysim_run", input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT
     ),
 )
-@require_runtime_kwargs("settings", "state", "workspace", "activitysim_launch_context")
+@require_runtime_kwargs(
+    "settings",
+    "state",
+    "workspace",
+    "activitysim_launch_context",
+    "activitysim_config_staging_plan",
+)
 def _activitysim_run_callable(
     land_use_asim_in: Path,
     households_asim_in: Path,
@@ -1046,6 +1056,7 @@ def _activitysim_run_callable(
     state: WorkflowState,
     workspace: Workspace,
     activitysim_launch_context: ActivitySimLaunchContext | None = None,
+    activitysim_config_staging_plan: ActivitySimConfigStagingPlan | None = None,
 ) -> None:
     """Run ActivitySim from exactly one materialized native skim source."""
 
@@ -1063,8 +1074,12 @@ def _activitysim_run_callable(
         )
     if not isinstance(activitysim_launch_context, ActivitySimLaunchContext):
         raise RuntimeError("activitysim_run is missing its resolved launch context")
-    if activitysim_launch_context.config_source_roots:
-        stage_activitysim_config_roots(activitysim_launch_context)
+    if not isinstance(activitysim_config_staging_plan, ActivitySimConfigStagingPlan):
+        raise RuntimeError("activitysim_run is missing its configuration staging plan")
+    stage_activitysim_config_roots(
+        activitysim_launch_context,
+        activitysim_config_staging_plan,
+    )
     inputs = ActivitySimPreprocessOutputs(
         mutable_data_dir=activitysim_launch_context.mutable_data_dir,
         land_use_table=Path(land_use_asim_in),

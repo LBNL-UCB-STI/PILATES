@@ -60,6 +60,7 @@ from typing import Any, Dict, Optional
 
 from consist.core.step_context import StepContext
 
+from pilates.config.models import ActivitySimConfig
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.atlas.preprocessor import selected_atlas_static_input_sources
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
@@ -77,16 +78,12 @@ _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
 
 
 def activitysim_config_root_dirs(
-    settings: Any,
+    settings: ActivitySimConfig,
     mutable_configs_root: Path,
 ) -> tuple[Path, ...]:
     """Return ActivitySim config roots in the same order used for identity."""
-    activitysim_settings = getattr(settings, "activitysim", None)
-    main_configs_dir = (
-        getattr(activitysim_settings, "main_configs_dir", None) or "configs"
-    )
     candidates = (
-        main_configs_dir,
+        settings.main_configs_dir,
         "configs",
         "configs_extended",
         "configs_mp",
@@ -270,7 +267,9 @@ def consist_step_meta(
         if mutable_configs_root is None:
             return None
 
-        config_roots = activitysim_config_root_dirs(settings, mutable_configs_root)
+        config_roots = activitysim_config_root_dirs(
+            activitysim_settings, mutable_configs_root
+        )
         missing_roots = [candidate for candidate in config_roots if not candidate.is_dir()]
         if missing_roots:
             missing = ", ".join(str(candidate) for candidate in missing_roots)

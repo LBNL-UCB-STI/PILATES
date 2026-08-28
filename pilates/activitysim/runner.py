@@ -100,14 +100,24 @@ class ActivitySimLaunchContext:
     runtime_zarr_path: Path
     shared_cache_dir: Path
     shared_tmp_dir: Path
-    config_source_roots: tuple[Path, ...] = ()
+    requires_staged_config_dirs: bool = False
 
 
-def stage_activitysim_config_roots(launch_context: ActivitySimLaunchContext) -> None:
+@dataclass(frozen=True, slots=True)
+class ActivitySimConfigStagingPlan:
+    """Runtime-only source roots copied into an ActivitySim launch tree."""
+
+    source_roots: tuple[Path, ...]
+
+
+def stage_activitysim_config_roots(
+    launch_context: ActivitySimLaunchContext,
+    staging_plan: ActivitySimConfigStagingPlan,
+) -> None:
     """Copy the adapter-selected configuration roots into the launch tree."""
-    if not launch_context.config_source_roots:
+    if not staging_plan.source_roots:
         raise RuntimeError("ActivitySim launch context is missing configuration roots")
-    for source in launch_context.config_source_roots:
+    for source in staging_plan.source_roots:
         if not source.is_dir():
             raise RuntimeError(
                 f"ActivitySim staged configuration source is missing: {source}"
@@ -751,7 +761,7 @@ class ActivitysimRunner(GenericRunner):
                 configured_runtime_cache_dir = os.path.abspath(
                     str(launch_context.runtime_cache_dir)
                 )
-            if launch_context.config_source_roots:
+            if launch_context.requires_staged_config_dirs:
                 required_config_dirs = (
                     settings.activitysim.main_configs_dir,
                     "configs_mp",

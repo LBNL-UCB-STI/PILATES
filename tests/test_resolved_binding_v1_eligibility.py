@@ -109,7 +109,7 @@ def test_activitysim_config_identity_roots_use_stable_adapter_order(
     tmp_path: Path,
 ) -> None:
     roots = activitysim_config_root_dirs(
-        SimpleNamespace(activitysim=SimpleNamespace(main_configs_dir="configs_extended")),
+        SimpleNamespace(main_configs_dir="configs_extended"),
         tmp_path / "activitysim" / "configs",
     )
 
@@ -131,7 +131,7 @@ def test_activitysim_config_adapter_identity_is_portable_and_content_sensitive(
 
     def make_roots(workspace_name: str) -> tuple[Path, ...]:
         root = tmp_path / workspace_name / "activitysim" / "configs"
-        roots = activitysim_config_root_dirs(settings, root)
+        roots = activitysim_config_root_dirs(settings.activitysim, root)
         for config_root in roots:
             config_root.mkdir(parents=True)
             (config_root / "settings.yaml").write_text(
@@ -145,8 +145,10 @@ def test_activitysim_config_adapter_identity_is_portable_and_content_sensitive(
     first = adapter.discover(
         list(first_roots), identity=IdentityManager(project_root=tmp_path)
     )
-    portable_closure = tuple(path.name for path in first_roots)
-    assert portable_closure == tuple(path.name for path in second_roots)
+    second = adapter.discover(
+        list(second_roots), identity=IdentityManager(project_root=tmp_path)
+    )
+    assert first.content_hash == second.content_hash
     (second_roots[0] / "settings.yaml").write_text(
         "models: []\nchunk_size: 1\n", encoding="utf-8"
     )

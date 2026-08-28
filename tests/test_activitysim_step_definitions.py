@@ -18,7 +18,10 @@ from pilates.activitysim.outputs import (
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_tables,
 )
-from pilates.activitysim.runner import ActivitySimLaunchContext
+from pilates.activitysim.runner import (
+    ActivitySimConfigStagingPlan,
+    ActivitySimLaunchContext,
+)
 from pilates.activitysim.postprocessor import _activitysim_iteration_output_paths
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -966,6 +969,8 @@ def test_activitysim_run_resolver_selects_exactly_one_published_skim_source(
     )
     assert resolved.metadata["activitysim_skim_mode"] == expected_mode
     assert resolved.metadata["activitysim_produces_zarr"] is produces_zarr
+    assert "activitysim_launch_context" not in resolved.metadata
+    assert "activitysim_config_staging_plan" not in resolved.metadata
     assert set(resolved.logical_destinations) == set(resolved.selected_roles())
     assert isinstance(resolved.binding, BindingResult)
     assert dict(resolved.binding.inputs or {}) == {
@@ -1173,34 +1178,57 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
         )
 
 
-def test_activitysim_execution_options_carry_resolved_launch_context() -> None:
-    launch_context = ActivitySimLaunchContext(
-        workspace_root=Path("/workspace"),
-        mutable_data_dir=Path("/inputs"),
-        output_dir=Path("/output"),
-        compile_output_dir=Path("/compile-output"),
-        mutable_configs_dir=Path("/configs"),
-        runtime_cache_dir=Path("/output/cache"),
-        runtime_zarr_path=Path("/output/cache/skims.zarr"),
-        shared_cache_dir=Path("/shared-cache"),
-        shared_tmp_dir=Path("/tmp"),
-    )
+def test_activitysim_execution_options_build_context_from_materialization_destinations(
+    tmp_path: Path,
+) -> None:
+    staged_data = tmp_path / "activitysim" / "native-launch" / "data"
+    source_configs = tmp_path / "activitysim" / "configs"
+    for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
+        (source_configs / dirname).mkdir(parents=True)
     resolved = ResolvedStepInputs(
         step_name="activitysim_run",
-        binding=BindingResult(),
-        required_roles=(ASIM_LAND_USE_IN,),
-        logical_destinations={ASIM_LAND_USE_IN: Path("inputs/land_use.csv")},
-        metadata={"activitysim_launch_context": launch_context},
+        binding=BindingResult(
+            inputs={
+                ASIM_LAND_USE_IN: object(),
+                ASIM_HOUSEHOLDS_IN: object(),
+                ASIM_PERSONS_IN: object(),
+            }
+        ),
+        required_roles=(ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN),
+        logical_destinations={
+            ASIM_LAND_USE_IN: staged_data / "land_use.csv",
+            ASIM_HOUSEHOLDS_IN: staged_data / "households.csv",
+            ASIM_PERSONS_IN: staged_data / "persons.csv",
+        },
+    )
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(main_configs_dir="configs_extended")
+    )
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_configs_dir=lambda: str(source_configs),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
     )
 
     options = activitysim.activitysim_run.execution_options(
-        settings=None,
+        settings=settings,
         state=None,
-        workspace=None,
+        workspace=workspace,
         resolved_inputs=resolved,
     )
 
-    assert options.runtime_kwargs == {"activitysim_launch_context": launch_context}
+    assert isinstance(options.runtime_kwargs["activitysim_launch_context"], ActivitySimLaunchContext)
+    assert options.runtime_kwargs["activitysim_launch_context"].mutable_data_dir == staged_data
+    assert "activitysim_launch_context" not in resolved.metadata
+    assert options.runtime_kwargs["activitysim_config_staging_plan"] == ActivitySimConfigStagingPlan(
+        source_roots=(
+            source_configs / "configs_extended",
+            source_configs / "configs",
+            source_configs / "configs_mp",
+            source_configs / "configs_sh_compile",
+        )
+    )
 
 
 def test_activitysim_launch_context_uses_explicit_staged_model_inputs(
@@ -1221,7 +1249,6 @@ def test_activitysim_launch_context_uses_explicit_staged_model_inputs(
         workspace,
         staged_data_dir=staged_data,
         staged_configs_dir=staged_configs,
-        config_source_roots=(tmp_path / "identity-configs" / "configs",),
     )
 
     assert context.mutable_data_dir == staged_data
@@ -1250,7 +1277,6 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         runtime_zarr_path=tmp_path / "activitysim" / "output" / "cache" / "skims.zarr",
         shared_cache_dir=tmp_path / "shared-cache",
         shared_tmp_dir=tmp_path / "tmp",
-        config_source_roots=tuple(sources),
     )
     captured: dict[str, object] = {}
 
@@ -1263,7 +1289,6 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         "get_runner",
         lambda _self, *_args: Runner(),
     )
-
     activitysim._activitysim_run_callable(
         tmp_path / "land_use.csv",
         tmp_path / "households.csv",
@@ -1273,6 +1298,9 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         state=SimpleNamespace(),
         workspace=SimpleNamespace(),
         activitysim_launch_context=launch_context,
+        activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
+            source_roots=tuple(sources)
+        ),
     )
 
     assert captured["context"] == launch_context
@@ -1313,6 +1341,7 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         "get_runner",
         lambda _self, *_args: Runner(),
     )
+    monkeypatch.setattr(activitysim, "stage_activitysim_config_roots", lambda *_args: None)
     workspace = SimpleNamespace()
     launch_context = ActivitySimLaunchContext(
         workspace_root=Path("/workspace"),
@@ -1336,6 +1365,7 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         state=SimpleNamespace(),
         workspace=workspace,
         activitysim_launch_context=launch_context,
+        activitysim_config_staging_plan=ActivitySimConfigStagingPlan(source_roots=()),
     )
 
     assert captured["skim_mode"] == expected_mode
