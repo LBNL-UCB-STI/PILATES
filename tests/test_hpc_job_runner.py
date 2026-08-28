@@ -482,6 +482,80 @@ printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
     assert not any("run.py" in call for call in python_calls)
 
 
+def test_job_activitysim_acceptance_installs_required_release_not_editable(
+    tmp_path: Path,
+) -> None:
+    """ActivitySim acceptance never substitutes an adjacent editable Consist."""
+
+    pilates_dir = tmp_path / "pilates"
+    requirements = pilates_dir / "hpc" / "requirements-hpc.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("", encoding="utf-8")
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run: {}\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text('{"released_consist_version": "9.8.7"}\n', encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    consist_source = tmp_path / "adjacent-consist"
+    consist_source.mkdir()
+    venv = tmp_path / "venv"
+    venv_bin = venv / "bin"
+    venv_bin.mkdir(parents=True)
+    calls = tmp_path / "python-calls"
+    _write_executable(
+        venv_bin / "python3",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
+if [ "$1" = "-c" ]; then
+    printf '%s\\n' '9.8.7'
+fi
+""",
+    )
+    (venv_bin / "activate").write_text(
+        f'export PATH="{venv_bin}:$PATH"\n', encoding="utf-8"
+    )
+    (venv / ".last_requirements_hash").write_text(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "module", "#!/bin/sh\nexit 0\n")
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--activitysim-run-acceptance",
+            str(settings),
+            str(manifest),
+            str(evidence_root),
+        ],
+        cwd=_PROJECT_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PILATES_DIR": str(pilates_dir),
+            "PILATES_VENV_PATH": str(venv),
+            "PILATES_REQUIREMENTS_FILE": str(requirements),
+            "CONSIST_SRC_DIR": str(consist_source),
+            "PYTHON_CALLS_FILE": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    python_calls = calls.read_text(encoding="utf-8").splitlines()
+    assert any(
+        call == "-m pip install --upgrade --force-reinstall consist==9.8.7"
+        for call in python_calls
+    )
+    assert not any("-m pip install -e" in call for call in python_calls)
+
+
 def test_job_urbansim_h5_snapshot_acceptance_runs_capture_then_reconcile(
     tmp_path: Path,
 ) -> None:

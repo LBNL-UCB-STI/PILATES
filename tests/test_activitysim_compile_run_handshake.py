@@ -6,6 +6,7 @@ compile step it formerly covered no longer exists.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -171,6 +172,10 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
     monkeypatch.setattr(
         activitysim_runner.GenericRunner, "run_container", staticmethod(run_container)
     )
+    observation_log = tmp_path / "activitysim-observations.jsonl"
+    monkeypatch.setenv(
+        "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_OBSERVATIONS", str(observation_log)
+    )
 
     outputs = runner.run(
         _matrix_inputs(tmp_path),
@@ -184,6 +189,9 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
 
     expected_calls = ["warmup", "body"] if preparation_required else ["body"]
     assert calls == expected_calls
+    assert [
+        json.loads(line)["event"] for line in observation_log.read_text().splitlines()
+    ] == ["activitysim_runner_preparation"]
     if selected_mode == "zarr":
         assert (runtime_zarr / ".zgroup").read_bytes() == selected_zarr_bytes
         assert outputs.zarr_skims is None

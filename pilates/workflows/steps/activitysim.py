@@ -1076,6 +1076,11 @@ def _activitysim_run_callable(
         raise RuntimeError("activitysim_run is missing its resolved launch context")
     if not isinstance(activitysim_config_staging_plan, ActivitySimConfigStagingPlan):
         raise RuntimeError("activitysim_run is missing its configuration staging plan")
+    from pilates.runtime.activitysim_run_observations import (
+        record_activitysim_observation,
+    )
+
+    record_activitysim_observation("activitysim_run_body")
     stage_activitysim_config_roots(
         activitysim_launch_context,
         activitysim_config_staging_plan,

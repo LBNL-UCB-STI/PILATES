@@ -141,6 +141,7 @@ directory) or `omx_skims` (one readable OMX file), never both:
 
 ```json
 {
+  "released_consist_version": "<operator-approved published Consist version>",
   "inputs": {
     "land_use_asim_in": "${PILATES_ACTIVITYSIM_LAND_USE}",
     "households_asim_in": "${PILATES_ACTIVITYSIM_HOUSEHOLDS}",
@@ -155,16 +156,26 @@ directory) or `omx_skims` (one readable OMX file), never both:
 }
 ```
 
-Before submitting, check all four declared paths and use the released Consist
-replay when it is available; an editable checkout is implementation evidence,
-not a substitute for release proof. The settings file must identify the normal
-SFBay ActivitySim configuration bundle, which the driver copies into each
-otherwise empty workspace so the adapter can establish the same config identity
-in both phases.
+Before submitting, replace the placeholder with the exact published Consist
+version selected for the acceptance. Do not use `CONSIST_SRC_DIR` or an editable
+checkout for this mode: the allocated job force-reinstalls only
+`consist==released_consist_version`, then the driver records and checks the
+installed version, public `consist.__version__`, `importlib.metadata` version,
+import path, and editable/release determination in `runtime-environment.json`.
+It rejects an editable install or any mismatch before the cold phase. An
+operator can confirm the expected release is resolvable before submitting:
+
+```bash
+python3 -m pip download --no-deps "consist==<operator-approved published Consist version>"
+```
+
+The settings file must identify the normal SFBay ActivitySim configuration
+bundle, which the driver copies into each otherwise empty workspace so the
+adapter can establish the same config identity in both phases.
 
 ```bash
 ./hpc/job_runner.sh \
-  -c scenarios/sfbay/settings-sfbay-consist-hpc-2019-canary.yaml \
+  -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
   -a <slurm_account> \
   --activitysim-run-acceptance hpc/activitysim-run-acceptance-inputs.json
 ```
@@ -173,7 +184,9 @@ The wrapper retains the submitted manifest and generated settings below
 `/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
 override the parent with `PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT`. A valid
 bundle contains the shared Tracker and run store, persisted cold/fresh Run
-snapshots, phase records, model-aware semantic validation, and `checksums.json`.
+snapshots, phase records, `runtime-environment.json`, native
+`activitysim-observations.jsonl`, model-aware semantic validation, and
+`checksums.json`.
 The semantic checks validate ActivitySim final-pipeline table placement, column
 schema, and row counts (plus selected Zarr structure), rather than treating
 byte equality as model correctness. Accept the boundary evidence only if cold

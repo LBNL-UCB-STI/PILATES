@@ -652,6 +652,11 @@ class ActivitysimRunner(GenericRunner):
         transition. It carries the already selected skim mode/path straight to
         the body while replacing only its non-identity cache root.
         """
+        from pilates.runtime.activitysim_run_observations import (
+            record_activitysim_observation,
+        )
+
+        record_activitysim_observation("activitysim_runner_preparation")
         if skip_numba_warmup:
             logger.info(
                 "ActivitySim Numba warmup: not required (explicit rewind skip)"

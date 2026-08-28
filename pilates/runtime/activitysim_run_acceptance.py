@@ -11,18 +11,22 @@ import argparse
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 import hashlib
+from importlib import metadata as importlib_metadata
 import json
 import os
 from pathlib import Path
 import shutil
 
-import pandas as pd
+import consist
 from consist import Artifact, Tracker
+from consist.types import OutputArtifactSpec
+import pyarrow.parquet as pq
 
 from pilates.activitysim.preprocessor import _ensure_required_asim_config_dirs
 from pilates.activitysim.runner import validate_activitysim_zarr_skims
 from pilates.activitysim.outputs import configured_asim_output_tables
-from pilates.config import load_config
+from pilates.config import PilatesConfig, load_config
+from pilates.runtime.activitysim_run_observations import OBSERVATION_PATH_ENV
 from pilates.utils import consist_runtime as cr
 from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.workspace import Workspace
@@ -35,6 +39,7 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps.activitysim import activitysim_run
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from workflow_state import WorkflowState
 
 
@@ -52,14 +57,7 @@ class AcceptanceManifest:
     workflow_year: int
     forecast_year: int
     iteration: int
-
-
-@dataclass
-class InvocationCounters:
-    """Counts body entries and runner preparation entries observed by the harness."""
-
-    body_executions: int = 0
-    runner_preparation_attempts: int = 0
+    released_consist_version: str
 
 
 @dataclass(frozen=True)
@@ -93,6 +91,39 @@ def _write_json(path: Path, value: Mapping[str, object]) -> None:
     )
 
 
+def _observation_counts(path: Path) -> tuple[int, int]:
+    """Count only native body/preparation entries written by the opt-in hooks."""
+
+    if not path.exists():
+        return (0, 0)
+    body_executions = 0
+    runner_preparation_attempts = 0
+    for line_number, line in enumerate(
+        path.read_text(encoding="utf-8").splitlines(), 1
+    ):
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"invalid ActivitySim acceptance observation at line {line_number}"
+            ) from error
+        if not isinstance(record, Mapping):
+            raise RuntimeError(
+                f"invalid ActivitySim acceptance observation at line {line_number}"
+            )
+        event = record.get("event")
+        if event == "activitysim_run_body":
+            body_executions += 1
+        elif event == "activitysim_runner_preparation":
+            runner_preparation_attempts += 1
+        else:
+            raise RuntimeError(
+                "unexpected ActivitySim acceptance observation event "
+                f"at line {line_number}: {event!r}"
+            )
+    return body_executions, runner_preparation_attempts
+
+
 def _sha256_path(path: Path) -> str:
     digest = hashlib.sha256()
     if path.is_file():
@@ -115,6 +146,16 @@ def _validate_cohort(value: object) -> None:
             raise ValueError(f"acceptance cohort must be exactly {_COHORT}")
 
 
+def _required_release_version(raw: Mapping[str, object]) -> str:
+    value = raw.get("released_consist_version")
+    if not isinstance(value, str) or value.strip() == "":
+        raise ValueError(
+            "ActivitySim acceptance manifest requires a non-empty "
+            "released_consist_version"
+        )
+    return value.strip()
+
+
 def load_manifest(path: Path) -> AcceptanceManifest:
     """Load exactly three table inputs and one validated selected skim source."""
 
@@ -126,6 +167,7 @@ def load_manifest(path: Path) -> AcceptanceManifest:
         ) from error
     if not isinstance(raw, Mapping):
         raise ValueError("ActivitySim acceptance manifest must be a JSON object")
+    released_consist_version = _required_release_version(raw)
     inputs_value = raw.get("inputs")
     if not isinstance(inputs_value, Mapping):
         raise ValueError("ActivitySim acceptance manifest requires an inputs object")
@@ -162,7 +204,79 @@ def load_manifest(path: Path) -> AcceptanceManifest:
         workflow_year=_COHORT["workflow_year"],
         forecast_year=_COHORT["forecast_year"],
         iteration=_COHORT["iteration"],
+        released_consist_version=released_consist_version,
     )
+
+
+def preflight_released_consist(required_release_version: str) -> dict[str, object]:
+    """Describe whether the imported Consist is the operator's release install."""
+
+    if not isinstance(required_release_version, str) or required_release_version == "":
+        raise ValueError("released Consist preflight requires a non-empty version")
+    evidence: dict[str, object] = {
+        "required_release_version": required_release_version,
+        "installed_version": None,
+        "importlib_metadata_version": None,
+        "public_version": None,
+        "import_path": None,
+        "editable_install": None,
+        "release_install": False,
+        "version_match": False,
+        "public_api_matches_metadata": False,
+        "valid": False,
+    }
+    try:
+        distribution = importlib_metadata.distribution("consist")
+        installed_version = distribution.version
+        metadata_version = importlib_metadata.version("consist")
+        public_version = consist.__version__
+        import_file = consist.__file__
+        if not isinstance(import_file, str):
+            raise RuntimeError("consist has no importable module file")
+        direct_url_text = distribution.read_text("direct_url.json")
+        editable_install = False
+        if direct_url_text is not None:
+            direct_url = json.loads(direct_url_text)
+            if not isinstance(direct_url, Mapping):
+                raise RuntimeError("consist direct_url.json is not an object")
+            directory_info = direct_url.get("dir_info")
+            editable_install = (
+                isinstance(directory_info, Mapping)
+                and directory_info.get("editable") is True
+            )
+    except (
+        AttributeError,
+        importlib_metadata.PackageNotFoundError,
+        json.JSONDecodeError,
+        OSError,
+        RuntimeError,
+    ) as error:
+        evidence["error"] = f"{type(error).__name__}: {error}"
+        return evidence
+
+    version_match = (
+        installed_version == required_release_version
+        and metadata_version == required_release_version
+        and public_version == required_release_version
+    )
+    public_api_matches_metadata = (
+        public_version == metadata_version == installed_version
+    )
+    release_install = not editable_install
+    evidence.update(
+        {
+            "installed_version": installed_version,
+            "importlib_metadata_version": metadata_version,
+            "public_version": public_version,
+            "import_path": str(Path(import_file).resolve()),
+            "editable_install": editable_install,
+            "release_install": release_install,
+            "version_match": version_match,
+            "public_api_matches_metadata": public_api_matches_metadata,
+            "valid": release_install and version_match and public_api_matches_metadata,
+        }
+    )
+    return evidence
 
 
 def _validate_state(state: WorkflowState) -> None:
@@ -352,15 +466,12 @@ def _persisted_run_evidence(
     }
 
 
-def _config_source_root(settings: object) -> Path:
-    activitysim_settings = getattr(settings, "activitysim", None)
-    run_settings = getattr(settings, "run", None)
-    local_configs_folder = getattr(activitysim_settings, "local_configs_folder", None)
-    region = getattr(run_settings, "region", None)
-    if not isinstance(local_configs_folder, str) or not isinstance(region, str):
-        raise ValueError(
-            "acceptance settings must define ActivitySim config root and region"
-        )
+def _config_source_root(settings: PilatesConfig) -> Path:
+    activitysim_settings = settings.activitysim
+    if activitysim_settings is None:
+        raise ValueError("acceptance settings must define an ActivitySim section")
+    local_configs_folder = activitysim_settings.local_configs_folder
+    region = settings.run.region
     candidate = Path(os.path.expandvars(local_configs_folder)).expanduser()
     if not candidate.is_absolute():
         candidate = Path(__file__).resolve().parents[2] / candidate
@@ -373,7 +484,7 @@ def _config_source_root(settings: object) -> Path:
 
 
 def _stage_workspace_config(
-    *, settings: object, workspace: Workspace
+    *, settings: PilatesConfig, workspace: Workspace
 ) -> dict[str, str]:
     """Seed one empty acceptance workspace with adapter-tracked config sources."""
 
@@ -384,7 +495,9 @@ def _stage_workspace_config(
             "acceptance workspace config root already exists; each phase must start empty"
         )
     shutil.copytree(source_root, destination)
-    activitysim_settings = getattr(settings, "activitysim")
+    activitysim_settings = settings.activitysim
+    if activitysim_settings is None:
+        raise ValueError("acceptance settings must define an ActivitySim section")
     _ensure_required_asim_config_dirs(
         configs_dest_dir=str(destination),
         main_configs_dir=str(activitysim_settings.main_configs_dir),
@@ -396,9 +509,8 @@ def _stage_workspace_config(
     }
 
 
-def _selected_input_paths(resolved: object) -> dict[str, Path]:
-    binding = getattr(resolved, "binding")
-    inputs = getattr(binding, "inputs") or {}
+def _selected_input_paths(resolved: ResolvedStepInputs) -> dict[str, Path]:
+    inputs = resolved.binding.inputs or {}
     selected: dict[str, Path] = {}
     for key, artifact in inputs.items():
         path = artifact_to_path(artifact)
@@ -408,8 +520,8 @@ def _selected_input_paths(resolved: object) -> dict[str, Path]:
     return selected
 
 
-def _output_path(value: object) -> Path:
-    path = getattr(value, "path", value)
+def _output_path(value: Path | str | OutputArtifactSpec) -> Path:
+    path = value.path if isinstance(value, OutputArtifactSpec) else value
     if isinstance(path, Path):
         return path
     if isinstance(path, str):
@@ -421,12 +533,12 @@ def run_phase(
     *,
     phase: str,
     workspace_root: Path,
-    settings: object,
+    settings: PilatesConfig,
     state: WorkflowState,
     tracker: Tracker,
     artifacts: Mapping[str, Artifact],
     evidence_root: Path,
-    counters: InvocationCounters,
+    observation_log: Path,
 ) -> PhaseExecution:
     """Execute the native boundary once in one separately rooted workspace."""
 
@@ -434,8 +546,7 @@ def run_phase(
         raise RuntimeError(f"acceptance workspace must start empty: {workspace_root}")
     workspace = Workspace(settings, str(workspace_root.parent), workspace_root.name)
     config_staging = _stage_workspace_config(settings=settings, workspace=workspace)
-    body_before = counters.body_executions
-    preparation_before = counters.runner_preparation_attempts
+    body_before, preparation_before = _observation_counts(observation_log)
     with tracker.scenario(f"activitysim-run-acceptance-{phase}") as scenario:
         for key, artifact in artifacts.items():
             scenario.coupler.set_from_artifact(key, artifact)
@@ -457,12 +568,7 @@ def run_phase(
             phase="run",
             resolved_inputs=resolved,
         )
-    if not result.cache_hit:
-        counters.body_executions += 1
-        # ActivitysimRunner.run always enters its private preparation seam before
-        # the container body. This count deliberately does not claim a compile
-        # occurred: configuration can validly disable the actual warmup.
-        counters.runner_preparation_attempts += 1
+    body_after, preparation_after = _observation_counts(observation_log)
     declared = activitysim_run.output_paths(
         settings=settings,
         state=state,
@@ -505,9 +611,9 @@ def run_phase(
         config_staging=config_staging,
         persisted_run=persisted,
         body_executions_before=body_before,
-        body_executions_after=counters.body_executions,
+        body_executions_after=body_after,
         runner_preparation_attempts_before=preparation_before,
-        runner_preparation_attempts_after=counters.runner_preparation_attempts,
+        runner_preparation_attempts_after=preparation_after,
     )
 
 
@@ -547,7 +653,12 @@ def _semantic_product(
             "reason": "unexpected final-pipeline location",
         }
     try:
-        frame = pd.read_parquet(path)
+        parquet_file = pq.ParquetFile(path)
+        metadata = parquet_file.metadata
+        if metadata is None:
+            raise RuntimeError("Parquet footer metadata is unavailable")
+        row_count = metadata.num_rows
+        columns = list(parquet_file.schema_arrow.names)
     except Exception as error:
         return {
             "valid": False,
@@ -561,13 +672,13 @@ def _semantic_product(
         "kind": "activitysim-final-pipeline-table",
         "relative_path": relative_path,
         "table": expected_table,
-        "row_count": len(frame.index),
-        "columns": list(frame.columns),
+        "row_count": row_count,
+        "columns": columns,
     }
 
 
 def _phase_record(
-    execution: PhaseExecution, *, workspace_root: Path, settings: object
+    execution: PhaseExecution, *, workspace_root: Path, settings: PilatesConfig
 ) -> dict[str, object]:
     configured_tables = configured_asim_output_tables(settings)
     products = {
@@ -755,6 +866,7 @@ def _write_checksums(
     manifest: AcceptanceManifest,
     cold: PhaseExecution,
     fresh: PhaseExecution,
+    observation_log: Path,
 ) -> None:
     checksums: dict[str, str] = {
         f"input/{key}": _sha256_path(path) for key, path in manifest.inputs.items()
@@ -762,7 +874,59 @@ def _write_checksums(
     for phase, execution in (("cold", cold), ("fresh", fresh)):
         for key, path in execution.declared_outputs.items():
             checksums[f"{phase}/output/{key}"] = _sha256_path(path)
+    checksums["activitysim-observations.jsonl"] = _sha256_path(observation_log)
     _write_json(evidence_root / "checksums.json", {"sha256": checksums})
+
+
+def _execute_acceptance_phases(
+    *,
+    settings: PilatesConfig,
+    state: WorkflowState,
+    tracker: Tracker,
+    artifacts: Mapping[str, Artifact],
+    evidence_root: Path,
+) -> tuple[PhaseExecution, PhaseExecution, Path]:
+    """Run both phases while the native hooks are explicitly enabled."""
+
+    observation_log = evidence_root / "activitysim-observations.jsonl"
+    if observation_log.exists():
+        raise RuntimeError(
+            "ActivitySim acceptance observation log already exists; "
+            "use a fresh evidence root"
+        )
+    previous_observation_path = os.environ.get(OBSERVATION_PATH_ENV)
+    os.environ[OBSERVATION_PATH_ENV] = str(observation_log)
+    common = {
+        "settings": settings,
+        "state": state,
+        "tracker": tracker,
+        "artifacts": artifacts,
+        "evidence_root": evidence_root,
+        "observation_log": observation_log,
+    }
+    cold_root = evidence_root / "workspaces" / "cold"
+    fresh_root = evidence_root / "workspaces" / "fresh"
+    try:
+        _progress("cold acceptance phase started")
+        cold_execution = run_phase(phase="cold", workspace_root=cold_root, **common)
+        if cold_execution.cache_hit:
+            raise RuntimeError(
+                "cold ActivitySim acceptance invocation unexpectedly hit cache"
+            )
+        _progress("cold acceptance phase completed")
+        _progress("fresh acceptance phase started")
+        fresh_execution = run_phase(phase="fresh", workspace_root=fresh_root, **common)
+        if not fresh_execution.cache_hit:
+            raise RuntimeError(
+                "fresh ActivitySim acceptance invocation missed cache or entered the body"
+            )
+        _progress("fresh acceptance phase completed")
+        return cold_execution, fresh_execution, observation_log
+    finally:
+        if previous_observation_path is None:
+            os.environ.pop(OBSERVATION_PATH_ENV, None)
+        else:
+            os.environ[OBSERVATION_PATH_ENV] = previous_observation_path
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -789,9 +953,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         {
             "inputs": {key: str(path) for key, path in manifest.inputs.items()},
             "selected_skim_role": manifest.selected_skim_role,
+            "released_consist_version": manifest.released_consist_version,
             "cohort": dict(_COHORT),
         },
     )
+    release_preflight = preflight_released_consist(manifest.released_consist_version)
+    _write_json(evidence_root / "runtime-environment.json", release_preflight)
+    if release_preflight["valid"] is not True:
+        raise RuntimeError(
+            "ActivitySim acceptance requires the requested non-editable released "
+            "Consist installation; inspect runtime-environment.json"
+        )
+    _progress("released Consist preflight validated")
     settings = load_config(str(args.settings))
     state = WorkflowState.from_settings(settings)
     _validate_state(state)
@@ -810,35 +983,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         for key, path in manifest.inputs.items():
             artifacts[key] = tracker.log_artifact(path, key=key, direction="input")
     _progress("acceptance input artifacts logged")
-    counters = InvocationCounters()
-    common = {
-        "settings": settings,
-        "state": state,
-        "tracker": tracker,
-        "artifacts": artifacts,
-        "evidence_root": evidence_root,
-        "counters": counters,
-    }
     cold_root = evidence_root / "workspaces" / "cold"
     fresh_root = evidence_root / "workspaces" / "fresh"
-    _progress("cold acceptance phase started")
-    cold_execution = run_phase(phase="cold", workspace_root=cold_root, **common)
+    cold_execution, fresh_execution, observation_log = _execute_acceptance_phases(
+        settings=settings,
+        state=state,
+        tracker=tracker,
+        artifacts=artifacts,
+        evidence_root=evidence_root,
+    )
     cold = _phase_record(cold_execution, workspace_root=cold_root, settings=settings)
     _write_json(evidence_root / "phases" / "cold.json", cold)
-    if cold_execution.cache_hit:
-        raise RuntimeError(
-            "cold ActivitySim acceptance invocation unexpectedly hit cache"
-        )
-    _progress("cold acceptance phase completed")
-    _progress("fresh acceptance phase started")
-    fresh_execution = run_phase(phase="fresh", workspace_root=fresh_root, **common)
     fresh = _phase_record(fresh_execution, workspace_root=fresh_root, settings=settings)
     _write_json(evidence_root / "phases" / "fresh.json", fresh)
-    if not fresh_execution.cache_hit:
-        raise RuntimeError(
-            "fresh ActivitySim acceptance invocation missed cache or entered the body"
-        )
-    _progress("fresh acceptance phase completed")
     validation = validate(cold, fresh)
     _write_json(evidence_root / "semantic-validation.json", validation)
     if validation["valid"] is not True:
@@ -848,6 +1005,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest=manifest,
         cold=cold_execution,
         fresh=fresh_execution,
+        observation_log=observation_log,
     )
     _progress("acceptance semantic validation completed")
     return 0

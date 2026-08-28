@@ -110,6 +110,19 @@ PY
 }
 
 
+required_activitysim_acceptance_consist_version() {
+    local manifest_path="$1"
+    python3 -c 'import json, sys; raw = json.load(open(sys.argv[1], encoding="utf-8")); value = raw.get("released_consist_version"); isinstance(value, str) and value.strip() or sys.exit("ActivitySim acceptance manifest requires non-empty released_consist_version"); print(value.strip())' "$manifest_path"
+}
+
+
+install_released_activitysim_acceptance_consist() {
+    local required_version="$1"
+    echo "Installing required released Consist version consist==$required_version ..."
+    python3 -m pip install --upgrade --force-reinstall "consist==$required_version"
+}
+
+
 install_hdf5_acceptance_consist() {
     local evidence_root="$1"
     local consist_revision
@@ -263,6 +276,9 @@ fi
 install_python_deps "$REQUIREMENTS_FILE"
 if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
     install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
+elif [ "$acceptance_mode" = "activitysim-run" ]; then
+    required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
+    install_released_activitysim_acceptance_consist "$required_consist_version"
 else
     install_consist "$REQUIREMENTS_FILE"
 fi

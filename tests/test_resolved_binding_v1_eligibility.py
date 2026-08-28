@@ -10,12 +10,18 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 from consist import BindingResult, ExecutionOptions, ResolvedBinding, Tracker
 from consist.core.identity import IdentityManager
 from consist.integrations.activitysim import ActivitySimConfigAdapter
 
-from pilates.activitysim.outputs import ASIM_REQUIRED_RUN_OUTPUT_KEYS
+from pilates.activitysim.outputs import (
+    ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+    ActivitySimPreprocessOutputs,
+)
 from pilates.activitysim.runner import (
     ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
@@ -230,6 +236,7 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         ),
     )
     captured: dict[str, object] = {}
+    observation_log = tmp_path / "activitysim-observations.jsonl"
 
     class Runner:
         def run(
@@ -246,6 +253,9 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         activitysim_steps.ModelFactory,
         "get_runner",
         lambda _factory, *_args: Runner(),
+    )
+    monkeypatch.setenv(
+        "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_OBSERVATIONS", str(observation_log)
     )
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
@@ -270,6 +280,11 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         ),
     )
 
+    assert observation_log.exists()
+    assert [
+        json.loads(line)["event"] for line in observation_log.read_text().splitlines()
+    ] == ["activitysim_run_body"]
+
     mounts = captured["mounts"]
     assert isinstance(mounts, dict)
     mounted_paths = tuple(mounts)
@@ -277,6 +292,28 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
     assert str(poisoned_config_root) not in mounted_paths
     assert os.path.abspath(str(staged_data_root)) in mounts
     assert mounts[os.path.abspath(str(staged_data_root))]["mode"] == "ro"
+    allowed_mount_roots = (
+        staged_data_root.resolve(),
+        staged_config_root.resolve(),
+        output_root.resolve(),
+        launch_context.runtime_cache_dir.resolve(),
+        launch_context.shared_cache_dir.resolve(),
+        launch_context.shared_tmp_dir.resolve(),
+        launch_context.compile_output_dir.resolve(),
+    )
+    for mounted_path in mounts:
+        mounted_root = Path(mounted_path).resolve()
+        assert any(
+            mounted_root.is_relative_to(allowed_root)
+            for allowed_root in allowed_mount_roots
+        ), f"ambient mount source leaked into native launch: {mounted_root}"
+    captured_inputs = captured["inputs"]
+    assert isinstance(captured_inputs, ActivitySimPreprocessOutputs)
+    assert captured_inputs.mutable_data_dir == staged_data_root
+    assert captured_inputs.land_use_table == staged_inputs[ASIM_LAND_USE_IN]
+    assert captured_inputs.households_table == staged_inputs[ASIM_HOUSEHOLDS_IN]
+    assert captured_inputs.persons_table == staged_inputs[ASIM_PERSONS_IN]
+    assert captured["context"] is launch_context
     assert (staged_config_root / "configs_extended" / "settings.yaml").read_text(
         encoding="utf-8"
     ) == "source: configs_extended\n"
@@ -332,6 +369,7 @@ def test_activitysim_run_acceptance_manifest_allows_only_three_tables_and_one_sk
     manifest_path.write_text(
         json.dumps(
             {
+                "released_consist_version": "9.8.7",
                 "inputs": {key: str(path) for key, path in inputs.items()},
                 "cohort": {
                     "workflow_year": 2017,
@@ -347,6 +385,7 @@ def test_activitysim_run_acceptance_manifest_allows_only_three_tables_and_one_sk
 
     assert manifest.selected_skim_role == ZARR_SKIMS
     assert manifest.inputs == {key: path.resolve() for key, path in inputs.items()}
+    assert manifest.released_consist_version == "9.8.7"
 
     invalid = json.loads(manifest_path.read_text(encoding="utf-8"))
     invalid["inputs"][ASIM_OMX_SKIMS] = str(tmp_path / "skims.omx")
@@ -355,6 +394,282 @@ def test_activitysim_run_acceptance_manifest_allows_only_three_tables_and_one_sk
 
     with pytest.raises(ValueError, match="exactly one selected skim"):
         activitysim_run_acceptance.load_manifest(manifest_path)
+
+
+def test_activitysim_run_acceptance_requires_operator_released_consist_version(
+    tmp_path: Path,
+) -> None:
+    """The release gate cannot fall back to a repository-adjacent version."""
+
+    manifest_path = tmp_path / "activitysim-inputs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "inputs": {},
+                "cohort": {
+                    "workflow_year": 2017,
+                    "forecast_year": 2019,
+                    "iteration": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="released_consist_version"):
+        activitysim_run_acceptance.load_manifest(manifest_path)
+
+
+@pytest.mark.parametrize(
+    (
+        "direct_url",
+        "installed_version",
+        "metadata_version",
+        "public_version",
+        "expected_valid",
+    ),
+    [
+        (None, "9.8.7", "9.8.7", "9.8.7", True),
+        ('{"dir_info": {"editable": true}}', "9.8.7", "9.8.7", "9.8.7", False),
+        (None, "9.8.6", "9.8.7", "9.8.7", False),
+        (None, "9.8.7", "9.8.6", "9.8.7", False),
+        (None, "9.8.7", "9.8.7", "9.8.6", False),
+    ],
+)
+def test_activitysim_run_release_preflight_records_and_enforces_release_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    direct_url: str | None,
+    installed_version: str,
+    metadata_version: str,
+    public_version: str,
+    expected_valid: bool,
+) -> None:
+    """Editable or inconsistent Consist metadata invalidates the acceptance."""
+
+    class Distribution:
+        version = installed_version
+
+        def read_text(self, name: str) -> str | None:
+            assert name == "direct_url.json"
+            return direct_url
+
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "consist",
+        SimpleNamespace(
+            __version__=public_version,
+            __file__="/released/site-packages/consist/__init__.py",
+        ),
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance.importlib_metadata,
+        "distribution",
+        lambda package_name: Distribution(),
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance.importlib_metadata,
+        "version",
+        lambda package_name: metadata_version,
+    )
+
+    evidence = activitysim_run_acceptance.preflight_released_consist("9.8.7")
+
+    assert evidence["required_release_version"] == "9.8.7"
+    assert evidence["installed_version"] == installed_version
+    assert evidence["public_version"] == public_version
+    assert evidence["import_path"] == "/released/site-packages/consist/__init__.py"
+    assert evidence["editable_install"] is (direct_url is not None)
+    assert evidence["release_install"] is (direct_url is None)
+    assert evidence["valid"] is expected_valid
+
+
+def test_activitysim_run_retains_failed_release_preflight_before_any_phase(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A rejected release check still leaves its evidence for operator review."""
+
+    for name in (
+        "PILATES_LOCAL_RUN_DIR",
+        "PILATES_ARCHIVE_RUN_DIR",
+        "PILATES_ENABLE_ARCHIVE_COPY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("run: {}\n", encoding="utf-8")
+    manifest_path = tmp_path / "inputs.json"
+    manifest_path.write_text("{}\n", encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    manifest = activitysim_run_acceptance.AcceptanceManifest(
+        inputs={},
+        selected_skim_role=ZARR_SKIMS,
+        workflow_year=2017,
+        forecast_year=2019,
+        iteration=0,
+        released_consist_version="9.8.7",
+    )
+    preflight = {
+        "required_release_version": "9.8.7",
+        "installed_version": "9.8.7",
+        "public_version": "9.8.7",
+        "import_path": "/adjacent/consist/__init__.py",
+        "editable_install": True,
+        "release_install": False,
+        "valid": False,
+    }
+    monkeypatch.setattr(
+        activitysim_run_acceptance, "load_manifest", lambda _path: manifest
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "preflight_released_consist",
+        lambda _version: preflight,
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="requires the requested non-editable"):
+            activitysim_run_acceptance.main(
+                [
+                    "--settings",
+                    str(settings_path),
+                    "--manifest",
+                    str(manifest_path),
+                    "--evidence-root",
+                    str(evidence_root),
+                ]
+            )
+
+        assert (
+            json.loads((evidence_root / "runtime-environment.json").read_text())
+            == preflight
+        )
+    finally:
+        for name in (
+            "PILATES_LOCAL_RUN_DIR",
+            "PILATES_ARCHIVE_RUN_DIR",
+            "PILATES_ENABLE_ARCHIVE_COPY",
+        ):
+            os.environ.pop(name, None)
+
+
+def test_activitysim_run_phase_derives_counts_from_observation_log(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Phase evidence uses native observation entries, never cache-status inference."""
+
+    from pilates.runtime.activitysim_run_observations import (
+        record_activitysim_observation,
+    )
+
+    observation_log = tmp_path / "activitysim-observations.jsonl"
+    monkeypatch.setenv(
+        "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_OBSERVATIONS", str(observation_log)
+    )
+
+    class Scenario:
+        coupler = SimpleNamespace(set_from_artifact=lambda *_args: None)
+
+        def __enter__(self) -> Scenario:
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    class TrackerStub:
+        def scenario(self, _name: str) -> Scenario:
+            return Scenario()
+
+    resolved = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs=None),
+    )
+    result = SimpleNamespace(
+        cache_hit=False,
+        run=SimpleNamespace(id="cold-run"),
+    )
+    native_step = SimpleNamespace(
+        resolve_inputs=lambda **_kwargs: resolved,
+        output_paths=lambda **_kwargs: {},
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance, "Workspace", lambda *_args: object()
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "_stage_workspace_config",
+        lambda **_kwargs: {"source_root": "source", "staged_root": "staged"},
+    )
+    monkeypatch.setattr(activitysim_run_acceptance, "activitysim_run", native_step)
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "_persisted_run_evidence",
+        lambda **_kwargs: {
+            "cache_outcome": "miss",
+            "requested_run_id": "cold-run",
+            "execution_run_id": "cold-run",
+            "source_run_id": None,
+        },
+    )
+
+    def execute_native_body(**_kwargs: object) -> tuple[SimpleNamespace, None]:
+        record_activitysim_observation("activitysim_run_body")
+        record_activitysim_observation("activitysim_runner_preparation")
+        return result, None
+
+    monkeypatch.setattr(activitysim_run_acceptance, "execute_step", execute_native_body)
+
+    phase = activitysim_run_acceptance.run_phase(
+        phase="cold",
+        workspace_root=tmp_path / "workspace",
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(year=2017, current_inner_iter=0),
+        tracker=TrackerStub(),
+        artifacts={},
+        evidence_root=tmp_path / "evidence",
+        observation_log=observation_log,
+    )
+
+    assert phase.body_executions_before == 0
+    assert phase.body_executions_after == 1
+    assert phase.runner_preparation_attempts_before == 0
+    assert phase.runner_preparation_attempts_after == 1
+
+
+def test_activitysim_run_semantic_validation_reads_parquet_footer_not_table(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Large model outputs are checked from schema and row-count metadata only."""
+
+    path = (
+        tmp_path
+        / "activitysim"
+        / "output"
+        / "final_pipeline"
+        / "households"
+        / "final.parquet"
+    )
+    path.parent.mkdir(parents=True)
+    pq.write_table(pa.table({"household_id": [1, 2], "income": [100, 200]}), path)
+
+    def fail_full_table_load(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("semantic validation must not load a full parquet table")
+
+    monkeypatch.setattr(pd, "read_parquet", fail_full_table_load)
+
+    product = activitysim_run_acceptance._semantic_product(
+        key="households_asim_out",
+        path=path,
+        workspace_root=tmp_path,
+        configured_tables={"households_asim_out": "households"},
+    )
+
+    assert product == {
+        "valid": True,
+        "kind": "activitysim-final-pipeline-table",
+        "relative_path": "activitysim/output/final_pipeline/households/final.parquet",
+        "table": "households",
+        "row_count": 2,
+        "columns": ["household_id", "income"],
+    }
 
 
 def test_activitysim_run_acceptance_requires_one_body_then_model_aware_hydration() -> (
@@ -463,6 +778,13 @@ def test_activitysim_run_acceptance_requires_one_body_then_model_aware_hydration
     assert validation["ordinary_binding_valid"] is True
     assert validation["body_and_preparation_valid"] is True
     assert validation["fresh_hydration_destinations_valid"] is True
+
+    cold["body_executions_after"] = 2
+    assert activitysim_run_acceptance.validate(cold, fresh)["valid"] is False
+
+    cold["body_executions_after"] = 1
+    fresh["runner_preparation_attempts_after"] = 2
+    assert activitysim_run_acceptance.validate(cold, fresh)["valid"] is False
 
 
 def test_matrix_covers_each_native_step_definition_once() -> None:
