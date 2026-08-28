@@ -125,6 +125,56 @@ fresh misses, declared outputs are absent, the callable executes twice, the
 fresh source is not the cold requested Run, hydration destinations differ, or
 the non-workspace persisted identity/semantic-product comparison differs.
 
+## UrbanSim HDF5 Snapshot-Reconciliation Acceptance
+
+Use this narrow, pre-merge acceptance only to establish merge-confidence
+evidence for an editable Consist checkout. It exercises the native
+`urbansim_postprocess` boundary with one retained SFBay HDF5 input, checkpoints
+the Tracker, and reconciles the completed run in a separate Python process.
+It is not a cache hit, does not execute a new cacheable native run during
+reconciliation, and does not promote the HDF5 artifact or make any HDF5
+consumer boundary eligible for reuse.
+
+Before submitting, point the manifest at the retained source artifact on HPC:
+
+```fish
+set -x PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_INPUT_H5 /global/scratch/users/zaneedell/pilates-outputs/pilates-run--sfbay--consist-sfbay-usim-base-short-canary--20260826-104715/consist-recovery/pilates-run--sfbay--consist-sfbay-usim-base-short-canary--20260826-104715_atlas_postprocess__y2019__i0__phase_postprocess_b28c6e38/urbansim/data/model_data_2019_population_source.h5
+test -f "$PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_INPUT_H5"
+```
+
+The acceptance driver, not the source filename, enforces workflow year 2017,
+forecast year 2019, and iteration 0. Copy the tracked template to the
+operator-owned, untracked manifest only after the preflight succeeds, then
+submit with the editable Consist checkout and the ordinary node shape:
+
+```fish
+set -x CONSIST_SRC_DIR /global/scratch/users/zaneedell/sources/consist
+envsubst < hpc/urbansim-h5-snapshot-acceptance-inputs.json.template > hpc/urbansim-h5-snapshot-acceptance-inputs.json
+./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
+  -a ac_beamcore \
+  --urbansim-h5-snapshot-acceptance hpc/urbansim-h5-snapshot-acceptance-inputs.json
+```
+
+Do not add `--high-mem` or `-s`. Record the submitted Slurm job ID and the
+evidence root printed by the wrapper. The evidence bundle contains distinct
+`capture.json` and `reconciliation.json` records, plus a checkpointed Tracker
+snapshot and `validation.json`: capture records the strict native input binding
+before the later unowned override observation; reconciliation records a
+separate read-only process reopening that snapshot and comparing the persisted
+identity. Treat the run as successful only when Slurm is `COMPLETED` and every
+named check in `validation.json` is true, including `valid`.
+
+After a successful job, copy the evidence root to the established NFS
+`pilates-boundary-promotions` archive, generate SHA-256 manifests for both the
+source and destination copies, and compare them. Preserve the PILATES and
+editable-Consist revisions from the evidence record. This verifies retention
+of the evidence bundle; it is neither a hash of nor a replacement for the
+retained external source HDF5. Append only this verified, checksum-backed
+evidence to the boundary-promotion plan. A later released-Consist replay and
+separate boundary-specific cache proof remain required before any HDF5
+promotion decision.
+
 The reviewed Seattle seed is based on the first-iteration launch evidence from
 the failed capture run. Its host-local `/local/job...` prefixes are normalized
 by the checker, so a new Slurm allocation does not need to reproduce the old
