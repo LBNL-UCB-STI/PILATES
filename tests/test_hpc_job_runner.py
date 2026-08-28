@@ -245,7 +245,9 @@ printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
     ) == manifest.read_text(encoding="utf-8")
     submitted_args = captured_args.read_text(encoding="utf-8").splitlines()
     selector_index = submitted_args.index("--activitysim-run-acceptance")
-    assert submitted_args[selector_index + 2] == str(manifest)
+    assert submitted_args[selector_index + 2] == str(
+        evidence_dir / "submitted-input-manifest.json"
+    )
     assert submitted_args[selector_index + 3] == str(evidence_dir)
 
 

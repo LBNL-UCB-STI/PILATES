@@ -325,11 +325,13 @@ if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
 fi
 
 activitysim_run_acceptance_evidence_dir=""
+activitysim_run_acceptance_evidence_manifest=""
 if [ -n "$activitysim_run_acceptance_manifest_path" ]; then
     acceptance_root="${PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
     activitysim_run_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    activitysim_run_acceptance_evidence_manifest="$activitysim_run_acceptance_evidence_dir/submitted-input-manifest.json"
     mkdir -p "$activitysim_run_acceptance_evidence_dir"
-    cp "$activitysim_run_acceptance_manifest_path" "$activitysim_run_acceptance_evidence_dir/submitted-input-manifest.json"
+    cp "$activitysim_run_acceptance_manifest_path" "$activitysim_run_acceptance_evidence_manifest"
     cp "$generated_settings_path" "$activitysim_run_acceptance_evidence_dir/generated-settings.yaml"
     echo "ActivitySim run acceptance evidence: $activitysim_run_acceptance_evidence_dir"
 fi
@@ -361,7 +363,7 @@ if [ -n "$activitysim_run_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --activitysim-run-acceptance
         "$generated_settings_path"
-        "$activitysim_run_acceptance_manifest_path"
+        "$activitysim_run_acceptance_evidence_manifest"
         "$activitysim_run_acceptance_evidence_dir"
     )
 elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then

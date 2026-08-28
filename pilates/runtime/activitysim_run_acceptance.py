@@ -923,6 +923,22 @@ def _write_checksums(
         for key, path in execution.declared_outputs.items():
             checksums[f"{phase}/output/{key}"] = _sha256_path(path)
     checksums["activitysim-observations.jsonl"] = _sha256_path(observation_log)
+    control_records = (
+        "submitted-input-manifest.json",
+        "effective-input-manifest.json",
+        "generated-settings.yaml",
+        "runtime-environment.json",
+        "persisted-runs/cold.json",
+        "persisted-runs/fresh.json",
+        "phases/cold.json",
+        "phases/fresh.json",
+        "semantic-validation.json",
+    )
+    for relative_path in control_records:
+        checksums[relative_path] = _sha256_path(evidence_root / relative_path)
+    provenance_path = evidence_root / "provenance.duckdb"
+    if provenance_path.is_file():
+        checksums["provenance.duckdb"] = _sha256_path(provenance_path)
     _write_json(evidence_root / "checksums.json", {"sha256": checksums})
 
 
@@ -994,7 +1010,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     _progress("four-role input manifest validated")
     shutil.copy2(args.settings, evidence_root / "generated-settings.yaml")
     submitted_manifest = evidence_root / "submitted-input-manifest.json"
-    if args.manifest.resolve() != submitted_manifest.resolve():
+    if (
+        submitted_manifest.exists()
+        and args.manifest.resolve() != submitted_manifest.resolve()
+    ):
+        if submitted_manifest.read_bytes() != args.manifest.read_bytes():
+            raise RuntimeError(
+                "ActivitySim acceptance retained submitted manifest does not match "
+                f"the requested source: {submitted_manifest}"
+            )
+    elif args.manifest.resolve() != submitted_manifest.resolve():
         shutil.copy2(args.manifest, submitted_manifest)
     _write_json(
         evidence_root / "effective-input-manifest.json",

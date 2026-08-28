@@ -22,6 +22,7 @@ from pilates.activitysim.runner import (
     ActivitySimConfigStagingPlan,
     ActivitySimLaunchContext,
 )
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.activitysim.postprocessor import _activitysim_iteration_output_paths
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -1056,7 +1057,9 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
         get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
         get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
         get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
-        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
+        get_asim_runtime_cache_dir=lambda: str(
+            tmp_path / "activitysim" / "output" / "cache"
+        ),
     )
 
     resolved = activitysim._activitysim_run_resolver(
@@ -1070,7 +1073,9 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
         *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
         activitysim.ASIM_OMX_SKIMS,
     )
-    assert resolved.metadata["activitysim_skim_decision"] == activitysim.ActivitySimSkimDecision(
+    assert resolved.metadata[
+        "activitysim_skim_decision"
+    ] == activitysim.ActivitySimSkimDecision(
         role=activitysim.ASIM_OMX_SKIMS,
         mode="omx",
         produces_zarr=True,
@@ -1079,8 +1084,7 @@ def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
     assert resolved.metadata["activitysim_skim_mode"] == "omx"
     assert resolved.metadata["activitysim_produces_zarr"] is True
     assert not any(
-        "missing Zarr metadata" in str(value)
-        for value in resolved.metadata.values()
+        "missing Zarr metadata" in str(value) for value in resolved.metadata.values()
     )
     assert json.loads(
         json.dumps(asdict(resolved.metadata["activitysim_skim_decision"]))
@@ -1147,7 +1151,10 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
     base_resolution = ResolvedStepInputs(
         step_name="activitysim_run",
         binding=BindingResult(inputs=selected_artifacts),
-        required_roles=(*activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES, activitysim.ZARR_SKIMS),
+        required_roles=(
+            *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+            activitysim.ZARR_SKIMS,
+        ),
         optional_roles=(),
         source_by_role={key: "coupler" for key in all_roles},
         selected_key_by_role={key: key for key in all_roles},
@@ -1208,7 +1215,9 @@ def test_activitysim_execution_options_build_context_from_materialization_destin
         full_path=str(tmp_path),
         get_asim_mutable_configs_dir=lambda: str(source_configs),
         get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
-        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
+        get_asim_runtime_cache_dir=lambda: str(
+            tmp_path / "activitysim" / "output" / "cache"
+        ),
     )
 
     options = activitysim.activitysim_run.execution_options(
@@ -1218,16 +1227,24 @@ def test_activitysim_execution_options_build_context_from_materialization_destin
         resolved_inputs=resolved,
     )
 
-    assert isinstance(options.runtime_kwargs["activitysim_launch_context"], ActivitySimLaunchContext)
-    assert options.runtime_kwargs["activitysim_launch_context"].mutable_data_dir == staged_data
+    assert isinstance(
+        options.runtime_kwargs["activitysim_launch_context"], ActivitySimLaunchContext
+    )
+    assert (
+        options.runtime_kwargs["activitysim_launch_context"].mutable_data_dir
+        == staged_data
+    )
     assert "activitysim_launch_context" not in resolved.metadata
-    assert options.runtime_kwargs["activitysim_config_staging_plan"] == ActivitySimConfigStagingPlan(
-        source_roots=(
-            source_configs / "configs_extended",
-            source_configs / "configs",
-            source_configs / "configs_mp",
-            source_configs / "configs_sh_compile",
-        )
+    config_roots = required_activitysim_config_roots("configs_extended")
+    assert options.runtime_kwargs[
+        "activitysim_config_staging_plan"
+    ] == ActivitySimConfigStagingPlan(
+        source_root=source_configs,
+        config_roots=config_roots,
+    )
+    assert (
+        options.runtime_kwargs["activitysim_launch_context"].config_roots
+        == config_roots
     )
 
 
@@ -1240,15 +1257,20 @@ def test_activitysim_launch_context_uses_explicit_staged_model_inputs(
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
         get_asim_mutable_data_dir=lambda: pytest.fail("ambient data root was read"),
-        get_asim_mutable_configs_dir=lambda: pytest.fail("ambient config root was read"),
+        get_asim_mutable_configs_dir=lambda: pytest.fail(
+            "ambient config root was read"
+        ),
         get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
-        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
+        get_asim_runtime_cache_dir=lambda: str(
+            tmp_path / "activitysim" / "output" / "cache"
+        ),
     )
 
     context = activitysim._activitysim_launch_context(
         workspace,
         staged_data_dir=staged_data,
         staged_configs_dir=staged_configs,
+        config_roots=required_activitysim_config_roots("configs_extended"),
     )
 
     assert context.mutable_data_dir == staged_data
@@ -1261,12 +1283,11 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
 ) -> None:
     """The run body copies the identity-selected config bytes into its launch tree."""
     source_root = tmp_path / "identity-configs"
-    sources = []
     for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
         source = source_root / dirname
         source.mkdir(parents=True)
         (source / "settings.yaml").write_text(f"root: {dirname}\n", encoding="utf-8")
-        sources.append(source)
+    config_roots = required_activitysim_config_roots("configs_extended")
     launch_context = ActivitySimLaunchContext(
         workspace_root=tmp_path,
         mutable_data_dir=tmp_path / "activitysim" / "native-launch" / "data",
@@ -1277,6 +1298,7 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         runtime_zarr_path=tmp_path / "activitysim" / "output" / "cache" / "skims.zarr",
         shared_cache_dir=tmp_path / "shared-cache",
         shared_tmp_dir=tmp_path / "tmp",
+        config_roots=config_roots,
     )
     captured: dict[str, object] = {}
 
@@ -1299,7 +1321,8 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
         workspace=SimpleNamespace(),
         activitysim_launch_context=launch_context,
         activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
-            source_roots=tuple(sources)
+            source_root=source_root,
+            config_roots=config_roots,
         ),
     )
 
@@ -1307,6 +1330,75 @@ def test_activitysim_run_callable_stages_adapter_selected_config_roots(
     assert (
         launch_context.mutable_configs_dir / "configs_extended" / "settings.yaml"
     ).read_text(encoding="utf-8") == "root: configs_extended\n"
+
+
+def test_activitysim_run_callable_preserves_nested_config_staging_destination(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """A nested logical root must not be flattened to its source basename."""
+
+    source_root = tmp_path / "identity-configs"
+    config_roots = required_activitysim_config_roots("scenarios/sfbay/configs")
+    for root in config_roots:
+        source = root.path_under(source_root)
+        source.mkdir(parents=True)
+        (source / "settings.yaml").write_text(
+            f"root: {root.as_posix()}\n", encoding="utf-8"
+        )
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "activitysim" / "native-launch" / "data",
+        output_dir=tmp_path / "activitysim" / "output",
+        compile_output_dir=tmp_path / "activitysim" / "compile-output",
+        mutable_configs_dir=tmp_path / "activitysim" / "native-launch" / "configs",
+        runtime_cache_dir=tmp_path / "activitysim" / "output" / "cache",
+        runtime_zarr_path=tmp_path / "activitysim" / "output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        requires_staged_config_dirs=True,
+        config_roots=config_roots,
+    )
+
+    class Runner:
+        def run(self, *_args, **_kwargs):
+            return None
+
+    monkeypatch.setattr(
+        activitysim.ModelFactory,
+        "get_runner",
+        lambda _self, *_args: Runner(),
+    )
+    activitysim._activitysim_run_callable(
+        tmp_path / "land_use.csv",
+        tmp_path / "households.csv",
+        tmp_path / "persons.csv",
+        omx_skims=tmp_path / "skims.omx",
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        activitysim_launch_context=launch_context,
+        activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
+            source_root=source_root,
+            config_roots=config_roots,
+        ),
+    )
+
+    nested_settings = (
+        launch_context.mutable_configs_dir
+        / "scenarios"
+        / "sfbay"
+        / "configs"
+        / "settings.yaml"
+    )
+    assert nested_settings.read_text(encoding="utf-8") == (
+        "root: scenarios/sfbay/configs\n"
+    )
+    assert (
+        not (launch_context.mutable_configs_dir / "configs" / "settings.yaml")
+        .read_text(encoding="utf-8")
+        .startswith("root: scenarios/")
+    )
 
 
 @pytest.mark.parametrize(
@@ -1341,7 +1433,9 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         "get_runner",
         lambda _self, *_args: Runner(),
     )
-    monkeypatch.setattr(activitysim, "stage_activitysim_config_roots", lambda *_args: None)
+    monkeypatch.setattr(
+        activitysim, "stage_activitysim_config_roots", lambda *_args: None
+    )
     workspace = SimpleNamespace()
     launch_context = ActivitySimLaunchContext(
         workspace_root=Path("/workspace"),
@@ -1365,7 +1459,10 @@ def test_activitysim_run_callable_binds_only_the_resolved_skim_source(
         state=SimpleNamespace(),
         workspace=workspace,
         activitysim_launch_context=launch_context,
-        activitysim_config_staging_plan=ActivitySimConfigStagingPlan(source_roots=()),
+        activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
+            source_root=Path("/configs"),
+            config_roots=(),
+        ),
     )
 
     assert captured["skim_mode"] == expected_mode

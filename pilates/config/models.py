@@ -21,6 +21,8 @@ from pydantic import (
 )
 import yaml
 
+from pilates.activitysim.config_roots import ActivitySimConfigRoot
+
 logger = logging.getLogger(__name__)
 
 
@@ -623,6 +625,12 @@ class ActivitySimConfig(BaseModel):
     main_configs_dir: str = Field(
         "configs_extended", description="Main configs directory"
     )
+
+    @field_validator("main_configs_dir")
+    @classmethod
+    def validate_main_configs_dir(cls, value: str) -> str:
+        return ActivitySimConfigRoot.parse(value).as_posix()
+
     region_mappings: Dict[str, Any] = Field(
         default_factory=dict, description="Region-specific mappings"
     )

@@ -8,6 +8,40 @@ from pilates.activitysim.preprocessor import (
     _disable_activitysim_vehicle_ownership_models_for_atlas,
     _ensure_required_asim_config_dirs,
 )
+from pilates.config.models import ActivitySimConfig
+
+
+def _activitysim_config(*, main_configs_dir: str) -> ActivitySimConfig:
+    return ActivitySimConfig(
+        local_input_folder="activitysim/input",
+        local_mutable_data_folder="activitysim/data",
+        local_output_folder="activitysim/output",
+        local_configs_folder="pilates/activitysim/configs",
+        local_mutable_configs_folder="activitysim/configs",
+        validation_folder="activitysim/validation",
+        command_template="activitysim run -c {config}",
+        final_plans_folder="activitysim/final-plans",
+        main_configs_dir=main_configs_dir,
+    )
+
+
+@pytest.mark.parametrize(
+    "main_configs_dir",
+    ("/ambient/configs", "../configs", "scenarios/../../ambient/configs"),
+)
+def test_activitysim_main_configs_dir_rejects_non_logical_relative_paths(
+    main_configs_dir: str,
+) -> None:
+    """An unsafe config root must fail before adapter, staging, or launch."""
+
+    with pytest.raises(ValueError, match="logical relative path"):
+        _activitysim_config(main_configs_dir=main_configs_dir)
+
+
+def test_activitysim_main_configs_dir_preserves_nested_logical_path() -> None:
+    config = _activitysim_config(main_configs_dir="scenarios/sfbay/configs")
+
+    assert config.main_configs_dir == "scenarios/sfbay/configs"
 
 
 def test_ensure_required_asim_config_dirs_synthesizes_missing_overlays(

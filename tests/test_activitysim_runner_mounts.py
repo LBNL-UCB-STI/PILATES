@@ -10,6 +10,7 @@ from pilates.activitysim.runner import (
     ActivitysimRunner,
     _asim_container_environment,
 )
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 
 
 def _settings() -> SimpleNamespace:
@@ -82,16 +83,19 @@ def test_activitysim_docker_vols_mount_only_the_resolved_staged_launch_tree(
     assert vols[os.path.abspath(launch_context.output_dir)]["mode"] == "rw"
 
 
-def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
+def test_activitysim_docker_vols_preserve_nested_main_config_root(
     tmp_path: Path,
 ) -> None:
-    """A missing staged overlay must fail instead of falling back to workspace."""
+    """The validated nested root is staged and mounted without ambient fallback."""
+
     settings = _settings()
+    settings.activitysim.main_configs_dir = "scenarios/sfbay/configs"
+    config_roots = required_activitysim_config_roots(
+        settings.activitysim.main_configs_dir
+    )
     staged_configs = tmp_path / "native-launch" / "configs"
-    (staged_configs / "configs_extended").mkdir(parents=True)
-    (staged_configs / "configs_mp").mkdir()
-    source = tmp_path / "identity-configs" / "configs_extended"
-    source.mkdir(parents=True)
+    for root in config_roots:
+        root.path_under(staged_configs).mkdir(parents=True)
     launch_context = ActivitySimLaunchContext(
         workspace_root=tmp_path,
         mutable_data_dir=tmp_path / "native-launch" / "data",
@@ -103,6 +107,47 @@ def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
         shared_cache_dir=tmp_path / "shared-cache",
         shared_tmp_dir=tmp_path / "tmp",
         requires_staged_config_dirs=True,
+        config_roots=config_roots,
+    )
+
+    vols = ActivitysimRunner.get_asim_docker_vols(
+        settings,
+        working_dir=str(tmp_path / "ambient-workspace"),
+        launch_context=launch_context,
+    )
+
+    nested_root = staged_configs / "scenarios" / "sfbay" / "configs"
+    remote_workdir = "/activitysim/activitysim/examples/prototype_mtc_clean"
+    assert vols[str(nested_root.resolve())] == {
+        "bind": f"{remote_workdir}/configs",
+        "mode": "ro",
+    }
+    assert str(tmp_path / "ambient-workspace") not in " ".join(vols)
+
+
+def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
+    tmp_path: Path,
+) -> None:
+    """A missing staged overlay must fail instead of falling back to workspace."""
+    settings = _settings()
+    staged_configs = tmp_path / "native-launch" / "configs"
+    (staged_configs / "configs_extended").mkdir(parents=True)
+    (staged_configs / "configs_mp").mkdir()
+    source = tmp_path / "identity-configs" / "configs_extended"
+    source.mkdir(parents=True)
+    config_roots = required_activitysim_config_roots("configs_extended")
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "native-launch" / "data",
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        requires_staged_config_dirs=True,
+        config_roots=config_roots,
     )
 
     with pytest.raises(RuntimeError, match="missing staged configuration directory"):

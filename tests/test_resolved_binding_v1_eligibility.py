@@ -27,6 +27,7 @@ from pilates.activitysim.runner import (
     ActivitySimLaunchContext,
     ActivitysimRunner,
 )
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
     ASIM_LAND_USE_IN,
@@ -124,16 +125,18 @@ ELIGIBILITY_MATRIX = (
 def test_activitysim_config_identity_roots_use_stable_adapter_order(
     tmp_path: Path,
 ) -> None:
+    mutable_root = tmp_path / "activitysim" / "configs"
     roots = activitysim_config_root_dirs(
-        SimpleNamespace(main_configs_dir="configs_extended"),
-        tmp_path / "activitysim" / "configs",
+        SimpleNamespace(main_configs_dir="scenarios/sfbay/configs"),
+        mutable_root,
     )
 
-    assert tuple(path.name for path in roots) == (
-        "configs_extended",
-        "configs",
-        "configs_mp",
-        "configs_sh_compile",
+    assert roots == (
+        mutable_root / "scenarios" / "sfbay" / "configs",
+        mutable_root / "configs",
+        mutable_root / "configs_extended",
+        mutable_root / "configs_mp",
+        mutable_root / "configs_sh_compile",
     )
 
 
@@ -224,6 +227,7 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
 
     staged_config_root = tmp_path / "activitysim" / "native-launch" / "configs"
     output_root = tmp_path / "activitysim" / "output"
+    config_roots = required_activitysim_config_roots("configs_extended")
     launch_context = ActivitySimLaunchContext(
         workspace_root=tmp_path,
         mutable_data_dir=staged_data_root,
@@ -235,6 +239,7 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         shared_cache_dir=tmp_path / "shared-cache",
         shared_tmp_dir=tmp_path / "tmp",
         requires_staged_config_dirs=True,
+        config_roots=config_roots,
     )
     settings = SimpleNamespace(
         run=SimpleNamespace(region="test"),
@@ -316,7 +321,8 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         workspace=workspace,
         activitysim_launch_context=launch_context,
         activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
-            source_roots=tuple(adapter_roots)
+            source_root=adapter_root,
+            config_roots=config_roots,
         ),
     )
 
@@ -666,6 +672,129 @@ def test_activitysim_run_retains_failed_release_preflight_before_any_phase(
             "PILATES_ENABLE_ARCHIVE_COPY",
         ):
             os.environ.pop(name, None)
+
+
+def test_activitysim_run_driver_does_not_overwrite_retained_submitted_manifest(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A mutable source cannot replace the submission record after retention."""
+
+    settings_path = tmp_path / "settings.yaml"
+    settings_path.write_text("run: {}\n", encoding="utf-8")
+    manifest_path = tmp_path / "mutable-inputs.json"
+    manifest_path.write_text('{"source": "changed"}\n', encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    retained_manifest = evidence_root / "submitted-input-manifest.json"
+    retained_manifest.write_text('{"source": "submitted"}\n', encoding="utf-8")
+    manifest = activitysim_run_acceptance.AcceptanceManifest(
+        inputs={},
+        selected_skim_role=ZARR_SKIMS,
+        workflow_year=2017,
+        forecast_year=2019,
+        iteration=0,
+        released_consist_version="9.8.7",
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance, "load_manifest", lambda _path: manifest
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "preflight_released_consist",
+        lambda _version: {"valid": False},
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="retained submitted manifest"):
+            activitysim_run_acceptance.main(
+                [
+                    "--settings",
+                    str(settings_path),
+                    "--manifest",
+                    str(manifest_path),
+                    "--evidence-root",
+                    str(evidence_root),
+                ]
+            )
+        assert retained_manifest.read_text(encoding="utf-8") == (
+            '{"source": "submitted"}\n'
+        )
+    finally:
+        for name in (
+            "PILATES_LOCAL_RUN_DIR",
+            "PILATES_ARCHIVE_RUN_DIR",
+            "PILATES_ENABLE_ARCHIVE_COPY",
+        ):
+            os.environ.pop(name, None)
+
+
+def test_activitysim_run_checksums_seal_evidence_control_records(
+    tmp_path: Path,
+) -> None:
+    """A reviewer can detect mutation of every formal control record."""
+
+    evidence_root = tmp_path / "evidence"
+    controls = {
+        "submitted-input-manifest.json": "submitted\n",
+        "effective-input-manifest.json": "effective\n",
+        "generated-settings.yaml": "settings\n",
+        "runtime-environment.json": "runtime\n",
+        "persisted-runs/cold.json": "persisted cold\n",
+        "persisted-runs/fresh.json": "persisted fresh\n",
+        "phases/cold.json": "phase cold\n",
+        "phases/fresh.json": "phase fresh\n",
+        "semantic-validation.json": "semantic\n",
+    }
+    for relative_path, content in controls.items():
+        path = evidence_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    observation_log = evidence_root / "activitysim-observations.jsonl"
+    observation_log.write_text("{}\n", encoding="utf-8")
+    input_path = tmp_path / "input.parquet"
+    input_path.write_text("input\n", encoding="utf-8")
+    output_path = tmp_path / "output.parquet"
+    output_path.write_text("output\n", encoding="utf-8")
+    manifest = activitysim_run_acceptance.AcceptanceManifest(
+        inputs={ASIM_LAND_USE_IN: input_path},
+        selected_skim_role=ZARR_SKIMS,
+        workflow_year=2017,
+        forecast_year=2019,
+        iteration=0,
+        released_consist_version="9.8.7",
+    )
+
+    def execution() -> activitysim_run_acceptance.PhaseExecution:
+        return activitysim_run_acceptance.PhaseExecution(
+            cache_hit=False,
+            requested_run_id="run",
+            execution_run_id="run",
+            source_run_id=None,
+            declared_outputs={"activitysim_trips": output_path},
+            selected_roles={},
+            source_bindings={},
+            input_identities={},
+            config_staging={},
+            persisted_run={},
+            body_executions_before=0,
+            body_executions_after=1,
+            runner_preparation_attempts_before=0,
+            runner_preparation_attempts_after=1,
+        )
+
+    activitysim_run_acceptance._write_checksums(
+        evidence_root=evidence_root,
+        manifest=manifest,
+        cold=execution(),
+        fresh=execution(),
+        observation_log=observation_log,
+    )
+
+    checksums = json.loads((evidence_root / "checksums.json").read_text())["sha256"]
+    assert set(controls).issubset(checksums)
+    assert checksums["submitted-input-manifest.json"] == (
+        "93577775f201d3c610a22609a1a97f6c86355f55055a979271ce3cb7fbbec558"
+    )
 
 
 def test_activitysim_run_phase_derives_counts_from_observation_log(

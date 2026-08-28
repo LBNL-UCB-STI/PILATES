@@ -61,6 +61,7 @@ from typing import Any, Dict, Optional
 from consist.core.step_context import StepContext
 
 from pilates.config.models import ActivitySimConfig
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.atlas.preprocessor import selected_atlas_static_input_sources
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
@@ -82,15 +83,9 @@ def activitysim_config_root_dirs(
     mutable_configs_root: Path,
 ) -> tuple[Path, ...]:
     """Return ActivitySim config roots in the same order used for identity."""
-    candidates = (
-        settings.main_configs_dir,
-        "configs",
-        "configs_extended",
-        "configs_mp",
-        "configs_sh_compile",
-    )
     return tuple(
-        mutable_configs_root / dirname for dirname in dict.fromkeys(candidates)
+        config_root.path_under(mutable_configs_root)
+        for config_root in required_activitysim_config_roots(settings.main_configs_dir)
     )
 
 
@@ -270,7 +265,9 @@ def consist_step_meta(
         config_roots = activitysim_config_root_dirs(
             activitysim_settings, mutable_configs_root
         )
-        missing_roots = [candidate for candidate in config_roots if not candidate.is_dir()]
+        missing_roots = [
+            candidate for candidate in config_roots if not candidate.is_dir()
+        ]
         if missing_roots:
             missing = ", ".join(str(candidate) for candidate in missing_roots)
             raise RuntimeError(

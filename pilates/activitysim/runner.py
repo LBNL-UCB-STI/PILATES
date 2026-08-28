@@ -12,6 +12,10 @@ import xarray as xr
 import zarr
 
 from pilates.config import PilatesConfig
+from pilates.activitysim.config_roots import (
+    ActivitySimConfigRoot,
+    required_activitysim_config_roots,
+)
 from pilates.generic.runner import GenericRunner
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -102,6 +106,7 @@ class ActivitySimLaunchContext:
     shared_cache_dir: Path
     shared_tmp_dir: Path
     requires_staged_config_dirs: bool = False
+    config_roots: tuple[ActivitySimConfigRoot, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +157,8 @@ _ACTIVITYSIM_COMPILE_EPOCHS = ActivitySimCompileEpochRegistry()
 class ActivitySimConfigStagingPlan:
     """Runtime-only source roots copied into an ActivitySim launch tree."""
 
-    source_roots: tuple[Path, ...]
+    source_root: Path
+    config_roots: tuple[ActivitySimConfigRoot, ...]
 
 
 def stage_activitysim_config_roots(
@@ -160,15 +166,21 @@ def stage_activitysim_config_roots(
     staging_plan: ActivitySimConfigStagingPlan,
 ) -> None:
     """Copy the adapter-selected configuration roots into the launch tree."""
-    if not staging_plan.source_roots:
+    if not staging_plan.config_roots:
         raise RuntimeError("ActivitySim launch context is missing configuration roots")
-    for source in staging_plan.source_roots:
+    if launch_context.config_roots != staging_plan.config_roots:
+        raise RuntimeError(
+            "ActivitySim launch context configuration roots differ from staging plan"
+        )
+    for config_root in staging_plan.config_roots:
+        source = config_root.path_under(staging_plan.source_root)
         if not source.is_dir():
             raise RuntimeError(
                 f"ActivitySim staged configuration source is missing: {source}"
             )
-        destination = launch_context.mutable_configs_dir / source.name
+        destination = config_root.path_under(launch_context.mutable_configs_dir)
         _remove_path_if_present(str(destination))
+        destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source, destination)
 
 
@@ -475,9 +487,7 @@ class ActivitysimNumbaWarmup(GenericRunner):
 
         compile_output_dir = str(launch_context.compile_output_dir)
         runtime_cache_dir = str(launch_context.runtime_cache_dir)
-        runtime_cache_mode: Literal["ro", "rw"] = (
-            "ro" if skim_mode == "zarr" else "rw"
-        )
+        runtime_cache_mode: Literal["ro", "rw"] = "ro" if skim_mode == "zarr" else "rw"
         if skim_mode == "zarr":
             if zarr_input_path is None or not os.path.isdir(zarr_input_path):
                 raise RuntimeError(
@@ -560,7 +570,9 @@ class ActivitysimRunner(GenericRunner):
         Declare the input paths/artifacts this runner expects without disk checks.
         """
         del settings, state
-        staged_data_dir = Path(workspace.full_path) / "activitysim" / "native-launch" / "data"
+        staged_data_dir = (
+            Path(workspace.full_path) / "activitysim" / "native-launch" / "data"
+        )
         return {
             ASIM_LAND_USE_IN: staged_data_dir / "land_use.csv",
             ASIM_HOUSEHOLDS_IN: staged_data_dir / "households.csv",
@@ -658,9 +670,7 @@ class ActivitysimRunner(GenericRunner):
 
         record_activitysim_observation("activitysim_runner_preparation")
         if skip_numba_warmup:
-            logger.info(
-                "ActivitySim Numba warmup: not required (explicit rewind skip)"
-            )
+            logger.info("ActivitySim Numba warmup: not required (explicit rewind skip)")
             return ActivitySimPreparationResult(
                 launch_context=launch_context,
                 skim_mode=skim_mode,
@@ -678,9 +688,7 @@ class ActivitysimRunner(GenericRunner):
                 generated_zarr_path=None,
             )
         if self.state.full_settings.activitysim.num_processes <= 1:
-            logger.info(
-                "ActivitySim Numba warmup: not required (single-process run)"
-            )
+            logger.info("ActivitySim Numba warmup: not required (single-process run)")
             return ActivitySimPreparationResult(
                 launch_context=launch_context,
                 skim_mode=skim_mode,
@@ -691,9 +699,7 @@ class ActivitysimRunner(GenericRunner):
         existing_epoch = _ACTIVITYSIM_COMPILE_EPOCHS.get(self.state)
         if existing_epoch is not None:
             logger.info("ActivitySim Numba warmup: reused private epoch")
-            epoch_context = replace(
-                launch_context, shared_cache_dir=existing_epoch
-            )
+            epoch_context = replace(launch_context, shared_cache_dir=existing_epoch)
         else:
             epoch_context = replace(
                 launch_context,
@@ -722,9 +728,7 @@ class ActivitysimRunner(GenericRunner):
                 raise RuntimeError(
                     "ActivitySim OMX preparation requires a workspace for skim finalization"
                 )
-            rejection = validate_activitysim_zarr_skims(
-                epoch_context.runtime_zarr_path
-            )
+            rejection = validate_activitysim_zarr_skims(epoch_context.runtime_zarr_path)
             if rejection is not None:
                 raise RuntimeError(
                     "ActivitySim warmup generated invalid runtime Zarr skims: "
@@ -894,6 +898,16 @@ class ActivitysimRunner(GenericRunner):
         asim_remote_workdir = os.path.join("/activitysim", asim_subdir)
         configured_runtime_cache_dir = runtime_cache_dir
         if launch_context is not None:
+            config_roots = (
+                launch_context.config_roots
+                or required_activitysim_config_roots(
+                    settings.activitysim.main_configs_dir
+                )
+            )
+            main_config_root = config_roots[0]
+            config_root_by_path = {root.as_posix(): root for root in config_roots}
+            mp_config_root = config_root_by_path["configs_mp"]
+            compile_config_root = config_root_by_path["configs_sh_compile"]
             asim_local_mutable_data_folder = os.path.abspath(
                 str(launch_context.mutable_data_dir)
             )
@@ -901,35 +915,27 @@ class ActivitysimRunner(GenericRunner):
                 output_dir if output_dir is not None else str(launch_context.output_dir)
             )
             asim_local_configs_folder = os.path.abspath(
-                os.path.join(
-                    str(launch_context.mutable_configs_dir),
-                    settings.activitysim.main_configs_dir,
-                )
+                main_config_root.path_under(launch_context.mutable_configs_dir)
             )
             asim_local_configs_compile_folder = os.path.abspath(
-                os.path.join(
-                    str(launch_context.mutable_configs_dir),
-                    "configs_sh_compile",
-                )
+                compile_config_root.path_under(launch_context.mutable_configs_dir)
             )
             asim_local_configs_mp_folder = os.path.abspath(
-                os.path.join(
-                    str(launch_context.mutable_configs_dir),
-                    "configs_mp",
-                )
+                mp_config_root.path_under(launch_context.mutable_configs_dir)
             )
             if configured_runtime_cache_dir is None:
                 configured_runtime_cache_dir = os.path.abspath(
                     str(launch_context.runtime_cache_dir)
                 )
             if launch_context.requires_staged_config_dirs:
-                required_config_dirs = (
-                    settings.activitysim.main_configs_dir,
-                    "configs_mp",
-                    "configs_sh_compile",
-                )
-                for dirname in dict.fromkeys(required_config_dirs):
-                    config_dir = launch_context.mutable_configs_dir / dirname
+                if not launch_context.config_roots:
+                    raise RuntimeError(
+                        "ActivitySim launch context is missing validated configuration roots"
+                    )
+                for config_root in launch_context.config_roots:
+                    config_dir = config_root.path_under(
+                        launch_context.mutable_configs_dir
+                    )
                     if not config_dir.is_dir():
                         raise RuntimeError(
                             "ActivitySim launch context is missing staged configuration "
@@ -1055,13 +1061,9 @@ class ActivitysimRunner(GenericRunner):
         default_runtime_cache_dir = os.path.abspath(
             os.path.join(asim_local_output_folder, "cache")
         )
-        if (
-            configured_runtime_cache_dir
-            and (
-                os.path.abspath(configured_runtime_cache_dir)
-                != default_runtime_cache_dir
-                or runtime_cache_mode == "ro"
-            )
+        if configured_runtime_cache_dir and (
+            os.path.abspath(configured_runtime_cache_dir) != default_runtime_cache_dir
+            or runtime_cache_mode == "ro"
         ):
             asim_docker_vols[os.path.abspath(configured_runtime_cache_dir)] = {
                 "bind": asim_remote_runtime_cache_folder,

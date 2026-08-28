@@ -20,6 +20,10 @@ from consist.types import OutputArtifactSpec
 from pilates.activitysim.preprocessor import (
     ActivitysimPreprocessor,
 )
+from pilates.activitysim.config_roots import (
+    ActivitySimConfigRoot,
+    required_activitysim_config_roots,
+)
 from pilates.activitysim.runner import (
     ActivitySimSkimDecision,
     ActivitysimSkimMode,
@@ -55,10 +59,7 @@ from pilates.workflows.output_projection import require_output
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
-from pilates.workflows.step_consist_meta import (
-    activitysim_config_root_dirs,
-    consist_step_meta,
-)
+from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.workflows.step_definition import (
     ConfigContract,
     InputContract,
@@ -282,6 +283,7 @@ def _activitysim_launch_context(
     *,
     staged_data_dir: Path,
     staged_configs_dir: Path,
+    config_roots: tuple[ActivitySimConfigRoot, ...],
 ) -> ActivitySimLaunchContext:
     """Build one launch tree from resolver-owned model input destinations."""
 
@@ -299,6 +301,7 @@ def _activitysim_launch_context(
         shared_cache_dir=workspace_root / "shared_cache",
         shared_tmp_dir=workspace_root / "tmp",
         requires_staged_config_dirs=True,
+        config_roots=config_roots,
     )
 
 
@@ -484,9 +487,7 @@ def _activitysim_run_resolver(
             selected_source=omx_source,
         )
     elif zarr_rejection is not None:
-        raise RuntimeError(
-            f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}"
-        )
+        raise RuntimeError(f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}")
     else:
         expected = (
             ZARR_SKIMS if requires_beam_skim else f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
@@ -673,16 +674,23 @@ def _activitysim_execution_options(
             raise RuntimeError("activitysim_run requires ActivitySim settings")
         staged_data_dir = staged_destinations.pop()
         workspace_root = Path(workspace.full_path)
+        config_roots = required_activitysim_config_roots(
+            activitysim_settings.main_configs_dir
+        )
         launch_context = _activitysim_launch_context(
             workspace,
             staged_data_dir=staged_data_dir,
-            staged_configs_dir=workspace_root / "activitysim" / "native-launch" / "configs",
+            staged_configs_dir=workspace_root
+            / "activitysim"
+            / "native-launch"
+            / "configs",
+            config_roots=config_roots,
         )
         runtime_kwargs["activitysim_launch_context"] = launch_context
-        runtime_kwargs["activitysim_config_staging_plan"] = ActivitySimConfigStagingPlan(
-            source_roots=activitysim_config_root_dirs(
-                activitysim_settings,
-                Path(workspace.get_asim_mutable_configs_dir()),
+        runtime_kwargs["activitysim_config_staging_plan"] = (
+            ActivitySimConfigStagingPlan(
+                source_root=Path(workspace.get_asim_mutable_configs_dir()),
+                config_roots=config_roots,
             )
         )
     return ExecutionOptions(
