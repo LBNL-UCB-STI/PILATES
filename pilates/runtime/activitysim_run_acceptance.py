@@ -28,7 +28,7 @@ from pilates.activitysim.outputs import configured_asim_output_tables
 from pilates.config import PilatesConfig, load_config
 from pilates.runtime.activitysim_run_observations import OBSERVATION_PATH_ENV
 from pilates.utils import consist_runtime as cr
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_path, set_coupler_from_artifact
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
     ASIM_HOUSEHOLDS_IN,
@@ -597,7 +597,7 @@ def run_phase(
     body_before, preparation_before = _observation_counts(observation_log)
     with tracker.scenario(f"activitysim-run-acceptance-{phase}") as scenario:
         for key, artifact in artifacts.items():
-            scenario.coupler.set_from_artifact(key, artifact)
+            set_coupler_from_artifact(scenario.coupler, key, artifact)
         resolved = activitysim_run.resolve_inputs(
             settings=settings,
             state=state,

@@ -18,6 +18,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon
 
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
 )
@@ -331,6 +332,14 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     sharrow_cache_dir = Path(env["sharrow_cache_dir"])
     zarr_path = Path(env["zarr_path"])
     raw_beam_zarr_path = beam_output_dir / "raw-od-skims.zarr"
+    mutable_configs_root = Path(workspace.get_asim_mutable_configs_dir())
+    for config_root in required_activitysim_config_roots(
+        settings.activitysim.main_configs_dir
+    ):
+        _write_file(
+            config_root.path_under(mutable_configs_root) / "settings.yaml",
+            "models: []\n",
+        )
 
     temp_names = (
         "accessibility",

@@ -265,17 +265,25 @@ def consist_step_meta(
         config_roots = activitysim_config_root_dirs(
             activitysim_settings, mutable_configs_root
         )
-        missing_roots = [
-            candidate for candidate in config_roots if not candidate.is_dir()
-        ]
-        if missing_roots:
-            missing = ", ".join(str(candidate) for candidate in missing_roots)
-            raise RuntimeError(
-                "ActivitySim configuration identity is incomplete; missing roots: "
-                f"{missing}"
+        if model == "activitysim_run":
+            missing_roots = [
+                candidate for candidate in config_roots if not candidate.is_dir()
+            ]
+            if missing_roots:
+                missing = ", ".join(str(candidate) for candidate in missing_roots)
+                raise RuntimeError(
+                    "ActivitySim configuration identity is incomplete; missing roots: "
+                    f"{missing}"
+                )
+            selected_roots = config_roots
+        else:
+            selected_roots = tuple(
+                candidate for candidate in config_roots if candidate.is_dir()
             )
+            if not selected_roots:
+                return None
 
-        return ActivitySimConfigAdapter(root_dirs=list(config_roots))
+        return ActivitySimConfigAdapter(root_dirs=list(selected_roots))
 
     def _beam_adapter(ctx: StepContext) -> Any:
         if os.environ.get(_DISABLE_BEAM_CONFIG_ADAPTER_ENV, "").lower() in {

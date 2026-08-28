@@ -173,11 +173,15 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     assert FINAL_SKIMS_OMX in captured["atlas"]
 
 
-def test_activitysim_uses_zarr_only_after_beam_bootstrap(monkeypatch) -> None:
+def test_activitysim_uses_zarr_only_after_beam_bootstrap(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Later ActivitySim iterations must not select an OMX skim handoff."""
 
     captured: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    zarr = object()
+    zarr = tmp_path / "selected-skims.zarr"
+    zarr.mkdir()
+    (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     run_inputs = {
         "land_use_asim_in": object(),
         "households_asim_in": object(),
