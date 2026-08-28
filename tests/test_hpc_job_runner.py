@@ -556,6 +556,43 @@ fi
     assert not any("-m pip install -e" in call for call in python_calls)
 
 
+def test_job_activitysim_acceptance_rejects_inherited_pythonpath(
+    tmp_path: Path,
+) -> None:
+    """An inherited import search path cannot shadow the released Consist wheel."""
+
+    pilates_dir = tmp_path / "pilates"
+    pilates_dir.mkdir()
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run: {}\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text('{"released_consist_version": "9.8.7"}\n', encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--activitysim-run-acceptance",
+            str(settings),
+            str(manifest),
+            str(evidence_root),
+        ],
+        cwd=_PROJECT_ROOT,
+        env={
+            **os.environ,
+            "PILATES_DIR": str(pilates_dir),
+            "PYTHONPATH": "/shadow-checkout",
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "must not inherit PYTHONPATH" in completed.stderr
+
+
 def test_job_urbansim_h5_snapshot_acceptance_runs_capture_then_reconcile(
     tmp_path: Path,
 ) -> None:

@@ -208,6 +208,28 @@ def load_manifest(path: Path) -> AcceptanceManifest:
     )
 
 
+def _distribution_consist_import_paths(
+    distribution: importlib_metadata.Distribution,
+) -> tuple[Path, ...]:
+    """Return wheel-recorded locations that can provide ``consist.__init__``."""
+
+    package_files = distribution.files
+    if not package_files:
+        raise RuntimeError("installed Consist distribution has no package-file record")
+    init_files = [
+        member
+        for member in package_files
+        if tuple(Path(member).parts[-2:]) == ("consist", "__init__.py")
+    ]
+    if not init_files:
+        raise RuntimeError(
+            "installed Consist distribution does not record consist/__init__.py"
+        )
+    return tuple(
+        Path(distribution.locate_file(member)).resolve() for member in init_files
+    )
+
+
 def preflight_released_consist(required_release_version: str) -> dict[str, object]:
     """Describe whether the imported Consist is the operator's release install."""
 
@@ -219,6 +241,8 @@ def preflight_released_consist(required_release_version: str) -> dict[str, objec
         "importlib_metadata_version": None,
         "public_version": None,
         "import_path": None,
+        "distribution_import_paths": [],
+        "distribution_import_path_match": False,
         "editable_install": None,
         "release_install": False,
         "version_match": False,
@@ -233,6 +257,15 @@ def preflight_released_consist(required_release_version: str) -> dict[str, objec
         import_file = consist.__file__
         if not isinstance(import_file, str):
             raise RuntimeError("consist has no importable module file")
+        import_path = Path(import_file).resolve()
+        evidence.update(
+            {
+                "installed_version": installed_version,
+                "importlib_metadata_version": metadata_version,
+                "public_version": public_version,
+                "import_path": str(import_path),
+            }
+        )
         direct_url_text = distribution.read_text("direct_url.json")
         editable_install = False
         if direct_url_text is not None:
@@ -244,12 +277,21 @@ def preflight_released_consist(required_release_version: str) -> dict[str, objec
                 isinstance(directory_info, Mapping)
                 and directory_info.get("editable") is True
             )
+        evidence.update(
+            {
+                "editable_install": editable_install,
+                "release_install": not editable_install,
+            }
+        )
+        distribution_import_paths = _distribution_consist_import_paths(distribution)
     except (
         AttributeError,
         importlib_metadata.PackageNotFoundError,
         json.JSONDecodeError,
         OSError,
         RuntimeError,
+        TypeError,
+        ValueError,
     ) as error:
         evidence["error"] = f"{type(error).__name__}: {error}"
         return evidence
@@ -262,18 +304,24 @@ def preflight_released_consist(required_release_version: str) -> dict[str, objec
     public_api_matches_metadata = (
         public_version == metadata_version == installed_version
     )
+    distribution_import_path_match = import_path in distribution_import_paths
     release_install = not editable_install
     evidence.update(
         {
-            "installed_version": installed_version,
-            "importlib_metadata_version": metadata_version,
-            "public_version": public_version,
-            "import_path": str(Path(import_file).resolve()),
+            "distribution_import_paths": [
+                str(path) for path in distribution_import_paths
+            ],
+            "distribution_import_path_match": distribution_import_path_match,
             "editable_install": editable_install,
             "release_install": release_install,
             "version_match": version_match,
             "public_api_matches_metadata": public_api_matches_metadata,
-            "valid": release_install and version_match and public_api_matches_metadata,
+            "valid": (
+                release_install
+                and version_match
+                and public_api_matches_metadata
+                and distribution_import_path_match
+            ),
         }
     )
     return evidence

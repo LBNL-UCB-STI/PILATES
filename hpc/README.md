@@ -161,9 +161,13 @@ version selected for the acceptance. Do not use `CONSIST_SRC_DIR` or an editable
 checkout for this mode: the allocated job force-reinstalls only
 `consist==released_consist_version`, then the driver records and checks the
 installed version, public `consist.__version__`, `importlib.metadata` version,
-import path, and editable/release determination in `runtime-environment.json`.
-It rejects an editable install or any mismatch before the cold phase. An
-operator can confirm the expected release is resolvable before submitting:
+import path, wheel-recorded package-file path, their exact match, and
+editable/release determination in `runtime-environment.json`. It rejects an
+editable install, an import shadowing the installed wheel, or any version
+mismatch before the cold phase. Submit from an environment with `PYTHONPATH`
+unset; the acceptance job rejects a non-empty inherited value to prevent a
+checkout from shadowing the selected release. An operator can confirm the
+expected release is resolvable before submitting:
 
 ```bash
 python3 -m pip download --no-deps "consist==<operator-approved published Consist version>"
@@ -174,7 +178,7 @@ bundle, which the driver copies into each otherwise empty workspace so the
 adapter can establish the same config identity in both phases.
 
 ```bash
-./hpc/job_runner.sh \
+env -u PYTHONPATH ./hpc/job_runner.sh \
   -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
   -a <slurm_account> \
   --activitysim-run-acceptance hpc/activitysim-run-acceptance-inputs.json

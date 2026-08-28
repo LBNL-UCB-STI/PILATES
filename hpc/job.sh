@@ -246,6 +246,10 @@ if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
 fi
+if [ "$acceptance_mode" = "activitysim-run" ] && [ -n "${PYTHONPATH:-}" ]; then
+    echo "ERROR: ActivitySim acceptance must not inherit PYTHONPATH; unset it before submission to prevent Consist import shadowing." >&2
+    exit 2
+fi
 
 echo "Setting up HPC runtime environment..."
 set +u

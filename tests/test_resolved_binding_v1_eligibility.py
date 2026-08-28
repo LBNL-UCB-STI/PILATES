@@ -174,8 +174,9 @@ def test_activitysim_config_adapter_identity_is_portable_and_content_sensitive(
     assert changed.content_hash != first.content_hash
 
 
+@pytest.mark.parametrize("selected_skim_role", (ASIM_OMX_SKIMS, ZARR_SKIMS))
 def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, selected_skim_role: str
 ) -> None:
     """A native body must not rediscover poisoned mutable ActivitySim roots.
 
@@ -196,10 +197,18 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         ASIM_LAND_USE_IN: staged_data_root / "land_use.csv",
         ASIM_HOUSEHOLDS_IN: staged_data_root / "households.csv",
         ASIM_PERSONS_IN: staged_data_root / "persons.csv",
-        ASIM_OMX_SKIMS: staged_data_root / "skims.omx",
     }
     for role, path in staged_inputs.items():
         path.write_text(f"{role}\n", encoding="utf-8")
+    selected_skim = staged_data_root / (
+        "skims.zarr" if selected_skim_role == ZARR_SKIMS else "skims.omx"
+    )
+    if selected_skim_role == ZARR_SKIMS:
+        selected_skim.mkdir()
+        (selected_skim / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    else:
+        selected_skim.write_text("omx skims\n", encoding="utf-8")
+    staged_inputs[selected_skim_role] = selected_skim
 
     adapter_roots: list[Path] = []
     adapter_root = tmp_path / "adapter-selected-configs"
@@ -237,6 +246,25 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
     )
     captured: dict[str, object] = {}
     observation_log = tmp_path / "activitysim-observations.jsonl"
+    native_state = SimpleNamespace(
+        full_settings=settings,
+        current_year=2019,
+        current_inner_iter=0,
+    )
+    body_runner = ActivitysimRunner("activitysim", native_state)
+
+    def capture_container(**kwargs: object) -> bool:
+        captured["mounts"] = kwargs["volumes"]
+        return True
+
+    monkeypatch.setattr(
+        body_runner, "get_model_and_image", lambda *_args: ("activitysim", "image")
+    )
+    monkeypatch.setattr(
+        body_runner, "get_base_asim_cmd", lambda *_args: ["activitysim"]
+    )
+    monkeypatch.setattr(body_runner, "get_asim_additional_args", lambda *_args: [])
+    monkeypatch.setattr(body_runner, "run_container", capture_container)
 
     class Runner:
         def run(
@@ -245,8 +273,15 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
             captured["inputs"] = inputs
             captured["context"] = context
             captured["kwargs"] = kwargs
-            captured["mounts"] = ActivitysimRunner.get_asim_docker_vols(
-                settings, launch_context=context
+            body_runner._run(
+                inputs,
+                context,
+                skim_mode="zarr" if selected_skim_role == ZARR_SKIMS else "omx",
+                extra_inputs=(
+                    {ZARR_SKIMS: selected_skim}
+                    if selected_skim_role == ZARR_SKIMS
+                    else {}
+                ),
             )
 
     monkeypatch.setattr(
@@ -266,13 +301,18 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
         get_asim_output_dir=lambda: str(output_root),
     )
 
+    skim_kwargs = (
+        {"zarr_skims": selected_skim}
+        if selected_skim_role == ZARR_SKIMS
+        else {"omx_skims": selected_skim}
+    )
     activitysim_steps._activitysim_run_callable(
         staged_inputs[ASIM_LAND_USE_IN],
         staged_inputs[ASIM_HOUSEHOLDS_IN],
         staged_inputs[ASIM_PERSONS_IN],
-        omx_skims=staged_inputs[ASIM_OMX_SKIMS],
+        **skim_kwargs,
         settings=settings,
-        state=SimpleNamespace(),
+        state=native_state,
         workspace=workspace,
         activitysim_launch_context=launch_context,
         activitysim_config_staging_plan=ActivitySimConfigStagingPlan(
@@ -290,23 +330,38 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
     mounted_paths = tuple(mounts)
     assert str(poisoned_data_root) not in mounted_paths
     assert str(poisoned_config_root) not in mounted_paths
-    assert os.path.abspath(str(staged_data_root)) in mounts
-    assert mounts[os.path.abspath(str(staged_data_root))]["mode"] == "ro"
-    allowed_mount_roots = (
-        staged_data_root.resolve(),
-        staged_config_root.resolve(),
-        output_root.resolve(),
-        launch_context.runtime_cache_dir.resolve(),
-        launch_context.shared_cache_dir.resolve(),
-        launch_context.shared_tmp_dir.resolve(),
-        launch_context.compile_output_dir.resolve(),
-    )
-    for mounted_path in mounts:
-        mounted_root = Path(mounted_path).resolve()
-        assert any(
-            mounted_root.is_relative_to(allowed_root)
-            for allowed_root in allowed_mount_roots
-        ), f"ambient mount source leaked into native launch: {mounted_root}"
+    remote_root = "/activitysim/example"
+    expected_mounts = {
+        str(staged_data_root.resolve()): {
+            "bind": f"{remote_root}/data",
+            "mode": "ro",
+        },
+        str(output_root.resolve()): {"bind": f"{remote_root}/output", "mode": "rw"},
+        str((staged_config_root / "configs_extended").resolve()): {
+            "bind": f"{remote_root}/configs",
+            "mode": "ro",
+        },
+        str((staged_config_root / "configs_mp").resolve()): {
+            "bind": f"{remote_root}/configs_mp",
+            "mode": "ro",
+        },
+        str((staged_config_root / "configs_sh_compile").resolve()): {
+            "bind": f"{remote_root}/configs_sh_compile",
+            "mode": "ro",
+        },
+        str(launch_context.shared_tmp_dir.resolve()): {"bind": "/tmp", "mode": "rw"},
+        str(launch_context.shared_cache_dir.resolve()): {
+            "bind": "/app/numba_cache",
+            "mode": "rw",
+        },
+    }
+    if selected_skim_role == ZARR_SKIMS:
+        expected_mounts[str(launch_context.runtime_cache_dir.resolve())] = {
+            "bind": f"{remote_root}/output/cache",
+            "mode": "ro",
+        }
+    assert mounts == expected_mounts
+    assert str(launch_context.compile_output_dir.resolve()) not in mounts
     captured_inputs = captured["inputs"]
     assert isinstance(captured_inputs, ActivitySimPreprocessOutputs)
     assert captured_inputs.mutable_data_dir == staged_data_root
@@ -314,6 +369,16 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
     assert captured_inputs.households_table == staged_inputs[ASIM_HOUSEHOLDS_IN]
     assert captured_inputs.persons_table == staged_inputs[ASIM_PERSONS_IN]
     assert captured["context"] is launch_context
+    captured_kwargs = captured["kwargs"]
+    assert isinstance(captured_kwargs, dict)
+    if selected_skim_role == ZARR_SKIMS:
+        assert captured_inputs.omx_skims is None
+        assert captured_kwargs["skim_mode"] == "zarr"
+        assert captured_kwargs["extra_inputs"] == {ZARR_SKIMS: selected_skim}
+    else:
+        assert captured_inputs.omx_skims == selected_skim
+        assert captured_kwargs["skim_mode"] == "omx"
+        assert captured_kwargs["extra_inputs"] == {}
     assert (staged_config_root / "configs_extended" / "settings.yaml").read_text(
         encoding="utf-8"
     ) == "source: configs_extended\n"
@@ -448,10 +513,15 @@ def test_activitysim_run_release_preflight_records_and_enforces_release_identity
 
     class Distribution:
         version = installed_version
+        files = (Path("consist/__init__.py"),)
 
         def read_text(self, name: str) -> str | None:
             assert name == "direct_url.json"
             return direct_url
+
+        def locate_file(self, member: Path) -> Path:
+            assert member == Path("consist/__init__.py")
+            return Path("/released/site-packages") / member
 
     monkeypatch.setattr(
         activitysim_run_acceptance,
@@ -478,9 +548,56 @@ def test_activitysim_run_release_preflight_records_and_enforces_release_identity
     assert evidence["installed_version"] == installed_version
     assert evidence["public_version"] == public_version
     assert evidence["import_path"] == "/released/site-packages/consist/__init__.py"
+    assert evidence["distribution_import_paths"] == [
+        "/released/site-packages/consist/__init__.py"
+    ]
+    assert evidence["distribution_import_path_match"] is True
     assert evidence["editable_install"] is (direct_url is not None)
     assert evidence["release_install"] is (direct_url is None)
     assert evidence["valid"] is expected_valid
+
+
+def test_activitysim_run_release_preflight_rejects_same_version_shadow_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A PYTHONPATH checkout cannot impersonate the selected same-version wheel."""
+
+    class Distribution:
+        version = "9.8.7"
+        files = (Path("consist/__init__.py"),)
+
+        def read_text(self, name: str) -> None:
+            assert name == "direct_url.json"
+            return None
+
+        def locate_file(self, member: Path) -> Path:
+            assert member == Path("consist/__init__.py")
+            return Path("/released/site-packages") / member
+
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "consist",
+        SimpleNamespace(
+            __version__="9.8.7",
+            __file__="/shadow-checkout/consist/__init__.py",
+        ),
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance.importlib_metadata,
+        "distribution",
+        lambda _package_name: Distribution(),
+    )
+    monkeypatch.setattr(
+        activitysim_run_acceptance.importlib_metadata,
+        "version",
+        lambda _package_name: "9.8.7",
+    )
+
+    evidence = activitysim_run_acceptance.preflight_released_consist("9.8.7")
+
+    assert evidence["valid"] is False
+    assert evidence["import_path"] == "/shadow-checkout/consist/__init__.py"
+    assert evidence["distribution_import_path_match"] is False
 
 
 def test_activitysim_run_retains_failed_release_preflight_before_any_phase(
