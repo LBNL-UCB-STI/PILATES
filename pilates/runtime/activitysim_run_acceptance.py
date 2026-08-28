@@ -16,6 +16,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
 
 import consist
 from consist import Artifact, Tracker
@@ -57,7 +58,8 @@ class AcceptanceManifest:
     workflow_year: int
     forecast_year: int
     iteration: int
-    released_consist_version: str
+    released_consist_version: str | None = None
+    consist_install_mode: str = "released"
 
 
 @dataclass(frozen=True)
@@ -156,6 +158,25 @@ def _required_release_version(raw: Mapping[str, object]) -> str:
     return value.strip()
 
 
+def _consist_install_mode(raw: Mapping[str, object]) -> tuple[str, str | None]:
+    """Select one explicit Consist installation provenance policy."""
+
+    mode = raw.get("consist_install_mode", "released")
+    if mode not in {"released", "editable"}:
+        raise ValueError(
+            "ActivitySim acceptance consist_install_mode must be 'released' or "
+            "'editable'"
+        )
+    if mode == "editable":
+        if "released_consist_version" in raw:
+            raise ValueError(
+                "editable ActivitySim acceptance must not declare "
+                "released_consist_version"
+            )
+        return mode, None
+    return mode, _required_release_version(raw)
+
+
 def load_manifest(path: Path) -> AcceptanceManifest:
     """Load exactly three table inputs and one validated selected skim source."""
 
@@ -167,7 +188,7 @@ def load_manifest(path: Path) -> AcceptanceManifest:
         ) from error
     if not isinstance(raw, Mapping):
         raise ValueError("ActivitySim acceptance manifest must be a JSON object")
-    released_consist_version = _required_release_version(raw)
+    consist_install_mode, released_consist_version = _consist_install_mode(raw)
     inputs_value = raw.get("inputs")
     if not isinstance(inputs_value, Mapping):
         raise ValueError("ActivitySim acceptance manifest requires an inputs object")
@@ -205,6 +226,7 @@ def load_manifest(path: Path) -> AcceptanceManifest:
         forecast_year=_COHORT["forecast_year"],
         iteration=_COHORT["iteration"],
         released_consist_version=released_consist_version,
+        consist_install_mode=consist_install_mode,
     )
 
 
@@ -324,6 +346,60 @@ def preflight_released_consist(required_release_version: str) -> dict[str, objec
             ),
         }
     )
+    return evidence
+
+
+def preflight_editable_consist(editable_source: Path) -> dict[str, object]:
+    """Prove the imported Consist module belongs to one supplied Git checkout."""
+
+    source = editable_source.resolve()
+    evidence: dict[str, object] = {
+        "consist_install_mode": "editable",
+        "evidence_kind": "pre_merge_editable_integration",
+        "editable_source": str(source),
+        "editable_revision": None,
+        "editable_dirty": None,
+        "import_path": None,
+        "import_within_editable_source": False,
+        "editable_install": True,
+        "release_install": False,
+        "valid": False,
+    }
+    try:
+        if not source.is_dir():
+            raise RuntimeError(f"editable Consist source is not a directory: {source}")
+        revision = subprocess.run(
+            ["git", "-C", str(source), "rev-parse", "HEAD"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        dirty_status = subprocess.run(
+            ["git", "-C", str(source), "status", "--porcelain"],
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        import_file = consist.__file__
+        if not isinstance(import_file, str):
+            raise RuntimeError("consist has no importable module file")
+        import_path = Path(import_file).resolve()
+        try:
+            import_path.relative_to(source)
+            import_within_source = True
+        except ValueError:
+            import_within_source = False
+        evidence.update(
+            {
+                "editable_revision": revision,
+                "editable_dirty": dirty_status != "",
+                "import_path": str(import_path),
+                "import_within_editable_source": import_within_source,
+                "valid": revision != "" and import_within_source,
+            }
+        )
+    except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
+        evidence["error"] = f"{type(error).__name__}: {error}"
     return evidence
 
 
@@ -998,6 +1074,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--settings", required=True, type=Path)
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--evidence-root", required=True, type=Path)
+    parser.add_argument("--editable-consist", type=Path)
     args = parser.parse_args(argv)
 
     evidence_root = args.evidence_root.resolve()
@@ -1026,18 +1103,35 @@ def main(argv: Sequence[str] | None = None) -> int:
         {
             "inputs": {key: str(path) for key, path in manifest.inputs.items()},
             "selected_skim_role": manifest.selected_skim_role,
+            "consist_install_mode": manifest.consist_install_mode,
             "released_consist_version": manifest.released_consist_version,
             "cohort": dict(_COHORT),
         },
     )
-    release_preflight = preflight_released_consist(manifest.released_consist_version)
-    _write_json(evidence_root / "runtime-environment.json", release_preflight)
-    if release_preflight["valid"] is not True:
+    if manifest.consist_install_mode == "editable":
+        if args.editable_consist is None:
+            raise RuntimeError(
+                "editable ActivitySim acceptance requires --editable-consist; "
+                "inspect runtime-environment.json"
+            )
+        consist_preflight = preflight_editable_consist(args.editable_consist)
+        preflight_label = "editable Consist"
+    else:
+        if args.editable_consist is not None:
+            raise RuntimeError(
+                "released ActivitySim acceptance must not receive --editable-consist"
+            )
+        if manifest.released_consist_version is None:
+            raise RuntimeError("released ActivitySim acceptance has no release version")
+        consist_preflight = preflight_released_consist(manifest.released_consist_version)
+        preflight_label = "non-editable released Consist"
+    _write_json(evidence_root / "runtime-environment.json", consist_preflight)
+    if consist_preflight["valid"] is not True:
         raise RuntimeError(
-            "ActivitySim acceptance requires the requested non-editable released "
-            "Consist installation; inspect runtime-environment.json"
+            f"ActivitySim acceptance requires the requested {preflight_label} "
+            "installation; inspect runtime-environment.json"
         )
-    _progress("released Consist preflight validated")
+    _progress(f"{preflight_label} preflight validated")
     settings = load_config(str(args.settings))
     state = WorkflowState.from_settings(settings)
     _validate_state(state)

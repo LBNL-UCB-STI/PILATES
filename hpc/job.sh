@@ -116,10 +116,50 @@ required_activitysim_acceptance_consist_version() {
 }
 
 
+activitysim_acceptance_consist_install_mode() {
+    local manifest_path="$1"
+    python3 -c 'import json, sys; raw = json.load(open(sys.argv[1], encoding="utf-8")); mode = raw.get("consist_install_mode", "released"); mode in {"released", "editable"} or sys.exit("ActivitySim acceptance manifest has invalid consist_install_mode"); print(mode)' "$manifest_path"
+}
+
+
 install_released_activitysim_acceptance_consist() {
     local required_version="$1"
     echo "Installing required released Consist version consist==$required_version ..."
     python3 -m pip install --upgrade --force-reinstall "consist==$required_version"
+}
+
+
+install_editable_activitysim_acceptance_consist() {
+    local editable_source="$1"
+    local consist_revision
+
+    if [ "${editable_source#/}" = "$editable_source" ] || [ ! -d "$editable_source" ]; then
+        echo "ERROR: editable ActivitySim acceptance requires an existing absolute Consist checkout." >&2
+        return 1
+    fi
+    if ! consist_revision="$(git -C "$editable_source" rev-parse HEAD)"; then
+        echo "ERROR: editable ActivitySim acceptance requires --editable-consist to be a Git checkout." >&2
+        return 1
+    fi
+    echo "Installing required editable Consist checkout from $editable_source at $consist_revision ..."
+    python3 -m pip install -e "$editable_source"
+    ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE="$editable_source" python3 - <<'PY'
+import os
+from pathlib import Path
+
+import consist
+
+source = Path(os.environ["ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE"]).resolve()
+module = Path(consist.__file__).resolve()
+try:
+    module.relative_to(source)
+except ValueError as error:
+    raise SystemExit(
+        "ERROR: Consist import is not provided by the required editable checkout: "
+        f"{module} is outside {source}"
+    ) from error
+print(f"consist import path: {module}")
+PY
 }
 
 
@@ -225,8 +265,8 @@ elif [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
 elif [ "${1:-}" = "--activitysim-run-acceptance" ]; then
     acceptance_mode="activitysim-run"
     shift
-    if [ "$#" -ne 3 ]; then
-        echo "Usage: $0 --activitysim-run-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+    if [ "$#" -ne 3 ] && [ "$#" -ne 5 ]; then
+        echo "Usage: $0 --activitysim-run-acceptance <settings_file> <input_manifest> <evidence_root> [--editable-consist <absolute-source-dir>]" >&2
         exit 2
     fi
 elif [ "$#" -gt 2 ]; then
@@ -242,6 +282,14 @@ fi
 CONFIG_FILE="$(normalize_path "$1")"
 STAGE_FILE="$(normalize_path "${2:-}")"
 ACCEPTANCE_EVIDENCE_ROOT="$(normalize_path "${3:-}")"
+ACTIVITYSIM_EDITABLE_CONSIST_SOURCE=""
+if [ "$acceptance_mode" = "activitysim-run" ] && [ "$#" -eq 5 ]; then
+    if [ "${4:-}" != "--editable-consist" ] || [ -z "${5:-}" ]; then
+        echo "ERROR: ActivitySim editable acceptance expects --editable-consist <absolute-source-dir>." >&2
+        exit 2
+    fi
+    ACTIVITYSIM_EDITABLE_CONSIST_SOURCE="$5"
+fi
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
@@ -281,8 +329,21 @@ install_python_deps "$REQUIREMENTS_FILE"
 if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
     install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
 elif [ "$acceptance_mode" = "activitysim-run" ]; then
-    required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
-    install_released_activitysim_acceptance_consist "$required_consist_version"
+    activitysim_consist_mode="$(activitysim_acceptance_consist_install_mode "$STAGE_FILE")"
+    if [ "$activitysim_consist_mode" = "editable" ]; then
+        if [ -z "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+            echo "ERROR: editable ActivitySim acceptance requires --editable-consist <absolute-source-dir>." >&2
+            exit 2
+        fi
+        install_editable_activitysim_acceptance_consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
+    else
+        if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+            echo "ERROR: released ActivitySim acceptance must not receive --editable-consist." >&2
+            exit 2
+        fi
+        required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
+        install_released_activitysim_acceptance_consist "$required_consist_version"
+    fi
 else
     install_consist "$REQUIREMENTS_FILE"
 fi

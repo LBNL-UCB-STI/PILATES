@@ -558,6 +558,83 @@ fi
     assert not any("-m pip install -e" in call for call in python_calls)
 
 
+def test_job_activitysim_acceptance_editable_mode_installs_supplied_checkout(
+    tmp_path: Path,
+) -> None:
+    """Pre-merge ActivitySim evidence installs only the selected checkout."""
+
+    pilates_dir = tmp_path / "pilates"
+    requirements = pilates_dir / "hpc" / "requirements-hpc.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("", encoding="utf-8")
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run: {}\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text('{"consist_install_mode": "editable"}\n', encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    consist_source = tmp_path / "consist"
+    consist_source.mkdir()
+    venv = tmp_path / "venv"
+    venv_bin = venv / "bin"
+    venv_bin.mkdir(parents=True)
+    calls = tmp_path / "python-calls"
+    _write_executable(
+        venv_bin / "python3",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
+if [ "$1" = "-c" ]; then
+    printf '%s\\n' editable
+fi
+if [ "$1" = "-" ]; then
+    exit 0
+fi
+""",
+    )
+    (venv_bin / "activate").write_text(
+        f'export PATH="{venv_bin}:$PATH"\n', encoding="utf-8"
+    )
+    (venv / ".last_requirements_hash").write_text(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "module", "#!/bin/sh\nexit 0\n")
+    _write_executable(fake_bin / "git", "#!/bin/sh\nprintf '%s\\n' fake-revision\n")
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--activitysim-run-acceptance",
+            str(settings),
+            str(manifest),
+            str(evidence_root),
+            "--editable-consist",
+            str(consist_source),
+        ],
+        cwd=_PROJECT_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PILATES_DIR": str(pilates_dir),
+            "PILATES_VENV_PATH": str(venv),
+            "PILATES_REQUIREMENTS_FILE": str(requirements),
+            "CONSIST_SRC_DIR": str(tmp_path / "unselected-adjacent-consist"),
+            "PYTHON_CALLS_FILE": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    python_calls = calls.read_text(encoding="utf-8").splitlines()
+    assert any(call == f"-m pip install -e {consist_source}" for call in python_calls)
+    assert not any("--force-reinstall consist==" in call for call in python_calls)
+
+
 def test_job_activitysim_acceptance_rejects_inherited_pythonpath(
     tmp_path: Path,
 ) -> None:

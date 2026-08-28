@@ -34,6 +34,7 @@ high_mem=false
 native_structural_canary_seed=""
 beam_preprocess_acceptance_manifest=""
 activitysim_run_acceptance_manifest=""
+activitysim_run_acceptance_editable_consist=""
 urbansim_h5_snapshot_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
@@ -82,6 +83,14 @@ while [ $# -gt 0 ]; do
         activitysim_run_acceptance_manifest="$2"
         shift 2
         ;;
+    --editable-consist)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --editable-consist requires an absolute Consist checkout path." >&2
+            exit 2
+        fi
+        activitysim_run_acceptance_editable_consist="$2"
+        shift 2
+        ;;
     --urbansim-h5-snapshot-acceptance)
         if [ -z "${2:-}" ]; then
             echo "ERROR: --urbansim-h5-snapshot-acceptance requires an input manifest path." >&2
@@ -91,17 +100,18 @@ while [ $# -gt 0 ]; do
         shift 2
         ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json [--editable-consist /absolute/consist]] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
         echo "  --native-structural-canary: copy a reviewed seed manifest into per-job canary evidence."
         echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
         echo "  --activitysim-run-acceptance: run the isolated cold-to-fresh ActivitySim run acceptance harness."
+        echo "  --editable-consist: explicit source for an editable ActivitySim pre-merge acceptance manifest."
         echo "  --urbansim-h5-snapshot-acceptance: capture and reconcile the UrbanSim HDF5 snapshot acceptance harness."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--native-structural-canary seed-manifest.json] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json [--editable-consist /absolute/consist]] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -233,6 +243,16 @@ if [ -n "$activitysim_run_acceptance_manifest" ] \
     && [ ! -f "$activitysim_run_acceptance_manifest_path" ]; then
     echo "ERROR: ActivitySim run acceptance input manifest not found: $activitysim_run_acceptance_manifest_path" >&2
     exit 1
+fi
+if [ -n "$activitysim_run_acceptance_editable_consist" ] \
+    && [ -z "$activitysim_run_acceptance_manifest" ]; then
+    echo "ERROR: --editable-consist is only valid with --activitysim-run-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_editable_consist" ] \
+    && { [ "${activitysim_run_acceptance_editable_consist#/}" = "$activitysim_run_acceptance_editable_consist" ] || [ ! -d "$activitysim_run_acceptance_editable_consist" ]; }; then
+    echo "ERROR: --editable-consist must name an existing absolute Consist checkout." >&2
+    exit 2
 fi
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
     && [ ! -f "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
@@ -366,6 +386,12 @@ if [ -n "$activitysim_run_acceptance_evidence_dir" ]; then
         "$activitysim_run_acceptance_evidence_manifest"
         "$activitysim_run_acceptance_evidence_dir"
     )
+    if [ -n "$activitysim_run_acceptance_editable_consist" ]; then
+        sbatch_args+=(
+            --editable-consist
+            "$activitysim_run_acceptance_editable_consist"
+        )
+    fi
 elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --urbansim-h5-snapshot-acceptance

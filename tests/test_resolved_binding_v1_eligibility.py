@@ -491,6 +491,86 @@ def test_activitysim_run_acceptance_requires_operator_released_consist_version(
         activitysim_run_acceptance.load_manifest(manifest_path)
 
 
+def test_activitysim_run_acceptance_allows_explicit_editable_consist_mode(
+    tmp_path: Path,
+) -> None:
+    """Pre-merge evidence selects editable Consist without a release version."""
+
+    inputs = {
+        ASIM_LAND_USE_IN: tmp_path / "land_use.csv",
+        ASIM_HOUSEHOLDS_IN: tmp_path / "households.csv",
+        ASIM_PERSONS_IN: tmp_path / "persons.csv",
+        ZARR_SKIMS: tmp_path / "skims.zarr",
+    }
+    for key, path in inputs.items():
+        if key == ZARR_SKIMS:
+            path.mkdir()
+            (path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+        else:
+            path.write_text(f"{key}\n", encoding="utf-8")
+    manifest_path = tmp_path / "activitysim-editable-inputs.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "consist_install_mode": "editable",
+                "inputs": {key: str(path) for key, path in inputs.items()},
+                "cohort": {
+                    "workflow_year": 2017,
+                    "forecast_year": 2019,
+                    "iteration": 0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = activitysim_run_acceptance.load_manifest(manifest_path)
+
+    assert manifest.consist_install_mode == "editable"
+    assert manifest.released_consist_version is None
+
+
+def test_activitysim_run_editable_preflight_records_exact_checkout_provenance(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Pre-merge evidence proves the imported module belongs to its checkout."""
+
+    source = tmp_path / "consist"
+    module = source / "src" / "consist" / "__init__.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        activitysim_run_acceptance,
+        "consist",
+        SimpleNamespace(__file__=str(module)),
+    )
+
+    def git_run(command: list[str], **_kwargs: object) -> SimpleNamespace:
+        if command[-2:] == ["rev-parse", "HEAD"]:
+            return SimpleNamespace(stdout="feedface\n")
+        if command[-2:] == ["status", "--porcelain"]:
+            return SimpleNamespace(stdout="")
+        raise AssertionError(command)
+
+    monkeypatch.setattr(activitysim_run_acceptance.subprocess, "run", git_run)
+
+    evidence = activitysim_run_acceptance.preflight_editable_consist(source)
+
+    assert evidence == {
+        "consist_install_mode": "editable",
+        "evidence_kind": "pre_merge_editable_integration",
+        "editable_source": str(source.resolve()),
+        "editable_revision": "feedface",
+        "editable_dirty": False,
+        "import_path": str(module.resolve()),
+        "import_within_editable_source": True,
+        "editable_install": True,
+        "release_install": False,
+        "valid": True,
+    }
+
+
 @pytest.mark.parametrize(
     (
         "direct_url",
