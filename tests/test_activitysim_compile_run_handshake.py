@@ -23,6 +23,9 @@ from pilates.activitysim.runner import (
     asim_compile_output_dir,
 )
 from pilates.utils import consist_runtime as cr
+from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_definition import InputContract, StepDefinition
+from pilates.workflows.step_execution import execute_step
 
 
 def _launch_context(root: Path) -> ActivitySimLaunchContext:
@@ -96,10 +99,10 @@ def test_numba_warmup_is_private_and_never_publishes_its_local_zarr(
     assert not hasattr(warmup, "expected_outputs")
 
 
-def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
+def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_container(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """Consist admission skips the whole runner body, including warmup."""
+    """A native cache hit hydrates without entering the ActivitySim body."""
     workspace = SimpleNamespace(full_path=str(tmp_path / "workspace"))
     settings = SimpleNamespace(
         activitysim=SimpleNamespace(persist_sharrow_cache=True, num_processes=2)
@@ -117,10 +120,19 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
     )
     runner_body_calls: list[None] = []
     warmup_calls: list[None] = []
+    warmup_contexts: list[ActivitySimLaunchContext] = []
+    runner_run_calls: list[None] = []
+    container_calls: list[None] = []
 
-    def warm_cache(*_args, **_kwargs) -> None:
+    def warm_cache(
+        _warmup: object,
+        _inputs: ActivitySimPreprocessOutputs,
+        warmup_context: ActivitySimLaunchContext,
+        **_kwargs: object,
+    ) -> None:
         warmup_calls.append(None)
-        cache_dir = tmp_path / "workspace" / "shared_cache" / "numba"
+        warmup_contexts.append(warmup_context)
+        cache_dir = warmup_context.shared_cache_dir / "numba"
         cache_dir.mkdir(parents=True, exist_ok=True)
         (cache_dir / "numba.nbi").touch()
 
@@ -128,8 +140,13 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
         runner_body_calls.append(None)
         return ActivitySimRunOutputs(output_dir=tmp_path / "workspace" / "output")
 
+    def fail_if_container_runs(*_args: object, **_kwargs: object) -> bool:
+        container_calls.append(None)
+        raise AssertionError("the test runner body must not start a container")
+
     monkeypatch.setattr(ActivitysimNumbaWarmup, "run", warm_cache)
     monkeypatch.setattr(runner, "_run", run_production)
+    monkeypatch.setattr(runner, "run_container", fail_if_container_runs)
     monkeypatch.setattr(
         activitysim_runner,
         "finalize_activitysim_zarr_skims",
@@ -142,8 +159,19 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
         output_paths={"result": "result.txt"},
         input_binding="paths",
     )
-    def native_activitysim_body(source: Path, ctx) -> None:
+    def native_activitysim_body(
+        source: Path,
+        ctx,
+        *,
+        settings: object,
+        state: object,
+        workspace: object,
+    ) -> None:
         del source
+        assert settings is not None
+        assert state is not None
+        assert workspace is not None
+        runner_run_calls.append(None)
         runner.run(
             inputs,
             _launch_context(tmp_path / "workspace"),
@@ -155,6 +183,23 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
 
     source = tmp_path / "source.txt"
     source.write_text("source\n", encoding="utf-8")
+    definition = StepDefinition(
+        name="activitysim_cache_admission_probe",
+        function=native_activitysim_body,
+        resolve_inputs=lambda **_: ResolvedStepInputs(
+            step_name="activitysim_cache_admission_probe",
+            binding=BindingResult(inputs={"source": source}),
+        ),
+        project_outputs=lambda outputs, **_: outputs,
+        execution_options=lambda **_: ExecutionOptions(
+            input_binding="paths", inject_context="ctx"
+        ),
+        input_contract=InputContract(
+            status="incomplete",
+            reason="test-only cache admission probe",
+        ),
+        archive_outputs=False,
+    )
     tracker = Tracker(
         run_dir=tmp_path / "consist-runs",
         db_path=str(tmp_path / "provenance.duckdb"),
@@ -162,20 +207,33 @@ def test_cache_hit_skips_activitysim_warmup_with_the_native_runner_body(
     results = []
     for name in ("activitysim-first", "activitysim-second"):
         with tracker.scenario(name) as scenario:
-            results.append(
-                scenario.run(
-                    fn=native_activitysim_body,
-                    binding=BindingResult(inputs={"source": source}),
-                    execution_options=ExecutionOptions(
-                        input_binding="paths", inject_context="ctx"
-                    ),
-                )
+            result, _ = execute_step(
+                scenario=scenario,
+                definition=definition,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                stage="activitysim",
+                year=None,
+                iteration=None,
+                phase=None,
             )
+            results.append(result)
 
     assert results[0].cache_hit is False
     assert results[1].cache_hit is True
+    assert runner_run_calls == [None]
     assert runner_body_calls == [None]
     assert warmup_calls == [None]
+    assert container_calls == []
+    epoch_path = warmup_contexts[0].shared_cache_dir
+    resolved_inputs = definition.resolve_inputs()
+    assert all(
+        str(epoch_path) not in str(value)
+        for value in (resolved_inputs.binding.inputs or {}).values()
+    )
+    assert str(epoch_path) not in str(results[0].outputs)
+    assert str(epoch_path) not in str(definition.execution_options())
 
 
 def test_numba_warmup_passes_only_private_zarr_bytes_to_consist_container(

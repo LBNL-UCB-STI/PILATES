@@ -97,13 +97,13 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
         "expected_warmup_calls",
     ),
     [
-        (False, True, 2, False, "ActivitySim Numba warmup: running", 1),
+        (False, True, 2, False, "ActivitySim Numba warmup: new private epoch", 1),
         (
             True,
             True,
             2,
             False,
-            "ActivitySim Numba warmup: skipped (explicit rewind skip)",
+            "ActivitySim Numba warmup: not required (explicit rewind skip)",
             0,
         ),
         (
@@ -111,7 +111,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
             False,
             2,
             False,
-            "ActivitySim Numba warmup: skipped (persistent cache disabled)",
+            "ActivitySim Numba warmup: not required (persistent cache disabled)",
             0,
         ),
         (
@@ -119,7 +119,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
             False,
             1,
             True,
-            "ActivitySim Numba warmup: skipped (persistent cache disabled)",
+            "ActivitySim Numba warmup: not required (persistent cache disabled)",
             0,
         ),
         (
@@ -127,7 +127,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
             True,
             1,
             False,
-            "ActivitySim Numba warmup: skipped (single-process run)",
+            "ActivitySim Numba warmup: not required (single-process run)",
             0,
         ),
         (
@@ -135,7 +135,7 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
             True,
             1,
             True,
-            "ActivitySim Numba warmup: skipped (single-process run)",
+            "ActivitySim Numba warmup: not required (single-process run)",
             0,
         ),
         (
@@ -143,15 +143,15 @@ def _runner_state(*, persist_cache: bool, num_processes: int) -> SimpleNamespace
             True,
             2,
             True,
-            "ActivitySim Numba warmup: skipped (node-local cache present)",
-            0,
+            "ActivitySim Numba warmup: new private epoch",
+            1,
         ),
         (
             True,
             False,
             1,
             True,
-            "ActivitySim Numba warmup: skipped (explicit rewind skip)",
+            "ActivitySim Numba warmup: not required (explicit rewind skip)",
             0,
         ),
     ],
@@ -181,15 +181,19 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
     inputs = _activitysim_inputs(tmp_path)
     warmup_calls: list[None] = []
 
+    warmed_contexts: list[ActivitySimLaunchContext] = []
+
     def warm_cache(
         _warmup: object,
         _inputs: ActivitySimPreprocessOutputs,
-        _workspace: _Workspace,
+        warmup_context: ActivitySimLaunchContext,
         **_kwargs: object,
     ) -> None:
         warmup_calls.append(None)
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        (cache_dir / "numba.nbi").touch()
+        warmed_contexts.append(warmup_context)
+        epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
+        epoch_numba_dir.mkdir(parents=True, exist_ok=True)
+        (epoch_numba_dir / "numba.nbi").touch()
 
     def run_after_decision(*_args: object, **_kwargs: object) -> ActivitySimRunOutputs:
         decisions = [
@@ -210,9 +214,10 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
     )
     caplog.set_level(logging.INFO, logger="pilates.activitysim.runner")
 
+    launch_context = _launch_context(tmp_path)
     runner.run(
         inputs,
-        _launch_context(tmp_path),
+        launch_context,
         skim_mode="omx",
         skip_numba_warmup=skip_numba_warmup,
         workspace=workspace,
@@ -220,6 +225,125 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
 
     assert expected_decision in caplog.text
     assert len(warmup_calls) == expected_warmup_calls
+    if expected_warmup_calls:
+        assert warmed_contexts[0].shared_cache_dir != launch_context.shared_cache_dir
+
+
+def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A stale workspace cache cannot replace this process's first preparation."""
+    workspace = _Workspace(tmp_path)
+    ambient_numba_dir = tmp_path / "shared_cache" / "numba"
+    ambient_numba_dir.mkdir(parents=True)
+    (ambient_numba_dir / "stale.nbi").touch()
+    inputs = _activitysim_inputs(tmp_path)
+    launch_context = _launch_context(tmp_path)
+    state = _runner_state(persist_cache=True, num_processes=2)
+    warmup_contexts: list[ActivitySimLaunchContext] = []
+    body_contexts: list[ActivitySimLaunchContext] = []
+
+    def warm_cache(
+        _warmup: object,
+        _inputs: ActivitySimPreprocessOutputs,
+        warmup_context: ActivitySimLaunchContext,
+        **_kwargs: object,
+    ) -> None:
+        warmup_contexts.append(warmup_context)
+        epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
+        epoch_numba_dir.mkdir(parents=True)
+        (epoch_numba_dir / "compiled.nbi").touch()
+
+    def run_body(
+        _runner: ActivitysimRunner,
+        _inputs: ActivitySimPreprocessOutputs,
+        body_context: ActivitySimLaunchContext,
+        **_kwargs: object,
+    ) -> ActivitySimRunOutputs:
+        body_contexts.append(body_context)
+        return ActivitySimRunOutputs(output_dir=body_context.output_dir)
+
+    monkeypatch.setattr(activitysim_runner.ActivitysimNumbaWarmup, "run", warm_cache)
+    monkeypatch.setattr(ActivitysimRunner, "_run", run_body)
+    monkeypatch.setattr(
+        activitysim_runner,
+        "finalize_activitysim_zarr_skims",
+        lambda path, *_args: Path(path),
+    )
+    caplog.set_level(logging.INFO, logger="pilates.activitysim.runner")
+
+    ActivitysimRunner("activitysim", state).run(
+        inputs,
+        launch_context,
+        skim_mode="omx",
+        workspace=workspace,
+    )
+    ActivitysimRunner("activitysim", state).run(
+        inputs,
+        launch_context,
+        skim_mode="omx",
+        workspace=workspace,
+    )
+    ActivitysimRunner(
+        "activitysim", _runner_state(persist_cache=True, num_processes=2)
+    ).run(
+        inputs,
+        launch_context,
+        skim_mode="omx",
+        workspace=workspace,
+    )
+
+    assert len(warmup_contexts) == 2
+    assert body_contexts[0].shared_cache_dir == body_contexts[1].shared_cache_dir
+    assert body_contexts[0].shared_cache_dir != ambient_numba_dir.parent
+    assert body_contexts[0].shared_cache_dir.is_relative_to(ambient_numba_dir)
+    assert body_contexts[2].shared_cache_dir != body_contexts[0].shared_cache_dir
+    decisions = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("ActivitySim Numba warmup:")
+    ]
+    assert decisions == [
+        "ActivitySim Numba warmup: new private epoch",
+        "ActivitySim Numba warmup: reused private epoch",
+        "ActivitySim Numba warmup: new private epoch",
+    ]
+
+
+def test_activitysim_runner_aborts_the_body_when_private_preparation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed compile cannot fall back to stale cache bytes before the body."""
+    workspace = _Workspace(tmp_path)
+    ambient_numba_dir = tmp_path / "shared_cache" / "numba"
+    ambient_numba_dir.mkdir(parents=True)
+    (ambient_numba_dir / "stale.nbi").touch()
+    runner = ActivitysimRunner(
+        "activitysim", _runner_state(persist_cache=True, num_processes=2)
+    )
+    body_calls: list[None] = []
+
+    def fail_warmup(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("compile failed")
+
+    def fail_if_body_runs(*_args: object, **_kwargs: object) -> ActivitySimRunOutputs:
+        body_calls.append(None)
+        raise AssertionError("the ActivitySim body must not follow a failed compile")
+
+    monkeypatch.setattr(activitysim_runner.ActivitysimNumbaWarmup, "run", fail_warmup)
+    monkeypatch.setattr(runner, "_run", fail_if_body_runs)
+
+    with pytest.raises(RuntimeError, match="compile failed"):
+        runner.run(
+            _activitysim_inputs(tmp_path),
+            _launch_context(tmp_path),
+            skim_mode="omx",
+            workspace=workspace,
+        )
+
+    assert body_calls == []
 
 
 def test_numba_warmup_writes_only_to_isolated_compile_output_root(

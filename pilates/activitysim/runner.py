@@ -3,6 +3,7 @@ import os
 import shutil
 import inspect
 import json
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Literal, Mapping
@@ -101,6 +102,40 @@ class ActivitySimLaunchContext:
     shared_cache_dir: Path
     shared_tmp_dir: Path
     requires_staged_config_dirs: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ActivitySimCompileEpoch:
+    """One process-local private Numba cache for a live workflow state."""
+
+    state: "WorkflowState"
+    cache_dir: Path
+
+
+class ActivitySimCompileEpochRegistry:
+    """Keep successful private compile epochs out of workflow identity.
+
+    Entries intentionally retain the live workflow state object and compare by
+    object identity. A workspace pathname cannot prove that this Python process
+    prepared the cache, while a live state object identifies one invocation.
+    """
+
+    def __init__(self) -> None:
+        self._epochs: list[_ActivitySimCompileEpoch] = []
+
+    def get(self, state: "WorkflowState") -> Path | None:
+        for epoch in self._epochs:
+            if epoch.state is state:
+                return epoch.cache_dir
+        return None
+
+    def record(self, state: "WorkflowState", cache_dir: Path) -> None:
+        if self.get(state) is not None:
+            raise RuntimeError("ActivitySim compile epoch already recorded for state")
+        self._epochs.append(_ActivitySimCompileEpoch(state=state, cache_dir=cache_dir))
+
+
+_ACTIVITYSIM_COMPILE_EPOCHS = ActivitySimCompileEpochRegistry()
 
 
 @dataclass(frozen=True, slots=True)
@@ -587,6 +622,75 @@ class ActivitysimRunner(GenericRunner):
             "asim_geoms",
         ]
 
+    @staticmethod
+    def _allocate_private_compile_epoch(
+        launch_context: ActivitySimLaunchContext,
+    ) -> Path:
+        """Create a fresh process-private cache root below the launch cache."""
+        epoch_parent = launch_context.shared_cache_dir / "numba" / "compile-epochs"
+        epoch_parent.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="epoch-", dir=epoch_parent))
+
+    def _prepare_body_launch(
+        self,
+        inputs: ActivitySimPreprocessOutputs,
+        launch_context: ActivitySimLaunchContext,
+        *,
+        skim_mode: ActivitysimSkimMode,
+        zarr_input_path: Optional[str],
+        skip_numba_warmup: bool,
+    ) -> tuple[ActivitySimLaunchContext, ActivitysimSkimMode, Optional[str]]:
+        """Prepare the private compile epoch and return the body launch choice.
+
+        This runner-private seam has no Consist call or workflow state
+        transition. It carries the already selected skim mode/path straight to
+        the body while replacing only its non-identity cache root.
+        """
+        if skip_numba_warmup:
+            logger.info(
+                "ActivitySim Numba warmup: not required (explicit rewind skip)"
+            )
+            return launch_context, skim_mode, zarr_input_path
+        if not persist_sharrow_cache_enabled(self.state.full_settings):
+            logger.info(
+                "ActivitySim Numba warmup: not required (persistent cache disabled)"
+            )
+            return launch_context, skim_mode, zarr_input_path
+        if self.state.full_settings.activitysim.num_processes <= 1:
+            logger.info(
+                "ActivitySim Numba warmup: not required (single-process run)"
+            )
+            return launch_context, skim_mode, zarr_input_path
+
+        existing_epoch = _ACTIVITYSIM_COMPILE_EPOCHS.get(self.state)
+        if existing_epoch is not None:
+            logger.info("ActivitySim Numba warmup: reused private epoch")
+            return (
+                replace(launch_context, shared_cache_dir=existing_epoch),
+                skim_mode,
+                zarr_input_path,
+            )
+
+        epoch_context = replace(
+            launch_context,
+            shared_cache_dir=self._allocate_private_compile_epoch(launch_context),
+        )
+        logger.info("ActivitySim Numba warmup: new private epoch")
+        ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
+            inputs,
+            epoch_context,
+            skim_mode=skim_mode,
+            zarr_input_path=zarr_input_path,
+        )
+        if not _dir_contains_files(str(epoch_context.shared_cache_dir / "numba")):
+            raise RuntimeError(
+                "ActivitySim Numba warmup completed without a nonempty private cache."
+            )
+        _ACTIVITYSIM_COMPILE_EPOCHS.record(
+            self.state, epoch_context.shared_cache_dir
+        )
+        return epoch_context, skim_mode, zarr_input_path
+
     def run(
         self,
         inputs: ActivitySimPreprocessOutputs,
@@ -621,44 +725,34 @@ class ActivitysimRunner(GenericRunner):
                     "ActivitySim Zarr mode requires a staged, existing Zarr skim input."
                 )
             staged_extra_inputs[ZARR_SKIMS] = zarr_input_path
-        if skip_numba_warmup:
-            warmup_decision = "skipped (explicit rewind skip)"
-        elif not persist_sharrow_cache_enabled(self.state.full_settings):
-            warmup_decision = "skipped (persistent cache disabled)"
-        elif self.state.full_settings.activitysim.num_processes <= 1:
-            warmup_decision = "skipped (single-process run)"
-        elif _dir_contains_files(str(launch_context.shared_cache_dir / "numba")):
-            warmup_decision = "skipped (node-local cache present)"
-        else:
-            warmup_decision = "running"
-        logger.info("ActivitySim Numba warmup: %s", warmup_decision)
-        if warmup_decision == "running":
-            zarr_input_path = (
-                staged_extra_inputs.get(ZARR_SKIMS) if skim_mode == "zarr" else None
-            )
-            ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
+        body_launch_context, body_skim_mode, body_zarr_input_path = (
+            self._prepare_body_launch(
                 inputs,
                 launch_context,
                 skim_mode=skim_mode,
-                zarr_input_path=zarr_input_path,
+                zarr_input_path=(
+                    staged_extra_inputs.get(ZARR_SKIMS)
+                    if skim_mode == "zarr"
+                    else None
+                ),
+                skip_numba_warmup=skip_numba_warmup,
             )
-            if not _dir_contains_files(str(launch_context.shared_cache_dir / "numba")):
-                raise RuntimeError(
-                    "ActivitySim Numba warmup completed without a nonempty local cache."
-                )
+        )
+        if body_zarr_input_path is not None:
+            staged_extra_inputs[ZARR_SKIMS] = body_zarr_input_path
         outputs = self._run(
             inputs,
-            launch_context,
-            skim_mode=skim_mode,
+            body_launch_context,
+            skim_mode=body_skim_mode,
             extra_inputs=staged_extra_inputs,
         )
-        if skim_mode == "omx":
+        if body_skim_mode == "omx":
             if workspace is None:
                 raise RuntimeError(
                     "ActivitySim OMX mode requires a workspace for skim finalization"
                 )
             outputs.zarr_skims = finalize_activitysim_zarr_skims(
-                str(launch_context.runtime_zarr_path),
+                str(body_launch_context.runtime_zarr_path),
                 self.state.full_settings,
                 workspace,
             )
