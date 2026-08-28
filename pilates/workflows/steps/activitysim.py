@@ -21,10 +21,12 @@ from pilates.activitysim.preprocessor import (
     ActivitysimPreprocessor,
 )
 from pilates.activitysim.runner import (
+    ActivitySimSkimDecision,
     ActivitysimSkimMode,
     ActivitysimRunner,
     ActivitySimLaunchContext,
     asim_runtime_zarr_path,
+    validate_activitysim_zarr_skims,
 )
 from pilates.activitysim.outputs import (
     ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
@@ -60,6 +62,7 @@ from pilates.workflows.step_definition import (
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils.coupler_helpers import artifact_to_path
 
 # Model-specific step factories for ActivitySim.
 # Shared helpers/infrastructure are imported from shared.py.
@@ -252,6 +255,7 @@ _ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
     config_contract=ConfigContract.adapter("activitysim"),
 )
 _ACTIVITYSIM_RUN_SKIM_ROLES = (ZARR_SKIMS, ASIM_OMX_SKIMS)
+_ACTIVITYSIM_SKIM_DECISION_METADATA_KEY = "activitysim_skim_decision"
 _ACTIVITYSIM_SKIM_MODE_METADATA_KEY = "activitysim_skim_mode"
 _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY = "activitysim_produces_zarr"
 _ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES = (
@@ -431,20 +435,48 @@ def _activitysim_run_resolver(
         coupler=coupler,
     )
 
-    # A published Zarr cache is authoritative when present.  Otherwise the
-    # preprocessor's OMX artifact is the first-run source that this invocation
-    # converts and publishes as Zarr.  Keep the unselected source out of the
-    # binding so it cannot affect materialization or cache identity.
-    if resolved.source_by_role.get(ZARR_SKIMS) != "missing":
-        selected_skim_role = ZARR_SKIMS
-        skim_mode: ActivitysimSkimMode = "zarr"
-        produces_zarr = False
-    elif not requires_beam_skim and (
-        resolved.source_by_role.get(ASIM_OMX_SKIMS) != "missing"
-    ):
-        selected_skim_role = ASIM_OMX_SKIMS
-        skim_mode = "omx"
-        produces_zarr = True
+    zarr_source = resolved.source_by_role.get(ZARR_SKIMS, "missing")
+    omx_source = resolved.source_by_role.get(ASIM_OMX_SKIMS, "missing")
+    zarr_rejection: str | None = None
+    if zarr_source != "missing":
+        zarr_input = (resolved.binding.inputs or {}).get(ZARR_SKIMS)
+        zarr_path = artifact_to_path(zarr_input, workspace=workspace)
+        zarr_rejection = (
+            "could not resolve a concrete path"
+            if zarr_path is None
+            else validate_activitysim_zarr_skims(zarr_path)
+        )
+
+    # A valid published Zarr is authoritative. Otherwise the preprocessor's
+    # OMX artifact is the first-run source that this invocation converts and
+    # publishes as Zarr. Keep the unselected source out of the binding so it
+    # cannot affect materialization or cache identity.
+    if zarr_source != "missing" and zarr_rejection is None:
+        decision = ActivitySimSkimDecision(
+            role=ZARR_SKIMS,
+            mode="zarr",
+            produces_zarr=False,
+            selected_source=zarr_source,
+        )
+    elif not requires_beam_skim and omx_source != "missing":
+        if zarr_rejection is not None:
+            logger.warning(
+                "activitysim_run rejected %s before binding selection: %s; "
+                "falling back to %s",
+                ZARR_SKIMS,
+                zarr_rejection,
+                ASIM_OMX_SKIMS,
+            )
+        decision = ActivitySimSkimDecision(
+            role=ASIM_OMX_SKIMS,
+            mode="omx",
+            produces_zarr=True,
+            selected_source=omx_source,
+        )
+    elif zarr_rejection is not None:
+        raise RuntimeError(
+            f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}"
+        )
     else:
         expected = (
             ZARR_SKIMS if requires_beam_skim else f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
@@ -453,7 +485,7 @@ def _activitysim_run_resolver(
             f"activitysim_run requires one published skim role: {expected}"
         )
 
-    selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, selected_skim_role)
+    selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, decision.role)
     # The native selector has already frozen each selected artifact under its
     # semantic role.  Subset that immutable selection so unselected skim
     # alternatives cannot affect this run's materialization or cache identity.
@@ -467,8 +499,9 @@ def _activitysim_run_resolver(
         binding_inputs[role] = value
     metadata = {
         **resolved.metadata,
-        _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: skim_mode,
-        _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: produces_zarr,
+        _ACTIVITYSIM_SKIM_DECISION_METADATA_KEY: decision,
+        _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: decision.mode,
+        _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: decision.produces_zarr,
         "activitysim_launch_context": _activitysim_launch_context(workspace),
     }
     selected = ResolvedStepInputs(
@@ -478,7 +511,7 @@ def _activitysim_run_resolver(
             metadata=metadata,
         ),
         required_roles=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=(selected_skim_role,),
+        optional_roles=(decision.role,),
         source_by_role={
             key: value
             for key, value in resolved.source_by_role.items()

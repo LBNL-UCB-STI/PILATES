@@ -2,6 +2,7 @@ import logging
 import os
 import shutil
 import inspect
+import json
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any, Literal, Mapping
@@ -32,6 +33,50 @@ from pilates.workflows.artifact_keys import (
 logger = logging.getLogger(__name__)
 
 ActivitysimSkimMode = Literal["omx", "zarr"]
+
+
+@dataclass(frozen=True, slots=True)
+class ActivitySimSkimDecision:
+    """Immutable resolver-owned selection of one ActivitySim skim source.
+
+    All fields are scalar JSON-compatible values so the decision can be carried
+    through resolver metadata without embedding a host-specific source path.
+    """
+
+    role: str
+    mode: ActivitysimSkimMode
+    produces_zarr: bool
+    selected_source: str
+
+
+def validate_activitysim_zarr_skims(path: str | Path) -> str | None:
+    """Return a read-only structural rejection reason for a Zarr store, if any."""
+
+    zarr_path = Path(path)
+    if not zarr_path.exists():
+        return "path does not exist"
+    if not zarr_path.is_dir():
+        return "path is not a directory"
+
+    metadata_path = next(
+        (
+            candidate
+            for candidate in (zarr_path / ".zgroup", zarr_path / "zarr.json")
+            if candidate.exists()
+        ),
+        None,
+    )
+    if metadata_path is None:
+        return "missing Zarr metadata (.zgroup or zarr.json)"
+    if not metadata_path.is_file():
+        return f"Zarr metadata is not a file: {metadata_path.name}"
+    try:
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        return f"invalid Zarr metadata {metadata_path.name}: {error}"
+    if not isinstance(metadata, dict):
+        return f"invalid Zarr metadata {metadata_path.name}: expected an object"
+    return None
 
 
 @dataclass(frozen=True, slots=True)

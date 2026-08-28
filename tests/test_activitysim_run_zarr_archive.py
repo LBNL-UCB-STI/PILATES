@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.activitysim.outputs import (
     ActivitySimPreprocessOutputs,
     ActivitySimRunOutputs,
@@ -13,6 +15,7 @@ from pilates.activitysim.runner import (
     ActivitySimLaunchContext,
     ActivitysimRunner,
     asim_runtime_zarr_path,
+    validate_activitysim_zarr_skims,
 )
 
 
@@ -54,6 +57,34 @@ def _launch_context(tmp_path: Path) -> ActivitySimLaunchContext:
         shared_cache_dir=tmp_path / "shared_cache",
         shared_tmp_dir=tmp_path / "tmp",
     )
+
+
+def test_zarr_validation_is_read_only_for_a_structurally_valid_store(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    zarr_path = tmp_path / "selected" / "skims.zarr"
+    zarr_path.mkdir(parents=True)
+    (zarr_path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+    (zarr_path / "zone_flags.json").write_text('{"zero_based": false}\n', encoding="utf-8")
+    before = {
+        path.relative_to(zarr_path): path.read_bytes()
+        for path in zarr_path.rglob("*")
+        if path.is_file()
+    }
+    monkeypatch.setattr(
+        "pilates.activitysim.runner.ensure_0_based_and_flag_zarr_skims",
+        lambda *_args: pytest.fail("read-only validation must not normalize skims"),
+    )
+
+    assert validate_activitysim_zarr_skims(zarr_path) is None
+
+    after = {
+        path.relative_to(zarr_path): path.read_bytes()
+        for path in zarr_path.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_omx_mode_leaves_finalized_zarr_skims_to_central_archive(monkeypatch, tmp_path):

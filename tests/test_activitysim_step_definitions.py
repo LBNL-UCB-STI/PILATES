@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import asdict, replace
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -46,8 +47,14 @@ def _tracked_artifacts(tmp_path: Path, *keys: str) -> dict[str, object]:
     with tracker.start_run("seed_activitysim_inputs", "test"):
         for key in keys:
             source = tmp_path / "sources" / key
-            source.parent.mkdir(parents=True, exist_ok=True)
-            source.write_text(f"{key}\n", encoding="utf-8")
+            if key == ZARR_SKIMS:
+                source.mkdir(parents=True, exist_ok=True)
+                (source / ".zgroup").write_text(
+                    '{"zarr_format": 2}\n', encoding="utf-8"
+                )
+            else:
+                source.parent.mkdir(parents=True, exist_ok=True)
+                source.write_text(f"{key}\n", encoding="utf-8")
             artifacts[key] = tracker.log_artifact(source, key=key, direction="input")
     return artifacts
 
@@ -1000,6 +1007,165 @@ def test_activitysim_run_resolver_rejects_when_no_published_skim_source(
     )
 
     with pytest.raises(RuntimeError, match="requires one published skim role"):
+        activitysim._activitysim_run_resolver(
+            settings=SimpleNamespace(),
+            state=SimpleNamespace(),
+            workspace=SimpleNamespace(),
+            coupler=object(),
+        )
+
+
+def test_activitysim_run_resolver_falls_back_to_omx_for_an_invalid_zarr(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    all_roles = (
+        *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        activitysim.ZARR_SKIMS,
+        activitysim.ASIM_OMX_SKIMS,
+    )
+    selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
+    invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
+    (invalid_zarr / ".zgroup").unlink()
+    (invalid_zarr / "not-zarr.txt").write_text("not a Zarr store\n", encoding="utf-8")
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs=selected_artifacts),
+        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
+        source_by_role={key: "coupler" for key in all_roles},
+        selected_key_by_role={key: key for key in all_roles},
+        logical_destinations={key: Path(f"native/{key}") for key in all_roles},
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
+    )
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_data_dir=lambda: str(tmp_path / "activitysim" / "data"),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "activitysim" / "configs"),
+        get_asim_runtime_cache_dir=lambda: str(tmp_path / "activitysim" / "output" / "cache"),
+    )
+
+    resolved = activitysim._activitysim_run_resolver(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=workspace,
+        coupler=object(),
+    )
+
+    assert resolved.selected_roles() == (
+        *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        activitysim.ASIM_OMX_SKIMS,
+    )
+    assert resolved.metadata["activitysim_skim_decision"] == activitysim.ActivitySimSkimDecision(
+        role=activitysim.ASIM_OMX_SKIMS,
+        mode="omx",
+        produces_zarr=True,
+        selected_source="coupler",
+    )
+    assert resolved.metadata["activitysim_skim_mode"] == "omx"
+    assert resolved.metadata["activitysim_produces_zarr"] is True
+    assert not any(
+        "missing Zarr metadata" in str(value)
+        for value in resolved.metadata.values()
+    )
+    assert json.loads(
+        json.dumps(asdict(resolved.metadata["activitysim_skim_decision"]))
+    ) == {
+        "role": activitysim.ASIM_OMX_SKIMS,
+        "mode": "omx",
+        "produces_zarr": True,
+        "selected_source": "coupler",
+    }
+
+
+def test_activitysim_run_resolver_rejects_invalid_zarr_without_omx_before_execution(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    all_roles = (*activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES, activitysim.ZARR_SKIMS)
+    selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
+    invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
+    (invalid_zarr / ".zgroup").unlink()
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs=selected_artifacts),
+        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
+        source_by_role={
+            **{key: "coupler" for key in all_roles},
+            activitysim.ASIM_OMX_SKIMS: "missing",
+        },
+        selected_key_by_role={key: key for key in all_roles},
+        logical_destinations={key: Path(f"native/{key}") for key in all_roles},
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
+    )
+
+    with pytest.raises(RuntimeError, match="zarr_skims.*missing Zarr metadata"):
+        activitysim._activitysim_run_resolver(
+            settings=SimpleNamespace(),
+            state=SimpleNamespace(),
+            workspace=SimpleNamespace(),
+            coupler=object(),
+        )
+
+
+def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    all_roles = (
+        *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        activitysim.ZARR_SKIMS,
+        activitysim.ASIM_OMX_SKIMS,
+    )
+    selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
+    invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
+    (invalid_zarr / ".zgroup").unlink()
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs=selected_artifacts),
+        required_roles=(*activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES, activitysim.ZARR_SKIMS),
+        optional_roles=(),
+        source_by_role={key: "coupler" for key in all_roles},
+        selected_key_by_role={key: key for key in all_roles},
+        logical_destinations={key: Path(f"native/{key}") for key in all_roles},
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "requires_prior_beam_skim_handoff",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
+    )
+
+    with pytest.raises(RuntimeError, match="zarr_skims.*missing Zarr metadata"):
         activitysim._activitysim_run_resolver(
             settings=SimpleNamespace(),
             state=SimpleNamespace(),
