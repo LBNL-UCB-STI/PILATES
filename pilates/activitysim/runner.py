@@ -686,30 +686,29 @@ class ActivitysimRunner(GenericRunner):
         existing_epoch = _ACTIVITYSIM_COMPILE_EPOCHS.get(self.state)
         if existing_epoch is not None:
             logger.info("ActivitySim Numba warmup: reused private epoch")
-            return ActivitySimPreparationResult(
-                launch_context=replace(
-                    launch_context, shared_cache_dir=existing_epoch
-                ),
+            epoch_context = replace(
+                launch_context, shared_cache_dir=existing_epoch
+            )
+        else:
+            epoch_context = replace(
+                launch_context,
+                shared_cache_dir=self._allocate_private_compile_epoch(launch_context),
+            )
+            logger.info("ActivitySim Numba warmup: new private epoch")
+
+        if existing_epoch is None or skim_mode == "omx":
+            if skim_mode == "omx":
+                _remove_path_if_present(str(epoch_context.runtime_zarr_path))
+            ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
+                inputs,
+                epoch_context,
                 skim_mode=skim_mode,
                 zarr_input_path=zarr_input_path,
-                generated_zarr_path=None,
             )
-
-        epoch_context = replace(
-            launch_context,
-            shared_cache_dir=self._allocate_private_compile_epoch(launch_context),
-        )
-        logger.info("ActivitySim Numba warmup: new private epoch")
-        ActivitysimNumbaWarmup("activitysim_numba_warmup", self.state).run(
-            inputs,
-            epoch_context,
-            skim_mode=skim_mode,
-            zarr_input_path=zarr_input_path,
-        )
-        if not _dir_contains_files(str(epoch_context.shared_cache_dir / "numba")):
-            raise RuntimeError(
-                "ActivitySim Numba warmup completed without a nonempty private cache."
-            )
+            if not _dir_contains_files(str(epoch_context.shared_cache_dir / "numba")):
+                raise RuntimeError(
+                    "ActivitySim Numba warmup completed without a nonempty private cache."
+                )
         generated_zarr_path: Optional[Path] = None
         body_skim_mode = skim_mode
         body_zarr_input_path = zarr_input_path
@@ -739,9 +738,10 @@ class ActivitysimRunner(GenericRunner):
                 )
             body_skim_mode = "zarr"
             body_zarr_input_path = str(generated_zarr_path)
-        _ACTIVITYSIM_COMPILE_EPOCHS.record(
-            self.state, epoch_context.shared_cache_dir
-        )
+        if existing_epoch is None:
+            _ACTIVITYSIM_COMPILE_EPOCHS.record(
+                self.state, epoch_context.shared_cache_dir
+            )
         return ActivitySimPreparationResult(
             launch_context=epoch_context,
             skim_mode=body_skim_mode,

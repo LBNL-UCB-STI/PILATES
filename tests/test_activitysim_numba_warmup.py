@@ -249,7 +249,9 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
     launch_context = _launch_context(tmp_path)
     state = _runner_state(persist_cache=True, num_processes=2)
     warmup_contexts: list[ActivitySimLaunchContext] = []
+    warmup_runtime_zarr_exists: list[bool] = []
     body_contexts: list[ActivitySimLaunchContext] = []
+    body_skim_modes: list[str] = []
 
     def warm_cache(
         _warmup: object,
@@ -258,8 +260,9 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
         **_kwargs: object,
     ) -> None:
         warmup_contexts.append(warmup_context)
+        warmup_runtime_zarr_exists.append(warmup_context.runtime_zarr_path.exists())
         epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
-        epoch_numba_dir.mkdir(parents=True)
+        epoch_numba_dir.mkdir(parents=True, exist_ok=True)
         (epoch_numba_dir / "compiled.nbi").touch()
         _write_structurally_valid_zarr(warmup_context.runtime_zarr_path)
 
@@ -267,9 +270,10 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
         _runner: ActivitysimRunner,
         _inputs: ActivitySimPreprocessOutputs,
         body_context: ActivitySimLaunchContext,
-        **_kwargs: object,
+        **kwargs: object,
     ) -> ActivitySimRunOutputs:
         body_contexts.append(body_context)
+        body_skim_modes.append(str(kwargs["skim_mode"]))
         return ActivitySimRunOutputs(output_dir=body_context.output_dir)
 
     monkeypatch.setattr(activitysim_runner.ActivitysimNumbaWarmup, "run", warm_cache)
@@ -302,11 +306,15 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
         workspace=workspace,
     )
 
-    assert len(warmup_contexts) == 2
+    assert len(warmup_contexts) == 3
     assert body_contexts[0].shared_cache_dir == body_contexts[1].shared_cache_dir
     assert body_contexts[0].shared_cache_dir != ambient_numba_dir.parent
     assert body_contexts[0].shared_cache_dir.is_relative_to(ambient_numba_dir)
     assert body_contexts[2].shared_cache_dir != body_contexts[0].shared_cache_dir
+    assert warmup_contexts[0].shared_cache_dir == warmup_contexts[1].shared_cache_dir
+    assert warmup_contexts[2].shared_cache_dir != warmup_contexts[0].shared_cache_dir
+    assert warmup_runtime_zarr_exists == [False, False, False]
+    assert body_skim_modes == ["zarr", "zarr", "zarr"]
     decisions = [
         record.getMessage()
         for record in caplog.records
@@ -317,6 +325,76 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
         "ActivitySim Numba warmup: reused private epoch",
         "ActivitySim Numba warmup: new private epoch",
     ]
+
+
+def test_activitysim_runner_reuses_compile_cache_without_regenerating_selected_zarr(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A selected Zarr stays input-only when its compile cache is reused."""
+    launch_context = _launch_context(tmp_path)
+    selected_zarr = tmp_path / "selected" / "skims.zarr"
+    _write_structurally_valid_zarr(selected_zarr)
+    selected_bytes = (selected_zarr / ".zgroup").read_bytes()
+    state = _runner_state(persist_cache=True, num_processes=2)
+    warmup_contexts: list[ActivitySimLaunchContext] = []
+    body_modes: list[str] = []
+    body_zarr_paths: list[str] = []
+
+    def warm_cache(
+        _warmup: object,
+        _inputs: ActivitySimPreprocessOutputs,
+        warmup_context: ActivitySimLaunchContext,
+        **kwargs: object,
+    ) -> None:
+        warmup_contexts.append(warmup_context)
+        assert kwargs["skim_mode"] == "zarr"
+        epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
+        epoch_numba_dir.mkdir(parents=True, exist_ok=True)
+        (epoch_numba_dir / "compiled.nbi").touch()
+
+    def run_body(
+        _runner: ActivitysimRunner,
+        _inputs: ActivitySimPreprocessOutputs,
+        _body_context: ActivitySimLaunchContext,
+        **kwargs: object,
+    ) -> ActivitySimRunOutputs:
+        body_modes.append(str(kwargs["skim_mode"]))
+        extra_inputs = kwargs["extra_inputs"]
+        assert isinstance(extra_inputs, dict)
+        body_zarr_paths.append(str(extra_inputs[ZARR_SKIMS]))
+        return ActivitySimRunOutputs(output_dir=launch_context.output_dir)
+
+    monkeypatch.setattr(activitysim_runner.ActivitysimNumbaWarmup, "run", warm_cache)
+    monkeypatch.setattr(ActivitysimRunner, "_run", run_body)
+    monkeypatch.setattr(
+        activitysim_runner,
+        "finalize_activitysim_zarr_skims",
+        lambda *_args: pytest.fail("selected Zarr must not be finalized"),
+    )
+
+    first_outputs = ActivitysimRunner("activitysim", state).run(
+        _activitysim_inputs(tmp_path),
+        launch_context,
+        skim_mode="zarr",
+        extra_inputs={ZARR_SKIMS: selected_zarr},
+    )
+    second_outputs = ActivitysimRunner("activitysim", state).run(
+        _activitysim_inputs(tmp_path),
+        launch_context,
+        skim_mode="zarr",
+        extra_inputs={ZARR_SKIMS: selected_zarr},
+    )
+
+    assert len(warmup_contexts) == 1
+    assert body_modes == ["zarr", "zarr"]
+    assert body_zarr_paths == [
+        str(launch_context.runtime_zarr_path),
+        str(launch_context.runtime_zarr_path),
+    ]
+    assert (selected_zarr / ".zgroup").read_bytes() == selected_bytes
+    assert first_outputs.zarr_skims is None
+    assert second_outputs.zarr_skims is None
 
 
 def test_activitysim_runner_aborts_the_body_when_private_preparation_fails(
