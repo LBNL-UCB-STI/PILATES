@@ -433,6 +433,10 @@ def test_job_urbansim_h5_snapshot_acceptance_runs_capture_then_reconcile(
         """#!/bin/sh
 printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
 if [ "$1" = "-" ]; then
+    if [ -z "${PILATES_DIR+x}" ]; then
+        echo 'PILATES_DIR was not exported to the runtime record writer' >&2
+        exit 1
+    fi
     printf '%s\\n' '{"consist":{"editable_source":"fake","import_path":"fake","revision":"fake-revision"},"pilates":{"revision":"fake-revision"},"python":{"executable":"fake"}}' > "$CONSIST_ACCEPTANCE_RUNTIME_RECORD"
 fi
 """,
@@ -452,8 +456,11 @@ fi
     completed = subprocess.run(
         [
             "bash",
+            "-c",
+            'PILATES_DIR="$1"; export -n PILATES_DIR; source "$2" --urbansim-h5-snapshot-acceptance "$3" "$4" "$5"',
+            "job.sh",
+            str(pilates_dir),
             str(_PROJECT_ROOT / "hpc/job.sh"),
-            "--urbansim-h5-snapshot-acceptance",
             str(settings),
             str(manifest),
             str(evidence_root),
@@ -462,7 +469,6 @@ fi
         env={
             **os.environ,
             "PATH": f"{fake_bin}:{os.environ['PATH']}",
-            "PILATES_DIR": str(pilates_dir),
             "PILATES_VENV_PATH": str(venv),
             "PILATES_REQUIREMENTS_FILE": str(requirements),
             "CONSIST_SRC_DIR": str(consist_source),

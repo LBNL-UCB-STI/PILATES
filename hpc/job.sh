@@ -20,6 +20,7 @@ error_exit() {
 trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
 
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
+export PILATES_DIR
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
