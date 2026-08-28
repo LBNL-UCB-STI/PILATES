@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -425,6 +426,92 @@ def test_job_urbansim_h5_snapshot_acceptance_runs_capture_then_reconcile(
     venv_bin = venv / "bin"
     venv_bin.mkdir(parents=True)
     calls = tmp_path / "python-calls"
+    consist_source = tmp_path / "consist"
+    (consist_source / "src" / "consist").mkdir(parents=True)
+    _write_executable(
+        venv_bin / "python3",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
+if [ "$1" = "-" ]; then
+    printf '%s\\n' '{"consist":{"editable_source":"fake","import_path":"fake","revision":"fake-revision"},"pilates":{"revision":"fake-revision"},"python":{"executable":"fake"}}' > "$CONSIST_ACCEPTANCE_RUNTIME_RECORD"
+fi
+""",
+    )
+    (venv_bin / "activate").write_text(
+        f'export PATH="{venv_bin}:$PATH"\n',
+        encoding="utf-8",
+    )
+    (venv / ".last_requirements_hash").write_text(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "module", "#!/bin/sh\nexit 0\n")
+    _write_executable(fake_bin / "git", "#!/bin/sh\nprintf '%s\\n' fake-revision\n")
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--urbansim-h5-snapshot-acceptance",
+            str(settings),
+            str(manifest),
+            str(evidence_root),
+        ],
+        cwd=_PROJECT_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PILATES_DIR": str(pilates_dir),
+            "PILATES_VENV_PATH": str(venv),
+            "PILATES_REQUIREMENTS_FILE": str(requirements),
+            "CONSIST_SRC_DIR": str(consist_source),
+            "PYTHON_CALLS_FILE": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    python_calls = calls.read_text(encoding="utf-8").splitlines()
+    driver_calls = [
+        call
+        for call in python_calls
+        if call.startswith("-u -m pilates.runtime.urbansim_h5_snapshot_acceptance ")
+    ]
+    assert driver_calls == [
+        "-u -m pilates.runtime.urbansim_h5_snapshot_acceptance "
+        f"capture --settings {settings} --manifest {manifest} --evidence-root {evidence_root}",
+        "-u -m pilates.runtime.urbansim_h5_snapshot_acceptance "
+        f"reconcile --evidence-root {evidence_root}",
+    ]
+    assert not any("run.py" in call for call in python_calls)
+    runtime_environment = json.loads(
+        (evidence_root / "runtime-environment.json").read_text(encoding="utf-8")
+    )
+    assert runtime_environment["consist"]["revision"] == "fake-revision"
+
+
+def test_job_urbansim_h5_snapshot_acceptance_rejects_missing_editable_consist(
+    tmp_path: Path,
+) -> None:
+    """This acceptance cannot fall back to a packaged Consist installation."""
+
+    pilates_dir = tmp_path / "pilates"
+    requirements = pilates_dir / "hpc" / "requirements-hpc.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("", encoding="utf-8")
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run: {}\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    venv = tmp_path / "venv"
+    venv_bin = venv / "bin"
+    venv_bin.mkdir(parents=True)
+    calls = tmp_path / "python-calls"
     _write_executable(
         venv_bin / "python3",
         """#!/bin/sh
@@ -442,6 +529,7 @@ printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     _write_executable(fake_bin / "module", "#!/bin/sh\nexit 0\n")
+
     completed = subprocess.run(
         [
             "bash",
@@ -466,20 +554,85 @@ printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
         check=False,
     )
 
-    assert completed.returncode == 0, completed.stderr
-    python_calls = calls.read_text(encoding="utf-8").splitlines()
-    driver_calls = [
-        call
-        for call in python_calls
-        if call.startswith("-u -m pilates.runtime.urbansim_h5_snapshot_acceptance ")
-    ]
-    assert driver_calls == [
-        "-u -m pilates.runtime.urbansim_h5_snapshot_acceptance "
-        f"capture --settings {settings} --manifest {manifest} --evidence-root {evidence_root}",
-        "-u -m pilates.runtime.urbansim_h5_snapshot_acceptance "
-        f"reconcile --evidence-root {evidence_root}",
-    ]
-    assert not any("run.py" in call for call in python_calls)
+    assert completed.returncode != 0
+    assert "requires an existing editable Consist checkout" in completed.stderr
+    assert not calls.exists()
+
+
+def test_job_urbansim_h5_snapshot_acceptance_rejects_unverified_editable_import(
+    tmp_path: Path,
+) -> None:
+    """An editable install alone is insufficient when import verification fails."""
+
+    pilates_dir = tmp_path / "pilates"
+    requirements = pilates_dir / "hpc" / "requirements-hpc.txt"
+    requirements.parent.mkdir(parents=True)
+    requirements.write_text("", encoding="utf-8")
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run: {}\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text("{}\n", encoding="utf-8")
+    evidence_root = tmp_path / "evidence"
+    evidence_root.mkdir()
+    consist_source = tmp_path / "consist"
+    consist_source.mkdir()
+    venv = tmp_path / "venv"
+    venv_bin = venv / "bin"
+    venv_bin.mkdir(parents=True)
+    calls = tmp_path / "python-calls"
+    _write_executable(
+        venv_bin / "python3",
+        """#!/bin/sh
+printf '%s\\n' "$*" >> "$PYTHON_CALLS_FILE"
+if [ "$1" = "-" ]; then
+    echo 'simulated unexpected Consist import path' >&2
+    exit 1
+fi
+""",
+    )
+    (venv_bin / "activate").write_text(
+        f'export PATH="{venv_bin}:$PATH"\n',
+        encoding="utf-8",
+    )
+    (venv / ".last_requirements_hash").write_text(
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855\n",
+        encoding="utf-8",
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    _write_executable(fake_bin / "module", "#!/bin/sh\nexit 0\n")
+    _write_executable(fake_bin / "git", "#!/bin/sh\nprintf '%s\\n' fake-revision\n")
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job.sh"),
+            "--urbansim-h5-snapshot-acceptance",
+            str(settings),
+            str(manifest),
+            str(evidence_root),
+        ],
+        cwd=_PROJECT_ROOT,
+        env={
+            **os.environ,
+            "PATH": f"{fake_bin}:{os.environ['PATH']}",
+            "PILATES_DIR": str(pilates_dir),
+            "PILATES_VENV_PATH": str(venv),
+            "PILATES_REQUIREMENTS_FILE": str(requirements),
+            "CONSIST_SRC_DIR": str(consist_source),
+            "PYTHON_CALLS_FILE": str(calls),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode != 0
+    assert "simulated unexpected Consist import path" in completed.stderr
+    assert not any(
+        "pilates.runtime.urbansim_h5_snapshot_acceptance" in call
+        for call in calls.read_text(encoding="utf-8").splitlines()
+    )
 
 
 def test_job_acceptance_mode_requires_exact_arity() -> None:

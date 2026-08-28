@@ -23,6 +23,7 @@ PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
+CONSIST_SRC_DIR_SUPPLIED="${CONSIST_SRC_DIR+x}"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
 DEFAULT_CONSIST_PYPI_PACKAGE="consist==0.2.0"
@@ -108,6 +109,77 @@ PY
 }
 
 
+install_hdf5_acceptance_consist() {
+    local evidence_root="$1"
+    local consist_revision
+    local pilates_revision
+    local runtime_record="$evidence_root/runtime-environment.json"
+
+    if [ "$CONSIST_SRC_DIR_SUPPLIED" != "x" ] || [ ! -d "$CONSIST_SRC_DIR" ]; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires an existing editable Consist checkout supplied through CONSIST_SRC_DIR." >&2
+        return 1
+    fi
+    if ! consist_revision="$(git -C "$CONSIST_SRC_DIR" rev-parse HEAD)"; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires CONSIST_SRC_DIR to be a Git checkout." >&2
+        return 1
+    fi
+    if ! pilates_revision="$(git -C "$PILATES_DIR" rev-parse HEAD)"; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires PILATES_DIR to be a Git checkout." >&2
+        return 1
+    fi
+
+    echo "Installing required editable Consist checkout from $CONSIST_SRC_DIR ..."
+    if ! python3 -m pip install -e "$CONSIST_SRC_DIR"; then
+        echo "ERROR: failed to install required editable Consist checkout from $CONSIST_SRC_DIR." >&2
+        return 1
+    fi
+
+    CONSIST_ACCEPTANCE_RUNTIME_RECORD="$runtime_record" \
+    CONSIST_ACCEPTANCE_CONSIST_REVISION="$consist_revision" \
+    CONSIST_ACCEPTANCE_PILATES_REVISION="$pilates_revision" \
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import platform
+import sys
+
+import consist
+
+source = Path(os.environ["CONSIST_SRC_DIR"]).resolve()
+module = Path(consist.__file__).resolve()
+try:
+    module.relative_to(source)
+except ValueError as error:
+    raise SystemExit(
+        "ERROR: Consist import is not provided by the required editable checkout: "
+        f"{module} is outside {source}"
+    ) from error
+
+record = {
+    "consist": {
+        "editable_source": str(source),
+        "import_path": str(module),
+        "revision": os.environ["CONSIST_ACCEPTANCE_CONSIST_REVISION"],
+    },
+    "pilates": {
+        "source_path": os.environ["PILATES_DIR"],
+        "revision": os.environ["CONSIST_ACCEPTANCE_PILATES_REVISION"],
+    },
+    "python": {
+        "executable": sys.executable,
+        "implementation": platform.python_implementation(),
+        "version": sys.version,
+    },
+}
+destination = Path(os.environ["CONSIST_ACCEPTANCE_RUNTIME_RECORD"])
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"consist import path: {module}")
+PY
+}
+
+
 normalize_path() {
     local path_arg="$1"
     if [ -z "$path_arg" ]; then
@@ -181,7 +253,11 @@ if [ ! -f "$REQUIREMENTS_FILE" ]; then
 fi
 
 install_python_deps "$REQUIREMENTS_FILE"
-install_consist "$REQUIREMENTS_FILE"
+if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
+    install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
+else
+    install_consist "$REQUIREMENTS_FILE"
+fi
 
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"

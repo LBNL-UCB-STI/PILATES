@@ -9,6 +9,8 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import sys
 from typing import Sequence
 
 import consist
@@ -150,6 +152,59 @@ def _write_json(path: Path, record: Mapping[str, object]) -> None:
     )
 
 
+def _git_revision(path: Path) -> str:
+    """Return the checked-out revision for a repository-backed evidence record."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return "unavailable"
+    return completed.stdout.strip()
+
+
+def _repository_root(path: Path) -> Path | None:
+    """Find the closest repository root without assuming an editable layout."""
+
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _runtime_environment(evidence_root: Path) -> dict[str, object]:
+    """Record executable, source, and revision provenance without environment secrets."""
+
+    pilates_root = Path(__file__).resolve().parents[2]
+    consist_module = Path(consist.__file__).resolve()
+    consist_root = _repository_root(consist_module.parent)
+    runtime_environment: dict[str, object] = {
+        "python": {"executable": sys.executable, "version": sys.version},
+        "pilates": {
+            "import_path": str(pilates_root),
+            "revision": _git_revision(pilates_root),
+        },
+        "consist": {
+            "import_path": str(consist_module),
+            "revision": (
+                _git_revision(consist_root)
+                if consist_root is not None
+                else "unavailable"
+            ),
+        },
+    }
+    hpc_runtime_record = evidence_root / "runtime-environment.json"
+    if hpc_runtime_record.is_file():
+        loaded = json.loads(hpc_runtime_record.read_text(encoding="utf-8"))
+        if not isinstance(loaded, Mapping):
+            raise RuntimeError("runtime-environment.json must be a JSON object")
+        runtime_environment["hpc"] = dict(loaded)
+    return runtime_environment
+
+
 class _AcceptanceUrbansimPostprocessor(urbansim_atlas.UrbansimPostprocessor):
     """Materialize native postprocess outputs without invoking UrbanSim logic."""
 
@@ -191,6 +246,7 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
 
     evidence_root = evidence_root.resolve()
     evidence_root.mkdir(parents=True, exist_ok=True)
+    runtime_environment = _runtime_environment(evidence_root)
     manifest = load_manifest(manifest_path)
     source_descriptor = describe_population_h5(
         manifest.usim_datastore_h5,
@@ -233,6 +289,21 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
                 direction="input",
             )
         trusted_identity = str(consist.ArtifactIdentity.from_artifact(trusted))
+        _write_json(
+            evidence_root / "effective-input-manifest.json",
+            {
+                "cohort": {
+                    "workflow_year": manifest.workflow_year,
+                    "forecast_year": manifest.forecast_year,
+                    "iteration": manifest.iteration,
+                },
+                "source_descriptor": source_descriptor,
+                "trusted_artifact": {
+                    "id": str(trusted.id),
+                    "identity": trusted_identity,
+                },
+            },
+        )
         original_postprocessor = urbansim_atlas.UrbansimPostprocessor
         urbansim_atlas.UrbansimPostprocessor = _AcceptanceUrbansimPostprocessor
         try:
@@ -347,6 +418,8 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
                 "override_is_unowned": True,
                 "snapshot_created": True,
                 "output_h5_aliases_valid": True,
+                "process_id": os.getpid(),
+                "runtime_environment": runtime_environment,
             },
         )
     finally:
@@ -359,12 +432,15 @@ def validate(
     """Construct the acceptance verdict from capture and read-only evidence."""
 
     source_h5_valid = capture.get("source_h5_valid") is True
-    strict_binding_valid = capture.get("strict_binding_valid") is True
+    strict_binding_valid = reconciliation.get("action_v2_strict_binding_valid") is True
     override_is_unowned = capture.get("override_is_unowned") is True
     snapshot_created = capture.get("snapshot_created") is True
     fresh_snapshot_readable = reconciliation.get("fresh_snapshot_readable") is True
     persisted_identity_unchanged = (
         reconciliation.get("persisted_identity") == capture.get("trusted_identity")
+    )
+    persisted_strict_link_trusted = (
+        reconciliation.get("persisted_strict_link_trusted") is True
     )
     output_h5_aliases_valid = capture.get("output_h5_aliases_valid") is True
     valid = all(
@@ -375,6 +451,7 @@ def validate(
             snapshot_created,
             fresh_snapshot_readable,
             persisted_identity_unchanged,
+            persisted_strict_link_trusted,
             output_h5_aliases_valid,
         )
     )
@@ -385,6 +462,7 @@ def validate(
         "snapshot_created": snapshot_created,
         "fresh_snapshot_readable": fresh_snapshot_readable,
         "persisted_identity_unchanged": persisted_identity_unchanged,
+        "persisted_strict_link_trusted": persisted_strict_link_trusted,
         "output_h5_aliases_valid": output_h5_aliases_valid,
         "valid": valid,
     }
@@ -395,6 +473,7 @@ def run_reconciliation(*, evidence_root: Path) -> None:
 
     evidence_root = evidence_root.resolve()
     capture = json.loads((evidence_root / "capture.json").read_text(encoding="utf-8"))
+    runtime_environment = _runtime_environment(evidence_root)
     snapshot_ref = capture.get("snapshot_path")
     if not isinstance(snapshot_ref, str):
         raise RuntimeError("capture.json is missing snapshot_path")
@@ -420,6 +499,16 @@ def run_reconciliation(*, evidence_root: Path) -> None:
         completed_run = snapshot_tracker.get_run(completed_run_id)
         if completed_run is None or completed_run.status != "completed":
             raise RuntimeError("capture snapshot does not contain a completed native run")
+        input_identity = completed_run.meta.get("input_identity")
+        action_v2_strict_binding_valid = (
+            isinstance(input_identity, Mapping)
+            and input_identity.get("mode") == "action-v2"
+            and type(input_identity.get("strict_input_count")) is int
+            and input_identity.get("strict_input_count") == 1
+            and isinstance(input_identity.get("strict_binding_identity"), str)
+            and bool(input_identity["strict_binding_identity"].strip())
+            and input_identity.get("bindings") == []
+        )
         inputs = snapshot_tracker.get_run_inputs(completed_run_id)
         artifact = inputs.get(USIM_DATASTORE_H5)
         if artifact is None or str(artifact.id) != trusted_artifact_id:
@@ -428,10 +517,21 @@ def run_reconciliation(*, evidence_root: Path) -> None:
             raise RuntimeError("capture snapshot does not retain the later HDF5 override")
         if any(str(candidate.id) == override_artifact_id for candidate in inputs.values()):
             raise RuntimeError("capture snapshot selected the later HDF5 override")
+        persisted_identity = str(consist.ArtifactIdentity.from_artifact(artifact))
+        persisted_strict_link_trusted = (
+            action_v2_strict_binding_valid
+            and len(inputs) == 1
+            and str(artifact.id) == trusted_artifact_id
+            and persisted_identity == capture.get("trusted_identity")
+        )
         reconciliation: dict[str, object] = {
+            "action_v2_strict_binding_valid": action_v2_strict_binding_valid,
             "completed_run_id": completed_run_id,
             "fresh_snapshot_readable": True,
-            "persisted_identity": str(consist.ArtifactIdentity.from_artifact(artifact)),
+            "persisted_identity": persisted_identity,
+            "persisted_strict_link_trusted": persisted_strict_link_trusted,
+            "process_id": os.getpid(),
+            "runtime_environment": runtime_environment,
             "trusted_artifact_id": trusted_artifact_id,
         }
     finally:

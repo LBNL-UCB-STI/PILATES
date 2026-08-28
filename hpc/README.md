@@ -165,6 +165,18 @@ separate read-only process reopening that snapshot and comparing the persisted
 identity. Treat the run as successful only when Slurm is `COMPLETED` and every
 named check in `validation.json` is true, including `valid`.
 
+This mode fails before either driver starts unless `CONSIST_SRC_DIR` was
+explicitly supplied, is a Git checkout, installs editable, and the resulting
+`consist` import resolves inside that checkout. It never falls back to another
+installed or PyPI Consist. `runtime-environment.json` records the exact PILATES
+and editable-Consist revisions, import path, and Python runtime without copying
+environment variables or secrets. `effective-input-manifest.json` preserves the
+validated cohort, expanded/resolved HDF5 descriptor, and trusted artifact ID
+and identity without modifying the submitted manifest. The capture and
+reconciliation records include their distinct process IDs; the reconciliation
+record independently derives action-v2 strict-binding validity and confirms
+that the persisted strict link is the trusted pre-override artifact.
+
 After a successful job, copy the evidence root to the established NFS
 `pilates-boundary-promotions` archive, generate SHA-256 manifests for both the
 source and destination copies, and compare them. Preserve the PILATES and

@@ -132,6 +132,80 @@ def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
     ]
 
 
+def test_capture_retains_effective_manifest_and_distinct_process_provenance(
+    tmp_path: Path,
+) -> None:
+    """Expanded input provenance survives without changing the submitted manifest."""
+
+    source, manifest = _real_h5_manifest(tmp_path)
+    submitted_manifest = manifest.read_text(encoding="utf-8")
+    evidence = tmp_path / "evidence"
+    _run_module(
+        "capture",
+        "--settings",
+        str(_SETTINGS),
+        "--manifest",
+        str(manifest),
+        "--evidence-root",
+        str(evidence),
+    )
+
+    capture = _read_json(evidence / "capture.json")
+    effective_manifest = _read_json(evidence / "effective-input-manifest.json")
+    assert manifest.read_text(encoding="utf-8") == submitted_manifest
+    assert effective_manifest["cohort"] == {
+        "workflow_year": 2017,
+        "forecast_year": 2019,
+        "iteration": 0,
+    }
+    assert effective_manifest["source_descriptor"]["path"] == str(source.resolve())
+    assert effective_manifest["trusted_artifact"] == {
+        "id": capture["trusted_artifact_id"],
+        "identity": capture["trusted_identity"],
+    }
+    assert isinstance(capture["process_id"], int)
+    assert capture["runtime_environment"]["pilates"]["revision"]
+    assert capture["runtime_environment"]["consist"]["import_path"]
+
+    _run_module("reconcile", "--evidence-root", str(evidence))
+
+    reconciliation = _read_json(evidence / "reconciliation.json")
+    assert isinstance(reconciliation["process_id"], int)
+    assert reconciliation["process_id"] != capture["process_id"]
+    assert reconciliation["runtime_environment"] == capture["runtime_environment"]
+
+
+def test_reconciliation_derives_strict_binding_from_snapshot_not_capture_flag(
+    tmp_path: Path,
+) -> None:
+    """The fresh process derives action-v2 validity from persisted run metadata."""
+
+    _source, manifest = _real_h5_manifest(tmp_path)
+    evidence = tmp_path / "evidence"
+    _run_module(
+        "capture",
+        "--settings",
+        str(_SETTINGS),
+        "--manifest",
+        str(manifest),
+        "--evidence-root",
+        str(evidence),
+    )
+    capture_path = evidence / "capture.json"
+    capture = _read_json(capture_path)
+    capture["strict_binding_valid"] = False
+    capture_path.write_text(json.dumps(capture), encoding="utf-8")
+
+    _run_module("reconcile", "--evidence-root", str(evidence))
+
+    reconciliation = _read_json(evidence / "reconciliation.json")
+    validation = _read_json(evidence / "validation.json")
+    assert reconciliation["action_v2_strict_binding_valid"] is True
+    assert reconciliation["persisted_strict_link_trusted"] is True
+    assert validation["strict_binding_valid"] is True
+    assert validation["valid"] is True
+
+
 def test_reconciliation_requires_tracker_snapshot_before_opening_tracker(
     tmp_path: Path,
 ) -> None:
