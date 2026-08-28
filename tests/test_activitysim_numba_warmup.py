@@ -50,6 +50,11 @@ def _launch_context(root: Path) -> ActivitySimLaunchContext:
     )
 
 
+def _write_structurally_valid_zarr(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    (path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+
 def test_activitysim_run_outputs_round_trip_generated_zarr(tmp_path: Path) -> None:
     """OMX-mode primary output persists Zarr as a first-class record."""
     workspace = _Workspace(tmp_path)
@@ -194,6 +199,7 @@ def test_activitysim_runner_logs_one_numba_warmup_decision_before_execution(
         epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
         epoch_numba_dir.mkdir(parents=True, exist_ok=True)
         (epoch_numba_dir / "numba.nbi").touch()
+        _write_structurally_valid_zarr(warmup_context.runtime_zarr_path)
 
     def run_after_decision(*_args: object, **_kwargs: object) -> ActivitySimRunOutputs:
         decisions = [
@@ -255,6 +261,7 @@ def test_activitysim_runner_reuses_private_compile_epoch_only_for_same_live_stat
         epoch_numba_dir = warmup_context.shared_cache_dir / "numba"
         epoch_numba_dir.mkdir(parents=True)
         (epoch_numba_dir / "compiled.nbi").touch()
+        _write_structurally_valid_zarr(warmup_context.runtime_zarr_path)
 
     def run_body(
         _runner: ActivitysimRunner,
@@ -352,6 +359,7 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
     """A compile container write must not reach production's output mount."""
     workspace = _Workspace(tmp_path)
     production_output = Path(workspace.get_asim_output_dir())
+    production_runtime_cache = production_output / "cache"
     production_output.mkdir(parents=True)
     sentinel = production_output / "production-only.txt"
     sentinel.write_text("keep", encoding="utf-8")
@@ -381,9 +389,13 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
         if not isinstance(value, (str, Path)):
             return False
         try:
-            return os.path.commonpath(
-                [os.path.abspath(value), str(production_output)]
-            ) == str(production_output)
+            value_path = os.path.abspath(value)
+            return (
+                os.path.commonpath([value_path, str(production_output)])
+                == str(production_output)
+                and os.path.commonpath([value_path, str(production_runtime_cache)])
+                != str(production_runtime_cache)
+            )
         except ValueError:
             return False
 
@@ -439,21 +451,21 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
         if mount["bind"].endswith("/output")
     )
     assert mounted_output != production_output
+    assert captured_volumes[str(production_runtime_cache)]["mode"] == "rw"
     assert (mounted_output / "compile-only.txt").read_text(encoding="utf-8") == "sample"
     assert sentinel.read_text(encoding="utf-8") == "keep"
     assert not (production_output / "compile-only.txt").exists()
     assert attempted_production_mutations == []
 
 
-def test_numba_warmup_copies_the_selected_zarr_into_private_compile_scratch(
+def test_numba_warmup_mounts_the_staged_zarr_as_its_read_only_compile_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Warmup must not mount the selected Zarr into the writable container."""
+    """Warmup uses the body Zarr rather than a private copied replacement."""
     workspace = _Workspace(tmp_path)
-    zarr_parent = tmp_path / "selected-zarr"
-    zarr_path = zarr_parent / "skims.zarr"
-    zarr_path.mkdir(parents=True)
-    (zarr_path / ".zgroup").write_text("{}\n", encoding="utf-8")
+    launch_context = _launch_context(tmp_path)
+    zarr_path = launch_context.runtime_zarr_path
+    _write_structurally_valid_zarr(zarr_path)
     settings = SimpleNamespace(
         run=SimpleNamespace(region="seattle"),
         activitysim=SimpleNamespace(
@@ -487,11 +499,11 @@ def test_numba_warmup_copies_the_selected_zarr_into_private_compile_scratch(
 
     warmup.run(
         _activitysim_inputs(tmp_path),
-        _launch_context(tmp_path),
+        launch_context,
         skim_mode="zarr",
         zarr_input_path=str(zarr_path),
     )
 
     compile_zarr = tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
-    assert str(zarr_path) not in captured_volumes
-    assert (compile_zarr / ".zgroup").read_text(encoding="utf-8") == "{}\n"
+    assert captured_volumes[str(launch_context.runtime_cache_dir)]["mode"] == "ro"
+    assert not compile_zarr.exists()

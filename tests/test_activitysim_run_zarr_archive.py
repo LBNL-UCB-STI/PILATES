@@ -59,6 +59,101 @@ def _launch_context(tmp_path: Path) -> ActivitySimLaunchContext:
     )
 
 
+def _preparation_settings() -> SimpleNamespace:
+    return SimpleNamespace(
+        run=SimpleNamespace(
+            region="seattle",
+            models=SimpleNamespace(
+                land_use="urbansim",
+                travel="beam",
+                activity_demand="activitysim",
+                vehicle_ownership=None,
+            ),
+        ),
+        infrastructure=SimpleNamespace(
+            container_manager="docker",
+            docker_images={"activitysim": "activitysim-image"},
+        ),
+        activitysim=SimpleNamespace(
+            region_mappings={"region_to_subdir": {"seattle": "example"}},
+            local_mutable_data_folder="activitysim/data",
+            local_output_folder="activitysim/output",
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs",
+            file_format="parquet",
+            persist_sharrow_cache=True,
+            command_template="activitysim",
+            household_sample_size=0,
+            num_processes=2,
+            chunk_size=0,
+        ),
+    )
+
+
+@pytest.mark.parametrize("generated_zarr", ["missing", "invalid"])
+def test_omx_preparation_rejects_missing_or_invalid_zarr_before_body(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    generated_zarr: str,
+) -> None:
+    """A warmup success cannot admit the body without a valid runtime Zarr."""
+    launch_context = _launch_context(tmp_path)
+    state = SimpleNamespace(
+        full_settings=_preparation_settings(),
+        current_year=2018,
+        current_inner_iter=0,
+        set_sub_stage_progress=lambda _progress: None,
+    )
+    runner = ActivitysimRunner("activitysim", state)
+    calls: list[str] = []
+
+    def run_container(*_args: object, **kwargs: object) -> bool:
+        model_name = kwargs["model_name"]
+        volumes = kwargs["volumes"]
+        assert isinstance(model_name, str)
+        assert isinstance(volumes, dict)
+        if model_name == "activitysim_numba_warmup":
+            calls.append("warmup")
+            cache_mount = next(
+                Path(local)
+                for local, mount in volumes.items()
+                if mount["bind"] == "/app/numba_cache"
+            )
+            (cache_mount / "numba").mkdir(parents=True, exist_ok=True)
+            (cache_mount / "numba" / "compiled.nbi").write_text(
+                "cache", encoding="utf-8"
+            )
+            if generated_zarr == "invalid":
+                zarr_path = launch_context.runtime_zarr_path
+                zarr_path.mkdir(parents=True)
+                (zarr_path / ".zgroup").write_text("{}\n", encoding="utf-8")
+            return True
+
+        assert model_name == "activitysim"
+        calls.append("body")
+        return True
+
+    monkeypatch.setattr(
+        "pilates.activitysim.runner.GenericRunner.run_container",
+        staticmethod(run_container),
+    )
+
+    with pytest.raises(RuntimeError):
+        runner.run(
+            ActivitySimPreprocessOutputs(
+                mutable_data_dir=tmp_path / "mutable-data",
+                land_use_table=tmp_path / "land_use.csv",
+                households_table=tmp_path / "households.csv",
+                persons_table=tmp_path / "persons.csv",
+            ),
+            launch_context,
+            skim_mode="omx",
+            workspace=SimpleNamespace(full_path=str(tmp_path)),
+        )
+
+    assert calls == ["warmup"]
+
+
 def test_zarr_validation_is_read_only_for_a_structurally_valid_store(
     monkeypatch,
     tmp_path: Path,
