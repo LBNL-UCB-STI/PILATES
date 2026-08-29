@@ -633,7 +633,7 @@ fi
     python_calls = calls.read_text(encoding="utf-8").splitlines()
     assert any(
         call
-        == f"-m pip install --upgrade --force-reinstall -e {consist_source}"
+        == f"-m pip install --upgrade --force-reinstall --no-deps -e {consist_source}"
         for call in python_calls
     )
     assert not any("--force-reinstall consist==" in call for call in python_calls)

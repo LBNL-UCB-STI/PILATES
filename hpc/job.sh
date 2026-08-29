@@ -142,7 +142,7 @@ install_editable_activitysim_acceptance_consist() {
         return 1
     fi
     echo "Installing required editable Consist checkout from $editable_source at $consist_revision ..."
-    python3 -m pip install --upgrade --force-reinstall -e "$editable_source"
+    python3 -m pip install --upgrade --force-reinstall --no-deps -e "$editable_source"
     ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE="$editable_source" python3 - <<'PY'
 import os
 from pathlib import Path
