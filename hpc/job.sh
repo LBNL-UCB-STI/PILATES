@@ -382,10 +382,18 @@ elif [ "$acceptance_mode" = "activitysim-run" ]; then
         exit 2
     fi
     echo "Launching ActivitySim-run acceptance driver with unbuffered output..."
-    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.activitysim_run_acceptance \
+    activitysim_acceptance_args=(
         --settings "$CONFIG_FILE" \
         --manifest "$STAGE_FILE" \
         --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    )
+    if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+        activitysim_acceptance_args+=(
+            --editable-consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
+        )
+    fi
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.activitysim_run_acceptance \
+        "${activitysim_acceptance_args[@]}"
     exit 0
 elif [ -n "$STAGE_FILE" ]; then
     echo "Stage: $STAGE_FILE"

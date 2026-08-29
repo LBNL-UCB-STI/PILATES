@@ -636,6 +636,16 @@ fi
         == f"-m pip install --upgrade --force-reinstall --no-deps -e {consist_source}"
         for call in python_calls
     )
+    driver_calls = [
+        call
+        for call in python_calls
+        if call.startswith("-u -m pilates.runtime.activitysim_run_acceptance ")
+    ]
+    assert driver_calls == [
+        "-u -m pilates.runtime.activitysim_run_acceptance "
+        f"--settings {settings} --manifest {manifest} --evidence-root {evidence_root} "
+        f"--editable-consist {consist_source}"
+    ]
     assert not any("--force-reinstall consist==" in call for call in python_calls)
 
 
