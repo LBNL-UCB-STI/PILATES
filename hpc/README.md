@@ -185,6 +185,13 @@ env -u PYTHONPATH ./hpc/job_runner.sh \
   --activitysim-run-acceptance hpc/activitysim-run-acceptance-inputs.json
 ```
 
+To validate an unreleased ActivitySim image without changing the normal canary
+settings, pass an immutable `docker://...@sha256:...` reference with
+`--activitysim-image`. The wrapper rewrites only
+`infrastructure.singularity_images.activitysim` in that job's generated
+settings, retains the exact override beside the evidence, and rejects the flag
+for ordinary runs.
+
 For a pre-merge integration check of an unreleased Consist branch, select
 editable mode explicitly in a distinct manifest. Do not include
 `released_consist_version`; released and editable evidence are deliberately
@@ -219,7 +226,8 @@ env -u PYTHONPATH ./hpc/job_runner.sh \
   -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
   -a ac_beamcore \
   --activitysim-run-acceptance hpc/activitysim-run-acceptance-editable-inputs.json \
-  --editable-consist "$CONSIST_SRC_DIR"
+  --editable-consist "$CONSIST_SRC_DIR" \
+  --activitysim-image docker://example/activitysim@sha256:<immutable-image-digest>
 ```
 
 Editable mode force-installs that supplied checkout, verifies the imported

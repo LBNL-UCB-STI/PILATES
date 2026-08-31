@@ -251,6 +251,116 @@ printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
     assert submitted_args[selector_index + 3] == str(evidence_dir)
 
 
+def test_job_runner_stages_activitysim_acceptance_image_override(
+    tmp_path: Path,
+) -> None:
+    """An acceptance-only image override is retained with generated settings."""
+
+    pilates_dir = tmp_path / "pilates"
+    pilates_dir.mkdir()
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text(
+        """infrastructure:
+  singularity_images:
+    urbansim: docker://example/urbansim:old
+    activitysim: docker://example/activitysim:old
+  docker_images:
+    activitysim: example/activitysim:old
+""",
+        encoding="utf-8",
+    )
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text('{"inputs": {}}\n', encoding="utf-8")
+    evidence_root = tmp_path / "activitysim-acceptance-evidence"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_args = tmp_path / "captured-sbatch-args"
+    _write_executable(
+        fake_bin / "mkdir",
+        """#!/bin/sh
+if [ "$2" = "/global/scratch/users/activitysim-image-user/pilates_logs" ]; then
+    exit 0
+fi
+exec /bin/mkdir "$@"
+""",
+    )
+    _write_executable(
+        fake_bin / "sbatch",
+        """#!/bin/sh
+printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
+""",
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PILATES_DIR": str(pilates_dir),
+        "PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT": str(evidence_root),
+        "SBATCH_ARGS_FILE": str(captured_args),
+        "USER": "activitysim-image-user",
+    }
+    image = "docker://zaneedell/activitysim@sha256:40532e09ace910b727999f87e5afa6dd9ff4879c8244e34095a914b5c5cbe77e"
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job_runner.sh"),
+            "-c",
+            "settings.yaml",
+            "-a",
+            "test-account",
+            "--activitysim-run-acceptance",
+            "inputs.json",
+            "--activitysim-image",
+            image,
+        ],
+        cwd=_PROJECT_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    evidence_dir = next(path for path in evidence_root.iterdir() if path.is_dir())
+    generated_settings = (evidence_dir / "generated-settings.yaml").read_text(
+        encoding="utf-8"
+    )
+    assert f"    activitysim: {image}\n" in generated_settings
+    assert "activitysim: example/activitysim:old" in generated_settings
+    assert (evidence_dir / "activitysim-image-override.txt").read_text(
+        encoding="utf-8"
+    ) == f"{image}\n"
+
+
+def test_job_runner_rejects_activitysim_image_outside_acceptance(
+    tmp_path: Path,
+) -> None:
+    """The pre-release image override cannot alter ordinary jobs."""
+
+    settings = tmp_path / "settings.yaml"
+    settings.write_text("run:\n  label: ordinary\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job_runner.sh"),
+            "-c",
+            str(settings),
+            "-a",
+            "test-account",
+            "--activitysim-image",
+            "docker://example/activitysim@sha256:abc",
+        ],
+        cwd=_PROJECT_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 2
+    assert "only valid with --activitysim-run-acceptance" in completed.stderr
+
+
 def test_job_runner_assembles_urbansim_h5_snapshot_acceptance_submission(
     tmp_path: Path,
 ) -> None:
