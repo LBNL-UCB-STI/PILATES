@@ -19,17 +19,11 @@ def _write_population_store(path: Path, tables: tuple[str, ...]) -> Path:
     return path
 
 
-def _write_population_h5(path: Path, tables: tuple[str, ...]) -> None:
-    with h5py.File(path, "w") as handle:
-        for table_name in tables:
-            handle.create_dataset(table_name, data=[1])
-
-
 def test_ensure_usim_population_year_table_aliases_creates_year_scoped_links(
     tmp_path: Path,
 ) -> None:
     h5_path = tmp_path / "population.h5"
-    _write_population_h5(h5_path, ("households", "persons", "jobs", "blocks"))
+    _write_population_store(h5_path, ("households", "persons", "jobs", "blocks"))
 
     result = ensure_usim_population_year_table_aliases(
         h5_path=str(h5_path),
@@ -57,7 +51,7 @@ def test_ensure_usim_population_year_table_aliases_reports_missing_root_tables(
     tmp_path: Path,
 ) -> None:
     h5_path = tmp_path / "population.h5"
-    _write_population_h5(h5_path, ("households", "persons"))
+    _write_population_store(h5_path, ("households", "persons"))
 
     result = ensure_usim_population_year_table_aliases(
         h5_path=str(h5_path),
@@ -97,6 +91,9 @@ def test_create_snapshot_adds_exact_year_links_and_resolves_them(
         "/2023/jobs",
         "/2023/blocks",
     }
+    with h5py.File(destination, "r") as handle:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert handle[f"/2023/{table_name}"].id == handle[f"/{table_name}"].id
     with h5py.File(source, "r") as handle:
         assert "/2023" not in handle
 
