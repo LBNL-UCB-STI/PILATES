@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -26,6 +27,41 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
     USIM_POPULATION_JOBS_TABLE: "jobs",
     USIM_POPULATION_BLOCKS_TABLE: "blocks",
 }
+
+
+def create_usim_population_source_snapshot(
+    *, source_h5: Path, destination_h5: Path, year: int
+) -> Path:
+    """Copy and validate one exact-year population-source HDF5 output."""
+    source = Path(source_h5)
+    destination = Path(destination_h5)
+    if not source.is_file():
+        raise FileNotFoundError(f"Population-source H5 input does not exist: {source}")
+    if source.resolve() == destination.resolve() or (
+        destination.exists() and source.samefile(destination)
+    ):
+        raise ValueError("Population-source H5 destination must differ from source")
+    with h5py.File(source, "r") as handle:
+        missing = [
+            name for name in POPULATION_TABLE_BY_KEY.values() if name not in handle
+        ]
+    if missing:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing root tables: "
+            f"h5_path={source} year={year} "
+            f"missing_root={['/' + name for name in missing]}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    alias_result = ensure_usim_population_year_table_aliases(
+        h5_path=str(destination), year=year
+    )
+    if alias_result["missing_root"]:
+        raise RuntimeError("Population-source snapshot aliases are incomplete")
+    resolve_usim_population_table_paths(
+        h5_path=str(destination), year=year, require_exact_year=True
+    )
+    return destination
 
 
 def ensure_usim_population_year_table_aliases(
