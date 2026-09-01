@@ -3,11 +3,39 @@
 from pathlib import Path
 from types import SimpleNamespace
 
+import h5py
+import pandas as pd
 import pytest
 from consist import AdmissionEvidence, ResolvedBinding, Tracker, define_step
 from consist.core.resolved_binding import ArtifactIdentity
 
+from pilates.utils.usim_h5 import create_usim_population_source_snapshot
+from pilates.workflows import binding
+from pilates.workflows.artifact_keys import (
+    USIM_POPULATION_HOUSEHOLDS_TABLE,
+    USIM_POPULATION_SOURCE_H5,
+)
 from pilates.workflows.binding import build_resolved_binding
+
+
+def _write_population_store(path: Path, tables: tuple[str, ...]) -> Path:
+    with pd.HDFStore(path, mode="w") as store:
+        for index, table_name in enumerate(tables):
+            store.put(table_name, pd.DataFrame({"marker": [index]}))
+    return path
+
+
+class _LandUseContinuationState:
+    forecast_year = 2030
+
+    class Stage:
+        land_use = object()
+
+    def is_enabled(self, stage: object) -> bool:
+        return stage is self.Stage.land_use
+
+    def is_start_year(self) -> bool:
+        return False
 
 
 def _tracked_artifact(tmp_path: Path):
@@ -27,6 +55,49 @@ def _step_identity(step_name: str) -> SimpleNamespace:
         name=f"{step_name}__y2030__i1__phase_test",
         step_contract_identity="sha256:step-v1:" + "0" * 64,
     )
+
+
+def test_activitysim_population_source_resolves_builder_snapshot_exact_year(
+    tmp_path: Path,
+) -> None:
+    source_h5 = _write_population_store(
+        tmp_path / "source.h5", ("households", "persons", "jobs", "blocks")
+    )
+    snapshot_h5 = create_usim_population_source_snapshot(
+        source_h5=source_h5,
+        destination_h5=tmp_path / "valid_population_source.h5",
+        year=2030,
+    )
+
+    resolved = binding._activitysim_population_source(
+        explicit_fallback_inputs={USIM_POPULATION_SOURCE_H5: snapshot_h5},
+        settings=SimpleNamespace(),
+        state=_LandUseContinuationState(),
+        workspace=SimpleNamespace(),
+    )
+
+    assert resolved is not None
+    assert resolved[USIM_POPULATION_HOUSEHOLDS_TABLE] == "/2030/households"
+
+
+def test_activitysim_population_source_does_not_repair_malformed_snapshot(
+    tmp_path: Path,
+) -> None:
+    malformed_h5 = _write_population_store(
+        tmp_path / "malformed_population_source.h5",
+        ("households", "persons", "jobs", "blocks"),
+    )
+
+    with pytest.raises(KeyError, match="missing required tables"):
+        binding._activitysim_population_source(
+            explicit_fallback_inputs={USIM_POPULATION_SOURCE_H5: malformed_h5},
+            settings=SimpleNamespace(),
+            state=_LandUseContinuationState(),
+            workspace=SimpleNamespace(),
+        )
+
+    with h5py.File(malformed_h5, "r") as handle:
+        assert "/2030" not in handle
 
 
 def test_build_resolved_binding_freezes_tracked_named_inputs_without_diagnostics_in_identity(

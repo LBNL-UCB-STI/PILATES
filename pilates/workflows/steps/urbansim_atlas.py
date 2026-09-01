@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Sequence
 
@@ -45,7 +44,7 @@ from pilates.workflows.step_definition import (
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.utils.consist_runtime import require_runtime_kwargs
-from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
+from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -717,24 +716,15 @@ def _native_urbansim_postprocess(
         NativeUrbanSimRunOutputs(usim_datastore_h5=usim_datastore_h5),
         workspace,
     )
-    population_source = _urbansim_population_source_path(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    population_source.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(usim_datastore_h5, population_source)
-    alias_result = ensure_usim_population_year_table_aliases(
-        h5_path=str(population_source),
+    create_usim_population_source_snapshot(
+        source_h5=usim_datastore_h5,
+        destination_h5=_urbansim_population_source_path(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ),
         year=state.forecast_year,
     )
-    missing_root = alias_result.get("missing_root", ())
-    if missing_root:
-        raise RuntimeError(
-            "UrbanSim population-source snapshot is missing root tables: "
-            f"h5_path={population_source} year={state.forecast_year} "
-            f"missing_root={missing_root}"
-        )
 
 
 @define_step(
@@ -866,7 +856,6 @@ def _native_atlas_postprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
     forecast_year = state.forecast_year
     atlas_output_dir = Path(workspace.get_atlas_output_dir())
     expected_raw_outputs = {
@@ -893,12 +882,14 @@ def _native_atlas_postprocess(
         workspace,
         usim_datastore_h5=usim_datastore_h5,
     )
-    population_source = usim_datastore_h5.with_name(
-        f"{usim_datastore_h5.stem}_population_source{usim_datastore_h5.suffix}"
+    destination_h5 = Path(
+        _atlas_postprocess_native_output_paths(
+            settings=settings, state=state, workspace=workspace
+        )[USIM_POPULATION_SOURCE_H5]
     )
-    shutil.copy2(usim_datastore_h5, population_source)
-    ensure_usim_population_year_table_aliases(
-        h5_path=str(population_source),
+    create_usim_population_source_snapshot(
+        source_h5=usim_datastore_h5,
+        destination_h5=destination_h5,
         year=state.forecast_year,
     )
 
