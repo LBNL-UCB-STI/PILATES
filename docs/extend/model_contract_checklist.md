@@ -15,6 +15,10 @@ summary: Checklist for a native Consist model boundary in PILATES.
 
 ## Native definition
 
+- [ ] Declare an `InputContract` on the definition. Its optional
+  `config_contract` field is required for `complete`, which needs demonstrated
+  portable identity closure; it may be absent for `incomplete`, whose reason is
+  status/evidence, not cache promotion.
 - [ ] Define a typed `StepOutputsBase` subclass for persisted public outputs.
 - [ ] Implement a resolver that selects each role once into concrete Consist
   inputs and deterministic destinations.
@@ -31,6 +35,9 @@ summary: Checklist for a native Consist model boundary in PILATES.
 - [ ] Sequence it with an explicit `execute_step(...)` call in the owning
   stage.
 - [ ] Keep source precedence in the resolver and stage order in the stage.
+- [ ] Leave post-scenario action refresh, configured output archival, and
+  archived-artifact republishing to `execute_step(...)` before projection;
+  model integrations must not duplicate that bridge policy.
 
 ## Cache and restart
 

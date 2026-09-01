@@ -24,6 +24,7 @@ semantic roles
 -> execute_step(..., StepDefinition)
 -> Consist scenario.run(...)
 -> RunResult.outputs
+-> PILATES archive/refresh/republish when enabled
 -> TypedOutputProjector
 -> typed PILATES outputs
 ```
@@ -38,6 +39,12 @@ selected artifacts and destinations, and require completeness before execution.
 The projector validates persisted outputs at their declared destinations.
 Consequently fresh runs, admitted cache hits, and the committed restart path
 produce the same typed handoff from `RunResult.outputs`.
+
+After `scenario.run()` returns, `execute_step()` refreshes PILATES action
+evidence. If archive copying is enabled, it archives the completed outputs and
+republishes the refreshed artifacts to the scenario coupler before projection.
+That is the current PILATES bridge; `scenario.run()` itself does not make this
+archive-validation and refreshed-publication guarantee.
 
 ## Advanced immutable bindings
 
@@ -89,14 +96,30 @@ behavior, while a restart decision remains PILATES policy. No cache result
 creates a second stage sequence or permits a stage to select a historical
 artifact outside its declared roles.
 
+All native definitions have `InputContract`s, but that structural coverage is
+not a workflow-wide cache-promotion decision. A native execution or ordinary
+cache hit is likewise not proof of portable reuse. `beam_preprocess` is the
+only complete native boundary with portable fresh-workspace promotion evidence;
+the remaining boundaries require their own acceptance evidence. HDF5 promotion
+is a separate gate.
+
 ## Restart Boundary
 
 The sole committed mid-stage checkpoint is `beam_run_completed` to
 `beam_postprocess`. PILATES pins the immediate successor input closure,
-validates every producer/output identity, and asks Consist to hydrate the
-closure to exact current destinations. It then re-resolves and runs native
-`beam_postprocess`. The in-progress postprocess mutation gate remains
-non-restartable.
+flushes queued archival, synchronously archives selected closure sources, and
+verifies their archive-visible bytes before publishing the pinned snapshot. On
+restart it validates and hydrates that closure to exact current destinations,
+then re-resolves and runs native `beam_postprocess`. The in-progress
+postprocess mutation gate remains non-restartable.
+
+## Evidence Status
+
+The SFBay structural checker is the formal structural acceptance artifact.
+Seattle v1 is supporting runtime evidence only. BEAM-preprocess and the
+editable-Consist ActivitySim-run acceptances are boundary-specific; replay with
+a released Consist wheel remains to be shown. HDF5 promotion is separate. This
+page does not claim an HPC execution path as acceptance evidence.
 
 All other restart behavior follows the normal durable stage/year frontier. In
 particular, an interrupted ActivitySim mid-stage operation fails closed.

@@ -5,23 +5,29 @@ summary: Native Consist integration path for a new PILATES model.
 
 # Adding a Model
 
-Start with `scripts/new_model_scaffold.py`. It creates model adapter shells,
-typed output classes, a decorated callable for each phase, resolvers,
-projectors, `StepDefinition` objects, catalog policy entries, and explicit
-stage-call snippets.
+`scripts/new_model_scaffold.py` is a mechanical native starting aid, not a
+turnkey model integration. It generates the required native-contract surfaces
+with conservative incomplete adapter contracts; establish every real semantic
+role, dependency, and completion status in the [Model Contract
+Checklist](model_contract_checklist.md) before relying on an integration.
 
 ## Implementation order
 
 1. Define stable semantic input and output roles.
-2. Define typed outputs for the persisted files downstream code may trust.
-3. Implement a decorated native callable for preprocess, run, or postprocess.
-4. Implement one resolver that selects roles once and gives each selected input
+2. Declare an `InputContract` as a first-class part of the step definition.
+   Its optional `config_contract` field must be set for `complete`, which
+   requires demonstrated portable identity closure; it may be absent for
+   `incomplete`, which records the remaining status and evidence gap rather
+   than promoting a cache entry.
+3. Define typed outputs for the persisted files downstream code may trust.
+4. Implement a decorated native callable for preprocess, run, or postprocess.
+5. Implement one resolver that selects roles once and gives each selected input
    an exact materialization destination.
-5. Implement one projector that turns `RunResult.outputs` into the typed
+6. Implement one projector that turns `RunResult.outputs` into the typed
    output object and validates current destinations.
-6. Export the `StepDefinition` and add a policy-only catalog entry.
-7. Add the explicit `execute_step(...)` call in the owning stage.
-8. Add focused contract, stage, and restart tests as applicable.
+7. Export the `StepDefinition` and add a policy-only catalog entry.
+8. Add the explicit `execute_step(...)` call in the owning stage.
+9. Add focused contract, stage, and restart tests as applicable.
 
 ## Ownership rules
 
@@ -32,6 +38,10 @@ stage-call snippets.
   and restart policy.
 - Stages sequence definitions; they do not rediscover inputs or reconstruct
   completed results.
+- The central `execute_step` bridge owns the post-scenario action refresh,
+  configured output archive, and republishing of archived artifacts to the
+  coupler before typed projection. Model integrations must not recreate that
+  sequence.
 
 Use the coupler only as the current semantic-role map. Introduce a new role
 only when a workflow boundary needs it; an archive location is not a role.

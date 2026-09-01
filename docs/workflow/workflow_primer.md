@@ -22,6 +22,7 @@ semantic roles
 -> resolve once
 -> execute the decorated callable through Consist
 -> RunResult.outputs
+-> archive/refresh/republish when enabled
 -> TypedOutputProjector
 -> next stage decision
 ```
@@ -37,6 +38,9 @@ Consist callable, resolver, output-path policy, and typed-output projector.
   destinations in `ResolvedStepInputs`.
 - **Consist** binds and materializes inputs, executes or admits a cache hit,
   records identity and provenance, and returns persisted outputs.
+- **PILATES** refreshes its action evidence and, when archive copying is
+  enabled, archives outputs and republishes the refreshed artifacts before
+  typed projection.
 - **Typed projectors** validate `RunResult.outputs` at their declared current
   destinations and return the typed values consumed by the next stage.
 
@@ -51,13 +55,17 @@ is mutable run-local layout, not an alternative execution contract.
    workspace/storage roots, and a Consist tracker and scenario.
 3. The year loop invokes the enabled stage sequence.
 4. Each stage resolves its semantic roles once and calls `execute_step(...)`.
-5. Consist returns `RunResult.outputs`; the step projector returns typed
-   PILATES outputs for the following stage decision.
+5. PILATES performs its current archive/refresh/republish bridge when enabled;
+   the step projector then returns typed PILATES outputs for the following
+   stage decision.
 6. PILATES records durable stage progress and finalizes archive state.
 
 Fresh execution, a Consist cache hit, and the committed restart path all join
 at `RunResult.outputs -> TypedOutputProjector`. Stages do not rebuild an
 in-memory execution graph or select historical output sources themselves.
+
+The bridge is downstream PILATES behavior today; `scenario.run()` does not
+itself make that archive-validation and refreshed-publication guarantee.
 
 ## Restart Boundary
 

@@ -75,6 +75,7 @@ The runtime is intentionally small:
   the current run
 - stages handle ordering and the inner-iteration loop
 - each stage resolves its inputs once, executes its native Consist step, and
+  performs the current archive/refresh/republish bridge when enabled, and
   projects `RunResult.outputs` into typed outputs for the next step
 
 These docs cover the things that come up day-to-day:
@@ -122,6 +123,13 @@ rebuilt by hand, repeated scenarios reuse earlier outputs where the identity
 matches, and old runs can be opened later without reconstructing what they were.
 See [Consist in PILATES](workflow/consist_in_pilates.md) for the boundary
 between what Consist owns and what PILATES owns.
+
+!!! note
+
+    Native `InputContract` coverage is structural, not blanket cache-promotion
+    evidence. `beam_preprocess` has portable fresh-workspace promotion evidence;
+    other boundaries, released-wheel replay, and HDF5 promotion have separate
+    acceptance work.
 
 ## Choose A Reading Path
 

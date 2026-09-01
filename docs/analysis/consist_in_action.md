@@ -1,6 +1,6 @@
 ---
 title: Consist in Action
-summary: Small, read-only walkthroughs for cache-hit inspection, faceted outcome comparison, and archive inspection.
+summary: Small, read-only walkthroughs for boundary-overlap, faceted outcome comparison, and archive inspection.
 ---
 
 # Consist in Action
@@ -10,14 +10,14 @@ summary: Small, read-only walkthroughs for cache-hit inspection, faceted outcome
 These examples are the shortest path to seeing what PILATES gets from Consist
 without reading the runtime code first:
 
-- cache-aware rerun inspection
+- boundary-overlap inspection
 - faceted output comparison
 - restart and archive inspection
 
 All examples are read-only. They operate on archive run directories and
 the attached Consist database under `.consist/`.
 
-## 1. Cache-Hit Inspection For A Rerun
+## 1. Boundary-Overlap Analysis For A Rerun
 
 Compare the logical year/iteration/model boundaries present in a baseline
 archive and a rerun archive:
@@ -35,8 +35,9 @@ What it shows:
 - logical boundary overlap on `scenario_id`, `year`, `iteration`, and `model`
 - which boundaries appear in both archives versus only one side
 
-Use this when you want a fast answer to "what reran and what stayed logically
-the same?"
+Use this to compare logical coverage between archives. It does not inspect
+Consist admission records, so it cannot prove whether a run was a cache hit or
+whether a cache outcome was portable.
 
 ## 2. Faceted Output Comparison
 
