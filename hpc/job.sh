@@ -20,9 +20,11 @@ error_exit() {
 trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
 
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
+export PILATES_DIR
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
 REQUIREMENTS_FILE="${PILATES_REQUIREMENTS_FILE:-$PILATES_DIR/hpc/requirements-hpc.txt}"
 FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
+CONSIST_SRC_DIR_SUPPLIED="${CONSIST_SRC_DIR+x}"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
 DEFAULT_CONSIST_PYPI_PACKAGE="consist==0.2.0"
@@ -108,6 +110,130 @@ PY
 }
 
 
+required_activitysim_acceptance_consist_version() {
+    local manifest_path="$1"
+    python3 -c 'import json, sys; raw = json.load(open(sys.argv[1], encoding="utf-8")); value = raw.get("released_consist_version"); isinstance(value, str) and value.strip() or sys.exit("ActivitySim acceptance manifest requires non-empty released_consist_version"); print(value.strip())' "$manifest_path"
+}
+
+
+activitysim_acceptance_consist_install_mode() {
+    local manifest_path="$1"
+    python3 -c 'import json, sys; raw = json.load(open(sys.argv[1], encoding="utf-8")); mode = raw.get("consist_install_mode", "released"); mode in {"released", "editable"} or sys.exit("ActivitySim acceptance manifest has invalid consist_install_mode"); print(mode)' "$manifest_path"
+}
+
+
+install_released_activitysim_acceptance_consist() {
+    local required_version="$1"
+    echo "Installing required released Consist version consist==$required_version ..."
+    python3 -m pip install --upgrade --force-reinstall "consist==$required_version"
+}
+
+
+install_editable_activitysim_acceptance_consist() {
+    local editable_source="$1"
+    local consist_revision
+
+    if [ "${editable_source#/}" = "$editable_source" ] || [ ! -d "$editable_source" ]; then
+        echo "ERROR: editable ActivitySim acceptance requires an existing absolute Consist checkout." >&2
+        return 1
+    fi
+    if ! consist_revision="$(git -C "$editable_source" rev-parse HEAD)"; then
+        echo "ERROR: editable ActivitySim acceptance requires --editable-consist to be a Git checkout." >&2
+        return 1
+    fi
+    echo "Installing required editable Consist checkout from $editable_source at $consist_revision ..."
+    python3 -m pip install --upgrade --force-reinstall --no-deps -e "$editable_source"
+    ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE="$editable_source" python3 - <<'PY'
+import os
+from pathlib import Path
+
+import consist
+
+source = Path(os.environ["ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE"]).resolve()
+module = Path(consist.__file__).resolve()
+try:
+    module.relative_to(source)
+except ValueError as error:
+    raise SystemExit(
+        "ERROR: Consist import is not provided by the required editable checkout: "
+        f"{module} is outside {source}"
+    ) from error
+print(f"consist import path: {module}")
+PY
+}
+
+
+install_hdf5_acceptance_consist() {
+    local evidence_root="$1"
+    local consist_revision
+    local pilates_revision
+    local runtime_record="$evidence_root/runtime-environment.json"
+
+    if [ "$CONSIST_SRC_DIR_SUPPLIED" != "x" ] || [ ! -d "$CONSIST_SRC_DIR" ]; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires an existing editable Consist checkout supplied through CONSIST_SRC_DIR." >&2
+        return 1
+    fi
+    if ! consist_revision="$(git -C "$CONSIST_SRC_DIR" rev-parse HEAD)"; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires CONSIST_SRC_DIR to be a Git checkout." >&2
+        return 1
+    fi
+    if ! pilates_revision="$(git -C "$PILATES_DIR" rev-parse HEAD)"; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance requires PILATES_DIR to be a Git checkout." >&2
+        return 1
+    fi
+
+    echo "Installing required editable Consist checkout from $CONSIST_SRC_DIR ..."
+    if ! python3 -m pip install -e "$CONSIST_SRC_DIR"; then
+        echo "ERROR: failed to install required editable Consist checkout from $CONSIST_SRC_DIR." >&2
+        return 1
+    fi
+
+    CONSIST_ACCEPTANCE_RUNTIME_RECORD="$runtime_record" \
+    CONSIST_ACCEPTANCE_CONSIST_REVISION="$consist_revision" \
+    CONSIST_ACCEPTANCE_PILATES_REVISION="$pilates_revision" \
+    python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import platform
+import sys
+
+import consist
+
+source = Path(os.environ["CONSIST_SRC_DIR"]).resolve()
+module = Path(consist.__file__).resolve()
+try:
+    module.relative_to(source)
+except ValueError as error:
+    raise SystemExit(
+        "ERROR: Consist import is not provided by the required editable checkout: "
+        f"{module} is outside {source}"
+    ) from error
+
+record = {
+    "consist": {
+        "editable_source": str(source),
+        "import_path": str(module),
+        "revision": os.environ["CONSIST_ACCEPTANCE_CONSIST_REVISION"],
+    },
+    "pilates": {
+        "source_path": os.environ["PILATES_DIR"],
+        "revision": os.environ["CONSIST_ACCEPTANCE_PILATES_REVISION"],
+    },
+    "python": {
+        "executable": sys.executable,
+        "implementation": platform.python_implementation(),
+        "version": sys.version,
+    },
+}
+destination = Path(os.environ["CONSIST_ACCEPTANCE_RUNTIME_RECORD"])
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+print(f"consist import path: {module}")
+PY
+}
+
+
 normalize_path() {
     local path_arg="$1"
     if [ -z "$path_arg" ]; then
@@ -121,12 +247,26 @@ normalize_path() {
     fi
 }
 
-acceptance_mode=false
-if [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
-    acceptance_mode=true
+acceptance_mode=""
+if [ "${1:-}" = "--urbansim-h5-snapshot-acceptance" ]; then
+    acceptance_mode="urbansim-h5-snapshot"
+    shift
+    if [ "$#" -ne 3 ]; then
+        echo "Usage: $0 --urbansim-h5-snapshot-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+        exit 2
+    fi
+elif [ "${1:-}" = "--beam-preprocess-acceptance" ]; then
+    acceptance_mode="beam-preprocess"
     shift
     if [ "$#" -ne 3 ]; then
         echo "Usage: $0 --beam-preprocess-acceptance <settings_file> <input_manifest> <evidence_root>" >&2
+        exit 2
+    fi
+elif [ "${1:-}" = "--activitysim-run-acceptance" ]; then
+    acceptance_mode="activitysim-run"
+    shift
+    if [ "$#" -ne 3 ] && [ "$#" -ne 5 ]; then
+        echo "Usage: $0 --activitysim-run-acceptance <settings_file> <input_manifest> <evidence_root> [--editable-consist <absolute-source-dir>]" >&2
         exit 2
     fi
 elif [ "$#" -gt 2 ]; then
@@ -142,9 +282,21 @@ fi
 CONFIG_FILE="$(normalize_path "$1")"
 STAGE_FILE="$(normalize_path "${2:-}")"
 ACCEPTANCE_EVIDENCE_ROOT="$(normalize_path "${3:-}")"
+ACTIVITYSIM_EDITABLE_CONSIST_SOURCE=""
+if [ "$acceptance_mode" = "activitysim-run" ] && [ "$#" -eq 5 ]; then
+    if [ "${4:-}" != "--editable-consist" ] || [ -z "${5:-}" ]; then
+        echo "ERROR: ActivitySim editable acceptance expects --editable-consist <absolute-source-dir>." >&2
+        exit 2
+    fi
+    ACTIVITYSIM_EDITABLE_CONSIST_SOURCE="$5"
+fi
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "ERROR: Config file not found: $CONFIG_FILE"
     exit 1
+fi
+if [ "$acceptance_mode" = "activitysim-run" ] && [ -n "${PYTHONPATH:-}" ]; then
+    echo "ERROR: ActivitySim acceptance must not inherit PYTHONPATH; unset it before submission to prevent Consist import shadowing." >&2
+    exit 2
 fi
 
 echo "Setting up HPC runtime environment..."
@@ -174,12 +326,46 @@ if [ ! -f "$REQUIREMENTS_FILE" ]; then
 fi
 
 install_python_deps "$REQUIREMENTS_FILE"
-install_consist "$REQUIREMENTS_FILE"
+if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
+    install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
+elif [ "$acceptance_mode" = "activitysim-run" ]; then
+    activitysim_consist_mode="$(activitysim_acceptance_consist_install_mode "$STAGE_FILE")"
+    if [ "$activitysim_consist_mode" = "editable" ]; then
+        if [ -z "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+            echo "ERROR: editable ActivitySim acceptance requires --editable-consist <absolute-source-dir>." >&2
+            exit 2
+        fi
+        install_editable_activitysim_acceptance_consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
+    else
+        if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+            echo "ERROR: released ActivitySim acceptance must not receive --editable-consist." >&2
+            exit 2
+        fi
+        required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
+        install_released_activitysim_acceptance_consist "$required_consist_version"
+    fi
+else
+    install_consist "$REQUIREMENTS_FILE"
+fi
 
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
 echo "Config: $CONFIG_FILE"
-if [ "$acceptance_mode" = true ]; then
+if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
+    if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
+        echo "ERROR: UrbanSim HDF5 snapshot acceptance mode requires settings, input manifest, and evidence root." >&2
+        exit 2
+    fi
+    echo "Launching UrbanSim HDF5 snapshot capture driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.urbansim_h5_snapshot_acceptance capture \
+        --settings "$CONFIG_FILE" \
+        --manifest "$STAGE_FILE" \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    echo "Launching UrbanSim HDF5 snapshot reconciliation driver with unbuffered output..."
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.urbansim_h5_snapshot_acceptance reconcile \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    exit 0
+elif [ "$acceptance_mode" = "beam-preprocess" ]; then
     if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
         echo "ERROR: acceptance mode requires settings, input manifest, and evidence root." >&2
         exit 2
@@ -189,6 +375,25 @@ if [ "$acceptance_mode" = true ]; then
         --settings "$CONFIG_FILE" \
         --manifest "$STAGE_FILE" \
         --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    exit 0
+elif [ "$acceptance_mode" = "activitysim-run" ]; then
+    if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
+        echo "ERROR: ActivitySim run acceptance mode requires settings, input manifest, and evidence root." >&2
+        exit 2
+    fi
+    echo "Launching ActivitySim-run acceptance driver with unbuffered output..."
+    activitysim_acceptance_args=(
+        --settings "$CONFIG_FILE" \
+        --manifest "$STAGE_FILE" \
+        --evidence-root "$ACCEPTANCE_EVIDENCE_ROOT"
+    )
+    if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+        activitysim_acceptance_args+=(
+            --editable-consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
+        )
+    fi
+    PYTHONUNBUFFERED=1 python3 -u -m pilates.runtime.activitysim_run_acceptance \
+        "${activitysim_acceptance_args[@]}"
     exit 0
 elif [ -n "$STAGE_FILE" ]; then
     echo "Stage: $STAGE_FILE"

@@ -35,7 +35,10 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import ConfigContract, InputContract
-from pilates.workflows.step_consist_meta import consist_step_meta
+from pilates.workflows.step_consist_meta import (
+    activitysim_config_root_dirs,
+    consist_step_meta,
+)
 from pilates.workflows.steps import (
     STEP_DEFINITIONS,
     activitysim_preprocess,
@@ -53,6 +56,7 @@ def _settings(*, activitysim: object | None = _DEFAULT_ACTIVITYSIM) -> SimpleNam
     if activitysim is _DEFAULT_ACTIVITYSIM:
         activitysim = SimpleNamespace(
             file_format="csv",
+            main_configs_dir="configs",
             output_tables={
                 "tables": [
                     "accessibility",
@@ -190,6 +194,12 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
     state = _state()
     workspace = _workspace(tmp_path)
     _configure_urbansim_static_sources(settings, tmp_path)
+    for config_root in activitysim_config_root_dirs(
+        settings.activitysim,
+        Path(workspace.get_asim_mutable_configs_dir()),
+    ):
+        config_root.mkdir(parents=True)
+        _write_file(config_root / "settings.yaml")
     monkeypatch.setattr(
         "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
         lambda *_args, **_kwargs: {},
@@ -243,6 +253,31 @@ def test_native_step_definition_registry_is_complete_and_consist_resolvable(
             assert _contract_output_paths(
                 contract.output_paths
             ) == _contract_output_paths(declared_paths)
+
+
+def test_activitysim_preprocess_adapter_tolerates_partial_legacy_config_tree(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Only the run boundary requires the complete staged launch-tree roots."""
+
+    settings = _settings()
+    workspace = _workspace(tmp_path)
+    main_root = Path(workspace.get_asim_mutable_configs_dir()) / "configs"
+    _write_file(main_root / "settings.yaml")
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda *_args, **_kwargs: {},
+    )
+
+    adapter = consist_step_meta("activitysim_preprocess")["adapter"](
+        StepContext(
+            func_name="activitysim_preprocess",
+            model="activitysim_preprocess",
+            runtime_kwargs={"settings": settings, "workspace": workspace},
+        )
+    )
+
+    assert adapter is not None
 
 
 def test_native_step_definitions_classify_every_executable_input_contract() -> None:

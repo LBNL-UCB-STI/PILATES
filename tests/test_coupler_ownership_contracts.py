@@ -139,6 +139,12 @@ def test_direct_coupler_calls_are_limited_to_gateway_modules():
     )
 
 
+def test_activitysim_run_acceptance_publishes_through_coupler_gateway() -> None:
+    acceptance = PILATES_ROOT / "runtime" / "activitysim_run_acceptance.py"
+
+    assert not _find_direct_coupler_calls(acceptance)
+
+
 def test_stage_modules_do_not_call_coupler_methods_directly():
     """
     Stage modules must resolve coupler values via workflow helpers only.

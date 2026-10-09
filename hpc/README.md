@@ -125,6 +125,197 @@ fresh misses, declared outputs are absent, the callable executes twice, the
 fresh source is not the cold requested Run, hydration destinations differ, or
 the non-workspace persisted identity/semantic-product comparison differs.
 
+## ActivitySim Run Cold-to-Fresh Acceptance
+
+Use this one-boundary harness only after the local ActivitySim closure audit has
+passed. It runs `activitysim_run` once from a cold workspace and once from a
+separate empty workspace against the same Tracker/provenance store. It is not a
+whole-workflow canary, does not alter cache policy, and does not make the
+ActivitySim input contract complete.
+
+Create an operator-owned, untracked manifest with exactly the three selected
+table inputs and one selected skim. The driver expands environment variables,
+rejects extra roles, and requires the fixed workflow-year 2017, forecast-year
+2019, iteration-0 cohort. Use either `zarr_skims` (a structurally valid Zarr
+directory) or `omx_skims` (one readable OMX file), never both. The default
+release mode remains the formal boundary-acceptance path:
+
+```json
+{
+  "released_consist_version": "<operator-approved published Consist version>",
+  "inputs": {
+    "land_use_asim_in": "${PILATES_ACTIVITYSIM_LAND_USE}",
+    "households_asim_in": "${PILATES_ACTIVITYSIM_HOUSEHOLDS}",
+    "persons_asim_in": "${PILATES_ACTIVITYSIM_PERSONS}",
+    "zarr_skims": "${PILATES_ACTIVITYSIM_ZARR_SKIMS}"
+  },
+  "cohort": {
+    "workflow_year": 2017,
+    "forecast_year": 2019,
+    "iteration": 0
+  }
+}
+```
+
+Before submitting, replace the placeholder with the exact published Consist
+version selected for the acceptance. Do not use `--editable-consist` for this
+mode: the allocated job force-reinstalls only
+`consist==released_consist_version`, then the driver records and checks the
+installed version, public `consist.__version__`, `importlib.metadata` version,
+import path, wheel-recorded package-file path, their exact match, and
+editable/release determination in `runtime-environment.json`. It rejects an
+editable install, an import shadowing the installed wheel, or any version
+mismatch before the cold phase. Submit from an environment with `PYTHONPATH`
+unset; the acceptance job rejects a non-empty inherited value to prevent a
+checkout from shadowing the selected release. An operator can confirm the
+expected release is resolvable before submitting:
+
+```bash
+python3 -m pip download --no-deps "consist==<operator-approved published Consist version>"
+```
+
+The settings file must identify the normal SFBay ActivitySim configuration
+bundle, which the driver copies into each otherwise empty workspace so the
+adapter can establish the same config identity in both phases.
+
+```bash
+env -u PYTHONPATH ./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
+  -a <slurm_account> \
+  --activitysim-run-acceptance hpc/activitysim-run-acceptance-inputs.json
+```
+
+To validate an unreleased ActivitySim image without changing the normal canary
+settings, pass an immutable `docker://...@sha256:...` reference with
+`--activitysim-image`. The wrapper rewrites only
+`infrastructure.singularity_images.activitysim` in that job's generated
+settings, retains the exact override beside the evidence, and rejects the flag
+for ordinary runs.
+
+For a pre-merge integration check of an unreleased Consist branch, select
+editable mode explicitly in a distinct manifest. Do not include
+`released_consist_version`; released and editable evidence are deliberately
+not interchangeable:
+
+```json
+{
+  "consist_install_mode": "editable",
+  "inputs": {
+    "land_use_asim_in": "${PILATES_ACTIVITYSIM_LAND_USE}",
+    "households_asim_in": "${PILATES_ACTIVITYSIM_HOUSEHOLDS}",
+    "persons_asim_in": "${PILATES_ACTIVITYSIM_PERSONS}",
+    "zarr_skims": "${PILATES_ACTIVITYSIM_ZARR_SKIMS}"
+  },
+  "cohort": {
+    "workflow_year": 2017,
+    "forecast_year": 2019,
+    "iteration": 0
+  }
+}
+```
+
+The checkout is both named in the fish environment for operator inspection and
+passed explicitly on the command line; the job never falls back to the default
+adjacent source. Submit from an environment with `PYTHONPATH` unset:
+
+```fish
+set -lx CONSIST_SRC_DIR /global/scratch/users/$USER/sources/consist
+test -d "$CONSIST_SRC_DIR/.git"; or exit 1
+
+env -u PYTHONPATH ./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
+  -a ac_beamcore \
+  --activitysim-run-acceptance hpc/activitysim-run-acceptance-editable-inputs.json \
+  --editable-consist "$CONSIST_SRC_DIR" \
+  --activitysim-image docker://example/activitysim@sha256:<immutable-image-digest>
+```
+
+Editable mode force-installs that supplied checkout, verifies the imported
+module is inside it before the driver starts, and records
+`consist_install_mode: editable`, `evidence_kind: pre_merge_editable_integration`,
+the resolved source path, exact Git revision, dirty status, import path, and
+source-match result in `runtime-environment.json`. It is pre-merge integration
+evidence only; repeat the released mode after publication for formal boundary
+acceptance.
+
+The wrapper retains the submitted manifest and generated settings below
+`/global/scratch/users/$USER/pilates-boundary-promotions/<job-id>/` by default;
+override the parent with `PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT`. A valid
+bundle contains the shared Tracker and run store, persisted cold/fresh Run
+snapshots, phase records, `runtime-environment.json`, native
+`activitysim-observations.jsonl`, model-aware semantic validation, and
+`checksums.json`.
+The semantic checks validate ActivitySim final-pipeline table placement, column
+schema, and row counts (plus selected Zarr structure), rather than treating
+byte equality as model correctness. Accept the boundary evidence only if cold
+is a miss with one body/preparation entry, fresh is a hit with no additional
+entry, the persisted source is the cold Run, every declared output is hydrated,
+and `semantic-validation.json` reports `valid: true`. Preserve the checksums
+with the evidence bundle; do not update a contract or promotion plan until that
+operator result has been independently reviewed.
+
+## UrbanSim HDF5 Snapshot-Reconciliation Acceptance
+
+Use this narrow, pre-merge acceptance only to establish merge-confidence
+evidence for an editable Consist checkout. It exercises the native
+`urbansim_postprocess` boundary with one retained SFBay HDF5 input, checkpoints
+the Tracker, and reconciles the completed run in a separate Python process.
+It is not a cache hit, does not execute a new cacheable native run during
+reconciliation, and does not promote the HDF5 artifact or make any HDF5
+consumer boundary eligible for reuse.
+
+Before submitting, point the manifest at the retained source artifact on HPC:
+
+```fish
+set -x PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_INPUT_H5 /global/scratch/users/zaneedell/pilates-outputs/pilates-run--sfbay--consist-sfbay-usim-base-short-canary--20260826-104715/consist-recovery/pilates-run--sfbay--consist-sfbay-usim-base-short-canary--20260826-104715_atlas_postprocess__y2019__i0__phase_postprocess_b28c6e38/urbansim/data/model_data_2019_population_source.h5
+test -f "$PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_INPUT_H5"
+```
+
+The acceptance driver, not the source filename, enforces workflow year 2017,
+forecast year 2019, and iteration 0. Copy the tracked template to the
+operator-owned, untracked manifest only after the preflight succeeds, then
+submit with the editable Consist checkout and the ordinary node shape:
+
+```fish
+set -x CONSIST_SRC_DIR /global/scratch/users/zaneedell/sources/consist
+envsubst < hpc/urbansim-h5-snapshot-acceptance-inputs.json.template > hpc/urbansim-h5-snapshot-acceptance-inputs.json
+./hpc/job_runner.sh \
+  -c scenarios/sfbay/settings-sfbay-consist-usim-hpc-2019-canary.yaml \
+  -a ac_beamcore \
+  --urbansim-h5-snapshot-acceptance hpc/urbansim-h5-snapshot-acceptance-inputs.json
+```
+
+Do not add `--high-mem` or `-s`. Record the submitted Slurm job ID and the
+evidence root printed by the wrapper. The evidence bundle contains distinct
+`capture.json` and `reconciliation.json` records, plus a checkpointed Tracker
+snapshot and `validation.json`: capture records the strict native input binding
+before the later unowned override observation; reconciliation records a
+separate read-only process reopening that snapshot and comparing the persisted
+identity. Treat the run as successful only when Slurm is `COMPLETED` and every
+named check in `validation.json` is true, including `valid`.
+
+This mode fails before either driver starts unless `CONSIST_SRC_DIR` was
+explicitly supplied, is a Git checkout, installs editable, and the resulting
+`consist` import resolves inside that checkout. It never falls back to another
+installed or PyPI Consist. `runtime-environment.json` records the exact PILATES
+and editable-Consist revisions, import path, and Python runtime without copying
+environment variables or secrets. `effective-input-manifest.json` preserves the
+validated cohort, expanded/resolved HDF5 descriptor, and trusted artifact ID
+and identity without modifying the submitted manifest. The capture and
+reconciliation records include their distinct process IDs; the reconciliation
+record independently derives action-v2 strict-binding validity and confirms
+that the persisted strict link is the trusted pre-override artifact.
+
+After a successful job, copy the evidence root to the established NFS
+`pilates-boundary-promotions` archive, generate SHA-256 manifests for both the
+source and destination copies, and compare them. Preserve the PILATES and
+editable-Consist revisions from the evidence record. This verifies retention
+of the evidence bundle; it is neither a hash of nor a replacement for the
+retained external source HDF5. Append only this verified, checksum-backed
+evidence to the boundary-promotion plan. A later released-Consist replay and
+separate boundary-specific cache proof remain required before any HDF5
+promotion decision.
+
 The reviewed Seattle seed is based on the first-iteration launch evidence from
 the failed capture run. Its host-local `/local/job...` prefixes are normalized
 by the checker, so a new Slurm allocation does not need to reproduce the old

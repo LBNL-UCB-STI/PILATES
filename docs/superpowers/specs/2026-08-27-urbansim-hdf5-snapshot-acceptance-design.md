@@ -1,6 +1,8 @@
 # UrbanSim HDF5 Snapshot-Reconciliation Acceptance Design
 
-**Status:** approved design; implementation has not started.
+**Status:** implemented and accepted against the editable Consist PR #225
+checkout on 2026-08-27; released-version replay and any HDF5 boundary
+promotion remain pending.
 
 ## Purpose
 
