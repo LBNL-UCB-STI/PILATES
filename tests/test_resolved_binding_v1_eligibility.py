@@ -11,9 +11,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
-import pyarrow as pa
-import pyarrow.parquet as pq
 import pytest
+
+pa = pytest.importorskip("pyarrow")
+pq = pytest.importorskip("pyarrow.parquet")
 from consist import BindingResult, ExecutionOptions, ResolvedBinding, Tracker
 from consist.core.identity import IdentityManager
 from consist.integrations.activitysim import ActivitySimConfigAdapter
