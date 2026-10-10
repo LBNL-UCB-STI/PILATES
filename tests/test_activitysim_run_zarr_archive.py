@@ -337,3 +337,72 @@ def test_zarr_mode_does_not_enqueue_its_input_skims_for_archiving(
     )
 
     assert archived == []
+
+
+def test_declared_expected_inputs_aligns_zarr_skims_to_runtime_cache(
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace(tmp_path)
+    settings = _settings()
+    state = SimpleNamespace(full_settings=settings)
+    declared = ActivitysimRunner.declared_expected_inputs(settings, state, workspace)
+
+    assert declared["zarr_skims"] == Path(asim_runtime_zarr_path(workspace))
+    assert (
+        declared["zarr_skims"]
+        == tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    )
+    assert (
+        declared["land_use_asim_in"]
+        == tmp_path / "activitysim" / "native-launch" / "data" / "land_use.csv"
+    )
+
+
+def test_stage_runtime_input_path_avoids_copy_when_aligned_or_samefile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from pilates.activitysim.runner import _stage_runtime_input_path
+
+    runtime_zarr = tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"
+    runtime_zarr.mkdir(parents=True)
+
+    def _fail_copy(*_args, **_kwargs):
+        pytest.fail("shutil.copytree should not be called when paths align or link")
+
+    monkeypatch.setattr("shutil.copytree", _fail_copy)
+
+    # 1. Exact path match
+    result = _stage_runtime_input_path(
+        key="zarr_skims",
+        input_path=str(runtime_zarr),
+        runtime_zarr_path=runtime_zarr,
+    )
+    assert result == str(runtime_zarr)
+
+    # 2. Distinct path but samefile (e.g. symlink)
+    symlink_path = tmp_path / "symlinked_skims.zarr"
+    symlink_path.symlink_to(runtime_zarr)
+    result = _stage_runtime_input_path(
+        key="zarr_skims",
+        input_path=str(symlink_path),
+        runtime_zarr_path=runtime_zarr,
+    )
+    assert result == str(runtime_zarr)
+
+
+def test_stage_runtime_input_path_copies_when_distinct(tmp_path: Path) -> None:
+    from pilates.activitysim.runner import _stage_runtime_input_path
+
+    source_zarr = tmp_path / "source" / "skims.zarr"
+    source_zarr.mkdir(parents=True)
+    (source_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
+
+    runtime_zarr = tmp_path / "dest" / "cache" / "skims.zarr"
+    result = _stage_runtime_input_path(
+        key="zarr_skims",
+        input_path=str(source_zarr),
+        runtime_zarr_path=runtime_zarr,
+    )
+    assert result == str(runtime_zarr)
+    assert (runtime_zarr / ".zgroup").exists()
+

@@ -661,9 +661,10 @@ def _activitysim_execution_options(
     selected_roles = set(resolved_inputs.selected_roles())
     runtime_kwargs: dict[str, Any] = {}
     if resolved_inputs.step_name == "activitysim_run":
+        data_roles = [role for role in selected_roles if role != ZARR_SKIMS]
         staged_destinations = {
             Path(resolved_inputs.logical_destinations[role]).parent
-            for role in selected_roles
+            for role in data_roles
         }
         if len(staged_destinations) != 1:
             raise RuntimeError(

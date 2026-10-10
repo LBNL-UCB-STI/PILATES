@@ -408,11 +408,13 @@ if [ -n "$activitysim_run_acceptance_manifest_path" ]; then
 fi
 
 urbansim_h5_snapshot_acceptance_evidence_dir=""
+urbansim_h5_snapshot_acceptance_evidence_manifest=""
 if [ -n "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
     acceptance_root="${PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
     urbansim_h5_snapshot_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    urbansim_h5_snapshot_acceptance_evidence_manifest="$urbansim_h5_snapshot_acceptance_evidence_dir/submitted-input-manifest.json"
     mkdir -p "$urbansim_h5_snapshot_acceptance_evidence_dir"
-    cp "$urbansim_h5_snapshot_acceptance_manifest_path" "$urbansim_h5_snapshot_acceptance_evidence_dir/submitted-input-manifest.json"
+    cp "$urbansim_h5_snapshot_acceptance_manifest_path" "$urbansim_h5_snapshot_acceptance_evidence_manifest"
     cp "$generated_settings_path" "$urbansim_h5_snapshot_acceptance_evidence_dir/generated-settings.yaml"
     echo "UrbanSim HDF5 snapshot acceptance evidence: $urbansim_h5_snapshot_acceptance_evidence_dir"
 fi
@@ -447,14 +449,14 @@ elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --urbansim-h5-snapshot-acceptance
         "$generated_settings_path"
-        "$urbansim_h5_snapshot_acceptance_manifest_path"
+        "$urbansim_h5_snapshot_acceptance_evidence_manifest"
         "$urbansim_h5_snapshot_acceptance_evidence_dir"
     )
 elif [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
     sbatch_args+=(
         --beam-preprocess-acceptance
         "$generated_settings_path"
-        "$beam_preprocess_acceptance_manifest_path"
+        "$beam_preprocess_acceptance_evidence_manifest"
         "$beam_preprocess_acceptance_evidence_dir"
     )
 else

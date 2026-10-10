@@ -1248,6 +1248,67 @@ def test_activitysim_execution_options_build_context_from_materialization_destin
     )
 
 
+def test_activitysim_execution_options_allows_zarr_skims_in_cache_dir(
+    tmp_path: Path,
+) -> None:
+    staged_data = tmp_path / "activitysim" / "native-launch" / "data"
+    source_configs = tmp_path / "activitysim" / "configs"
+    runtime_cache = tmp_path / "activitysim" / "output" / "cache"
+    for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
+        (source_configs / dirname).mkdir(parents=True)
+    resolved = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(
+            inputs={
+                ASIM_LAND_USE_IN: object(),
+                ASIM_HOUSEHOLDS_IN: object(),
+                ASIM_PERSONS_IN: object(),
+                ZARR_SKIMS: object(),
+            }
+        ),
+        required_roles=(ASIM_LAND_USE_IN, ASIM_HOUSEHOLDS_IN, ASIM_PERSONS_IN),
+        optional_roles=(ZARR_SKIMS,),
+        logical_destinations={
+            ASIM_LAND_USE_IN: staged_data / "land_use.csv",
+            ASIM_HOUSEHOLDS_IN: staged_data / "households.csv",
+            ASIM_PERSONS_IN: staged_data / "persons.csv",
+            ZARR_SKIMS: runtime_cache / "skims.zarr",
+        },
+    )
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(
+            local_mutable_configs_folder="activitysim/configs",
+            main_configs_dir="configs_extended",
+        )
+    )
+    workspace = SimpleNamespace(
+        full_path=str(tmp_path),
+        get_asim_mutable_configs_dir=lambda: str(source_configs),
+        get_asim_output_dir=lambda: str(tmp_path / "activitysim" / "output"),
+        get_asim_runtime_cache_dir=lambda: str(runtime_cache),
+    )
+
+    options = activitysim.activitysim_run.execution_options(
+        settings=settings,
+        state=None,
+        workspace=workspace,
+        resolved_inputs=resolved,
+    )
+
+    assert isinstance(
+        options.runtime_kwargs["activitysim_launch_context"], ActivitySimLaunchContext
+    )
+    assert (
+        options.runtime_kwargs["activitysim_launch_context"].mutable_data_dir
+        == staged_data
+    )
+    assert (
+        options.runtime_kwargs["activitysim_launch_context"].runtime_zarr_path
+        == runtime_cache / "skims.zarr"
+    )
+    assert options.input_paths[ZARR_SKIMS] == runtime_cache / "skims.zarr"
+
+
 def test_activitysim_launch_context_uses_explicit_staged_model_inputs(
     tmp_path: Path,
 ) -> None:

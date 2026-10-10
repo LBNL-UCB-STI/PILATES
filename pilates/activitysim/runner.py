@@ -350,6 +350,15 @@ def _stage_runtime_input_path(
         return input_path
     if os.path.abspath(input_path) == os.path.abspath(runtime_path):
         return runtime_path
+    try:
+        if (
+            os.path.exists(input_path)
+            and os.path.exists(runtime_path)
+            and os.path.samefile(input_path, runtime_path)
+        ):
+            return runtime_path
+    except OSError:
+        pass
 
     os.makedirs(os.path.dirname(runtime_path), exist_ok=True)
     if os.path.isdir(input_path):
@@ -578,7 +587,7 @@ class ActivitysimRunner(GenericRunner):
             ASIM_HOUSEHOLDS_IN: staged_data_dir / "households.csv",
             ASIM_PERSONS_IN: staged_data_dir / "persons.csv",
             ASIM_OMX_SKIMS: staged_data_dir / "skims.omx",
-            ZARR_SKIMS: staged_data_dir / "skims.zarr",
+            ZARR_SKIMS: Path(asim_runtime_zarr_path(workspace)),
         }
 
     @staticmethod
