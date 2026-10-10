@@ -243,6 +243,7 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
         ]["forecast_year"]
         == 2019
     )
+    assert (evidence_root / "runtime-environment.json").is_file()
     progress = capsys.readouterr().out
     expected_milestones = (
         "acceptance driver started",

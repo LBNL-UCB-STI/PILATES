@@ -122,9 +122,7 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
         (selected_zarr / ".zgroup").write_bytes(selected_zarr_bytes)
 
     state = SimpleNamespace(
-        full_settings=_matrix_settings(
-            num_processes=2 if preparation_required else 1
-        ),
+        full_settings=_matrix_settings(num_processes=2 if preparation_required else 1),
         current_year=2018,
         current_inner_iter=0,
         set_sub_stage_progress=lambda _progress: None,
@@ -150,7 +148,9 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
             )
             assert str(launch_context.runtime_cache_dir) in volumes
             expected_mode = "ro" if selected_mode == "zarr" else "rw"
-            assert volumes[str(launch_context.runtime_cache_dir)]["mode"] == expected_mode
+            assert (
+                volumes[str(launch_context.runtime_cache_dir)]["mode"] == expected_mode
+            )
             if selected_mode == "zarr":
                 assert (runtime_zarr / ".zgroup").read_bytes() == selected_zarr_bytes
             else:
@@ -294,9 +294,7 @@ def test_execute_step_cache_hit_skips_activitysim_runner_preparation_and_contain
         (cache_dir / "numba.nbi").touch()
         runtime_zarr = warmup_context.runtime_zarr_path
         runtime_zarr.mkdir(parents=True, exist_ok=True)
-        (runtime_zarr / ".zgroup").write_text(
-            '{"zarr_format": 2}\n', encoding="utf-8"
-        )
+        (runtime_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
 
     def run_production(*_args, **_kwargs) -> ActivitySimRunOutputs:
         runner_body_calls.append(None)
@@ -420,9 +418,7 @@ def test_numba_warmup_forwards_only_nondefault_mount_modes_to_consist(
     launch_context = _launch_context(tmp_path / "workspace")
     selected_zarr = launch_context.runtime_zarr_path
     selected_zarr.mkdir(parents=True)
-    (selected_zarr / ".zgroup").write_text(
-        '{"zarr_format": 2}\n', encoding="utf-8"
-    )
+    (selected_zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     settings = SimpleNamespace(
         run=SimpleNamespace(region="seattle", use_stubs=False),
         infrastructure=SimpleNamespace(

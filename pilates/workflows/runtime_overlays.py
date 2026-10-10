@@ -162,8 +162,11 @@ def resolve_runtime_output_overrides(
             configured = set(configured_asim_output_keys(settings))
             promoted = tuple(key for key in optional_outputs if key in configured)
     elif step_name == "atlas_preprocess":
-        atlas_settings = settings.atlas
-        if atlas_settings is not None and atlas_settings.beamac > 0:
+        atlas_settings = getattr(settings, "atlas", None)
+        beamac = (
+            getattr(atlas_settings, "beamac", 0) if atlas_settings is not None else 0
+        )
+        if beamac and beamac > 0:
             promoted = ("atlas_accessibility_csv",)
     elif step_name == "beam_postprocess" and requires_omx_skim_output(settings):
         promoted = (FINAL_SKIMS_OMX,)

@@ -100,9 +100,9 @@ def _check_declared_digest_legacy(
         observations = ("file_unreadable",)
     else:
         try:
-            observed_identity = "sha256:file:" + hashlib.sha256(
-                execution_path.read_bytes()
-            ).hexdigest()
+            observed_identity = (
+                "sha256:file:" + hashlib.sha256(execution_path.read_bytes()).hexdigest()
+            )
         except OSError:
             outcome = "unreadable"
             observations = ("file_unreadable",)

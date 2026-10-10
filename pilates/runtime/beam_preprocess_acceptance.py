@@ -7,6 +7,8 @@ import hashlib
 import json
 import os
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -14,7 +16,7 @@ from typing import Any, Mapping, Sequence
 from consist import Artifact, Tracker
 
 from pilates.config import load_config
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_path, set_coupler_from_artifact
 from pilates.utils import consist_runtime as cr
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
@@ -117,12 +119,85 @@ def _write_json(path: Path, value: Mapping[str, Any]) -> None:
     )
 
 
+def _git_revision(path: Path) -> str:
+    """Return the checked-out revision for a repository-backed evidence record."""
+
+    completed = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        return "unavailable"
+    return completed.stdout.strip()
+
+
+def _repository_root(path: Path) -> Path | None:
+    """Find the closest repository root without assuming an editable layout."""
+
+    for candidate in (path, *path.parents):
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _runtime_environment(evidence_root: Path) -> dict[str, object]:
+    """Record executable, source, and revision provenance without environment secrets."""
+
+    import consist
+
+    pilates_root = Path(__file__).resolve().parents[2]
+    consist_module = Path(consist.__file__).resolve()
+    consist_root = _repository_root(consist_module.parent)
+    runtime_environment: dict[str, object] = {
+        "python": {"executable": sys.executable, "version": sys.version},
+        "pilates": {
+            "import_path": str(pilates_root),
+            "revision": _git_revision(pilates_root),
+        },
+        "consist": {
+            "import_path": str(consist_module),
+            "revision": (
+                _git_revision(consist_root)
+                if consist_root is not None
+                else "unavailable"
+            ),
+        },
+    }
+    hpc_runtime_record = evidence_root / "runtime-environment.json"
+    if hpc_runtime_record.is_file():
+        try:
+            loaded = json.loads(hpc_runtime_record.read_text(encoding="utf-8"))
+            if isinstance(loaded, Mapping):
+                runtime_environment["hpc"] = dict(loaded)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return runtime_environment
+
+
 def _load_manifest(path: Path) -> tuple[Path, dict[str, Path], dict[str, Any]]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(
+            f"could not read BEAM preprocess acceptance manifest: {path}"
+        ) from error
+    if not isinstance(raw, Mapping):
+        raise ValueError("acceptance manifest must be a JSON object")
+    if "beam_input_root" not in raw or not isinstance(raw["beam_input_root"], str):
+        raise ValueError("acceptance manifest requires a string beam_input_root")
+    inputs_value = raw.get("inputs")
+    if not isinstance(inputs_value, Mapping):
+        raise ValueError("acceptance manifest requires an inputs object")
+    if set(inputs_value) != set(_REQUIRED_INPUTS):
+        raise ValueError(
+            f"acceptance manifest inputs must exactly match {set(_REQUIRED_INPUTS)}"
+        )
     beam_input_root = Path(os.path.expandvars(str(raw["beam_input_root"]))).expanduser()
     inputs = {
         key: Path(os.path.expandvars(str(value))).expanduser()
-        for key, value in raw["inputs"].items()
+        for key, value in inputs_value.items()
     }
     missing = [
         key
@@ -143,12 +218,15 @@ def _load_manifest(path: Path) -> tuple[Path, dict[str, Path], dict[str, Any]]:
         "forecast_year": _ACCEPTANCE_FORECAST_YEAR,
         "iteration": _ACCEPTANCE_ITERATION,
     }
-    if cohort != expected_cohort:
+    if not isinstance(cohort, Mapping) or set(cohort) != set(expected_cohort):
         raise ValueError(f"acceptance manifest cohort must be {expected_cohort}")
+    for field, expected in expected_cohort.items():
+        if type(cohort[field]) is not int or cohort[field] != expected:
+            raise ValueError(f"acceptance manifest cohort must be {expected_cohort}")
     effective = {
         "beam_input_root": str(beam_input_root.resolve()),
         "inputs": {key: str(value.resolve()) for key, value in inputs.items()},
-        "cohort": cohort,
+        "cohort": dict(cohort),
     }
     return beam_input_root, inputs, effective
 
@@ -410,7 +488,7 @@ def run_phase(
     before = _body_execution_count(body_log)
     with tracker.scenario(f"beam-preprocess-acceptance-{phase}") as scenario:
         for key, artifact in artifacts.items():
-            scenario.coupler.set_from_artifact(key, artifact)
+            set_coupler_from_artifact(scenario.coupler, key, artifact=artifact)
         resolved = beam_preprocess.resolve_inputs(
             settings=settings,
             state=state,
@@ -636,11 +714,16 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.environ["PILATES_ENABLE_ARCHIVE_COPY"] = "1"
     beam_input_root, input_paths, effective_manifest = _load_manifest(args.manifest)
     _progress("acceptance manifest validated")
-    shutil.copy2(args.settings, evidence_root / "generated-settings.yaml")
+    dest_settings = evidence_root / "generated-settings.yaml"
+    if args.settings.resolve() != dest_settings.resolve():
+        shutil.copy2(args.settings, dest_settings)
     submitted_manifest = evidence_root / "submitted-input-manifest.json"
     if args.manifest.resolve() != submitted_manifest.resolve():
         shutil.copy2(args.manifest, submitted_manifest)
     _write_json(evidence_root / "effective-input-manifest.json", effective_manifest)
+    runtime_env_path = evidence_root / "runtime-environment.json"
+    if not runtime_env_path.is_file():
+        _write_json(runtime_env_path, _runtime_environment(evidence_root))
     settings = load_config(str(args.settings))
     state = WorkflowState.from_settings(settings)
     _validate_acceptance_state(state)

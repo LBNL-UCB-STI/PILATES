@@ -726,12 +726,10 @@ def _compare_launch(
     ) != _canonicalize_launch_roots(observed.launch_roots, observed_workspace_root):
         errors.append(f"{expected.key} launch roots mismatch")
     expected_mounts = sorted(
-        _canonicalize_mount(mount, expected_workspace_root)
-        for mount in expected.mounts
+        _canonicalize_mount(mount, expected_workspace_root) for mount in expected.mounts
     )
     observed_mounts = sorted(
-        _canonicalize_mount(mount, observed_workspace_root)
-        for mount in observed.mounts
+        _canonicalize_mount(mount, observed_workspace_root) for mount in observed.mounts
     )
     if expected_mounts != observed_mounts:
         errors.append(f"{expected.key} mounts mismatch")
@@ -781,8 +779,7 @@ def _canonicalize_launch_roots(
     roots: Mapping[str, str], workspace_root: str | None
 ) -> dict[str, str]:
     return {
-        key: _canonicalize_path(value, workspace_root)
-        for key, value in roots.items()
+        key: _canonicalize_path(value, workspace_root) for key, value in roots.items()
     }
 
 
@@ -810,7 +807,7 @@ def _canonicalize_path(value: str, workspace_root: str | None) -> str:
         return "<workspace-root>"
     prefix = f"{root}/"
     if value.startswith(prefix):
-        return f"<workspace-root>/{value[len(prefix):]}"
+        return f"<workspace-root>/{value[len(prefix) :]}"
     return value
 
 
@@ -861,9 +858,7 @@ def _string(mapping: Mapping[str, object], key: str, field: str) -> str:
     return value
 
 
-def _optional_int(
-    mapping: Mapping[str, object], key: str, field: str
-) -> int | None:
+def _optional_int(mapping: Mapping[str, object], key: str, field: str) -> int | None:
     value = mapping.get(key)
     if value is None:
         return None

@@ -18,6 +18,7 @@ import h5py
 from consist import ExecutionOptions, Tracker
 
 from pilates.config import load_config
+from pilates.utils.coupler_helpers import set_coupler_from_artifact
 from pilates.urbansim.outputs import UrbanSimPostprocessOutputs, UrbanSimRunOutputs
 from pilates.workspace import Workspace
 from pilates.workflows.artifact_keys import (
@@ -89,8 +90,7 @@ def load_manifest(path: Path) -> AcceptanceManifest:
 def _validate_state(state: Mapping[str, object]) -> None:
     """Reject every cohort except the one acceptance cohort."""
     if set(state) != set(_COHORT) or any(
-        type(state[field_name]) is not int
-        or state[field_name] != expected_value
+        type(state[field_name]) is not int or state[field_name] != expected_value
         for field_name, expected_value in _COHORT.items()
     ):
         raise ValueError(f"acceptance cohort must be {_EXPECTED_COHORT}")
@@ -102,12 +102,16 @@ def describe_population_h5(
     """Describe required root population tables without changing the source file."""
     resolved_path = path.resolve()
     if not resolved_path.is_file():
-        raise ValueError(f"UrbanSim HDF5 input must be a readable file: {resolved_path}")
+        raise ValueError(
+            f"UrbanSim HDF5 input must be a readable file: {resolved_path}"
+        )
 
     try:
         with h5py.File(resolved_path, "r") as handle:
             root_tables = [
-                table_name for table_name in _REQUIRED_ROOT_TABLES if table_name in handle
+                table_name
+                for table_name in _REQUIRED_ROOT_TABLES
+                if table_name in handle
             ]
             missing_root_tables = [
                 f"/{table_name}"
@@ -130,8 +134,7 @@ def describe_population_h5(
                 missing_aliases = [
                     alias
                     for alias, table_name in zip(aliases, root_tables, strict=True)
-                    if alias not in handle
-                    or handle[alias].id != handle[table_name].id
+                    if alias not in handle or handle[alias].id != handle[table_name].id
                 ]
                 if missing_aliases:
                     raise ValueError(
@@ -141,7 +144,9 @@ def describe_population_h5(
                 descriptor["year_aliases"] = aliases
             return descriptor
     except OSError as error:
-        raise ValueError(f"could not read UrbanSim HDF5 input: {resolved_path}") from error
+        raise ValueError(
+            f"could not read UrbanSim HDF5 input: {resolved_path}"
+        ) from error
 
 
 def _write_json(path: Path, record: Mapping[str, object]) -> None:
@@ -241,7 +246,9 @@ def _record_output_descriptor(*, output: Path, year: int) -> dict[str, object]:
     return describe_population_h5(output, year=year, require_year_aliases=True)
 
 
-def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path) -> None:
+def run_capture(
+    *, settings_path: Path, manifest_path: Path, evidence_root: Path
+) -> None:
     """Execute one native UrbanSim postprocess wrapper and checkpoint its tracker."""
 
     evidence_root = evidence_root.resolve()
@@ -274,7 +281,9 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
         key: path.exists() for key, path in declared_outputs.items()
     }
     if any(declared_outputs_before.values()):
-        raise RuntimeError("acceptance declared outputs unexpectedly exist before execution")
+        raise RuntimeError(
+            "acceptance declared outputs unexpectedly exist before execution"
+        )
     tracker = Tracker(
         run_dir=evidence_root / "consist-runs",
         db_path=evidence_root / "provenance.duckdb",
@@ -308,7 +317,9 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
         urbansim_atlas.UrbansimPostprocessor = _AcceptanceUrbansimPostprocessor
         try:
             with tracker.scenario("urbansim-h5-acceptance") as scenario:
-                scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, trusted)
+                set_coupler_from_artifact(
+                    scenario.coupler, USIM_DATASTORE_H5, artifact=trusted
+                )
                 step_identity = scenario.resolve_step_identity(
                     URBANSIM_POSTPROCESS.function,
                     year=state.year,
@@ -352,7 +363,9 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
             or input_identity.get("strict_input_count") != 1
             or not input_identity.get("strict_binding_identity")
         ):
-            raise RuntimeError("capture did not persist one strict action-v2 HDF5 input")
+            raise RuntimeError(
+                "capture did not persist one strict action-v2 HDF5 input"
+            )
 
         output_path = Path(
             URBANSIM_POSTPROCESS.output_paths(
@@ -369,7 +382,9 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
             key: path.is_file() for key, path in declared_outputs.items()
         }
         if not all(declared_outputs_after.values()):
-            raise RuntimeError("native postprocess did not produce every declared output")
+            raise RuntimeError(
+                "native postprocess did not produce every declared output"
+            )
         with tracker.start_run("urbansim-h5-acceptance-override", "acceptance"):
             override = tracker.log_artifact(
                 trusted,
@@ -383,7 +398,9 @@ def run_capture(*, settings_path: Path, manifest_path: Path, evidence_root: Path
             or override.run_id is not None
             or override.meta["hash_semantics"]["source"] != "caller_supplied"
         ):
-            raise RuntimeError("capture did not create an unowned later HDF5 observation")
+            raise RuntimeError(
+                "capture did not create an unowned later HDF5 observation"
+            )
 
         snapshot_path = evidence_root / "snapshots" / "tracker.duckdb"
         tracker.snapshot_db(str(snapshot_path), checkpoint=True)
@@ -436,9 +453,9 @@ def validate(
     override_is_unowned = capture.get("override_is_unowned") is True
     snapshot_created = capture.get("snapshot_created") is True
     fresh_snapshot_readable = reconciliation.get("fresh_snapshot_readable") is True
-    persisted_identity_unchanged = (
-        reconciliation.get("persisted_identity") == capture.get("trusted_identity")
-    )
+    persisted_identity_unchanged = reconciliation.get(
+        "persisted_identity"
+    ) == capture.get("trusted_identity")
     persisted_strict_link_trusted = (
         reconciliation.get("persisted_strict_link_trusted") is True
     )
@@ -498,7 +515,9 @@ def run_reconciliation(*, evidence_root: Path) -> None:
             raise RuntimeError("capture.json is missing required artifact identifiers")
         completed_run = snapshot_tracker.get_run(completed_run_id)
         if completed_run is None or completed_run.status != "completed":
-            raise RuntimeError("capture snapshot does not contain a completed native run")
+            raise RuntimeError(
+                "capture snapshot does not contain a completed native run"
+            )
         input_identity = completed_run.meta.get("input_identity")
         action_v2_strict_binding_valid = (
             isinstance(input_identity, Mapping)
@@ -512,10 +531,16 @@ def run_reconciliation(*, evidence_root: Path) -> None:
         inputs = snapshot_tracker.get_run_inputs(completed_run_id)
         artifact = inputs.get(USIM_DATASTORE_H5)
         if artifact is None or str(artifact.id) != trusted_artifact_id:
-            raise RuntimeError("capture snapshot does not preserve the trusted HDF5 input")
+            raise RuntimeError(
+                "capture snapshot does not preserve the trusted HDF5 input"
+            )
         if snapshot_tracker.get_artifact(override_artifact_id) is None:
-            raise RuntimeError("capture snapshot does not retain the later HDF5 override")
-        if any(str(candidate.id) == override_artifact_id for candidate in inputs.values()):
+            raise RuntimeError(
+                "capture snapshot does not retain the later HDF5 override"
+            )
+        if any(
+            str(candidate.id) == override_artifact_id for candidate in inputs.values()
+        ):
             raise RuntimeError("capture snapshot selected the later HDF5 override")
         persisted_identity = str(consist.ArtifactIdentity.from_artifact(artifact))
         persisted_strict_link_trusted = (

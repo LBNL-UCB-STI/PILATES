@@ -110,9 +110,7 @@ class WorkflowStepSpec:
     @property
     def output_keys(self) -> Tuple[str, ...]:
         optional_keys = set(self.optional_output_keys)
-        return tuple(
-            key for key in self.schema_output_keys if key not in optional_keys
-        )
+        return tuple(key for key in self.schema_output_keys if key not in optional_keys)
 
     @property
     def optional_output_keys(self) -> Tuple[str, ...]:

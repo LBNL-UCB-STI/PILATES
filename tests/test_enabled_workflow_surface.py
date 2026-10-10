@@ -189,9 +189,10 @@ def test_surface_requires_only_configured_optional_outputs():
 
 def test_surface_requires_omx_for_downstream_models_or_explicit_export():
     full_surface = build_enabled_workflow_surface(_settings())
-    assert FINAL_SKIMS_OMX in full_surface.step_surface(
-        "beam_postprocess"
-    ).required_output_keys
+    assert (
+        FINAL_SKIMS_OMX
+        in full_surface.step_surface("beam_postprocess").required_output_keys
+    )
 
     beam_only_surface = build_enabled_workflow_surface(
         _settings(
@@ -202,9 +203,10 @@ def test_surface_requires_omx_for_downstream_models_or_explicit_export():
             write_skims_to_omx=True,
         )
     )
-    assert FINAL_SKIMS_OMX in beam_only_surface.step_surface(
-        "beam_postprocess"
-    ).required_output_keys
+    assert (
+        FINAL_SKIMS_OMX
+        in beam_only_surface.step_surface("beam_postprocess").required_output_keys
+    )
 
 
 def test_surface_bootstrap_owned_and_deferred_keys_follow_run_shape():

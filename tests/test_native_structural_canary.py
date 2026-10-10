@@ -66,9 +66,7 @@ def _workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
 
 
 def _beam_workspace_launch(workspace_root: str) -> CanaryLaunchObservation:
-    config_root = (
-        f"{workspace_root}/.pilates-beam-launch-config/y2018/i0/seattle"
-    )
+    config_root = f"{workspace_root}/.pilates-beam-launch-config/y2018/i0/seattle"
     return CanaryLaunchObservation(
         model="beam_run",
         step="beam_run",
@@ -433,9 +431,7 @@ def test_opt_in_collector_distinguishes_repeated_step_iterations(
     """Repeated model steps remain distinct observations by iteration."""
 
     manifest_path = tmp_path / "canary.json"
-    expected = tuple(
-        _launch(year=2018, iteration=iteration) for iteration in (0, 1)
-    )
+    expected = tuple(_launch(year=2018, iteration=iteration) for iteration in (0, 1))
     StructuralCanaryCapture(expected_launches=expected, required_evidence=()).write(
         manifest_path
     )
@@ -451,9 +447,7 @@ def test_opt_in_collector_distinguishes_repeated_step_iterations(
         ):
             record_active_container_launch(
                 model="activitysim",
-                volumes={
-                    "/run/resolved/asim": {"bind": "/app/asim", "mode": "rw"}
-                },
+                volumes={"/run/resolved/asim": {"bind": "/app/asim", "mode": "rw"}},
                 command=["run-model"],
                 working_dir="/app/asim",
                 output_paths=["/run/resolved/asim/output"],

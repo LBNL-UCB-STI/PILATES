@@ -422,7 +422,10 @@ def _urbansim_datastore_candidates_for_year(
             mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
         return mapping or None
 
-    if is_start_year():
+    start_year = getattr(state, "start_year", None)
+    is_base_year = (year == start_year) if start_year is not None else is_start_year()
+
+    if is_base_year:
         candidate_paths.update(
             _candidate_paths_metadata(
                 (USIM_DATASTORE_CURRENT_H5, (input_path, input_archive_path)),
@@ -1218,9 +1221,17 @@ def _restart_urbansim_required_artifacts(
 
     usim_data_dir = workspace.get_usim_mutable_data_dir()
     usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-    required: Dict[str, str] = {
-        USIM_DATASTORE_BASE_H5: os.path.join(usim_data_dir, usim_base_fname)
-    }
+    local_base_path = Path(usim_data_dir) / usim_base_fname
+    fallback_base_path = archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=local_base_path,
+    )
+    existing_base = first_existing_path(local_base_path, fallback_base_path)
+    base_target = (
+        str(existing_base) if existing_base is not None else str(local_base_path)
+    )
+    required: Dict[str, str] = {USIM_DATASTORE_BASE_H5: base_target}
 
     region = getattr(getattr(settings, "run", None), "region", None)
     urbansim_cfg = getattr(settings, "urbansim", None)
@@ -1422,4 +1433,11 @@ def is_restart_prebootstrap_deferred_artifact_key(key: str) -> bool:
         "beam_mutable_data_dir",
         "beam_region_input_dir",
         "beam_primary_config_file",
+        "usim_datastore_base_h5",
+        "omx_skims",
+        "hh_size",
+        "income_rates",
+        "relmap",
+        "schools",
+        "school_districts",
     }

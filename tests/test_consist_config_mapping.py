@@ -192,13 +192,13 @@ def test_urbansim_declared_digest_admission_uses_sanitized_cache_identity():
     assert changed_identity.get_initialization_signature() != signature
     assert changed_source_uri.get_initialization_signature() == signature
     assert changed_source_label.get_initialization_signature() == signature
+    assert build_urbansim_identity_config(
+        changed_source_label
+    ) == build_urbansim_identity_config(settings)
     assert (
-        build_urbansim_identity_config(changed_source_label)
-        == build_urbansim_identity_config(settings)
-    )
-    assert (
-        build_urbansim_facet(changed_source_label)["admission"]["initial_datastore"]
-        ["expectation"]["source_label"]
+        build_urbansim_facet(changed_source_label)["admission"]["initial_datastore"][
+            "expectation"
+        ]["source_label"]
         == "regional baseline mirror"
     )
 

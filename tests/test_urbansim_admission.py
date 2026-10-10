@@ -148,7 +148,9 @@ def test_admitted_datastore_logging_persists_trusted_identity_only_with_full_has
     persisted = reloaded.get_run_inputs(run_id)[_ROLE]
 
     if expected_trusted_identity:
-        assert str(consist.ArtifactIdentity.from_artifact(persisted)) == expected_identity
+        assert (
+            str(consist.ArtifactIdentity.from_artifact(persisted)) == expected_identity
+        )
     else:
         with pytest.raises(ValueError, match="trusted immutable identity"):
             consist.ArtifactIdentity.from_artifact(persisted)
@@ -283,7 +285,9 @@ def test_second_report_preserves_preexisting_admission_role(
         metadata_logger=logger,
         workspace_path=workspace_path,
         report_dir=tmp_path / "run-a",
-        existing_admission_reports={"beam_linkstats_warmstart": {"outcome": "verified"}},
+        existing_admission_reports={
+            "beam_linkstats_warmstart": {"outcome": "verified"}
+        },
     )
 
     report_payload = logger.meta["admission_reports"][_ROLE]

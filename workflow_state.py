@@ -701,9 +701,8 @@ class WorkflowState:
             self._schedule_index = bisect_left(self._year_schedule, current_year)
         next_index = self._schedule_index + 1
         max_year_intervals = self._settings["max_year_intervals"]
-        if (
-            next_index < len(self._year_schedule)
-            and (max_year_intervals is None or next_index < max_year_intervals)
+        if next_index < len(self._year_schedule) and (
+            max_year_intervals is None or next_index < max_year_intervals
         ):
             self.current_year = self._year_schedule[next_index]
             self._schedule_index = next_index

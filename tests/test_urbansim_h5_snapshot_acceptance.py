@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -13,6 +14,16 @@ import pandas as pd
 import pytest
 
 from pilates.runtime import urbansim_h5_snapshot_acceptance as acceptance
+
+
+def _has_consist_h5_override_support() -> bool:
+    try:
+        import consist
+
+        sig = inspect.signature(consist.Tracker.log_artifact)
+        return "force_hash_override" in sig.parameters
+    except Exception:
+        return False
 
 
 _SETTINGS = (
@@ -71,6 +82,11 @@ def _run_module(*arguments: str) -> None:
     )
 
 
+@pytest.mark.slow_ci
+@pytest.mark.skipif(
+    not _has_consist_h5_override_support(),
+    reason="Requires Consist >= 0.3.6 with unowned HDF5 hash override support (Consist PR #225)",
+)
 def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
     tmp_path: Path,
 ) -> None:
@@ -127,11 +143,17 @@ def test_capture_then_fresh_process_reconciliation_preserves_h5_identity(
         "output_h5_aliases_valid": True,
         "valid": True,
     }
-    assert capture["trusted_identity"] == _read_json(evidence / "reconciliation.json")[
-        "persisted_identity"
-    ]
+    assert (
+        capture["trusted_identity"]
+        == _read_json(evidence / "reconciliation.json")["persisted_identity"]
+    )
 
 
+@pytest.mark.slow_ci
+@pytest.mark.skipif(
+    not _has_consist_h5_override_support(),
+    reason="Requires Consist >= 0.3.6 with unowned HDF5 hash override support (Consist PR #225)",
+)
 def test_capture_retains_effective_manifest_and_distinct_process_provenance(
     tmp_path: Path,
 ) -> None:
@@ -175,6 +197,11 @@ def test_capture_retains_effective_manifest_and_distinct_process_provenance(
     assert reconciliation["runtime_environment"] == capture["runtime_environment"]
 
 
+@pytest.mark.slow_ci
+@pytest.mark.skipif(
+    not _has_consist_h5_override_support(),
+    reason="Requires Consist >= 0.3.6 with unowned HDF5 hash override support (Consist PR #225)",
+)
 def test_reconciliation_derives_strict_binding_from_snapshot_not_capture_flag(
     tmp_path: Path,
 ) -> None:
@@ -206,6 +233,11 @@ def test_reconciliation_derives_strict_binding_from_snapshot_not_capture_flag(
     assert validation["valid"] is True
 
 
+@pytest.mark.slow_ci
+@pytest.mark.skipif(
+    not _has_consist_h5_override_support(),
+    reason="Requires Consist >= 0.3.6 with unowned HDF5 hash override support (Consist PR #225)",
+)
 def test_reconciliation_requires_tracker_snapshot_before_opening_tracker(
     tmp_path: Path,
 ) -> None:
@@ -270,7 +302,9 @@ def test_load_manifest_requires_a_readable_source_file(tmp_path: Path) -> None:
         acceptance.load_manifest(manifest)
 
 
-def test_load_manifest_expands_source_environment_variables(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_load_manifest_expands_source_environment_variables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = _write_population_h5(
         tmp_path / "source.h5", ("households", "persons", "jobs", "blocks")
     )
@@ -314,9 +348,7 @@ def test_load_manifest_rejects_boolean_and_float_cohort_values(
         "iteration": 0,
     }
     cohort[field_name] = invalid_value
-    manifest = _write_manifest(
-        tmp_path / "inputs.json", source=source, cohort=cohort
-    )
+    manifest = _write_manifest(tmp_path / "inputs.json", source=source, cohort=cohort)
 
     with pytest.raises(
         ValueError,
@@ -331,9 +363,7 @@ def test_describe_population_h5_rejects_missing_root_table(tmp_path: Path) -> No
     )
 
     with pytest.raises(ValueError, match="missing root population tables"):
-        acceptance.describe_population_h5(
-            source, year=2019, require_year_aliases=False
-        )
+        acceptance.describe_population_h5(source, year=2019, require_year_aliases=False)
 
 
 def test_describe_population_h5_lists_root_tables_without_writing_year_aliases(

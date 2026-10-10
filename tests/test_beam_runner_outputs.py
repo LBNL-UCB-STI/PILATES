@@ -233,6 +233,7 @@ def test_beam_runner_mounts_the_bound_launch_tree(
         str(launch_root): {"bind": "/app/input", "mode": "rw"},
         str(launch_root.parent): {"bind": str(launch_root.parent), "mode": "rw"},
         str(tmp_path / "beam-output"): {"bind": "/app/output", "mode": "rw"},
+        str(tmp_path / "beam-output" / "tmp"): {"bind": "/tmp", "mode": "rw"},
     }
 
 

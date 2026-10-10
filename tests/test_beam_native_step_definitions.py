@@ -86,7 +86,9 @@ def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> No
                 BEAM_PERSONS_IN: Path("/workspace-b/persons.parquet"),
             }
         ),
-        logical_destinations={BEAM_PLANS_IN: Path("/workspace-b/other-output/plans.parquet")},
+        logical_destinations={
+            BEAM_PLANS_IN: Path("/workspace-b/other-output/plans.parquet")
+        },
         metadata={
             "beam_preprocess_context": {
                 "primary_config": Path("/workspace-b/beam.conf"),
@@ -630,7 +632,9 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
-    context = SimpleNamespace(canonicalization=object(), log_meta=lambda **_kwargs: None)
+    context = SimpleNamespace(
+        canonicalization=object(), log_meta=lambda **_kwargs: None
+    )
     tracker = object()
     events: list[str] = []
 
@@ -715,9 +719,7 @@ def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admi
     )
 
     settings = _beam_settings()
-    settings.beam.admission = SimpleNamespace(
-        linkstats=SimpleNamespace(mode="warn")
-    )
+    settings.beam.admission = SimpleNamespace(linkstats=SimpleNamespace(mode="warn"))
 
     beam_steps._native_beam_run(
         inputs[BEAM_PLANS_IN],
@@ -783,15 +785,15 @@ def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
         ),
         raising=False,
     )
-    monkeypatch.setattr(beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None
+    )
     monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
 
     from pilates.beam.admission import BeamInputAdmissionError
 
     settings = _beam_settings()
-    settings.beam.admission = SimpleNamespace(
-        linkstats=SimpleNamespace(mode="strict")
-    )
+    settings.beam.admission = SimpleNamespace(linkstats=SimpleNamespace(mode="strict"))
 
     with pytest.raises(BeamInputAdmissionError, match="mismatched"):
         beam_steps._native_beam_run(
@@ -1101,7 +1103,9 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         return SimpleNamespace(prepared_inputs={})
 
     monkeypatch.setattr(BeamPreprocessor, "preprocess", _capture_preprocess)
-    monkeypatch.setattr(beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
 
     resolved = _resolve_beam_preprocess_inputs(
         settings=settings,
@@ -1110,7 +1114,9 @@ def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned
         coupler=Coupler(),
     )
     resolved.require_complete()
-    assert resolved.metadata["beam_preprocess_context"]["primary_config"] == primary_config
+    assert (
+        resolved.metadata["beam_preprocess_context"]["primary_config"] == primary_config
+    )
     execution_options = beam_preprocess.execution_options(
         settings=settings,
         state=SimpleNamespace(),

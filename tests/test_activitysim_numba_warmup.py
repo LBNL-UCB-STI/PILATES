@@ -468,12 +468,11 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
             return False
         try:
             value_path = os.path.abspath(value)
-            return (
-                os.path.commonpath([value_path, str(production_output)])
-                == str(production_output)
-                and os.path.commonpath([value_path, str(production_runtime_cache)])
-                != str(production_runtime_cache)
-            )
+            return os.path.commonpath([value_path, str(production_output)]) == str(
+                production_output
+            ) and os.path.commonpath(
+                [value_path, str(production_runtime_cache)]
+            ) != str(production_runtime_cache)
         except ValueError:
             return False
 

@@ -408,9 +408,7 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
-    *, state: WorkflowState
-) -> bool:
+def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
     """Re-enter the provider chain when restart lacks a BEAM checkpoint.
 
     A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
@@ -421,34 +419,51 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
     to republish those roles.
     """
 
-    if (
-        not state.is_restart_run
-        or not state.is_enabled(state.Stage.activity_demand)
-        or state.current_major_stage != state.Stage.supply_demand_loop
-        or beam_checkpoint_resume_requested(state=state)
-    ):
+    if not getattr(state, "is_restart_run", False):
         return False
 
-    provider_boundary = state.Stage.supply_demand_loop
-    for candidate in state.major_stage_order:
-        if candidate == state.Stage.supply_demand_loop:
+    stage_enum = getattr(state, "Stage", None)
+    if stage_enum is None:
+        return False
+
+    activity_demand = getattr(stage_enum, "activity_demand", None)
+    supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
+    current_major_stage = getattr(state, "current_major_stage", None)
+
+    if current_major_stage != supply_demand_loop:
+        return False
+
+    is_enabled = getattr(state, "is_enabled", None)
+    if not callable(is_enabled) or not is_enabled(activity_demand):
+        return False
+
+    if beam_checkpoint_resume_requested(state=state):
+        return False
+
+    provider_boundary = supply_demand_loop
+    major_stage_order = getattr(state, "major_stage_order", ())
+    for candidate in major_stage_order:
+        if candidate == supply_demand_loop:
             break
-        if state.is_enabled(candidate):
+        if is_enabled(candidate):
             provider_boundary = candidate
             break
 
-    resumed_iteration = state.iteration
+    resumed_iteration = getattr(state, "iteration", 0)
     state.current_major_stage = provider_boundary
     state.current_inner_iter = 0
     state.current_sub_stage = None
     state.sub_stage_progress = None
-    state.write_state()
+    write_state = getattr(state, "write_state", None)
+    if callable(write_state):
+        write_state()
+    provider_name = getattr(provider_boundary, "name", str(provider_boundary))
     logger.warning(
         "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
         "from supply-demand iteration=%s to provider boundary=%s so native "
         "steps republish ActivitySim inputs.",
         resumed_iteration,
-        provider_boundary.name,
+        provider_name,
     )
     return True
 
@@ -614,6 +629,7 @@ def _prepare_run_context(
             archive_state_path=archive_state_path,
             allow_rewind_resume=settings.allow_rewind_resume,
         )
+        _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:

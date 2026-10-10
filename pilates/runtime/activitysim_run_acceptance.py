@@ -1128,7 +1128,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         if manifest.released_consist_version is None:
             raise RuntimeError("released ActivitySim acceptance has no release version")
-        consist_preflight = preflight_released_consist(manifest.released_consist_version)
+        consist_preflight = preflight_released_consist(
+            manifest.released_consist_version
+        )
         preflight_label = "non-editable released Consist"
     _write_json(evidence_root / "runtime-environment.json", consist_preflight)
     if consist_preflight["valid"] is not True:

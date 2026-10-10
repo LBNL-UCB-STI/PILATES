@@ -161,7 +161,9 @@ def test_zarr_validation_is_read_only_for_a_structurally_valid_store(
     zarr_path = tmp_path / "selected" / "skims.zarr"
     zarr_path.mkdir(parents=True)
     (zarr_path / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
-    (zarr_path / "zone_flags.json").write_text('{"zero_based": false}\n', encoding="utf-8")
+    (zarr_path / "zone_flags.json").write_text(
+        '{"zero_based": false}\n', encoding="utf-8"
+    )
     before = {
         path.relative_to(zarr_path): path.read_bytes()
         for path in zarr_path.rglob("*")
@@ -405,4 +407,3 @@ def test_stage_runtime_input_path_copies_when_distinct(tmp_path: Path) -> None:
     )
     assert result == str(runtime_zarr)
     assert (runtime_zarr / ".zgroup").exists()
-

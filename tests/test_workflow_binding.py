@@ -239,10 +239,11 @@ def test_restart_activitysim_required_artifacts_uses_forecast_year(
     )
     state = SimpleNamespace(
         year=2017,
+        start_year=2017,
         forecast_year=2019,
         current_major_stage="supply_demand_loop",
         is_enabled=lambda s: s in ("land_use", stage.land_use),
-        is_start_year=lambda: False,
+        is_start_year=lambda: True,
         Stage=stage,
     )
     settings = SimpleNamespace(

@@ -341,9 +341,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
         "memory": cfg.memory,
         "discard_plans_every_year": cfg.discard_plans_every_year,
         "max_plans_memory": cfg.max_plans_memory,
-        "write_skims_to_omx": bool(
-            get_setting(settings, "write_skims_to_omx", False)
-        ),
+        "write_skims_to_omx": bool(get_setting(settings, "write_skims_to_omx", False)),
         "router_directory": cfg.router_directory,
         "scenario_folder": cfg.scenario_folder,
         "linkstats_admission": (

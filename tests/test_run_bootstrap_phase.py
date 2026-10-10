@@ -3384,8 +3384,9 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
     monkeypatch.setattr(
         run_module,
         "_run_bootstrap_sequence",
-        lambda _prepared: events.append("bootstrap")
-        or {"bootstrap_cache_hit": bootstrap_cache_hit},
+        lambda _prepared: (
+            events.append("bootstrap") or {"bootstrap_cache_hit": bootstrap_cache_hit}
+        ),
     )
     monkeypatch.setattr(
         run_module,
@@ -3403,7 +3404,9 @@ def test_main_admits_bootstrap_datastore_inside_outer_run_before_seeding(
         "scenario",
         lambda *_args, **_kwargs: _OuterScenarioStub(events),
     )
-    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(
+        run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario
+    )
     monkeypatch.setattr(run_module.cr, "current_run", lambda: active_outer_run)
     monkeypatch.setattr(
         run_module,
@@ -3481,7 +3484,9 @@ def test_main_strict_bootstrap_admission_rejects_before_seeding_or_model_executi
         "scenario",
         lambda *_args, **_kwargs: _OuterScenarioStub(events),
     )
-    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(
+        run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario
+    )
     monkeypatch.setattr(run_module.cr, "current_run", lambda: SimpleNamespace(meta={}))
     monkeypatch.setattr(
         run_module,
@@ -3537,7 +3542,9 @@ def test_main_ordinary_resume_skips_admission_and_seeds_coupler(
         "scenario",
         lambda *_args, **_kwargs: _OuterScenarioStub(events),
     )
-    monkeypatch.setattr(run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario)
+    monkeypatch.setattr(
+        run_module, "_ScenarioParentLinkProxy", lambda scenario: scenario
+    )
     monkeypatch.setattr(
         run_module,
         "preflight_bootstrap_urbansim_datastore_admission",

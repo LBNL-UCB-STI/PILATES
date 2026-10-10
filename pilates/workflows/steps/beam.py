@@ -959,7 +959,7 @@ def _resolve_beam_preprocess_inputs(
                     "vehicles_beam_in",
                 )
                 if key in (resolved.binding.inputs or {})
-            )
+            ),
         },
     )
 
@@ -1342,8 +1342,7 @@ def _native_beam_preprocess(
     primary_config = beam_preprocess_context.get("primary_config")
     if not isinstance(primary_config, Path) or not primary_config.exists():
         raise FileNotFoundError(
-            "BEAM resolver-selected primary config file is missing: "
-            f"{primary_config}."
+            f"BEAM resolver-selected primary config file is missing: {primary_config}."
         )
     from pilates.beam.preprocessor import BeamPreprocessor
 

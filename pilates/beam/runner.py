@@ -107,9 +107,12 @@ def _beam_container_volumes(
 ) -> dict[str, dict[str, str]]:
     """Mount the launch snapshot at its container and configured host paths."""
 
+    shared_tmp_dir = output_root / "tmp"
+    shared_tmp_dir.mkdir(parents=True, exist_ok=True)
     volumes = {
         str(input_root): {"bind": "/app/input", "mode": "rw"},
         str(output_root): {"bind": "/app/output", "mode": "rw"},
+        str(shared_tmp_dir): {"bind": "/tmp", "mode": "rw"},
     }
     host_path_root = input_root.parent
     volumes[str(host_path_root)] = {
@@ -556,6 +559,10 @@ class BeamRunner(GenericRunner):
         )
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
+        system_cpus = os.cpu_count() or 4
+        parallel_gc = max(2, min(system_cpus, 36))
+        conc_gc = max(1, parallel_gc // 4)
+
         java_opts = (
             # Memory settings (match Xms and Xmx)
             f"-Xms{beam_memory} "
@@ -563,9 +570,9 @@ class BeamRunner(GenericRunner):
             # G1GC with more aggressive settings
             "-XX:+UseG1GC "
             "-XX:G1HeapRegionSize=32M "
-            # More GC threads for burst capacity
-            "-XX:ParallelGCThreads=36 "
-            "-XX:ConcGCThreads=9 "
+            # Scaled GC threads for burst capacity without oversubscription
+            f"-XX:ParallelGCThreads={parallel_gc} "
+            f"-XX:ConcGCThreads={conc_gc} "
             "-XX:+UseNUMA "
             "-XX:+AlwaysPreTouch "
             # Flexible young gen - WIDE range for adaptability
