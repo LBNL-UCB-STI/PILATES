@@ -16,7 +16,7 @@ py-cpuinfo
 blosc2>=2.3.0
 tables>=3.9.0,<4.0
 h5py
-matplotlib==3.7.1
+matplotlib>=3.8.0
 
 # Geospatial packages
 shapely>=1.8.5
