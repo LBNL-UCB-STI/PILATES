@@ -1297,7 +1297,7 @@ def _restart_activitysim_required_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=getattr(state, "year", getattr(state, "forecast_year", None)),
+            year=resolve_forecast_year(state),
         )
         if datastore_candidates:
             for semantic_key in (

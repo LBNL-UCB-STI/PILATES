@@ -34,26 +34,42 @@ high_mem=false
 native_structural_canary_seed=""
 beam_preprocess_acceptance_manifest=""
 activitysim_run_acceptance_manifest=""
-activitysim_run_acceptance_editable_consist=""
+editable_consist=""
 activitysim_run_acceptance_image=""
 urbansim_h5_snapshot_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
     -c)
-        settings_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -c requires a settings file path." >&2
+            exit 2
+        fi
+        settings_file="$2"
         shift 2
         ;;
     -s)
-        stage_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -s requires a stage file path." >&2
+            exit 2
+        fi
+        stage_file="$2"
         shift 2
         ;;
     -p)
-        partition_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -p requires a partition name." >&2
+            exit 2
+        fi
+        partition_arg="$2"
         shift 2
         ;;
     -a|--account)
-        account_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -a/--account requires an account name." >&2
+            exit 2
+        fi
+        account_arg="$2"
         shift 2
         ;;
     --high-mem|-H)
@@ -89,7 +105,7 @@ while [ $# -gt 0 ]; do
             echo "ERROR: --editable-consist requires an absolute Consist checkout path." >&2
             exit 2
         fi
-        activitysim_run_acceptance_editable_consist="$2"
+        editable_consist="$2"
         shift 2
         ;;
     --activitysim-image)
@@ -254,9 +270,10 @@ if [ -n "$activitysim_run_acceptance_manifest" ] \
     echo "ERROR: ActivitySim run acceptance input manifest not found: $activitysim_run_acceptance_manifest_path" >&2
     exit 1
 fi
-if [ -n "$activitysim_run_acceptance_editable_consist" ] \
-    && [ -z "$activitysim_run_acceptance_manifest" ]; then
-    echo "ERROR: --editable-consist is only valid with --activitysim-run-acceptance." >&2
+if [ -n "$editable_consist" ] \
+    && [ -z "$activitysim_run_acceptance_manifest" ] \
+    && [ -z "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    echo "ERROR: --editable-consist is only valid with --activitysim-run-acceptance or --urbansim-h5-snapshot-acceptance." >&2
     exit 2
 fi
 if [ -n "$activitysim_run_acceptance_image" ] \
@@ -269,8 +286,8 @@ if [ -n "$activitysim_run_acceptance_image" ] \
     echo "ERROR: --activitysim-image must be an immutable docker:// image digest." >&2
     exit 2
 fi
-if [ -n "$activitysim_run_acceptance_editable_consist" ] \
-    && { [ "${activitysim_run_acceptance_editable_consist#/}" = "$activitysim_run_acceptance_editable_consist" ] || [ ! -d "$activitysim_run_acceptance_editable_consist" ]; }; then
+if [ -n "$editable_consist" ] \
+    && { [ "${editable_consist#/}" = "$editable_consist" ] || [ ! -d "$editable_consist" ]; }; then
     echo "ERROR: --editable-consist must name an existing absolute Consist checkout." >&2
     exit 2
 fi
@@ -439,13 +456,16 @@ if [ -n "$activitysim_run_acceptance_evidence_dir" ]; then
         "$activitysim_run_acceptance_evidence_manifest"
         "$activitysim_run_acceptance_evidence_dir"
     )
-    if [ -n "$activitysim_run_acceptance_editable_consist" ]; then
+    if [ -n "$editable_consist" ]; then
         sbatch_args+=(
             --editable-consist
-            "$activitysim_run_acceptance_editable_consist"
+            "$editable_consist"
         )
     fi
 elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
+    if [ -n "$editable_consist" ]; then
+        export CONSIST_SRC_DIR="$editable_consist"
+    fi
     sbatch_args+=(
         --urbansim-h5-snapshot-acceptance
         "$generated_settings_path"

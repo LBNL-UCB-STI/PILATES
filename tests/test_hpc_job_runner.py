@@ -444,6 +444,76 @@ printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
     ]
 
 
+def test_job_runner_allows_editable_consist_with_urbansim_h5_acceptance(
+    tmp_path: Path,
+) -> None:
+    """The HDF5 harness accepts an editable Consist checkout and exports CONSIST_SRC_DIR."""
+
+    pilates_dir = tmp_path / "pilates"
+    pilates_dir.mkdir()
+    settings = pilates_dir / "settings.yaml"
+    settings.write_text("run:\n  label: h5-acceptance\n", encoding="utf-8")
+    manifest = pilates_dir / "inputs.json"
+    manifest.write_text(
+        '{"inputs": {"usim_datastore_h5": "input.h5"}}\n', encoding="utf-8"
+    )
+    consist_source = tmp_path / "consist-src"
+    consist_source.mkdir()
+    evidence_root = tmp_path / "h5-acceptance-evidence"
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    captured_args = tmp_path / "captured-sbatch-args"
+    captured_env = tmp_path / "captured-consist-env"
+    _write_executable(
+        fake_bin / "mkdir",
+        """#!/bin/sh
+if [ "$2" = "/global/scratch/users/h5-acceptance-user/pilates_logs" ]; then
+    exit 0
+fi
+exec /bin/mkdir "$@"
+""",
+    )
+    _write_executable(
+        fake_bin / "sbatch",
+        """#!/bin/sh
+printf '%s\\n' "$@" > "$SBATCH_ARGS_FILE"
+printf '%s\\n' "$CONSIST_SRC_DIR" > "$CONSIST_ENV_FILE"
+""",
+    )
+    environment = {
+        **os.environ,
+        "PATH": f"{fake_bin}:{os.environ['PATH']}",
+        "PILATES_DIR": str(pilates_dir),
+        "PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_ROOT": str(evidence_root),
+        "SBATCH_ARGS_FILE": str(captured_args),
+        "CONSIST_ENV_FILE": str(captured_env),
+        "USER": "h5-acceptance-user",
+    }
+
+    completed = subprocess.run(
+        [
+            "bash",
+            str(_PROJECT_ROOT / "hpc/job_runner.sh"),
+            "-c",
+            "settings.yaml",
+            "-a",
+            "test-account",
+            "--urbansim-h5-snapshot-acceptance",
+            "inputs.json",
+            "--editable-consist",
+            str(consist_source),
+        ],
+        cwd=_PROJECT_ROOT,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert captured_env.read_text(encoding="utf-8").strip() == str(consist_source)
+
+
 @pytest.mark.parametrize(
     ("additional_args", "expected_message"),
     [
@@ -745,7 +815,7 @@ fi
     python_calls = calls.read_text(encoding="utf-8").splitlines()
     assert any(
         call
-        == f"-m pip install --upgrade --force-reinstall --no-deps -e {consist_source}"
+        == f"-m pip install --upgrade --force-reinstall --no-build-isolation --no-deps -e {consist_source}"
         for call in python_calls
     )
     driver_calls = [

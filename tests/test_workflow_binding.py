@@ -12,6 +12,7 @@ from consist.core.resolved_binding import ArtifactIdentity
 from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows import binding
 from pilates.workflows.artifact_keys import (
+    USIM_DATASTORE_CURRENT_H5,
     USIM_POPULATION_HOUSEHOLDS_TABLE,
     USIM_POPULATION_SOURCE_H5,
 )
@@ -225,3 +226,60 @@ def test_build_resolved_binding_requires_consist_preflight_identity(
             logical_destinations={"payload": Path("inputs/payload.txt")},
             selection_diagnostics={},
         )
+
+
+def test_restart_activitysim_required_artifacts_uses_forecast_year(
+    tmp_path: Path,
+) -> None:
+    stage = SimpleNamespace(
+        supply_demand_loop="supply_demand_loop",
+        activity_demand="activity_demand",
+        activity_demand_directly_from_land_use="activity_demand_directly_from_land_use",
+        land_use="land_use",
+    )
+    state = SimpleNamespace(
+        year=2017,
+        forecast_year=2019,
+        current_major_stage="supply_demand_loop",
+        is_enabled=lambda s: s in ("land_use", stage.land_use),
+        is_start_year=lambda: False,
+        Stage=stage,
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            models=SimpleNamespace(activity_demand="activitysim"),
+            start_year=2017,
+            region="sfbay",
+        ),
+        activitysim=SimpleNamespace(
+            main_configs_dir="configs",
+            local_mutable_configs_folder=str(tmp_path / "configs"),
+        ),
+        urbansim=SimpleNamespace(
+            output_file_template="model_data_{year}.h5",
+            input_file_template="usim_base_{region_id}.h5",
+            region_mappings={"region_to_region_id": {"sfbay": "1"}},
+        ),
+    )
+    usim_data = tmp_path / "usim_data"
+    usim_data.mkdir()
+    base_h5 = usim_data / "usim_base_1.h5"
+    base_h5.write_text("base", encoding="utf-8")
+    ds_2019 = usim_data / "model_data_2019.h5"
+    ds_2019.write_text("data", encoding="utf-8")
+    workspace = SimpleNamespace(
+        get_asim_mutable_configs_dir=lambda: str(tmp_path / "configs"),
+        get_usim_mutable_data_dir=lambda: str(usim_data),
+    )
+
+    required = binding._restart_activitysim_required_artifacts(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        required_asim_config_dirs_fn=lambda _: ("configs",),
+        workflow_stage=stage,
+    )
+
+    assert required is not None
+    assert USIM_DATASTORE_CURRENT_H5 in required
+    assert "2019" in required[USIM_DATASTORE_CURRENT_H5]

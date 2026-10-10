@@ -232,6 +232,7 @@ def _asim_container_environment() -> Dict[str, str]:
         "NUMBA_CACHE_DIR": "/app/numba_cache/numba",
         "XDG_CACHE_HOME": "/app/numba_cache",
         "PYTHONNOUSERSITE": "1",
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
     for key in (
         "ASIM_DEBUG_ZARR_WRITE",
@@ -239,6 +240,12 @@ def _asim_container_environment() -> Dict[str, str]:
         "ASIM_DEBUG_ZARR_PROBE_ONLY",
         "ASIM_DEBUG_ZARR_PROBE_DIR",
         "ASIM_DEBUG_ZARR_PROBE_LIMIT",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "BLIS_NUM_THREADS",
+        "VECLIB_MAXIMUM_THREADS",
     ):
         value = os.environ.get(key)
         if value:
@@ -497,6 +504,8 @@ class ActivitysimNumbaWarmup(GenericRunner):
         compile_output_dir = str(launch_context.compile_output_dir)
         runtime_cache_dir = str(launch_context.runtime_cache_dir)
         runtime_cache_mode: Literal["ro", "rw"] = "ro" if skim_mode == "zarr" else "rw"
+        os.makedirs(compile_output_dir, exist_ok=True)
+        os.makedirs(os.path.join(compile_output_dir, "cache"), exist_ok=True)
         if skim_mode == "zarr":
             if zarr_input_path is None or not os.path.isdir(zarr_input_path):
                 raise RuntimeError(

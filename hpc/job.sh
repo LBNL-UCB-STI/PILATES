@@ -27,17 +27,17 @@ FALLBACK_REQUIREMENTS_FILE="$PILATES_DIR/requirements.txt"
 CONSIST_SRC_DIR_SUPPLIED="${CONSIST_SRC_DIR+x}"
 CONSIST_SRC_DIR="${CONSIST_SRC_DIR:-$PILATES_DIR/../consist}"
 CONSIST_PYPI_PACKAGE="${CONSIST_PYPI_PACKAGE:-}"
-DEFAULT_CONSIST_PYPI_PACKAGE="consist==0.2.0"
+DEFAULT_CONSIST_PYPI_PACKAGE="consist>=0.3.3"
 
 show_system_info() {
     echo "=== MEMORY INFORMATION ==="
-    free -h
-    grep MemTotal /proc/meminfo || true
-    grep -i numa /proc/cpuinfo | head -n 8 || true
+    free -h 2>/dev/null || true
+    grep MemTotal /proc/meminfo 2>/dev/null || true
+    grep -i numa /proc/cpuinfo 2>/dev/null | head -n 8 || true
     echo "=========================="
 
     echo "=== NODE USAGE INFORMATION ==="
-    squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" | grep "$(hostname)" || echo "Node info not found in squeue"
+    (squeue -o "%.18i %.9P %.8j %.8u %.8T %.10M %.9l %.6D %R" 2>/dev/null | grep "$(hostname)") || echo "Node info not found in squeue"
     echo "=========================="
 }
 
@@ -47,7 +47,7 @@ install_python_deps() {
     local filtered_req
     local current_hash
     filtered_req="$(mktemp)"
-    grep -Ev '^[[:space:]]*consist([[:space:]]|[<>=!~].*)?$' "$req_file" > "$filtered_req" || true
+    grep -Ev '^[[:space:]]*consist(\[[^]]*\])?([[:space:]]|[<>=!~].*)?$' "$req_file" > "$filtered_req" || true
     current_hash="$(sha256sum "$filtered_req" | awk '{print $1}')"
 
     if [ ! -f "$marker" ] || [ "$current_hash" != "$(cat "$marker")" ]; then
@@ -73,7 +73,7 @@ resolve_consist_package_spec() {
     local req_file
     for req_file in "$@"; do
         if [ -f "$req_file" ]; then
-            package_spec="$(grep -E '^[[:space:]]*consist([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+            package_spec="$(grep -E '^[[:space:]]*consist(\[[^]]*\])?([<>=!~].*)?$' "$req_file" | head -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
             if [ -n "$package_spec" ]; then
                 echo "$package_spec"
                 return
@@ -92,7 +92,7 @@ install_consist() {
 
     if [ -d "$CONSIST_SRC_DIR" ]; then
         echo "Attempting editable consist install from $CONSIST_SRC_DIR ..."
-        if python3 -m pip install -e "$CONSIST_SRC_DIR"; then
+        if python3 -m pip install --no-build-isolation --no-deps -e "$CONSIST_SRC_DIR"; then
             echo "Installed local editable consist from $CONSIST_SRC_DIR"
         else
             echo "WARNING: editable consist install failed; falling back to $package_spec" >&2
@@ -142,7 +142,7 @@ install_editable_activitysim_acceptance_consist() {
         return 1
     fi
     echo "Installing required editable Consist checkout from $editable_source at $consist_revision ..."
-    python3 -m pip install --upgrade --force-reinstall --no-deps -e "$editable_source"
+    python3 -m pip install --upgrade --force-reinstall --no-build-isolation --no-deps -e "$editable_source"
     ACTIVITYSIM_ACCEPTANCE_EDITABLE_SOURCE="$editable_source" python3 - <<'PY'
 import os
 from pathlib import Path
@@ -183,7 +183,7 @@ install_hdf5_acceptance_consist() {
     fi
 
     echo "Installing required editable Consist checkout from $CONSIST_SRC_DIR ..."
-    if ! python3 -m pip install -e "$CONSIST_SRC_DIR"; then
+    if ! python3 -m pip install --no-build-isolation --no-deps -e "$CONSIST_SRC_DIR"; then
         echo "ERROR: failed to install required editable Consist checkout from $CONSIST_SRC_DIR." >&2
         return 1
     fi
@@ -351,6 +351,45 @@ fi
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
 echo "Config: $CONFIG_FILE"
+
+# Cap implicit native thread pools used by NumPy/BLAS/OpenMP-backed libraries.
+# This avoids oversubscription/lock contention while still requesting full node
+# resources for containerized model runs. Override per job with PILATES_THREADS.
+THREADS="${PILATES_THREADS:-8}"
+export OMP_NUM_THREADS="$THREADS"
+export MKL_NUM_THREADS="$THREADS"
+export OPENBLAS_NUM_THREADS="$THREADS"
+export NUMEXPR_NUM_THREADS="$THREADS"
+export BLIS_NUM_THREADS="$THREADS"
+export VECLIB_MAXIMUM_THREADS="$THREADS"
+export SINGULARITYENV_OMP_NUM_THREADS="$THREADS"
+export APPTAINERENV_OMP_NUM_THREADS="$THREADS"
+export SINGULARITYENV_MKL_NUM_THREADS="$THREADS"
+export APPTAINERENV_MKL_NUM_THREADS="$THREADS"
+export SINGULARITYENV_OPENBLAS_NUM_THREADS="$THREADS"
+export APPTAINERENV_OPENBLAS_NUM_THREADS="$THREADS"
+export SINGULARITYENV_NUMEXPR_NUM_THREADS="$THREADS"
+export APPTAINERENV_NUMEXPR_NUM_THREADS="$THREADS"
+export SINGULARITYENV_BLIS_NUM_THREADS="$THREADS"
+export APPTAINERENV_BLIS_NUM_THREADS="$THREADS"
+export SINGULARITYENV_VECLIB_MAXIMUM_THREADS="$THREADS"
+export APPTAINERENV_VECLIB_MAXIMUM_THREADS="$THREADS"
+echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
+
+export DLT__RUNTIME__DLTHUB_TELEMETRY=false
+
+# ActivitySim Zarr write debugging. Keep the dataset summary logging enabled by
+# default, but leave the probe writes opt-in so the real compile cache write
+# path is exercised.
+export ASIM_DEBUG_ZARR_WRITE="${ASIM_DEBUG_ZARR_WRITE:-1}"
+unset ASIM_DEBUG_ZARR_PROBE
+unset ASIM_DEBUG_ZARR_PROBE_ONLY
+unset ASIM_DEBUG_ZARR_PROBE_DIR
+unset ASIM_DEBUG_ZARR_PROBE_LIMIT
+echo "ActivitySim Zarr debug: WRITE=$ASIM_DEBUG_ZARR_WRITE"
+
+show_system_info
+
 if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
     if [ -z "$STAGE_FILE" ] || [ -z "$ACCEPTANCE_EVIDENCE_ROOT" ]; then
         echo "ERROR: UrbanSim HDF5 snapshot acceptance mode requires settings, input manifest, and evidence root." >&2
@@ -401,32 +440,6 @@ else
     echo "Stage: <fresh run>"
 fi
 
-show_system_info
-
-export DLT__RUNTIME__DLTHUB_TELEMETRY=false
-
-# Cap implicit native thread pools used by NumPy/BLAS/OpenMP-backed libraries.
-# This avoids oversubscription/lock contention while still requesting full node
-# resources for containerized model runs. Override per job with PILATES_THREADS.
-THREADS="${PILATES_THREADS:-8}"
-export OMP_NUM_THREADS="$THREADS"
-export MKL_NUM_THREADS="$THREADS"
-export OPENBLAS_NUM_THREADS="$THREADS"
-export NUMEXPR_NUM_THREADS="$THREADS"
-export BLIS_NUM_THREADS="$THREADS"
-export VECLIB_MAXIMUM_THREADS="$THREADS"
-echo "Thread caps: PILATES_THREADS=$THREADS (OMP/MKL/OPENBLAS/NUMEXPR/BLIS/VECLIB)"
-
-# ActivitySim Zarr write debugging. Keep the dataset summary logging enabled by
-# default, but leave the probe writes opt-in so the real compile cache write
-# path is exercised.
-export ASIM_DEBUG_ZARR_WRITE="${ASIM_DEBUG_ZARR_WRITE:-1}"
-unset ASIM_DEBUG_ZARR_PROBE
-unset ASIM_DEBUG_ZARR_PROBE_ONLY
-unset ASIM_DEBUG_ZARR_PROBE_DIR
-unset ASIM_DEBUG_ZARR_PROBE_LIMIT
-echo "ActivitySim Zarr debug: WRITE=$ASIM_DEBUG_ZARR_WRITE"
-
 is_new_format() {
     grep -q "^run:" "$1" && grep -q "^shared:" "$1" && grep -q "^infrastructure:" "$1"
 }
@@ -443,7 +456,7 @@ if ! is_new_format "$CONFIG_FILE"; then
 fi
 
 if [ -n "$STAGE_FILE" ]; then
-    python3 run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"
+    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"
 else
-    python3 run.py -c "$CONFIG_FILE"
+    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE"
 fi

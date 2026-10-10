@@ -583,5 +583,6 @@ def test_numba_warmup_mounts_the_staged_zarr_as_its_read_only_compile_input(
     )
 
     compile_zarr = tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
+    assert (launch_context.compile_output_dir / "cache").is_dir()
     assert captured_volumes[str(launch_context.runtime_cache_dir)]["mode"] == "ro"
     assert not compile_zarr.exists()

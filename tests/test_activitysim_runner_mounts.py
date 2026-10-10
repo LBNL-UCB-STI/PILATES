@@ -210,6 +210,25 @@ def test_activitysim_container_environment_blocks_user_site():
     assert env["NUMBA_CACHE_DIR"] == "/app/numba_cache/numba"
     assert env["XDG_CACHE_HOME"] == "/app/numba_cache"
     assert env["PYTHONNOUSERSITE"] == "1"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+def test_activitysim_container_environment_passes_thread_caps(monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.setenv("MKL_NUM_THREADS", "4")
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "4")
+    monkeypatch.setenv("NUMEXPR_NUM_THREADS", "4")
+    monkeypatch.setenv("BLIS_NUM_THREADS", "4")
+    monkeypatch.setenv("VECLIB_MAXIMUM_THREADS", "4")
+
+    env = _asim_container_environment()
+
+    assert env["OMP_NUM_THREADS"] == "4"
+    assert env["MKL_NUM_THREADS"] == "4"
+    assert env["OPENBLAS_NUM_THREADS"] == "4"
+    assert env["NUMEXPR_NUM_THREADS"] == "4"
+    assert env["BLIS_NUM_THREADS"] == "4"
+    assert env["VECLIB_MAXIMUM_THREADS"] == "4"
 
 
 def test_activitysim_container_environment_passes_zarr_debug_flags(monkeypatch):
