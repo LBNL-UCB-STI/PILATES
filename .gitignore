@@ -122,6 +122,8 @@ hpc/run-notifications.env
 .claude/
 .serena/
 .worktrees/
+.superpowers/
+docs/superpowers/
 
 # Local generated artifacts and scratch outputs
 tests/tmp/
