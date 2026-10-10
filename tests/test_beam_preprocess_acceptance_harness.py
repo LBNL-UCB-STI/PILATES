@@ -150,6 +150,18 @@ def test_main_runs_real_native_step_cold_then_fresh_and_retains_evidence(
     manifest, evidence_root = _acceptance_inputs(tmp_path)
     monkeypatch.delenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", raising=False)
     monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
+    fake_zone = tmp_path / "zones.geojson"
+    fake_zone.write_text(
+        '{"type": "FeatureCollection", "features": []}', encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "resolve_canonical_zone_source",
+        lambda *_args, **_kwargs: (
+            fake_zone,
+            {"canonical_id_col": "TAZ", "activitysim_index_col": "TAZ"},
+        ),
+    )
     calls: list[Path] = []
 
     def fake_preprocess(
