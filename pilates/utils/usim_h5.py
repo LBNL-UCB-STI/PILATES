@@ -100,7 +100,9 @@ def ensure_usim_population_year_table_aliases(
 
 
 def _year_from_usim_model_data_filename(h5_path: str) -> Optional[int]:
-    match = re.fullmatch(r"model_data_(\d{4})\.h5", Path(h5_path).name)
+    match = re.fullmatch(
+        r"model_data_(\d{4})(?:_population_source)?\.h5", Path(h5_path).name
+    )
     if match is None:
         return None
     return int(match.group(1))

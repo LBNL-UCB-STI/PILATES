@@ -181,3 +181,33 @@ def test_create_snapshot_overwrites_existing_destination(
 
     with pd.HDFStore(destination, mode="r") as store:
         assert store["/households"]["marker"].tolist() == [42]
+
+
+def test_validate_usim_h5_filename_year_with_population_source_snapshot(
+    tmp_path: Path,
+) -> None:
+    from pilates.utils.usim_h5 import (
+        _validate_usim_h5_filename_year,
+        _year_from_usim_model_data_filename,
+    )
+
+    assert _year_from_usim_model_data_filename("model_data_2020.h5") == 2020
+    assert (
+        _year_from_usim_model_data_filename("model_data_2020_population_source.h5")
+        == 2020
+    )
+    assert _year_from_usim_model_data_filename("other_file.h5") is None
+
+    # Matching year passes cleanly
+    _validate_usim_h5_filename_year(
+        h5_path="model_data_2020_population_source.h5", year=2020
+    )
+    _validate_usim_h5_filename_year(h5_path="model_data_2020.h5", year=2020)
+
+    # Mismatched year raises ValueError
+    with pytest.raises(ValueError, match="filename/year mismatch"):
+        _validate_usim_h5_filename_year(
+            h5_path="model_data_2020_population_source.h5", year=2025
+        )
+    with pytest.raises(ValueError, match="filename/year mismatch"):
+        _validate_usim_h5_filename_year(h5_path="model_data_2020.h5", year=2025)
