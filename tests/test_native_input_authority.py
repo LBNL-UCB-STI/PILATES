@@ -7,6 +7,7 @@ import pytest
 from consist import BindingResult
 
 from pilates.workflows.artifact_keys import (
+    ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
@@ -251,9 +252,11 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(
             "land_use_asim_in",
             "households_asim_in",
             "persons_asim_in",
-            ZARR_SKIMS,
         ),
-        (),
+        (
+            ZARR_SKIMS,
+            ASIM_OMX_SKIMS,
+        ),
     )
     assert dict(resolved_run.binding.inputs or {}) == run_inputs
 

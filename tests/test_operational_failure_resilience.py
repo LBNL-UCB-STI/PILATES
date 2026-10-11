@@ -154,9 +154,10 @@ def test_resolve_preprocessor_workers_bounds():
         assert workers <= 16
 
     # Test environment variable override
-    with patch.dict(os.environ, {"PILATES_PREPROCESSOR_WORKERS": "4"}):
-        workers = _resolve_preprocessor_workers(100)
-        assert workers == 4
+    with patch("os.cpu_count", return_value=32):
+        with patch.dict(os.environ, {"PILATES_PREPROCESSOR_WORKERS": "4"}):
+            workers = _resolve_preprocessor_workers(100)
+            assert workers == 4
 
 
 def test_find_latest_beam_iteration_excludes_archived_dirs(tmp_path):
