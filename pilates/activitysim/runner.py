@@ -89,6 +89,40 @@ def validate_activitysim_zarr_skims(path: str | Path) -> str | None:
             return "zarr.json must declare zarr_format 3"
         if metadata.get("node_type") != "group":
             return "zarr.json root node_type must be 'group'"
+
+    # Deep structural check on array nodes when present
+    for child in zarr_path.iterdir():
+        if not child.is_dir():
+            continue
+        # Check v2 array metadata
+        child_zarray = child / ".zarray"
+        if child_zarray.exists():
+            if not child_zarray.is_file():
+                return f"Zarr array metadata is not a file: {child.name}/.zarray"
+            try:
+                array_meta = json.loads(child_zarray.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                return f"invalid Zarr array metadata {child.name}/.zarray: {error}"
+            if not isinstance(array_meta, dict) or "shape" not in array_meta:
+                return (
+                    f"invalid Zarr array metadata {child.name}/.zarray: missing shape"
+                )
+        # Check v3 array metadata
+        child_v3 = child / "zarr.json"
+        if child_v3.exists():
+            if not child_v3.is_file():
+                return f"Zarr node metadata is not a file: {child.name}/zarr.json"
+            try:
+                node_meta = json.loads(child_v3.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+                return f"invalid Zarr node metadata {child.name}/zarr.json: {error}"
+            if not isinstance(node_meta, dict):
+                return f"invalid Zarr node metadata {child.name}/zarr.json: expected an object"
+            if node_meta.get("node_type") == "array" and "shape" not in node_meta:
+                return (
+                    f"invalid Zarr array metadata {child.name}/zarr.json: missing shape"
+                )
+
     return None
 
 
@@ -1193,12 +1227,25 @@ class ActivitysimRunner(GenericRunner):
             settings, asim_docker_vols, False
         )
 
-        # Clear any stale success marker before running ActivitySim.
+        # Clear any stale success marker or prior incomplete final_pipeline before running ActivitySim.
         clear_asim_run_marker(
             str(launch_context.output_dir),
             self.state.current_year,
             self.state.current_inner_iter,
         )
+        stale_pipeline_dir = launch_context.output_dir / "final_pipeline"
+        if stale_pipeline_dir.exists():
+            try:
+                shutil.rmtree(stale_pipeline_dir)
+                logger.info(
+                    "Purged stale final_pipeline directory at %s", stale_pipeline_dir
+                )
+            except OSError as exc:
+                logger.warning(
+                    "Could not purge stale final_pipeline at %s: %s",
+                    stale_pipeline_dir,
+                    exc,
+                )
 
         success = self.run_container(
             client=client,

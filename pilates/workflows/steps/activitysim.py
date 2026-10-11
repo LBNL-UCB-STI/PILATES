@@ -354,6 +354,12 @@ def _native_activitysim_resolved_inputs(
                 else None
             ),
         )
+    elif step_name == "activitysim_run":
+        rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
+            semantic_key=ASIM_OMX_SKIMS,
+            required=False,
+            preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
+        )
     elif step_name == "activitysim_postprocess":
         rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
             semantic_key=USIM_DATASTORE_CURRENT_H5,
@@ -430,11 +436,8 @@ def _activitysim_run_resolver(
         settings=settings,
         state=state,
     )
-    required_roles = (
-        *_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        *((ZARR_SKIMS,) if requires_beam_skim else ()),
-    )
-    optional_roles = () if requires_beam_skim else _ACTIVITYSIM_RUN_SKIM_ROLES
+    required_roles = _ACTIVITYSIM_RUN_REQUIRED_ROLES
+    optional_roles = _ACTIVITYSIM_RUN_SKIM_ROLES
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_run",
         required_roles=required_roles,
@@ -461,7 +464,7 @@ def _activitysim_run_resolver(
         )
 
     # A valid published Zarr is authoritative. Otherwise the preprocessor's
-    # OMX artifact is the first-run source that this invocation converts and
+    # or BEAM's OMX artifact is the source that this invocation converts and
     # publishes as Zarr. Keep the unselected source out of the binding so it
     # cannot affect materialization or cache identity.
     if zarr_source != "missing" and zarr_rejection is None:
@@ -471,7 +474,7 @@ def _activitysim_run_resolver(
             produces_zarr=False,
             selected_source=zarr_source,
         )
-    elif not requires_beam_skim and omx_source != "missing":
+    elif omx_source != "missing":
         if zarr_rejection is not None:
             logger.warning(
                 "activitysim_run rejected %s before binding selection: %s; "
@@ -490,7 +493,9 @@ def _activitysim_run_resolver(
         raise RuntimeError(f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}")
     else:
         expected = (
-            ZARR_SKIMS if requires_beam_skim else f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+            f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+            if not requires_beam_skim
+            else f"prior BEAM skim handoff ({ZARR_SKIMS} or {ASIM_OMX_SKIMS})"
         )
         raise RuntimeError(
             f"activitysim_run requires one published skim role: {expected}"

@@ -446,6 +446,7 @@ sbatch_args=(
     --job-name="$JOB_NAME"
     --output="$JOB_LOG_FILE_PATH"
     --time="$EXPECTED_EXECUTION_DURATION"
+    --signal="${PILATES_SLURM_SIGNAL:-B:SIGTERM@120}"
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
 )

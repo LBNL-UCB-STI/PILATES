@@ -284,3 +284,14 @@ def test_restart_activitysim_required_artifacts_uses_forecast_year(
     assert required is not None
     assert USIM_DATASTORE_CURRENT_H5 in required
     assert "2019" in required[USIM_DATASTORE_CURRENT_H5]
+
+
+def test_beam_preprocess_binding_rules_prefer_linkstats_over_warmstart() -> None:
+    rules = binding.artifact_rules_for_step_name("beam_preprocess")
+    linkstats_rule = next(
+        r for r in rules if r.semantic_key == binding.LINKSTATS_WARMSTART
+    )
+    assert linkstats_rule.preferred_keys == (
+        binding.LINKSTATS,
+        binding.LINKSTATS_WARMSTART,
+    )

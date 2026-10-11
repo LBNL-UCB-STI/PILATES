@@ -803,7 +803,7 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=LINKSTATS_WARMSTART,
                 required=False,
-                preferred_keys=(LINKSTATS_WARMSTART, LINKSTATS),
+                preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
             ),
             ArtifactBindingRule(
                 semantic_key=ATLAS_VEHICLES2_OUTPUT,

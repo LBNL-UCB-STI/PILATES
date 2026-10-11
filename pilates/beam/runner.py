@@ -204,6 +204,10 @@ def rename_beam_output_directory(
     beam_output_dir, settings, year, replanning_iteration_number=0
 ) -> (str, str):
     iteration_output_directory, _ = find_latest_beam_iteration(beam_output_dir)
+    if iteration_output_directory is None:
+        raise RuntimeError(
+            f"No BEAM iteration output directory found under {beam_output_dir} to rename"
+        )
     beam_run_output_dir = os.path.dirname(os.path.dirname(iteration_output_directory))
     new_iteration_output_directory = os.path.join(
         beam_output_dir,

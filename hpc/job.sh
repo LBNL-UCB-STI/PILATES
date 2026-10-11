@@ -19,6 +19,38 @@ error_exit() {
 
 trap 'error_exit ${LINENO} "$BASH_COMMAND" $?' ERR
 
+RUN_PID=
+
+sig_handler() {
+    local sig="$1"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    echo "WARNING: job.sh received signal $sig (Slurm walltime warning or scancel)." >&2
+    echo "Propagating signal to child process ($RUN_PID)..." >&2
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" >&2
+    if [ -n "${RUN_PID:-}" ] && kill -0 "$RUN_PID" 2>/dev/null; then
+        kill "-$sig" "$RUN_PID" 2>/dev/null || true
+        wait "$RUN_PID" || true
+    fi
+    exit 143
+}
+
+trap 'sig_handler SIGTERM' SIGTERM
+trap 'sig_handler SIGINT' SIGINT
+
+with_venv_lock() {
+    local lockfile="$VENV_PATH/.install.lock"
+    mkdir -p "$(dirname "$lockfile")"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            exec 200>"$lockfile"
+            flock -x 200
+            "$@"
+        )
+    else
+        "$@"
+    fi
+}
+
 PILATES_DIR="${PILATES_DIR:-/global/scratch/users/$USER/sources/PILATES}"
 export PILATES_DIR
 VENV_PATH="${PILATES_VENV_PATH:-$PILATES_DIR/PILATES-env}"
@@ -311,42 +343,47 @@ echo "Using LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 
 cd "$PILATES_DIR"
 
-if [ ! -x "$VENV_PATH/bin/python3" ]; then
-    echo "Creating virtual environment at $VENV_PATH ..."
-    python3 -m venv "$VENV_PATH"
-fi
-source "$VENV_PATH/bin/activate"
-
-if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    REQUIREMENTS_FILE="$FALLBACK_REQUIREMENTS_FILE"
-fi
-if [ ! -f "$REQUIREMENTS_FILE" ]; then
-    echo "ERROR: requirements file not found at '$REQUIREMENTS_FILE'"
-    exit 1
-fi
-
-install_python_deps "$REQUIREMENTS_FILE"
-if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
-    install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
-elif [ "$acceptance_mode" = "activitysim-run" ]; then
-    activitysim_consist_mode="$(activitysim_acceptance_consist_install_mode "$STAGE_FILE")"
-    if [ "$activitysim_consist_mode" = "editable" ]; then
-        if [ -z "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
-            echo "ERROR: editable ActivitySim acceptance requires --editable-consist <absolute-source-dir>." >&2
-            exit 2
-        fi
-        install_editable_activitysim_acceptance_consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
-    else
-        if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
-            echo "ERROR: released ActivitySim acceptance must not receive --editable-consist." >&2
-            exit 2
-        fi
-        required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
-        install_released_activitysim_acceptance_consist "$required_consist_version"
+ensure_venv_and_deps() {
+    if [ ! -x "$VENV_PATH/bin/python3" ]; then
+        echo "Creating virtual environment at $VENV_PATH ..."
+        python3 -m venv "$VENV_PATH"
     fi
-else
-    install_consist "$REQUIREMENTS_FILE"
-fi
+    source "$VENV_PATH/bin/activate"
+
+    if [ ! -f "$REQUIREMENTS_FILE" ]; then
+        REQUIREMENTS_FILE="$FALLBACK_REQUIREMENTS_FILE"
+    fi
+    if [ ! -f "$REQUIREMENTS_FILE" ]; then
+        echo "ERROR: requirements file not found at '$REQUIREMENTS_FILE'"
+        exit 1
+    fi
+
+    install_python_deps "$REQUIREMENTS_FILE"
+    if [ "$acceptance_mode" = "urbansim-h5-snapshot" ]; then
+        install_hdf5_acceptance_consist "$ACCEPTANCE_EVIDENCE_ROOT"
+    elif [ "$acceptance_mode" = "activitysim-run" ]; then
+        activitysim_consist_mode="$(activitysim_acceptance_consist_install_mode "$STAGE_FILE")"
+        if [ "$activitysim_consist_mode" = "editable" ]; then
+            if [ -z "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+                echo "ERROR: editable ActivitySim acceptance requires --editable-consist <absolute-source-dir>." >&2
+                exit 2
+            fi
+            install_editable_activitysim_acceptance_consist "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE"
+        else
+            if [ -n "$ACTIVITYSIM_EDITABLE_CONSIST_SOURCE" ]; then
+                echo "ERROR: released ActivitySim acceptance must not receive --editable-consist." >&2
+                exit 2
+            fi
+            required_consist_version="$(required_activitysim_acceptance_consist_version "$STAGE_FILE")"
+            install_released_activitysim_acceptance_consist "$required_consist_version"
+        fi
+    else
+        install_consist "$REQUIREMENTS_FILE"
+    fi
+}
+
+with_venv_lock ensure_venv_and_deps
+source "$VENV_PATH/bin/activate"
 
 echo "Python version: $(python3 --version)"
 echo "Python path: $(which python3)"
@@ -456,7 +493,10 @@ if ! is_new_format "$CONFIG_FILE"; then
 fi
 
 if [ -n "$STAGE_FILE" ]; then
-    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE" -S "$STAGE_FILE"
+    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE" -S "$STAGE_FILE" &
 else
-    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE"
+    PYTHONUNBUFFERED=1 python3 -u run.py -c "$CONFIG_FILE" &
 fi
+RUN_PID=$!
+wait "$RUN_PID"
+RUN_PID=

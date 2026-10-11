@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 import logging
+import signal
 import sys
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
@@ -836,6 +837,22 @@ def main(
     archive_consist_db_path = prepared.archive_consist_db_path
     run_succeeded = False
 
+    original_signal_handlers: Dict[int, Any] = {}
+
+    def _graceful_exit_handler(signum: int, frame: Any) -> None:
+        logger.warning(
+            "PILATES received signal %d (%s); initiating graceful shutdown...",
+            signum,
+            signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum),
+        )
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            original_signal_handlers[sig] = signal.signal(sig, _graceful_exit_handler)
+        except (ValueError, OSError, AttributeError):
+            pass
+
     try:
         # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
         # Initialization runs before entering scenario step execution so bootstrap
@@ -1016,13 +1033,27 @@ def main(
         logger.info("[Main] Simulation complete.")
         run_succeeded = True
     finally:
-        snapshot_ok = snapshot_manager.final_snapshot()
-        flush_archive_queue(timeout=300)
-        stop_archive_worker(timeout=30)
-        if not snapshot_ok:
-            mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)
-        if run_succeeded and snapshot_ok:
-            log_promotion_instructions_on_success(
-                logger=logger,
-                context=RUN_FAILURE_CONTEXT,
-            )
+        try:
+            try:
+                snapshot_ok = snapshot_manager.final_snapshot()
+                flush_archive_queue(timeout=300)
+                stop_archive_worker(timeout=30)
+                if not snapshot_ok:
+                    mirror_consist_db_to_archive(
+                        local_consist_db_path,
+                        archive_consist_db_path,
+                        tracker=tracker,
+                    )
+                if run_succeeded and snapshot_ok:
+                    log_promotion_instructions_on_success(
+                        logger=logger,
+                        context=RUN_FAILURE_CONTEXT,
+                    )
+            finally:
+                cr.dispose_tracker(tracker)
+        finally:
+            for sig, handler in original_signal_handlers.items():
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError):
+                    pass

@@ -128,14 +128,25 @@ def find_latest_beam_iteration(beam_output_dir):
     Return (path_to_latest_iteration_dir, latest_iteration_number).
 
     BEAM iteration directories are typically named `it.<n>` under an `ITERS` folder.
+    Excludes already-archived regional iteration directories (year-\\d+-iteration-\\d+)
+    unless beam_output_dir itself points into one.
     """
-    iter_dirs = [
-        os.path.join(root, dir_name)
-        for root, dirs, files in os.walk(beam_output_dir)
-        if not os.path.basename(root).startswith(".")
-        for dir_name in dirs
-        if dir_name == "ITERS"
-    ]
+    if not beam_output_dir or not os.path.exists(beam_output_dir):
+        return None, None
+
+    is_already_scoped = bool(re.search(r"year-\d+-iteration-\d+", str(beam_output_dir)))
+
+    iter_dirs = []
+    for root, dirs, files in os.walk(beam_output_dir):
+        if os.path.basename(root).startswith("."):
+            dirs[:] = []
+            continue
+        if not is_already_scoped:
+            # Do not traverse into already finalized past-year/iteration directories
+            dirs[:] = [d for d in dirs if not re.match(r"^year-\d+-iteration-\d+$", d)]
+        if "ITERS" in dirs:
+            iter_dirs.append(os.path.join(root, "ITERS"))
+
     logger.info("Looking in directories {0}".format(iter_dirs))
     if not iter_dirs:
         return None, None
@@ -157,7 +168,10 @@ def find_latest_beam_iteration(beam_output_dir):
         return None, None
 
     max_it_num = max(iteration_nums)
-    return os.path.join(last_iters_dir, f"{it_prefix}{max_it_num}"), max_it_num
+    target_iter_dir = os.path.join(last_iters_dir, f"{it_prefix}{max_it_num}")
+    if not os.path.isdir(target_iter_dir):
+        return None, None
+    return target_iter_dir, max_it_num
 
 
 def find_produced_od_skims(beam_output_dir, suffix="csv.gz"):

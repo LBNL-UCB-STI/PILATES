@@ -1143,7 +1143,6 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
     all_roles = (
         *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
         activitysim.ZARR_SKIMS,
-        activitysim.ASIM_OMX_SKIMS,
     )
     selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
     invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
@@ -1183,6 +1182,55 @@ def test_activitysim_run_resolver_requires_valid_zarr_for_prior_beam_handoff(
             workspace=SimpleNamespace(),
             coupler=object(),
         )
+
+
+def test_activitysim_run_resolver_falls_back_to_omx_for_prior_beam_handoff_when_zarr_invalid(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    all_roles = (
+        *activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        activitysim.ZARR_SKIMS,
+        activitysim.ASIM_OMX_SKIMS,
+    )
+    selected_artifacts = _tracked_artifacts(tmp_path, *all_roles)
+    invalid_zarr = tmp_path / "sources" / activitysim.ZARR_SKIMS
+    (invalid_zarr / ".zgroup").write_text('{"zarr_format": 1}\n', encoding="utf-8")
+    base_resolution = ResolvedStepInputs(
+        step_name="activitysim_run",
+        binding=BindingResult(inputs=selected_artifacts),
+        required_roles=activitysim._ACTIVITYSIM_RUN_REQUIRED_ROLES,
+        optional_roles=activitysim._ACTIVITYSIM_RUN_SKIM_ROLES,
+        source_by_role={key: "coupler" for key in all_roles},
+        selected_key_by_role={key: key for key in all_roles},
+        logical_destinations={key: Path(f"native/{key}") for key in all_roles},
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "requires_prior_beam_skim_handoff",
+        lambda **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        activitysim,
+        "_native_activitysim_resolved_inputs",
+        lambda **_kwargs: base_resolution,
+    )
+    monkeypatch.setattr(
+        activitysim.ActivitysimRunner,
+        "declared_expected_inputs",
+        staticmethod(lambda *_args: {key: Path(f"native/{key}") for key in all_roles}),
+    )
+
+    resolved = activitysim._activitysim_run_resolver(
+        settings=SimpleNamespace(),
+        state=SimpleNamespace(),
+        workspace=SimpleNamespace(),
+        coupler=object(),
+    )
+    decision = resolved.metadata[activitysim._ACTIVITYSIM_SKIM_DECISION_METADATA_KEY]
+    assert decision.role == activitysim.ASIM_OMX_SKIMS
+    assert decision.mode == "omx"
+    assert decision.produces_zarr is True
 
 
 def test_activitysim_execution_options_build_context_from_materialization_destinations(
