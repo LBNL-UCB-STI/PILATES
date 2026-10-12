@@ -798,17 +798,43 @@ def _validate_rebound_postprocess_inputs(
 def _clean_interrupted_beam_postprocess_workspace(*, workspace: Workspace) -> None:
     """Remove partial/dirty staging or uncommitted output files from an aborted postprocess."""
     try:
+        candidate_roots: list[Path] = []
+        if getattr(workspace, "full_path", None):
+            candidate_roots.append(Path(workspace.full_path))
+        for getter in (
+            "get_beam_output_dir",
+            "get_beam_mutable_data_dir",
+            "get_asim_output_dir",
+        ):
+            method = getattr(workspace, getter, None)
+            if callable(method):
+                try:
+                    candidate_roots.append(Path(method()))
+                except Exception:
+                    pass
+
+        unique_roots: list[Path] = []
+        for r in candidate_roots:
+            try:
+                resolved = r.resolve()
+                if resolved not in unique_roots and resolved.exists():
+                    unique_roots.append(resolved)
+            except Exception:
+                pass
+
         beam_output_dir = Path(workspace.get_beam_output_dir())
         postprocess_output_dir = (
             beam_output_dir / ".pilates-consist-outputs" / "beam_postprocess"
         )
         if postprocess_output_dir.exists():
             shutil.rmtree(postprocess_output_dir, ignore_errors=True)
-        for staging in beam_output_dir.rglob(".staging_*"):
-            if staging.is_dir():
-                shutil.rmtree(staging, ignore_errors=True)
-            elif staging.is_file():
-                staging.unlink(missing_ok=True)
+
+        for root in unique_roots:
+            for staging in root.rglob(".staging_*"):
+                if staging.is_dir() and not staging.is_symlink():
+                    shutil.rmtree(staging, ignore_errors=True)
+                else:
+                    staging.unlink(missing_ok=True)
     except Exception as exc:
         logger.warning("[beam] Could not clean dirty postprocess workspace: %s", exc)
 

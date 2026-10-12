@@ -257,23 +257,40 @@ def test_scenario_3_crash_partway_through_postprocess_mutation_gate_and_atomic_s
     assert resumed_ckpt.producer_run_id == "beam-run-1"
 
     # 3. Simulate crash leaving behind dirty partial staging files in workspace
+    # 3. Simulate crash leaving behind dirty partial staging files across workspace roots
     staging_file = beam_output_dir / ".staging_skims.omx.tmp"
     staging_file.write_text("corrupted partial omx write")
     dirty_output_dir = beam_output_dir / ".pilates-consist-outputs" / "beam_postprocess"
     dirty_output_dir.mkdir(parents=True, exist_ok=True)
     (dirty_output_dir / "dirty_chunk.tmp").write_text("dirty chunk")
 
+    asim_output_dir = tmp_path / "asim_output"
+    asim_cache_dir = asim_output_dir / "cache"
+    asim_cache_dir.mkdir(parents=True, exist_ok=True)
+    dirty_zarr_staging = asim_cache_dir / ".staging_skims.zarr.tmp"
+    dirty_zarr_staging.mkdir(parents=True, exist_ok=True)
+    (dirty_zarr_staging / "dirty_chunk.zarr").write_text("dirty zarr")
+
+    beam_mutable_dir = tmp_path / "beam_mutable"
+    beam_mutable_dir.mkdir(parents=True, exist_ok=True)
+    dirty_omx_staging = beam_mutable_dir / ".staging_final_skims.omx.tmp"
+    dirty_omx_staging.write_text("dirty omx")
+
     workspace = SimpleNamespace(
         full_path=str(tmp_path),
         get_beam_output_dir=lambda: str(beam_output_dir),
+        get_asim_output_dir=lambda: str(asim_output_dir),
+        get_beam_mutable_data_dir=lambda: str(beam_mutable_dir),
     )
 
-    # 4. Clean interrupted workspace
+    # 4. Clean interrupted workspace across all candidate roots
     beam_stage._clean_interrupted_beam_postprocess_workspace(workspace=workspace)
     assert not staging_file.exists()
     assert not dirty_output_dir.exists()
+    assert not dirty_zarr_staging.exists()
+    assert not dirty_omx_staging.exists()
 
-    # 5. Atomic staging test in _materialize_native_outputs
+    # 5. Atomic staging test in _materialize_native_outputs (files and directories)
     source_file = tmp_path / "source_skims.omx"
     source_file.write_text("complete final omx data")
     destination_file = beam_output_dir / "skims.omx"
@@ -285,6 +302,38 @@ def test_scenario_3_crash_partway_through_postprocess_mutation_gate_and_atomic_s
     assert destination_file.exists()
     assert destination_file.read_text() == "complete final omx data"
     assert not (beam_output_dir / ".staging_skims.omx.tmp").exists()
+
+    # 6. Type transitions: leftover staging file when source is a directory
+    source_dir = tmp_path / "source_dir_skims"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "data.bin").write_text("dir data")
+    dest_dir = beam_output_dir / "dir_skims"
+    leftover_staging_file = beam_output_dir / f".staging_{dest_dir.name}.tmp"
+    leftover_staging_file.write_text("leftover file instead of dir")
+
+    _materialize_native_outputs(
+        source_paths={"dir_skims": source_dir},
+        declared_outputs={"dir_skims": dest_dir},
+    )
+    assert dest_dir.is_dir()
+    assert (dest_dir / "data.bin").read_text() == "dir data"
+    assert not leftover_staging_file.exists()
+
+    # 7. Type transitions: leftover staging dir when source is a file
+    source_file2 = tmp_path / "source_file2.txt"
+    source_file2.write_text("file2 data")
+    dest_file2 = beam_output_dir / "file2.txt"
+    leftover_staging_dir = beam_output_dir / f".staging_{dest_file2.name}.tmp"
+    leftover_staging_dir.mkdir(parents=True, exist_ok=True)
+    (leftover_staging_dir / "junk.txt").write_text("junk")
+
+    _materialize_native_outputs(
+        source_paths={"file2": source_file2},
+        declared_outputs={"file2": dest_file2},
+    )
+    assert dest_file2.is_file()
+    assert dest_file2.read_text() == "file2 data"
+    assert not leftover_staging_dir.exists()
 
 
 # ---------------------------------------------------------------------------

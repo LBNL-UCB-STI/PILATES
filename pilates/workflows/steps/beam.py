@@ -399,6 +399,13 @@ def _beam_full_skim_native_output_paths(
     }
 
 
+def _clean_staging_or_destination(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path)
+    elif path.exists() or path.is_symlink():
+        path.unlink()
+
+
 def _materialize_native_outputs(
     *,
     source_paths: Mapping[str, Path],
@@ -421,16 +428,14 @@ def _materialize_native_outputs(
         destination.parent.mkdir(parents=True, exist_ok=True)
         staging_destination = destination.parent / f".staging_{destination.name}.tmp"
         if source.is_dir():
-            if staging_destination.exists():
-                shutil.rmtree(staging_destination)
+            _clean_staging_or_destination(staging_destination)
             shutil.copytree(source, staging_destination)
-            if destination.exists():
-                shutil.rmtree(destination)
+            _clean_staging_or_destination(destination)
             staging_destination.replace(destination)
         elif source.resolve() != destination.resolve():
-            if staging_destination.exists():
-                staging_destination.unlink()
+            _clean_staging_or_destination(staging_destination)
             shutil.copy2(source, staging_destination)
+            _clean_staging_or_destination(destination)
             staging_destination.replace(destination)
 
 
@@ -814,14 +819,6 @@ def _strict_requested_output_cache(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
     )
-
-
-def _beam_workspace_target_root(workspace: Any) -> Path:
-    if hasattr(workspace, "full_path") and workspace.full_path:
-        return Path(workspace.full_path).resolve()
-    if hasattr(workspace, "get_beam_output_dir") and callable(workspace.get_beam_output_dir):
-        return Path(workspace.get_beam_output_dir()).resolve()
-    return Path.cwd().resolve()
 
 
 def _beam_linkstats_output_cache(
