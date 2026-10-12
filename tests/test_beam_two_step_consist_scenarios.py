@@ -11,17 +11,15 @@ Per the BEAM Two-Step Spike v2 Brief:
 from __future__ import annotations
 
 import gzip
-import os
 import shutil
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator
+from typing import Any, Callable
 from unittest.mock import patch
 
 import pandas as pd
 import pytest
 
 from consist import Tracker
-from consist.api import find_matching_run
 from consist.types import CacheOptions
 import dataclasses
 from pilates.beam.postprocessor import BeamPostprocessor
@@ -35,8 +33,6 @@ from pilates.workflows.artifact_keys import (
 )
 from pilates.workflows.stages import supply_demand_beam
 from pilates.workflows.stages.supply_demand_beam import (
-    _clear_beam_postprocess_in_progress,
-    _mark_beam_postprocess_in_progress,
     _run_beam_steps,
 )
 from pilates.workflows.steps.beam import beam_run
