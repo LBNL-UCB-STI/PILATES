@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 from consist import Artifact
 
 from pilates.config.models import PilatesConfig
+from pilates.runtime.archive_paths import archive_roots
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import (
@@ -794,6 +795,24 @@ def _validate_rebound_postprocess_inputs(
         raise RuntimeError("Committed BEAM checkpoint producer is absent from closure.")
 
 
+def _clean_interrupted_beam_postprocess_workspace(*, workspace: Workspace) -> None:
+    """Remove partial/dirty staging or uncommitted output files from an aborted postprocess."""
+    try:
+        beam_output_dir = Path(workspace.get_beam_output_dir())
+        postprocess_output_dir = (
+            beam_output_dir / ".pilates-consist-outputs" / "beam_postprocess"
+        )
+        if postprocess_output_dir.exists():
+            shutil.rmtree(postprocess_output_dir, ignore_errors=True)
+        for staging in beam_output_dir.rglob(".staging_*"):
+            if staging.is_dir():
+                shutil.rmtree(staging, ignore_errors=True)
+            elif staging.is_file():
+                staging.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("[beam] Could not clean dirty postprocess workspace: %s", exc)
+
+
 def _try_resume_committed_beam_postprocess(
     *,
     scenario: ScenarioWithCoupler,
@@ -811,10 +830,12 @@ def _try_resume_committed_beam_postprocess(
     if archive_run_dir is None or not beam_checkpoint_record_present(archive_run_dir):
         return None
     if beam_postprocess_is_in_progress(archive_run_dir):
-        raise RuntimeError(
-            "BEAM checkpoint is non-restartable: beam_postprocess_in_progress."
+        logger.warning(
+            "[beam] Interrupted beam_postprocess detected at checkpoint boundary; "
+            "cleaning uncommitted outputs and resuming postprocess."
         )
-    checkpoint = read_beam_run_checkpoint(archive_run_dir)
+        _clean_interrupted_beam_postprocess_workspace(workspace=context.workspace)
+    checkpoint = read_beam_run_checkpoint(archive_run_dir, allow_in_progress=True)
     if checkpoint is None or not checkpoint.closure_members:
         raise RuntimeError("Committed BEAM checkpoint is invalid or incomplete.")
     snapshot_path = (archive_run_dir / checkpoint.snapshot_ref).resolve()
@@ -1018,6 +1039,46 @@ def _compile_beam_launch_config(
     return launch_config
 
 
+def _archive_beam_run_outputs(
+    *,
+    scenario: ScenarioWithCoupler,
+    state: Any,
+    workspace: Workspace,
+    run_result: Any,
+) -> None:
+    """Register recovery roots / archive outputs using consist.api.archive_run_output_files."""
+
+    archive_run_dir = _archive_run_dir_for_restart(state)
+    if archive_run_dir is None:
+        roots = archive_roots()
+        if roots is not None:
+            archive_run_dir = Path(roots[1])
+    if archive_run_dir is None:
+        return
+    tracker = getattr(scenario, "tracker", None) or cr.current_tracker()
+    if tracker is None:
+        return
+    should_verify = (
+        getattr(getattr(tracker, "identity", None), "hashing_strategy", None)
+        == "full"
+    )
+    try:
+        from consist.api import archive_run_output_files
+
+        archive_run_output_files(
+            run_id=run_result.run.id,
+            recovery_root=archive_run_dir,
+            tracker=tracker,
+            preserve_existing=True,
+            verify=should_verify,
+            append=True,
+        )
+    except Exception as exc:
+        logger.warning(
+            "[beam] Failed to archive beam_run outputs to recovery root: %s", exc
+        )
+
+
 def _run_beam_steps(
     *,
     scenario: ScenarioWithCoupler,
@@ -1077,6 +1138,12 @@ def _run_beam_steps(
         runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=run_inputs,
     )
+    _archive_beam_run_outputs(
+        scenario=scenario,
+        state=state,
+        workspace=workspace,
+        run_result=run_result,
+    )
     postprocess_inputs = beam_postprocess.resolve_inputs(
         settings=settings,
         state=state,
@@ -1099,7 +1166,7 @@ def _run_beam_steps(
     _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
     archive_run_dir = _archive_run_dir_for_restart(state)
     if archive_run_dir is not None:
-        checkpoint = read_beam_run_checkpoint(archive_run_dir)
+        checkpoint = read_beam_run_checkpoint(archive_run_dir, allow_in_progress=True)
         if checkpoint is None:
             raise RuntimeError(
                 "BEAM checkpoint publication did not commit before postprocess."

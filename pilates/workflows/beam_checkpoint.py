@@ -466,17 +466,21 @@ def publish_beam_run_checkpoint(
     return checkpoint
 
 
-def read_beam_run_checkpoint(archive_run_dir: Path) -> BeamRunCheckpoint | None:
-    """Return the valid restartable checkpoint, never an in-progress marker."""
+def read_beam_run_checkpoint(
+    archive_run_dir: Path,
+    *,
+    allow_in_progress: bool = False,
+) -> BeamRunCheckpoint | None:
+    """Return the valid restartable checkpoint, or optionally an in-progress checkpoint for recovery."""
 
     payload = _load_state(_state_path(archive_run_dir)).get(_CHECKPOINT_KEY)
     if not isinstance(payload, dict) or payload.get("boundary_id") != _BOUNDARY_ID:
         return None
     if payload.get("schema_version") != _SCHEMA_VERSION:
         return None
-    if payload.get("next_boundary") == _IN_PROGRESS:
+    if payload.get("next_boundary") == _IN_PROGRESS and not allow_in_progress:
         return None
-    if payload.get("next_boundary") != _NEXT_BOUNDARY:
+    if payload.get("next_boundary") not in {_NEXT_BOUNDARY, _IN_PROGRESS}:
         return None
     try:
         scope = payload["scope"]

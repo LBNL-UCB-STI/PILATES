@@ -404,7 +404,7 @@ def _materialize_native_outputs(
     source_paths: Mapping[str, Path],
     declared_outputs: Mapping[str, Path],
 ) -> None:
-    """Copy selected semantic outputs to their declared individual paths."""
+    """Copy selected semantic outputs to their declared individual paths atomically."""
 
     for key, destination in declared_outputs.items():
         source = source_paths.get(key)
@@ -419,12 +419,19 @@ def _materialize_native_outputs(
         if source.resolve() == destination.resolve():
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
+        staging_destination = destination.parent / f".staging_{destination.name}.tmp"
         if source.is_dir():
+            if staging_destination.exists():
+                shutil.rmtree(staging_destination)
+            shutil.copytree(source, staging_destination)
             if destination.exists():
                 shutil.rmtree(destination)
-            shutil.copytree(source, destination)
+            staging_destination.replace(destination)
         elif source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
+            if staging_destination.exists():
+                staging_destination.unlink()
+            shutil.copy2(source, staging_destination)
+            staging_destination.replace(destination)
 
 
 def _beam_run_native_sources(produced: BeamRunOutputs) -> dict[str, Path]:
@@ -809,6 +816,14 @@ def _strict_requested_output_cache(
     )
 
 
+def _beam_workspace_target_root(workspace: Any) -> Path:
+    if hasattr(workspace, "full_path") and workspace.full_path:
+        return Path(workspace.full_path).resolve()
+    if hasattr(workspace, "get_beam_output_dir") and callable(workspace.get_beam_output_dir):
+        return Path(workspace.get_beam_output_dir()).resolve()
+    return Path.cwd().resolve()
+
+
 def _beam_linkstats_output_cache(
     *, settings: Any, state: Any, workspace: Any
 ) -> CacheOptions:
@@ -816,8 +831,19 @@ def _beam_linkstats_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
+        cache_hydration="outputs-all",
+        cache_version=1,
+    )
+
+
+def _beam_postprocess_output_cache(
+    *, settings: Any, state: Any, workspace: Any
+) -> CacheOptions:
+    """Output cache options for beam_postprocess."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-all",
         cache_version=1,
     )
 
@@ -1397,6 +1423,7 @@ def _native_beam_preprocess(
     schema_outputs=[LINKSTATS, BEAM_PLANS_OUT],
     output_paths=_native_contract_output_paths(_beam_run_native_output_paths),
     input_binding="paths",
+    cache_hydration="outputs-all",
     **consist_step_meta("beam_run", input_contract=_BEAM_RUN_INPUT_CONTRACT),
 )
 def _native_beam_run(
@@ -1492,6 +1519,7 @@ def _native_beam_run(
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),
     input_binding="paths",
+    cache_hydration="outputs-all",
     **consist_step_meta(
         "beam_postprocess", input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT
     ),
@@ -1670,7 +1698,7 @@ beam_postprocess = StepDefinition(
     input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    cache_options=_beam_postprocess_output_cache,
 )
 beam_full_skim = StepDefinition(
     name="beam_full_skim",
