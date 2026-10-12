@@ -118,3 +118,174 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     assert observed["resolver"]["launch_config"] is launch_config
     assert observed["resolved"] is run_inputs
     assert observed["runtime"] == {"beam_launch_config": launch_config}
+
+
+def test_native_archive_is_called_with_verify_before_canary_failpoint(
+    monkeypatch, tmp_path: Path
+):
+    """Native verified archival executes after beam_run commits and before canary failpoint."""
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_postprocess",
+        binding=BindingResult(inputs={}),
+    )
+    scenario = SimpleNamespace(
+        coupler=object(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
+    context = SimpleNamespace(
+        settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
+        state=SimpleNamespace(is_restart_run=False),
+        workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
+    )
+    calls: list[str] = []
+    tracked_run_outputs = {"linkstats": object()}
+
+    def fake_execute_step(*, phase, **_kwargs):
+        calls.append(phase)
+        if phase == "preprocess":
+            return SimpleNamespace(), SimpleNamespace()
+        if phase == "run":
+            return (
+                SimpleNamespace(
+                    run=SimpleNamespace(id="beam-run-1"), outputs=tracked_run_outputs
+                ),
+                SimpleNamespace(),
+            )
+        pytest.fail("canary failure must happen before native postprocess")
+
+    def fake_archive(**kwargs):
+        calls.append("archived")
+        assert kwargs["run_id"] == "beam-run-1"
+        assert kwargs["outputs"] is tracked_run_outputs
+
+    def failpoint(**_kwargs):
+        calls.append("failpoint")
+        raise RuntimeError("canary")
+
+    monkeypatch.setattr(
+        beam_stage,
+        "_compile_beam_launch_config",
+        lambda **_kwargs: SimpleNamespace(
+            root=tmp_path / "launch", primary_config=tmp_path / "launch" / "beam.conf"
+        ),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "beam_run",
+        SimpleNamespace(
+            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
+                "beam_run", BindingResult(inputs={})
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "beam_postprocess",
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: resolved_inputs),
+    )
+    monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
+    monkeypatch.setattr(beam_stage, "_archive_beam_run_outputs_native", fake_archive)
+    monkeypatch.setattr(beam_stage, "_maybe_fail_after_beam_run_for_canary", failpoint)
+
+    with pytest.raises(RuntimeError, match="canary"):
+        beam_stage._run_beam_steps(
+            scenario=scenario,
+            year=2021,
+            iteration=0,
+            context=context,
+        )
+
+    assert calls == ["preprocess", "run", "archived", "failpoint"]
+
+
+def test_archive_beam_run_outputs_native_enforces_verification(tmp_path: Path):
+    """Archiving beam_run outputs with verify=True raises loudly on verification failure."""
+    from unittest.mock import patch
+
+    tracker = SimpleNamespace()
+    outputs = {"linkstats": SimpleNamespace(driver="parquet", meta={})}
+
+    failure_item = SimpleNamespace(
+        copy_status="ok",
+        verification_status="corrupted",
+        metadata_committed=False,
+        message="hash mismatch",
+    )
+    mock_report = SimpleNamespace(
+        complete=False,
+        items=lambda: [("linkstats", failure_item)],
+    )
+
+    with patch(
+        "pilates.workflows.stages.supply_demand_beam.archive_run_output_files",
+        return_value=mock_report,
+    ):
+        with pytest.raises(
+            RuntimeError, match="Archiving beam_run outputs failed verification"
+        ):
+            beam_stage._archive_beam_run_outputs_native(
+                run_id="run-123",
+                tracker=tracker,
+                recovery_root=tmp_path / "recovery",
+                outputs=outputs,
+            )
+
+
+def test_interrupted_postprocess_detected_refuses_restart_before_step_execution(
+    monkeypatch, tmp_path: Path
+):
+    """Interrupted postprocess marker causes immediate refusal before any step runs."""
+    scenario = SimpleNamespace(
+        coupler=object(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
+    context = SimpleNamespace(
+        settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
+        state=SimpleNamespace(is_restart_run=True),
+        workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
+    )
+
+    monkeypatch.setattr(
+        beam_stage, "_interrupted_beam_postprocess_detected", lambda **_: True
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "execute_step",
+        lambda **_kwargs: pytest.fail(
+            "execute_step must not be called when postprocess was interrupted"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Interrupted BEAM postprocess detected"):
+        beam_stage._run_beam_steps(
+            scenario=scenario,
+            year=2021,
+            iteration=0,
+            context=context,
+        )
+
+
+# ==============================================================================
+# Semantic Gaps for Removed beam_checkpoint Tests (per spike brief instruction)
+# ==============================================================================
+# The following tests encoded beam_checkpoint semantics that have no direct native
+# equivalent in Consist, and are recorded here as architectural gaps:
+#
+# 1. test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache:
+#    GAP: Consist lacks pinned producer closures; cache resolution dynamically
+#    queries scenario coupler rather than freezing the producer run's lineage.
+#
+# 2. test_fresh_zarr_postprocess_closure_keeps_current_run_artifact_provenance:
+#    GAP: Consist does not pin run-artifact bindings; Coupler re-resolves artifacts
+#    dynamically.
+#
+# 3. test_beam_checkpoint_closure_keeps_requested_beam_run_on_cache_hit:
+#    GAP: Stochastic BEAM output collisions cause Consist find_matching_run() to
+#    select the newest run (epoch_us DESC) rather than retaining the original producer.
+#
+# 4. test_public_beam_handoff_is_postprocess_owned_across_run_modes_and_resume:
+#    GAP: Checkpoint-based handoff bypass is replaced by Consist's standard step
+#    output mappings.
+#
+# 5. test_rebound_checkpoint_requires_normal_resolver_identity_and_destination:
+#    GAP: Rebound destination verification was part of checkpoint deserialization;
+#    native Consist relies on declared output_paths and step contracts.
+# ==============================================================================

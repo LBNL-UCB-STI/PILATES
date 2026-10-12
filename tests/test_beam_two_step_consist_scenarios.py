@@ -279,32 +279,28 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
         run_counts["container"] += 1
         return container_stub(self, **kwargs)
 
-    def fail_postprocess(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated crash before postprocess")
+    def fail_after_beam_run(**kwargs: Any) -> None:
+        raise RuntimeError("Simulated crash after beam_run commits")
 
     # Monkeypatch 1: Container stub
-    # Monkeypatch 2: Postprocess fault injection hook
+    # Monkeypatch 2: Canary fault injection hook after beam_run commits
     with patch.object(BeamRunner, "run_container", tracked_container):
-        with patch.object(
-            BeamPostprocessor,
-            "postprocess",
-            side_effect=fail_postprocess,
+        with patch(
+            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            side_effect=fail_after_beam_run,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
                 for k, art in env["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
-                with pytest.raises(RuntimeError, match="Simulated crash before postprocess"):
+                with pytest.raises(
+                    RuntimeError, match="Simulated crash after beam_run commits"
+                ):
                     _run_beam_steps(
                         scenario=scenario, year=2020, iteration=0, context=env["context"]
                     )
 
         assert run_counts["container"] == 1
-
-        # Clear the interrupted postprocess marker to simulate clean restart gate test
-        _clear_beam_postprocess_in_progress(
-            state=env["context"].state, workspace=env["ws"]
-        )
 
         # Attempt 2: Restart! beam_run must cache hit (no container rerun)
         with env["tracker"].scenario("beam_scenario") as scenario:
@@ -383,22 +379,20 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_exposes_hydration_gap
     env = _create_test_environment(tmp_path)
     container_stub = _make_container_stub()
 
-    def fail_before_postprocess(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated crash after beam_run committed")
-
     # Monkeypatch 1: Container stub
     # Monkeypatch 2: Hook crashing after beam_run commits and archives
     with patch.object(BeamRunner, "run_container", container_stub):
-        with patch.object(
-            BeamPostprocessor,
-            "postprocess",
-            side_effect=fail_before_postprocess,
+        with patch(
+            "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
+            side_effect=RuntimeError("Simulated crash after beam_run committed"),
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
                 for k, art in env["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
-                with pytest.raises(RuntimeError, match="Simulated crash after beam_run committed"):
+                with pytest.raises(
+                    RuntimeError, match="Simulated crash after beam_run committed"
+                ):
                     _run_beam_steps(
                         scenario=scenario, year=2020, iteration=0, context=env["context"]
                     )
@@ -408,11 +402,6 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_exposes_hydration_gap
     assert beam_out.exists()
     shutil.rmtree(beam_out)
     assert not beam_out.exists()
-
-    # Clear interruption marker
-    _clear_beam_postprocess_in_progress(
-        state=env["context"].state, workspace=env["ws"]
-    )
 
     # Attempt 2: Restart. Demonstrates that Consist cache_hydration='outputs-all'
     # does NOT restore declared destination paths in scratch.
