@@ -60,16 +60,7 @@ Restart from an existing stage file:
 ./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml -a <slurm_account> -s current_stage_restart.yaml
 ```
 
-Run the native structural canary with a reviewed seed manifest:
-
-```bash
-./hpc/job_runner.sh -c scenarios/seattle/settings-seattle-consist-hpc.yaml \
-  -a <slurm_account> \
-  --native-structural-canary hpc/canaries/seattle-structural-reviewed.json
-```
-
-Run the isolated BEAM-preprocess cold-to-fresh acceptance harness (this is
-separate from, and must not be combined with, the structural canary):
+Run the isolated BEAM-preprocess cold-to-fresh acceptance harness:
 
 ```bash
 CONSIST_SRC_DIR=/global/scratch/users/$USER/sources/consist \
@@ -315,38 +306,6 @@ retained external source HDF5. Append only this verified, checksum-backed
 evidence to the boundary-promotion plan. A later released-Consist replay and
 separate boundary-specific cache proof remain required before any HDF5
 promotion decision.
-
-The reviewed Seattle seed is based on the first-iteration launch evidence from
-the failed capture run. Its host-local `/local/job...` prefixes are normalized
-by the checker, so a new Slurm allocation does not need to reproduce the old
-job ID or output directory. The new canary must retain its own launch log,
-Consist snapshot, generated settings, and action-v2 census; those artifacts are
-evidence for that new run and are not expected to match the failed run's log
-byte-for-byte.
-
-For the initial capture-only run, create the empty seed locally before
-submitting the job:
-
-```bash
-rtk /Users/zaneedell/miniforge3/envs/PILATES/bin/python -m \
-  pilates.runtime.native_canary \
-  --init-capture hpc/canaries/seattle-structural-capture.json
-```
-
-Copy or commit that file into the HPC checkout, then pass its path to
-`--native-structural-canary`. This first run collects actual launch
-observations; it is not a passing structural comparison until those
-observations have been independently reviewed and converted into
-`expected_launches`.
-
-This copies the seed manifest and generated settings into
-`/global/scratch/users/$USER/pilates-canaries/<job-id>/`, then exports that
-copy as `PILATES_NATIVE_STRUCTURAL_CANARY_MANIFEST` to the Slurm job. Set
-`PILATES_NATIVE_STRUCTURAL_CANARY_ROOT` to choose a different evidence root.
-The native step boundary refreshes `evidence/action-v2.jsonl` there as steps
-complete. After the job, copy the final Consist snapshot and job log under that
-same root, then run the checker described in
-`docs-internal/2026-08-20-native-structural-canary-harness.md`.
 
 Tracked scenario files are copy/edit starting points for the current cluster
 storage posture and model wiring. They are not turnkey machine-independent
