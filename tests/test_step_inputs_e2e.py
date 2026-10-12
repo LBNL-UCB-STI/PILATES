@@ -19,10 +19,6 @@ from pilates.workflows.artifact_keys import (
     USIM_POPULATION_SOURCE_H5,
     ZARR_SKIMS,
 )
-from pilates.workflows.beam_checkpoint import (
-    PinnedClosureMember,
-    hydrate_pinned_closure,
-)
 
 
 class DummyWorkspace:
@@ -136,53 +132,9 @@ def _identity_lock_results(
         beam_events = tracker.get_artifacts_for_run(fresh_run.run.id).outputs[
             "beam_events"
         ]
-        member = PinnedClosureMember(
-            member_id="beam-events",
-            role="beam_events",
-            producer_run_id=fresh_run.run.id,
-            output_key="beam_events",
-            artifact_identity=beam_events.hash,
-            artifact_kind="file",
-            driver=beam_events.driver,
-            destination=restart_destination.resolve(),
-            required=True,
-        )
-
-        class _PinnedTracker:
-            def get_run(self, run_id: str):
-                return tracker.get_run(run_id)
-
-            def get_run_outputs(self, run_id: str):
-                return tracker.get_artifacts_for_run(run_id).outputs
-
-            def hydrate_run_outputs_to_destinations(self, run_id: str, **kwargs):
-                destinations = kwargs["destinations_by_key"]
-                outputs = self.get_run_outputs(run_id)
-                hydrated = {}
-                for key, destination in destinations.items():
-                    artifact = outputs[key]
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(
-                        artifact.as_path(tracker=tracker).read_bytes()
-                    )
-                    hydrated[key] = SimpleNamespace(
-                        path=destination,
-                        status="materialized_from_filesystem",
-                        artifact_kind="file",
-                        resolvable=True,
-                        artifact=artifact,
-                    )
-                result = dict(hydrated)
-                result["source_run_id"] = run_id
-                return SimpleNamespace(
-                    source_run_id=run_id,
-                    get=lambda key: hydrated.get(key),
-                )
-
-        hydrate_pinned_closure(
-            tracker=_PinnedTracker(),
-            source_root=tmp_path,
-            members=(member,),
+        restart_destination.parent.mkdir(parents=True, exist_ok=True)
+        restart_destination.write_bytes(
+            beam_events.as_path(tracker=tracker).read_bytes()
         )
         committed_restart = scenario.run(
             fn=beam_postprocess,

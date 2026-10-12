@@ -17,7 +17,6 @@ from .supply_demand_activity import (
 from .supply_demand_beam import (
     TrafficAssignmentPhaseInputs,
     _run_traffic_assignment_phase,
-    beam_checkpoint_resume_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,16 +91,9 @@ def run_supply_demand_stage(
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
-        committed_beam_resume = beam_checkpoint_resume_requested(state=state)
 
         # C1. ACTIVITY DEMAND
-        if committed_beam_resume:
-            logger.info(
-                "[supply_demand][restart] committed BEAM checkpoint dispatch "
-                "preempts ActivitySim recovery for iteration=%s",
-                i,
-            )
-        elif state.should_run(
+        if state.should_run(
             state.Stage.supply_demand_loop,
             i,
             state.Stage.activity_demand,

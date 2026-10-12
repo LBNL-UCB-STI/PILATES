@@ -420,11 +420,25 @@ def _materialize_native_outputs(
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
+            staging = destination.parent / f".tmp_{destination.name}.{os.getpid()}"
+            if staging.exists():
+                shutil.rmtree(staging)
+            shutil.copytree(source, staging)
             if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(source, destination)
+                aside = destination.parent / f".old_{destination.name}.{os.getpid()}"
+                if aside.exists():
+                    shutil.rmtree(aside)
+                destination.replace(aside)
+                staging.replace(destination)
+                shutil.rmtree(aside)
+            else:
+                staging.replace(destination)
         elif source.resolve() != destination.resolve():
-            shutil.copy2(source, destination)
+            staging = destination.parent / f".tmp_{destination.name}.{os.getpid()}"
+            if staging.exists():
+                staging.unlink()
+            shutil.copy2(source, staging)
+            staging.replace(destination)
 
 
 def _beam_run_native_sources(produced: BeamRunOutputs) -> dict[str, Path]:
@@ -818,6 +832,32 @@ def _beam_linkstats_output_cache(
     return CacheOptions(
         cache_hydration="outputs-requested",
         cache_hydration_failure="miss",
+        cache_version=1,
+    )
+
+
+def _beam_run_output_cache(
+    *, settings: Any, state: Any, workspace: Any
+) -> CacheOptions:
+    """Output cache options for beam_run."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-all",
+        cache_hydration_failure="warn",
+        cache_version=1,
+    )
+
+
+def _beam_postprocess_output_cache(
+    *, settings: Any, state: Any, workspace: Any
+) -> CacheOptions:
+    """Output cache options for beam_postprocess."""
+
+    del settings, state, workspace
+    return CacheOptions(
+        cache_hydration="outputs-all",
+        cache_hydration_failure="warn",
         cache_version=1,
     )
 
@@ -1388,6 +1428,7 @@ def _native_beam_preprocess(
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
+    cache_hydration="outputs-all",
     inputs={
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
@@ -1488,6 +1529,7 @@ def _native_beam_run(
 @define_step(
     model="beam_postprocess",
     name_template="beam_postprocess__y{year}__i{iteration}__phase_{phase}",
+    cache_hydration="outputs-all",
     optional_input_keys=(ZARR_SKIMS,),
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),
@@ -1660,7 +1702,8 @@ beam_run = StepDefinition(
     output_paths=_beam_run_native_output_paths,
     output_sets=_beam_run_output_sets,
     execution_options=_native_execution_options,
-    cache_options=_beam_linkstats_output_cache,
+    archive_outputs=False,
+    cache_options=_beam_run_output_cache,
 )
 beam_postprocess = StepDefinition(
     name="beam_postprocess",
@@ -1670,7 +1713,8 @@ beam_postprocess = StepDefinition(
     input_contract=_BEAM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_beam_postprocess_native_output_paths,
     execution_options=_native_execution_options,
-    cache_options=_strict_requested_output_cache,
+    archive_outputs=False,
+    cache_options=_beam_postprocess_output_cache,
 )
 beam_full_skim = StepDefinition(
     name="beam_full_skim",

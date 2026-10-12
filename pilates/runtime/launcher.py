@@ -92,9 +92,6 @@ from pilates.workflows.stages import (
     run_vehicle_ownership_stage,
 )
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
-from pilates.workflows.stages.supply_demand_beam import (
-    beam_checkpoint_resume_requested,
-)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
@@ -436,9 +433,6 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
 
     is_enabled = getattr(state, "is_enabled", None)
     if not callable(is_enabled) or not is_enabled(activity_demand):
-        return False
-
-    if beam_checkpoint_resume_requested(state=state):
         return False
 
     provider_boundary = supply_demand_loop

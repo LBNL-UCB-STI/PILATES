@@ -2022,11 +2022,6 @@ def test_restart_rewinds_uncommitted_activitysim_to_upstream_provider_boundary(
             self.write_count += 1
 
     state = _State()
-    monkeypatch.setattr(
-        run_module,
-        "beam_checkpoint_resume_requested",
-        lambda **_kwargs: False,
-    )
 
     assert run_module._rewind_uncommitted_activitysim_restart_to_provider_boundary(
         state=state
