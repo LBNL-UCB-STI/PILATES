@@ -22,6 +22,7 @@ from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+from pilates.workflows.coupler_namespace import coupler_storage_value
 from consist import Artifact, Tracker
 from consist.api import archive_run_output_files
 from consist.protocols import ArtifactRecordLike
@@ -407,7 +408,7 @@ def _collect_previous_beam_outputs(
 
     promoted_outputs: Dict[str, Any] = {}
     for key in (LINKSTATS_WARMSTART, LINKSTATS, BEAM_PLANS_OUT):
-        value = coupler.get(key)
+        value = coupler_storage_value(coupler, key)
         if value is None:
             continue
         if artifact_to_existing_path(value, workspace):
