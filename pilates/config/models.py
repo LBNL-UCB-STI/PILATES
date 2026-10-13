@@ -5,12 +5,16 @@ This module defines the structure and validation for PILATES configuration files
 Consist-specific identity and facet mapping lives in pilates.utils.consist_config.
 """
 
-import os
+import argparse
+import copy
 import logging
+import os
+from pathlib import Path
 import re
+import sys
 import warnings
 from dataclasses import dataclass, field as dataclass_field
-from typing import Annotated, Dict, List, Optional, Any, Literal, Union
+from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -931,6 +935,11 @@ class PilatesConfig(BaseModel):
     model_config = ConfigDict(extra="allow")
     _runtime: PilatesRuntime = PrivateAttr(default_factory=PilatesRuntime)
 
+    base: Optional[str] = Field(
+        None,
+        exclude=True,
+        description="Optional path to a base YAML configuration file to inherit from.",
+    )
     run: RunConfig
     write_skims_to_omx: bool = Field(
         False,
@@ -948,6 +957,39 @@ class PilatesConfig(BaseModel):
     beam: Optional[BeamConfig] = None
     postprocessing: Optional[PostprocessingConfig] = None
     workflow: WorkflowConfig = Field(default_factory=WorkflowConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_inline_base_if_present(cls, value: Any) -> Any:
+        """Resolve top-level ``base``/``extends`` when validating a raw YAML dictionary."""
+        if not isinstance(value, dict):
+            return value
+        base_ref = value.get("base")
+        if base_ref is None and "extends" in value:
+            base_ref = value.get("extends")
+        if not isinstance(base_ref, (str, Path)) or not str(base_ref).strip():
+            return value
+
+        required_sections_present = all(
+            section in value for section in ("run", "shared", "infrastructure")
+        )
+        try:
+            resolved_base_path = _resolve_base_config_path(
+                base_ref,
+                referencing_path=None,
+                config_path="<inline dict>",
+                include_scenario_dirs=True,
+            )
+        except FileNotFoundError:
+            if required_sections_present:
+                return value
+            raise
+
+        base_dict = resolve_config_dict(resolved_base_path)
+        child_overrides = {
+            k: v for k, v in value.items() if k not in {"base", "extends"}
+        }
+        return _deep_merge_config_dicts(base_dict, child_overrides)
 
     @model_validator(mode="after")
     def validate_model_configs(self):
@@ -1105,7 +1147,131 @@ class PilatesConfig(BaseModel):
 # =============================================================================
 
 
-def load_config(config_path: str) -> PilatesConfig:
+def _deep_merge_config_dicts(
+    base: Dict[str, Any],
+    override: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Recursively deep-merge ``override`` onto ``base``.
+
+    Semantics:
+    - Dictionaries are merged recursively.
+    - Lists in ``override`` replace lists in ``base``.
+    - Scalars and explicit ``None`` values in ``override`` overwrite ``base``.
+    """
+    merged: Dict[str, Any] = copy.deepcopy(base)
+    for key, override_value in override.items():
+        base_value = merged.get(key)
+        if isinstance(base_value, dict) and isinstance(override_value, dict):
+            merged[key] = _deep_merge_config_dicts(base_value, override_value)
+        else:
+            merged[key] = copy.deepcopy(override_value)
+    return merged
+
+
+def _resolve_base_config_path(
+    base_path: Union[str, Path],
+    referencing_path: Optional[Path],
+    config_path: Union[str, Path],
+    include_scenario_dirs: bool = False,
+) -> Path:
+    """Resolve a base configuration path relative to the child file, cwd, or repo root."""
+    base_candidate = Path(str(base_path).strip())
+    if base_candidate.is_absolute():
+        if base_candidate.exists():
+            return base_candidate.resolve()
+        raise FileNotFoundError(
+            f"Base config not found: {base_path} (referenced by {config_path})"
+        )
+
+    repo_root = Path(__file__).resolve().parents[2]
+    search_roots: List[Path] = []
+    if referencing_path is not None:
+        search_roots.append(referencing_path.parent)
+    search_roots.extend([Path.cwd(), repo_root])
+    if include_scenario_dirs:
+        scenarios_dir = repo_root / "scenarios"
+        if scenarios_dir.is_dir():
+            search_roots.append(scenarios_dir)
+            search_roots.extend(
+                sorted(p for p in scenarios_dir.iterdir() if p.is_dir())
+            )
+
+    for root in search_roots:
+        candidate = root / base_candidate
+        if candidate.exists():
+            return candidate.resolve()
+
+    raise FileNotFoundError(
+        f"Base config not found: {base_path} (referenced by {config_path})"
+    )
+
+
+def resolve_config_dict(
+    config_path: Union[str, Path],
+    visited: Optional[set[Path]] = None,
+) -> Dict[str, Any]:
+    """
+    Load a YAML configuration file and recursively resolve ``base:`` inheritance.
+
+    Args:
+        config_path: Path to YAML configuration file.
+        visited: Canonical paths already visited in the current inheritance chain.
+
+    Returns:
+        Fully merged configuration dictionary with ``base``/``extends`` removed.
+
+    Raises:
+        FileNotFoundError: If ``config_path`` or any referenced ``base`` file does not exist.
+        ValueError: If circular configuration inheritance is detected or YAML is not a mapping.
+    """
+    path_obj = Path(config_path)
+    if not path_obj.exists():
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    canonical_path = path_obj.resolve()
+    active_visited: set[Path] = set() if visited is None else set(visited)
+    if canonical_path in active_visited:
+        raise ValueError(
+            f"Circular configuration inheritance detected: {canonical_path} already in {active_visited}"
+        )
+
+    with open(canonical_path, "r", encoding="utf-8") as f:
+        loaded = yaml.safe_load(f)
+
+    if loaded is None:
+        config_dict: Dict[str, Any] = {}
+    elif isinstance(loaded, dict):
+        config_dict = dict(loaded)
+    else:
+        raise ValueError(
+            f"Configuration file must deserialize to a mapping, got {type(loaded).__name__}: {config_path}"
+        )
+
+    has_base_key = "base" in config_dict or "extends" in config_dict
+    base_ref = config_dict.get("base")
+    if base_ref is None and "extends" in config_dict:
+        base_ref = config_dict.get("extends")
+
+    child_overrides = {
+        k: v for k, v in config_dict.items() if k not in {"base", "extends"}
+    }
+    if not has_base_key or base_ref is None or str(base_ref).strip() == "":
+        return child_overrides
+
+    resolved_base_path = _resolve_base_config_path(
+        base_ref,
+        referencing_path=canonical_path,
+        config_path=config_path,
+    )
+    base_dict = resolve_config_dict(
+        resolved_base_path,
+        visited={*active_visited, canonical_path},
+    )
+    return _deep_merge_config_dicts(base_dict, child_overrides)
+
+
+def load_config(config_path: Union[str, Path]) -> PilatesConfig:
     """
     Load and validate PILATES configuration from YAML file.
 
@@ -1117,16 +1283,11 @@ def load_config(config_path: str) -> PilatesConfig:
 
     Raises:
         ValidationError: If config is invalid
-        FileNotFoundError: If config file doesn't exist
+        FileNotFoundError: If config file or base config doesn't exist
+        ValueError: If circular configuration inheritance is detected
     """
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
-
-    with open(config_path, "r") as f:
-        config_dict = yaml.safe_load(f)
-
-    # Pydantic will validate on instantiation
-    return PilatesConfig(**config_dict)
+    merged_dict = resolve_config_dict(config_path)
+    return PilatesConfig(**merged_dict)
 
 
 def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
@@ -1143,3 +1304,30 @@ def validate_config(config_dict: Dict[str, Any]) -> PilatesConfig:
         ValidationError: If config is invalid
     """
     return PilatesConfig(**config_dict)
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    """CLI entrypoint to dump a resolved PILATES configuration YAML to stdout."""
+    parser = argparse.ArgumentParser(
+        prog="python -m pilates.config.models",
+        description="Resolve PILATES scenario configuration inheritance and dump YAML to stdout.",
+    )
+    parser.add_argument(
+        "config_path",
+        help="Path to the scenario YAML configuration file.",
+    )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        help="Validate the resolved configuration against PilatesConfig before dumping.",
+    )
+    args = parser.parse_args(argv)
+    resolved = resolve_config_dict(args.config_path)
+    if args.validate:
+        PilatesConfig(**resolved)
+    sys.stdout.write(yaml.safe_dump(resolved, sort_keys=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
