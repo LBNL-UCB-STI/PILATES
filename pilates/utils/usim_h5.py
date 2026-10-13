@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional
 
@@ -28,18 +29,61 @@ POPULATION_TABLE_BY_KEY: Dict[str, str] = {
 }
 
 
+def create_usim_population_source_snapshot(
+    *, source_h5: Path, destination_h5: Path, year: int
+) -> Path:
+    """Copy and validate one exact-year population-source HDF5 output."""
+    source = Path(source_h5)
+    destination = Path(destination_h5)
+    if not source.is_file():
+        raise FileNotFoundError(f"Population-source H5 input does not exist: {source}")
+    if source.resolve() == destination.resolve() or (
+        destination.exists() and source.samefile(destination)
+    ):
+        raise ValueError("Population-source H5 destination must differ from source")
+    with h5py.File(source, "r") as handle:
+        year_group = handle.get(str(year))
+        missing = [
+            name
+            for name in POPULATION_TABLE_BY_KEY.values()
+            if name not in handle
+            and not (isinstance(year_group, h5py.Group) and name in year_group)
+        ]
+    if missing:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing population tables: "
+            f"h5_path={source} year={year} "
+            f"missing={['/' + name for name in missing]}"
+        )
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, destination)
+    alias_result = ensure_usim_population_year_table_aliases(
+        h5_path=str(destination), year=year
+    )
+    if alias_result["missing_root"]:
+        raise RuntimeError("Population-source snapshot aliases are incomplete")
+    resolve_usim_population_table_paths(
+        h5_path=str(destination), year=year, require_exact_year=True
+    )
+    return destination
+
+
 def ensure_usim_population_year_table_aliases(
     *,
     h5_path: str,
     year: int,
 ) -> Dict[str, list[str]]:
     """
-    Link root-level UrbanSim population tables into a year-scoped namespace.
+    Ensure UrbanSim population tables exist at both root and year-scoped paths.
 
-    UrbanSim forecast outputs can expose the current population slice at root
-    keys such as ``/households``. Downstream exact-year consumers expect
-    ``/<year>/households``. HDF5 hard links let the population-source snapshot
-    satisfy that contract without duplicating table data.
+    UrbanSim forecast outputs may expose tables under ``/<year>/<table_name>``
+    (the native simulation output format) or at root keys such as
+    ``/<table_name>`` (the base-year datastore format). Downstream consumers
+    may require exact-year paths (e.g. ActivitySim) or root paths (e.g.
+    acceptance checkers and legacy tools).
+
+    HDF5 hard links bidirectionalize these aliases so that both namespaces
+    reference the same underlying datasets without duplicating table data.
     """
     created: list[str] = []
     existing: list[str] = []
@@ -48,14 +92,23 @@ def ensure_usim_population_year_table_aliases(
         year_group = handle.require_group(str(year))
         for table_name in POPULATION_TABLE_BY_KEY.values():
             year_key = f"/{year}/{table_name}"
-            if table_name in year_group:
+            root_key = f"/{table_name}"
+            in_year = table_name in year_group
+            in_root = table_name in handle
+
+            if not in_year and not in_root:
+                missing_root.append(root_key)
+                continue
+
+            if in_root and not in_year:
+                year_group[table_name] = handle[table_name]
+                created.append(year_key)
+            elif in_year and not in_root:
+                handle[table_name] = year_group[table_name]
+                created.append(root_key)
                 existing.append(year_key)
-                continue
-            if table_name not in handle:
-                missing_root.append(f"/{table_name}")
-                continue
-            year_group[table_name] = handle[table_name]
-            created.append(year_key)
+            else:
+                existing.append(year_key)
     return {
         "created": created,
         "existing": existing,
@@ -64,7 +117,9 @@ def ensure_usim_population_year_table_aliases(
 
 
 def _year_from_usim_model_data_filename(h5_path: str) -> Optional[int]:
-    match = re.fullmatch(r"model_data_(\d{4})\.h5", Path(h5_path).name)
+    match = re.fullmatch(
+        r"model_data_(\d{4})(?:_population_source)?\.h5", Path(h5_path).name
+    )
     if match is None:
         return None
     return int(match.group(1))

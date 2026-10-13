@@ -20,12 +20,22 @@ from consist.types import OutputArtifactSpec
 from pilates.activitysim.preprocessor import (
     ActivitysimPreprocessor,
 )
+from pilates.activitysim.config_roots import (
+    ActivitySimConfigRoot,
+    required_activitysim_config_roots,
+)
 from pilates.activitysim.runner import (
+    ActivitySimSkimDecision,
     ActivitysimSkimMode,
     ActivitysimRunner,
+    ActivitySimConfigStagingPlan,
+    ActivitySimLaunchContext,
     asim_runtime_zarr_path,
+    stage_activitysim_config_roots,
+    validate_activitysim_zarr_skims,
 )
 from pilates.activitysim.outputs import (
+    ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     ASIM_REQUIRED_RUN_OUTPUT_KEYS,
     configured_asim_output_keys,
 )
@@ -50,10 +60,15 @@ from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.runtime_overlays import resolve_runtime_input_output_overrides
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.step_consist_meta import consist_step_meta
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
+from pilates.utils.coupler_helpers import artifact_to_path
 
 # Model-specific step factories for ActivitySim.
 # Shared helpers/infrastructure are imported from shared.py.
@@ -229,7 +244,24 @@ _ACTIVITYSIM_RUN_REQUIRED_ROLES = (
     ASIM_HOUSEHOLDS_IN,
     ASIM_PERSONS_IN,
 )
+
+_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mutable ActivitySim config and data roots with selected-skim mode",
+    config_contract=ConfigContract.adapter("activitysim"),
+)
+_ACTIVITYSIM_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="runtime cache, warmup, and model output closure",
+    config_contract=ConfigContract.adapter("activitysim"),
+)
+_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="mixed aliases, direct skims, and model-owned roots",
+    config_contract=ConfigContract.adapter("activitysim"),
+)
 _ACTIVITYSIM_RUN_SKIM_ROLES = (ZARR_SKIMS, ASIM_OMX_SKIMS)
+_ACTIVITYSIM_SKIM_DECISION_METADATA_KEY = "activitysim_skim_decision"
 _ACTIVITYSIM_SKIM_MODE_METADATA_KEY = "activitysim_skim_mode"
 _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY = "activitysim_produces_zarr"
 _ACTIVITYSIM_POSTPROCESS_BASE_REQUIRED_ROLES = (
@@ -244,6 +276,33 @@ _ACTIVITYSIM_POSTPROCESS_OPTIONAL_ROLES = (
     USIM_DATASTORE_CURRENT_H5,
     USIM_DATASTORE_BASE_H5,
 )
+
+
+def _activitysim_launch_context(
+    workspace: Workspace,
+    *,
+    staged_data_dir: Path,
+    staged_configs_dir: Path,
+    config_roots: tuple[ActivitySimConfigRoot, ...],
+) -> ActivitySimLaunchContext:
+    """Build one launch tree from resolver-owned model input destinations."""
+
+    workspace_root = Path(workspace.full_path)
+    output_dir = Path(workspace.get_asim_output_dir())
+    runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
+    return ActivitySimLaunchContext(
+        workspace_root=workspace_root,
+        mutable_data_dir=staged_data_dir,
+        output_dir=output_dir,
+        compile_output_dir=output_dir.parent / "compile-output",
+        mutable_configs_dir=staged_configs_dir,
+        runtime_cache_dir=runtime_cache_dir,
+        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        shared_cache_dir=workspace_root / "shared_cache",
+        shared_tmp_dir=workspace_root / "tmp",
+        requires_staged_config_dirs=True,
+        config_roots=config_roots,
+    )
 
 
 def _native_activitysim_resolved_inputs(
@@ -294,6 +353,12 @@ def _native_activitysim_resolved_inputs(
                 if allow_population_bootstrap_fallback
                 else None
             ),
+        )
+    elif step_name == "activitysim_run":
+        rules[ASIM_OMX_SKIMS] = ArtifactBindingRule(
+            semantic_key=ASIM_OMX_SKIMS,
+            required=False,
+            preferred_keys=(FINAL_SKIMS_OMX, ASIM_OMX_SKIMS),
         )
     elif step_name == "activitysim_postprocess":
         rules[USIM_DATASTORE_CURRENT_H5] = ArtifactBindingRule(
@@ -371,11 +436,8 @@ def _activitysim_run_resolver(
         settings=settings,
         state=state,
     )
-    required_roles = (
-        *_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        *((ZARR_SKIMS,) if requires_beam_skim else ()),
-    )
-    optional_roles = () if requires_beam_skim else _ACTIVITYSIM_RUN_SKIM_ROLES
+    required_roles = _ACTIVITYSIM_RUN_REQUIRED_ROLES
+    optional_roles = _ACTIVITYSIM_RUN_SKIM_ROLES
     resolved = _native_activitysim_resolved_inputs(
         step_name="activitysim_run",
         required_roles=required_roles,
@@ -389,29 +451,57 @@ def _activitysim_run_resolver(
         coupler=coupler,
     )
 
-    # A published Zarr cache is authoritative when present.  Otherwise the
-    # preprocessor's OMX artifact is the first-run source that this invocation
-    # converts and publishes as Zarr.  Keep the unselected source out of the
-    # binding so it cannot affect materialization or cache identity.
-    if resolved.source_by_role.get(ZARR_SKIMS) != "missing":
-        selected_skim_role = ZARR_SKIMS
-        skim_mode: ActivitysimSkimMode = "zarr"
-        produces_zarr = False
-    elif not requires_beam_skim and (
-        resolved.source_by_role.get(ASIM_OMX_SKIMS) != "missing"
-    ):
-        selected_skim_role = ASIM_OMX_SKIMS
-        skim_mode = "omx"
-        produces_zarr = True
+    zarr_source = resolved.source_by_role.get(ZARR_SKIMS, "missing")
+    omx_source = resolved.source_by_role.get(ASIM_OMX_SKIMS, "missing")
+    zarr_rejection: str | None = None
+    if zarr_source != "missing":
+        zarr_input = (resolved.binding.inputs or {}).get(ZARR_SKIMS)
+        zarr_path = artifact_to_path(zarr_input, workspace=workspace)
+        zarr_rejection = (
+            "could not resolve a concrete path"
+            if zarr_path is None
+            else validate_activitysim_zarr_skims(zarr_path)
+        )
+
+    # A valid published Zarr is authoritative. Otherwise the preprocessor's
+    # or BEAM's OMX artifact is the source that this invocation converts and
+    # publishes as Zarr. Keep the unselected source out of the binding so it
+    # cannot affect materialization or cache identity.
+    if zarr_source != "missing" and zarr_rejection is None:
+        decision = ActivitySimSkimDecision(
+            role=ZARR_SKIMS,
+            mode="zarr",
+            produces_zarr=False,
+            selected_source=zarr_source,
+        )
+    elif omx_source != "missing":
+        if zarr_rejection is not None:
+            logger.warning(
+                "activitysim_run rejected %s before binding selection: %s; "
+                "falling back to %s",
+                ZARR_SKIMS,
+                zarr_rejection,
+                ASIM_OMX_SKIMS,
+            )
+        decision = ActivitySimSkimDecision(
+            role=ASIM_OMX_SKIMS,
+            mode="omx",
+            produces_zarr=True,
+            selected_source=omx_source,
+        )
+    elif zarr_rejection is not None:
+        raise RuntimeError(f"activitysim_run rejected {ZARR_SKIMS}: {zarr_rejection}")
     else:
         expected = (
-            ZARR_SKIMS if requires_beam_skim else f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+            f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
+            if not requires_beam_skim
+            else f"prior BEAM skim handoff ({ZARR_SKIMS} or {ASIM_OMX_SKIMS})"
         )
         raise RuntimeError(
             f"activitysim_run requires one published skim role: {expected}"
         )
 
-    selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, selected_skim_role)
+    selected_roles = (*_ACTIVITYSIM_RUN_REQUIRED_ROLES, decision.role)
     # The native selector has already frozen each selected artifact under its
     # semantic role.  Subset that immutable selection so unselected skim
     # alternatives cannot affect this run's materialization or cache identity.
@@ -425,8 +515,9 @@ def _activitysim_run_resolver(
         binding_inputs[role] = value
     metadata = {
         **resolved.metadata,
-        _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: skim_mode,
-        _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: produces_zarr,
+        _ACTIVITYSIM_SKIM_DECISION_METADATA_KEY: decision,
+        _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: decision.mode,
+        _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: decision.produces_zarr,
     }
     selected = ResolvedStepInputs(
         step_name=resolved.step_name,
@@ -435,7 +526,7 @@ def _activitysim_run_resolver(
             metadata=metadata,
         ),
         required_roles=_ACTIVITYSIM_RUN_REQUIRED_ROLES,
-        optional_roles=(selected_skim_role,),
+        optional_roles=(decision.role,),
         source_by_role={
             key: value
             for key, value in resolved.source_by_role.items()
@@ -571,8 +662,43 @@ def _activitysim_execution_options(
 ) -> ExecutionOptions:
     """Request Consist materialization at the one deterministic path per role."""
 
-    del settings, state, workspace
+    del state
     selected_roles = set(resolved_inputs.selected_roles())
+    runtime_kwargs: dict[str, Any] = {}
+    if resolved_inputs.step_name == "activitysim_run":
+        data_roles = [role for role in selected_roles if role != ZARR_SKIMS]
+        staged_destinations = {
+            Path(resolved_inputs.logical_destinations[role]).parent
+            for role in data_roles
+        }
+        if len(staged_destinations) != 1:
+            raise RuntimeError(
+                "activitysim_run materialized inputs must share one staged data root"
+            )
+        activitysim_settings = settings.activitysim
+        if activitysim_settings is None:
+            raise RuntimeError("activitysim_run requires ActivitySim settings")
+        staged_data_dir = staged_destinations.pop()
+        workspace_root = Path(workspace.full_path)
+        config_roots = required_activitysim_config_roots(
+            activitysim_settings.main_configs_dir
+        )
+        launch_context = _activitysim_launch_context(
+            workspace,
+            staged_data_dir=staged_data_dir,
+            staged_configs_dir=workspace_root
+            / "activitysim"
+            / "native-launch"
+            / "configs",
+            config_roots=config_roots,
+        )
+        runtime_kwargs["activitysim_launch_context"] = launch_context
+        runtime_kwargs["activitysim_config_staging_plan"] = (
+            ActivitySimConfigStagingPlan(
+                source_root=Path(workspace.get_asim_mutable_configs_dir()),
+                config_roots=config_roots,
+            )
+        )
     return ExecutionOptions(
         input_binding="paths",
         input_paths={
@@ -582,6 +708,7 @@ def _activitysim_execution_options(
         },
         input_materialization="requested",
         input_materialization_mode="copy",
+        runtime_kwargs=runtime_kwargs,
     )
 
 
@@ -875,7 +1002,9 @@ def _project_activitysim_postprocess_outputs(
     ],
     input_binding="paths",
     tags=["activitysim", "preprocess"],
-    **consist_step_meta("activitysim_preprocess"),
+    **consist_step_meta(
+        "activitysim_preprocess", input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _activitysim_preprocess_callable(
@@ -912,12 +1041,24 @@ def _activitysim_preprocess_callable(
     },
     optional_input_keys=_ACTIVITYSIM_RUN_SKIM_ROLES,
     outputs=list(ASIM_REQUIRED_RUN_OUTPUT_KEYS),
-    schema_outputs=[*ASIM_REQUIRED_RUN_OUTPUT_KEYS, ZARR_SKIMS],
+    schema_outputs=[
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+        ZARR_SKIMS,
+    ],
     input_binding="paths",
     tags=["activitysim", "run"],
-    **consist_step_meta("activitysim_run"),
+    **consist_step_meta(
+        "activitysim_run", input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT
+    ),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs(
+    "settings",
+    "state",
+    "workspace",
+    "activitysim_launch_context",
+    "activitysim_config_staging_plan",
+)
 def _activitysim_run_callable(
     land_use_asim_in: Path,
     households_asim_in: Path,
@@ -928,6 +1069,8 @@ def _activitysim_run_callable(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    activitysim_launch_context: ActivitySimLaunchContext | None = None,
+    activitysim_config_staging_plan: ActivitySimConfigStagingPlan | None = None,
 ) -> None:
     """Run ActivitySim from exactly one materialized native skim source."""
 
@@ -943,8 +1086,21 @@ def _activitysim_run_callable(
             "activitysim_run requires exactly one materialized skim input: "
             f"{ZARR_SKIMS} or {ASIM_OMX_SKIMS}"
         )
+    if not isinstance(activitysim_launch_context, ActivitySimLaunchContext):
+        raise RuntimeError("activitysim_run is missing its resolved launch context")
+    if not isinstance(activitysim_config_staging_plan, ActivitySimConfigStagingPlan):
+        raise RuntimeError("activitysim_run is missing its configuration staging plan")
+    from pilates.runtime.activitysim_run_observations import (
+        record_activitysim_observation,
+    )
+
+    record_activitysim_observation("activitysim_run_body")
+    stage_activitysim_config_roots(
+        activitysim_launch_context,
+        activitysim_config_staging_plan,
+    )
     inputs = ActivitySimPreprocessOutputs(
-        mutable_data_dir=Path(workspace.get_asim_mutable_data_dir()),
+        mutable_data_dir=activitysim_launch_context.mutable_data_dir,
         land_use_table=Path(land_use_asim_in),
         households_table=Path(households_asim_in),
         persons_table=Path(persons_asim_in),
@@ -952,9 +1108,10 @@ def _activitysim_run_callable(
     )
     ModelFactory().get_runner("activitysim", state).run(
         inputs,
-        workspace,
+        activitysim_launch_context,
         skim_mode=skim_mode,
         extra_inputs=extra_inputs,
+        workspace=workspace,
     )
 
 
@@ -970,15 +1127,23 @@ def _activitysim_run_callable(
     },
     optional_input_keys=(
         *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
         USIM_POPULATION_SOURCE_H5,
         USIM_DATASTORE_CURRENT_H5,
         USIM_DATASTORE_BASE_H5,
     ),
     outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
-    schema_outputs=[USIM_DATASTORE_H5, *ASIM_REQUIRED_RUN_OUTPUT_KEYS],
+    schema_outputs=[
+        USIM_DATASTORE_H5,
+        *ASIM_REQUIRED_RUN_OUTPUT_KEYS,
+        *ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
+    ],
     input_binding="paths",
     tags=["activitysim", "postprocess"],
-    **consist_step_meta("activitysim_postprocess"),
+    **consist_step_meta(
+        "activitysim_postprocess",
+        input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _activitysim_postprocess_callable(
@@ -1054,6 +1219,7 @@ activitysim_preprocess = StepDefinition(
     function=_activitysim_preprocess_callable,
     resolve_inputs=_activitysim_preprocess_resolver,
     project_outputs=_project_activitysim_preprocess_outputs,
+    input_contract=_ACTIVITYSIM_PREPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_preprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
@@ -1063,6 +1229,7 @@ activitysim_run = StepDefinition(
     function=_activitysim_run_callable,
     resolve_inputs=_activitysim_run_resolver,
     project_outputs=_project_activitysim_run_outputs,
+    input_contract=_ACTIVITYSIM_RUN_INPUT_CONTRACT,
     output_paths=_activitysim_run_native_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,
@@ -1072,6 +1239,7 @@ activitysim_postprocess = StepDefinition(
     function=_activitysim_postprocess_callable,
     resolve_inputs=_activitysim_postprocess_resolver,
     project_outputs=_project_activitysim_postprocess_outputs,
+    input_contract=_ACTIVITYSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=activitysim_postprocess_output_paths,
     execution_options=_activitysim_execution_options,
     cache_options=_activitysim_cache_options,

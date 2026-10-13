@@ -15,9 +15,10 @@ from dataclasses import dataclass
 from datetime import datetime
 import os
 import logging
+import signal
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable, List, Sequence, cast
+from typing import Optional, Dict, Any, Callable, List, Mapping, Sequence, cast
 
 from consist.models.run import Run
 from pilates.config import PilatesConfig
@@ -50,6 +51,9 @@ from pilates.atlas.inputs import (
     build_atlas_static_inputs_fallback,
 )
 from pilates.activitysim.preprocessor import required_asim_config_dirs
+from pilates.urbansim.admission import (
+    preflight_bootstrap_urbansim_datastore_admission,
+)
 from pilates.urbansim.postprocessor import get_usim_datastore_fname
 from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.runtime import bootstrap as bootstrap_runtime
@@ -88,9 +92,6 @@ from pilates.workflows.stages import (
     run_vehicle_ownership_stage,
 )
 from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
-from pilates.workflows.stages.supply_demand_beam import (
-    beam_checkpoint_resume_requested,
-)
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 from workflow_state import WorkflowState  # noqa: E402
@@ -208,6 +209,20 @@ _ScenarioParentLinkProxy = scenario_runtime.ScenarioParentLinkProxy
 
 def _resolve_cache_epoch(settings: PilatesConfig) -> int:
     return scenario_runtime.resolve_cache_epoch(settings)
+
+
+def _snapshot_activitysim_boundary(
+    snapshot_manager: ConsistDbSnapshotManager,
+    *,
+    year: int,
+    iteration: int,
+) -> bool:
+    """Persist the completed ActivitySim handoff before BEAM begins."""
+
+    return snapshot_manager.snapshot(
+        reason=f"after_activitysim_y{year}_i{iteration}",
+        checkpoint=True,
+    )
 
 
 def _resolve_run_storage_roots(settings: PilatesConfig) -> tuple[str, str]:
@@ -391,9 +406,7 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
-    *, state: WorkflowState
-) -> bool:
+def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
     """Re-enter the provider chain when restart lacks a BEAM checkpoint.
 
     A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
@@ -404,34 +417,48 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
     to republish those roles.
     """
 
-    if (
-        not state.is_restart_run
-        or not state.is_enabled(state.Stage.activity_demand)
-        or state.current_major_stage != state.Stage.supply_demand_loop
-        or beam_checkpoint_resume_requested(state=state)
-    ):
+    if not getattr(state, "is_restart_run", False):
         return False
 
-    provider_boundary = state.Stage.supply_demand_loop
-    for candidate in state.major_stage_order:
-        if candidate == state.Stage.supply_demand_loop:
+    stage_enum = getattr(state, "Stage", None)
+    if stage_enum is None:
+        return False
+
+    activity_demand = getattr(stage_enum, "activity_demand", None)
+    supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
+    current_major_stage = getattr(state, "current_major_stage", None)
+
+    if current_major_stage != supply_demand_loop:
+        return False
+
+    is_enabled = getattr(state, "is_enabled", None)
+    if not callable(is_enabled) or not is_enabled(activity_demand):
+        return False
+
+    provider_boundary = supply_demand_loop
+    major_stage_order = getattr(state, "major_stage_order", ())
+    for candidate in major_stage_order:
+        if candidate == supply_demand_loop:
             break
-        if state.is_enabled(candidate):
+        if is_enabled(candidate):
             provider_boundary = candidate
             break
 
-    resumed_iteration = state.iteration
+    resumed_iteration = getattr(state, "iteration", 0)
     state.current_major_stage = provider_boundary
     state.current_inner_iter = 0
     state.current_sub_stage = None
     state.sub_stage_progress = None
-    state.write_state()
+    write_state = getattr(state, "write_state", None)
+    if callable(write_state):
+        write_state()
+    provider_name = getattr(provider_boundary, "name", str(provider_boundary))
     logger.warning(
         "[launcher][restart] no committed BEAM checkpoint exists; rewinding "
         "from supply-demand iteration=%s to provider boundary=%s so native "
         "steps republish ActivitySim inputs.",
         resumed_iteration,
-        provider_boundary.name,
+        provider_name,
     )
     return True
 
@@ -597,6 +624,7 @@ def _prepare_run_context(
             archive_state_path=archive_state_path,
             allow_rewind_resume=settings.allow_rewind_resume,
         )
+        _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:
@@ -709,6 +737,26 @@ def _run_bootstrap_sequence(prepared: PreparedRunContext) -> Optional[Dict[str, 
     return bootstrap_result
 
 
+def _preflight_bootstrap_urbansim_datastore_admission(
+    prepared: PreparedRunContext,
+) -> None:
+    """Record and enforce datastore admission on the active outer scenario run."""
+    active_outer_run = cr.current_run()
+    existing_admission_reports: Mapping[str, object] | None = None
+    if active_outer_run is not None:
+        reports = active_outer_run.meta.get("admission_reports")
+        if isinstance(reports, Mapping):
+            existing_admission_reports = reports
+
+    preflight_bootstrap_urbansim_datastore_admission(
+        settings=prepared.settings,
+        metadata_logger=prepared.tracker,
+        workspace_path=Path(prepared.workspace.full_path),
+        report_dir=Path(prepared.archive_run_dir),
+        existing_admission_reports=existing_admission_reports,
+    )
+
+
 def _emit_pre_scenario_failure(
     prepared: PreparedRunContext,
     error: Exception,
@@ -783,6 +831,22 @@ def main(
     archive_consist_db_path = prepared.archive_consist_db_path
     run_succeeded = False
 
+    original_signal_handlers: Dict[int, Any] = {}
+
+    def _graceful_exit_handler(signum: int, frame: Any) -> None:
+        logger.warning(
+            "PILATES received signal %d (%s); initiating graceful shutdown...",
+            signum,
+            signal.Signals(signum).name if hasattr(signal, "Signals") else str(signum),
+        )
+        sys.exit(128 + signum)
+
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            original_signal_handlers[sig] = signal.signal(sig, _graceful_exit_handler)
+        except (ValueError, OSError, AttributeError):
+            pass
+
     try:
         # 5. BOOTSTRAP PHASE (PRE-SCENARIO)
         # Initialization runs before entering scenario step execution so bootstrap
@@ -850,6 +914,8 @@ def main(
                 warn_undefined=True,
                 description=coupler_schema,
             )
+            if bootstrap_result is not None:
+                _preflight_bootstrap_urbansim_datastore_admission(prepared)
             bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,
@@ -920,6 +986,13 @@ def main(
                         coupler=coupler,
                         year=year,
                         handoff=land_use_handoff,
+                        on_activity_demand_boundary=(
+                            lambda iteration, y=year: _snapshot_activitysim_boundary(
+                                snapshot_manager,
+                                year=y,
+                                iteration=iteration,
+                            )
+                        ),
                         on_iteration_boundary=(
                             lambda iteration, y=year: (
                                 snapshot_manager.on_outer_iteration_boundary(
@@ -954,13 +1027,27 @@ def main(
         logger.info("[Main] Simulation complete.")
         run_succeeded = True
     finally:
-        snapshot_ok = snapshot_manager.final_snapshot()
-        flush_archive_queue(timeout=300)
-        stop_archive_worker(timeout=30)
-        if not snapshot_ok:
-            mirror_consist_db_to_archive(local_consist_db_path, archive_consist_db_path)
-        if run_succeeded and snapshot_ok:
-            log_promotion_instructions_on_success(
-                logger=logger,
-                context=RUN_FAILURE_CONTEXT,
-            )
+        try:
+            try:
+                snapshot_ok = snapshot_manager.final_snapshot()
+                flush_archive_queue(timeout=300)
+                stop_archive_worker(timeout=30)
+                if not snapshot_ok:
+                    mirror_consist_db_to_archive(
+                        local_consist_db_path,
+                        archive_consist_db_path,
+                        tracker=tracker,
+                    )
+                if run_succeeded and snapshot_ok:
+                    log_promotion_instructions_on_success(
+                        logger=logger,
+                        context=RUN_FAILURE_CONTEXT,
+                    )
+            finally:
+                cr.dispose_tracker(tracker)
+        finally:
+            for sig, handler in original_signal_handlers.items():
+                try:
+                    signal.signal(sig, handler)
+                except (ValueError, OSError):
+                    pass

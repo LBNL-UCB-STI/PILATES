@@ -199,11 +199,11 @@ def _restore_missing_mutable_urbansim_supporting_inputs(
 
 def _mutable_urbansim_input_paths(
     settings: PilatesConfig,
-    workspace: "Workspace",
+    mutable_data_dir: Path,
 ) -> Dict[str, Path]:
     region = settings.run.region
     region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+    mutable_dir = Path(mutable_data_dir)
 
     prepared_inputs: Dict[str, Path] = {}
     candidate_paths = {
@@ -227,7 +227,7 @@ def _mutable_urbansim_input_paths(
 def _stage_declared_urbansim_datastore(
     *,
     settings: PilatesConfig,
-    workspace: "Workspace",
+    mutable_data_dir: Path,
     usim_datastore_h5: Path,
 ) -> Path:
     """Stage the bound datastore at UrbanSim's model-visible input path.
@@ -246,7 +246,7 @@ def _stage_declared_urbansim_datastore(
 
     region = settings.run.region
     region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
-    destination = Path(workspace.get_usim_mutable_data_dir()) / (
+    destination = mutable_data_dir / (
         settings.urbansim.input_file_template.format(region_id=region_id)
     )
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -262,6 +262,7 @@ def stage_urbansim_run_workspace(
     workspace: "Workspace",
     usim_datastore_h5: Path,
     final_skims_omx: Path | None,
+    mutable_data_dir: Path | None = None,
 ) -> UrbanSimPreprocessOutputs:
     """Stage UrbanSim's mutable workspace immediately before its container run.
 
@@ -270,12 +271,16 @@ def stage_urbansim_run_workspace(
     helper is the sole handoff between those two representations.
     """
     logger.info("[UrbansimRunner] Staging mutable UrbanSim run workspace.")
-    mutable_dir = Path(workspace.get_usim_mutable_data_dir())
+    mutable_dir = (
+        Path(mutable_data_dir)
+        if mutable_data_dir is not None
+        else Path(workspace.get_usim_mutable_data_dir())
+    )
     mutable_dir.mkdir(parents=True, exist_ok=True)
 
     _stage_declared_urbansim_datastore(
         settings=settings,
-        workspace=workspace,
+        mutable_data_dir=mutable_dir,
         usim_datastore_h5=Path(usim_datastore_h5),
     )
     for relative_name, source_path in selected_urbansim_static_input_sources(
@@ -331,7 +336,7 @@ def stage_urbansim_run_workspace(
         shutil.copy2(explicit_skims_path, destination)
         updated_skims_path = destination
 
-    prepared_inputs = _mutable_urbansim_input_paths(settings, workspace)
+    prepared_inputs = _mutable_urbansim_input_paths(settings, mutable_dir)
     if updated_skims_path is not None:
         prepared_inputs["usim_skims_input_updated"] = updated_skims_path
     return UrbanSimPreprocessOutputs(

@@ -1,0 +1,6 @@
+{
+  "inputs": {
+    "usim_datastore_h5": "${PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_INPUT_H5}"
+  },
+  "cohort": {"workflow_year": 2017, "forecast_year": 2019, "iteration": 0}
+}

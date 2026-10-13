@@ -17,13 +17,18 @@ For every model phase, follow the same boundary:
 2. Resolve roles once into `ResolvedStepInputs`.
 3. Call `execute_step(...)` with the `StepDefinition`.
 4. Let Consist run, persist, and materialize the declared artifacts.
-5. Project `RunResult.outputs` into typed PILATES outputs.
-6. Use those typed outputs only for the next sequencing decision.
+5. When enabled, let PILATES archive outputs, refresh their records, and
+   republish them to the coupler.
+6. Project `RunResult.outputs` into typed PILATES outputs.
+7. Use those typed outputs only for the next sequencing decision.
 
 The stage owns year/iteration order, enablement-driven sequence, and
 `WorkflowState` progress. It does not add a second input-selection pass,
 reconstruct historical outputs, or maintain an in-memory workflow handoff
 surface.
+
+The post-run archive bridge is a current PILATES responsibility, not a
+`scenario.run()` completion guarantee.
 
 ## Where to read code
 

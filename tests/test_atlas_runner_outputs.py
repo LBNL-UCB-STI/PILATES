@@ -5,7 +5,7 @@ import pytest
 
 from pilates.atlas.outputs import AtlasPreprocessOutputs
 from pilates.atlas import runner as atlas_runner
-from pilates.atlas.runner import AtlasRunner
+from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 
 
 def _settings() -> SimpleNamespace:
@@ -72,7 +72,10 @@ def test_atlas_runner_stages_selected_static_inputs_before_container(
 
     monkeypatch.setattr(runner, "run_container", successful_container)
 
-    runner.run(AtlasPreprocessOutputs(atlas_mutable_input_dir=atlas_input), workspace)
+    runner.run(
+        AtlasPreprocessOutputs(atlas_mutable_input_dir=atlas_input),
+        AtlasLaunchContext(input_root=atlas_input, output_root=atlas_output),
+    )
 
     assert (atlas_input / "modeaccessibility.csv").exists()
 
@@ -109,5 +112,6 @@ def test_atlas_run_rejects_missing_canonical_continuation_rdata(
 
     with pytest.raises(RuntimeError, match="continuation.*households_output.RData"):
         runner.run(
-            AtlasPreprocessOutputs(atlas_mutable_input_dir=atlas_input), workspace
+            AtlasPreprocessOutputs(atlas_mutable_input_dir=atlas_input),
+            AtlasLaunchContext(input_root=atlas_input, output_root=atlas_output),
         )

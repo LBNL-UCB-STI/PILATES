@@ -121,6 +121,9 @@ hpc/run-notifications.env
 # Local agent/editor state
 .claude/
 .serena/
+.worktrees/
+.superpowers/
+docs/superpowers/
 
 # Local generated artifacts and scratch outputs
 tests/tmp/

@@ -13,15 +13,21 @@ model boundary. A stage decides *when* a step runs. A `StepDefinition` decides
 
 ```text
 semantic roles -> ResolvedStepInputs -> Consist run -> RunResult.outputs
-               -> typed PILATES projection -> next stage decision
+               -> PILATES archive/refresh/republish -> typed projection
+               -> next stage decision
 ```
 
 The resolver reads the current semantic-role map once and freezes its selected
-artifacts and destinations. `execute_step(...)` materializes those inputs,
-runs the decorated callable through Consist, and projects persisted outputs
-into a typed object. Stages retain ordering, iteration, and workflow-state
-policy; they do not choose alternate input sources or implement execution
-plumbing.
+artifacts and destinations. `execute_step(...)` materializes those inputs and
+runs the decorated callable through Consist. When archive copying is enabled,
+PILATES then refreshes its action evidence, archives the completed outputs,
+and republishes the refreshed artifacts to the coupler before projecting
+`RunResult.outputs` into a typed object. Stages retain ordering, iteration,
+and workflow-state policy; they do not choose alternate input sources or
+implement execution plumbing.
+
+This archive/refresh/republish bridge is current PILATES code, not a
+`scenario.run()` completion guarantee.
 
 ## Ownership
 
@@ -32,6 +38,7 @@ plumbing.
 | Model-local preparation, execution, and postprocessing | Model adapter |
 | Current semantic role values | Scenario coupler |
 | Historical committed boundary facts | Snapshot artifacts |
+| Output archival, refreshed-artifact republish after a native run | PILATES (current bridge) |
 
 `WorkflowState` is durable control state. `Workspace` is run-local layout.
 The coupler is not a history store, and archive roots describe byte locations

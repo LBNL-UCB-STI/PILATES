@@ -12,6 +12,7 @@ short:
 define semantic roles
 -> resolve them once
 -> execute through Consist
+-> archive/refresh/republish when enabled
 -> project Consist outputs into typed PILATES outputs
 -> sequence the next step
 ```
@@ -37,9 +38,12 @@ destinations. Required roles must be complete before execution.
 
 Stages call `execute_step(...)` with the `StepDefinition`. `execute_step()`
 uses that single resolved selection (or resolves once), runs the decorated
-callable through Consist, then gives the persisted `RunResult.outputs` to the
-projector. A projector validates current declared destinations and returns the
-typed PILATES output object consumed by the following stage decision.
+callable through Consist, then performs the current PILATES action-evidence
+refresh and, when enabled, archive/refresh/republish bridge. It gives the
+resulting persisted `RunResult.outputs` to the projector. A projector validates
+current declared destinations and returns the typed PILATES output object
+consumed by the following stage decision. `scenario.run()` does not itself make
+this archive-validation and refreshed-publication guarantee.
 
 ## Typed outputs and artifacts
 
@@ -51,6 +55,12 @@ historical sources or reconstruct inputs.
 The coupler is the current semantic-role map. Consist owns artifact identity,
 materialization, cache admission, and persisted output lineage. PILATES owns
 semantic role selection, typed validation, stage sequence, and restart policy.
+
+Every native definition now has an `InputContract`, but that structural fact is
+not blanket cache-promotion evidence. Native execution or a cache hit also
+does not establish portable promotion. `beam_preprocess` is the completed
+boundary with fresh-workspace promotion evidence; other definitions remain
+boundary-specific work, including a separate HDF5 promotion gate.
 
 ## Restart boundary
 

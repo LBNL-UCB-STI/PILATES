@@ -53,6 +53,7 @@ def _make_settings():
     urbansim.input_file_template_year = "input_{year}.h5"
     urbansim.output_file_template = "output_{year}.h5"
     urbansim.region_id = "test"
+    urbansim.admission = None
     urbansim.model_dump.return_value = {"region_id": "test"}
     settings.urbansim = urbansim
 

@@ -21,9 +21,11 @@ from pilates.workflows.artifact_keys import (
     ZARR_SKIMS,
 )
 from pilates.workflows.steps.beam import (
+    _beam_preprocess_identity_payload,
     _beam_preprocess_native_output_paths,
     _beam_run_native_output_paths,
     _materialize_native_outputs,
+    _native_beam_preprocess,
     _native_beam_run,
     _project_beam_run_outputs,
     _resolve_beam_preprocess_inputs,
@@ -35,9 +37,13 @@ from pilates.workflows.steps.beam import (
     beam_run,
 )
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
+from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import beam as beam_steps
-from pilates.workflows.steps.shared import BeamRunOutputs
+from pilates.workflows.steps.shared import BeamPreprocessOutputs, BeamRunOutputs
+from pilates.beam import beam_exchange
 from pilates.beam.launch_config import BeamLaunchConfig
+from pilates.beam.preprocessor import BeamPreprocessor
+from pilates.generic.records import RecordStore
 
 
 def _empty_resolved_inputs() -> ResolvedStepInputs:
@@ -47,11 +53,275 @@ def _empty_resolved_inputs() -> ResolvedStepInputs:
     )
 
 
+def test_beam_preprocess_identity_payload_is_portable_and_role_sensitive() -> None:
+    """The closure names material choices, never run-local destinations."""
+
+    settings = SimpleNamespace(
+        activitysim=SimpleNamespace(file_format="parquet"),
+        beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
+    )
+    base = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                BEAM_PLANS_IN: Path("/workspace-a/plans.parquet"),
+                BEAM_HOUSEHOLDS_IN: Path("/workspace-a/households.parquet"),
+                BEAM_PERSONS_IN: Path("/workspace-a/persons.parquet"),
+            }
+        ),
+        logical_destinations={BEAM_PLANS_IN: Path("/workspace-a/output/plans.parquet")},
+        metadata={
+            "beam_preprocess_context": {
+                "primary_config": Path("/workspace-a/beam.conf"),
+                "exchange_scenario_folder": Path("/workspace-a/scenario"),
+            }
+        },
+    )
+    equivalent_other_workspace = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                BEAM_PLANS_IN: Path("/workspace-b/plans.parquet"),
+                BEAM_HOUSEHOLDS_IN: Path("/workspace-b/households.parquet"),
+                BEAM_PERSONS_IN: Path("/workspace-b/persons.parquet"),
+            }
+        ),
+        logical_destinations={
+            BEAM_PLANS_IN: Path("/workspace-b/other-output/plans.parquet")
+        },
+        metadata={
+            "beam_preprocess_context": {
+                "primary_config": Path("/workspace-b/beam.conf"),
+                "exchange_scenario_folder": Path("/workspace-b/scenario"),
+            }
+        },
+    )
+    with_warmstart = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(
+            inputs={
+                **dict(base.binding.inputs or {}),
+                LINKSTATS_WARMSTART: Path("/workspace-a/linkstats.parquet"),
+            }
+        ),
+    )
+
+    payload = _beam_preprocess_identity_payload(settings=settings, resolved_inputs=base)
+
+    assert payload == _beam_preprocess_identity_payload(
+        settings=settings, resolved_inputs=equivalent_other_workspace
+    )
+    assert payload != _beam_preprocess_identity_payload(
+        settings=settings, resolved_inputs=with_warmstart
+    )
+    assert payload != _beam_preprocess_identity_payload(
+        settings=SimpleNamespace(
+            activitysim=SimpleNamespace(file_format="csv"),
+            beam=SimpleNamespace(skim_zone_geoid_col="TAZ"),
+        ),
+        resolved_inputs=base,
+    )
+    assert "/workspace-a" not in repr(payload)
+    assert payload == {
+        "schema_version": "beam_preprocess_identity_v1",
+        "input_contract": {"status": "complete", "config_contract": "adapter:beam"},
+        "selected_roles": (
+            BEAM_HOUSEHOLDS_IN,
+            BEAM_PERSONS_IN,
+            BEAM_PLANS_IN,
+        ),
+        "launch": {
+            "activitysim_file_format": "parquet",
+            "zone_preparation": {
+                "enabled": False,
+                "canonical_id_column": None,
+                "canonical_index_column": None,
+                "beam_sort_column": "TAZ",
+            },
+        },
+    }
+
+
+def test_beam_preprocess_caches_across_workspaces_and_misses_on_material_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Equivalent native preprocessing hydrates outputs into a fresh workspace."""
+
+    local_root = tmp_path / "local"
+    archive_root = tmp_path / "archive"
+    tracker = Tracker(
+        run_dir=local_root / "consist-runs",
+        db_path=str(local_root / "provenance.duckdb"),
+        hashing_strategy="full",
+        mounts={"workspace": str(tmp_path)},
+    )
+    monkeypatch.setenv("PILATES_LOCAL_RUN_DIR", str(local_root))
+    monkeypatch.setenv("PILATES_ARCHIVE_RUN_DIR", str(archive_root))
+    monkeypatch.setenv("PILATES_ENABLE_ARCHIVE_COPY", "1")
+    monkeypatch.setenv("PILATES_DISABLE_BEAM_CONFIG_ADAPTER", "1")
+    monkeypatch.setattr(beam_steps, "enqueue_archive_copy", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda **_kwargs: {"config": {"model": "beam"}, "identity_inputs": []},
+    )
+
+    artifacts: dict[str, object] = {}
+    with tracker.start_run("seed_beam_preprocess_inputs", "test"):
+        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+            source = tmp_path / "sources" / f"{key}.parquet"
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text(f"{key}\n", encoding="utf-8")
+            artifacts[key] = tracker.log_artifact(source, key=key, direction="input")
+        warmstart = tmp_path / "sources" / "linkstats_warmstart.parquet"
+        warmstart.write_text("warmstart\n", encoding="utf-8")
+        artifacts[LINKSTATS_WARMSTART] = tracker.log_artifact(
+            warmstart, key=LINKSTATS_WARMSTART, direction="input"
+        )
+
+    calls: list[Path] = []
+
+    def _preprocess(
+        _self: BeamPreprocessor,
+        run_workspace: object,
+        *,
+        beam_preprocess_inputs: dict[str, Path],
+        beam_preprocess_context: object,
+    ) -> BeamPreprocessOutputs:
+        del beam_preprocess_context
+        mutable_data_dir = Path(run_workspace.get_beam_mutable_data_dir())
+        calls.append(mutable_data_dir)
+        prepared: dict[str, Path] = {}
+        for key, source in beam_preprocess_inputs.items():
+            destination = mutable_data_dir / "prepared" / Path(source).name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            prepared[key] = destination
+        return BeamPreprocessOutputs(
+            beam_mutable_data_dir=mutable_data_dir,
+            prepared_inputs=prepared,
+        )
+
+    monkeypatch.setattr(BeamPreprocessor, "preprocess", _preprocess)
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    def _settings(*, file_format: str = "parquet") -> SimpleNamespace:
+        return SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(
+                config="beam.conf",
+                scenario_folder="",
+                skim_zone_geoid_col="TAZ",
+                admission=None,
+            ),
+            activitysim=SimpleNamespace(file_format=file_format),
+            shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+            vehicle_ownership_model_enabled=False,
+        )
+
+    def _workspace(root: Path) -> SimpleNamespace:
+        mutable_data_dir = root / "beam-input"
+        config = mutable_data_dir / "test-region" / "beam.conf"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("beam {}\n", encoding="utf-8")
+        return SimpleNamespace(
+            full_path=str(root),
+            get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
+        )
+
+    def _execute(
+        *,
+        scenario_name: str,
+        workspace: SimpleNamespace,
+        settings: SimpleNamespace,
+        include_warmstart: bool = False,
+    ) -> tuple[object, BeamPreprocessOutputs]:
+        with tracker.scenario(scenario_name) as scenario:
+            for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                scenario.coupler.set_from_artifact(key, artifacts[key])
+            if include_warmstart:
+                scenario.coupler.set_from_artifact(
+                    LINKSTATS_WARMSTART, artifacts[LINKSTATS_WARMSTART]
+                )
+            return execute_step(
+                scenario=scenario,
+                definition=beam_preprocess,
+                settings=settings,
+                state=SimpleNamespace(
+                    year=2030,
+                    current_inner_iter=0,
+                    full_settings=settings,
+                ),
+                workspace=workspace,
+                stage="traffic_assignment",
+                year=2030,
+                iteration=0,
+                phase="preprocess",
+            )
+
+    cold_workspace = _workspace(tmp_path / "cold-workspace")
+    cold_result, cold_outputs = _execute(
+        scenario_name="beam-preprocess-cold",
+        workspace=cold_workspace,
+        settings=_settings(),
+    )
+    assert not cold_result.cache_hit
+    assert calls == [Path(cold_workspace.get_beam_mutable_data_dir())]
+
+    hit_workspace = _workspace(tmp_path / "fresh-workspace")
+    hit_result, hit_outputs = _execute(
+        scenario_name="beam-preprocess-hit",
+        workspace=hit_workspace,
+        settings=_settings(),
+    )
+    assert hit_result.cache_hit
+    assert calls == [Path(cold_workspace.get_beam_mutable_data_dir())]
+    assert set(hit_result.outputs) == set(cold_result.outputs)
+    assert set(hit_outputs.prepared_inputs) == set(cold_outputs.prepared_inputs)
+    assert all(
+        path.exists() and path.is_relative_to(Path(hit_workspace.full_path))
+        for path in hit_outputs.prepared_inputs.values()
+    )
+
+    optional_role_workspace = _workspace(tmp_path / "optional-role-workspace")
+    optional_role_result, _ = _execute(
+        scenario_name="beam-preprocess-optional-role-miss",
+        workspace=optional_role_workspace,
+        settings=_settings(),
+        include_warmstart=True,
+    )
+    assert not optional_role_result.cache_hit
+    assert calls[-1] == Path(optional_role_workspace.get_beam_mutable_data_dir())
+
+    launch_change_workspace = _workspace(tmp_path / "launch-change-workspace")
+    launch_change_result, _ = _execute(
+        scenario_name="beam-preprocess-launch-change-miss",
+        workspace=launch_change_workspace,
+        settings=_settings(file_format="csv"),
+    )
+    assert not launch_change_result.cache_hit
+    assert calls == [
+        Path(cold_workspace.get_beam_mutable_data_dir()),
+        Path(optional_role_workspace.get_beam_mutable_data_dir()),
+        Path(launch_change_workspace.get_beam_mutable_data_dir()),
+    ]
+
+
 def _beam_settings(*, skim_format: str = "zarr") -> SimpleNamespace:
     return SimpleNamespace(
         run=SimpleNamespace(region="test-region"),
         beam=SimpleNamespace(
-            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format)
+            artifact_formats=BeamArtifactFormatsConfig(activitysim_skims=skim_format),
+            admission=None,
         ),
     )
 
@@ -106,6 +376,46 @@ def test_beam_preprocess_output_paths_preserve_parquet_warmstart_suffix(
         / "beam_preprocess"
         / "linkstats_warmstart.parquet"
     )
+
+
+@pytest.mark.parametrize(
+    ("file_format", "expected_suffix"),
+    (("parquet", ".parquet"), ("csv", ".csv.gz")),
+)
+def test_beam_preprocess_output_paths_match_population_file_format(
+    tmp_path: Path,
+    file_format: str,
+    expected_suffix: str,
+) -> None:
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
+    )
+    settings = SimpleNamespace(activitysim=SimpleNamespace(file_format=file_format))
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_preprocess",
+        binding=BindingResult(inputs={}),
+        metadata={
+            "native_output_keys": (
+                BEAM_PLANS_IN,
+                BEAM_HOUSEHOLDS_IN,
+                BEAM_PERSONS_IN,
+                "vehicles_beam_in",
+            )
+        },
+    )
+
+    outputs = _beam_preprocess_native_output_paths(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=workspace,
+        resolved_inputs=resolved_inputs,
+    )
+
+    assert all(
+        str(outputs[key]).endswith(expected_suffix)
+        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+    )
+    assert str(outputs["vehicles_beam_in"]).endswith(".csv")
 
 
 def test_beam_run_output_paths_keep_linkstats_format_neutral(tmp_path: Path) -> None:
@@ -168,27 +478,16 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
 
-    output_set = beam_run.output_sets(
-        settings=_beam_settings(),
-        state=SimpleNamespace(forecast_year=2030, iteration=2),
-        workspace=workspace,
-    )["beam_run_outputs"]
+    assert beam_run.output_sets is None
     scalar_paths = beam_run.output_paths(
         settings=_beam_settings(),
         state=SimpleNamespace(forecast_year=2030, iteration=2),
         workspace=workspace,
         resolved_inputs=None,
     )
-
-    assert output_set.root == (
-        tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
-    )
-    assert output_set.include == "**/*"
-    assert output_set.exclude == "**/*.zarr/**"
-    assert output_set.recursive is True
+    expected_root = tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
     assert all(
-        Path(path).is_relative_to(Path(output_set.root))
-        for path in scalar_paths.values()
+        Path(path).is_relative_to(expected_root) for path in scalar_paths.values()
     )
     assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)
 
@@ -210,7 +509,7 @@ def test_beam_output_layout_cache_versions_reject_pre_migration_artifacts() -> N
         "workspace": SimpleNamespace(),
     }
 
-    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 1
+    assert beam_preprocess.cache_options(**options_kwargs).cache_version == 2
     assert beam_run.cache_options(**options_kwargs).cache_version == 1
 
 
@@ -305,7 +604,7 @@ def test_native_beam_artifact_inputs_match_callable_parameter_names() -> None:
         )
 
 
-def test_native_beam_run_validates_canonical_launch_references_before_runner(
+def test_native_beam_run_admits_final_linkstats_before_runner_for_linkstats_admission(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -322,27 +621,49 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         get_beam_mutable_data_dir=lambda: str(mutable_data_dir),
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
-    context = SimpleNamespace(canonicalization=object())
-    events: list[tuple[str, object]] = []
+    context = SimpleNamespace(
+        canonicalization=object(), log_meta=lambda **_kwargs: None
+    )
+    tracker = object()
+    events: list[str] = []
 
     launch_config = BeamLaunchConfig(root=tmp_path, primary_config=config)
 
-    def validate_linkstats(*, settings, workspace, run_context, config_root) -> None:
+    def validate_linkstats(*, settings, workspace, run_context, config_root) -> object:
         assert workspace is not None
         assert config_root == launch_config.root
-        events.append(("linkstats", run_context))
+        assert run_context is context
+        events.append("validate")
+        return object()
+
+    def admit_linkstats(
+        *,
+        tracker: object,
+        metadata_logger: object,
+        existing_admission_reports: dict[str, object],
+        settings: object,
+        launch_reference: object,
+        report_dir: Path,
+    ) -> None:
+        assert tracker is active_tracker
+        assert metadata_logger is context
+        assert existing_admission_reports == {"other_input": {"outcome": "verified"}}
+        assert launch_reference is not None
+        assert report_dir == tmp_path / "archive-run"
+        events.append("admit")
 
     def validate_r5(*, settings, workspace, run_context, config_root) -> None:
         assert workspace is not None
         assert config_root == launch_config.root
-        events.append(("r5", run_context))
+        assert run_context is context
+        events.append("r5")
 
     class Runner:
         def __init__(self, name: str, state: object) -> None:
             assert name == "beam_run"
 
         def run(self, *_args, **_kwargs) -> object:
-            events.append(("runner", context))
+            events.append("runner")
             return BeamRunOutputs(
                 beam_output_dir=tmp_path / "beam-output",
                 raw_outputs={},
@@ -352,6 +673,24 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         beam_steps,
         "validate_staged_linkstats_reference",
         validate_linkstats,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "preflight_staged_linkstats_admission",
+        admit_linkstats,
+        raising=False,
+    )
+    active_tracker = tracker
+    monkeypatch.setattr(
+        beam_steps,
+        "cr",
+        SimpleNamespace(
+            current_tracker=lambda: active_tracker,
+            current_run=lambda: SimpleNamespace(
+                meta={"admission_reports": {"other_input": {"outcome": "verified"}}}
+            ),
+        ),
         raising=False,
     )
     monkeypatch.setattr(
@@ -368,25 +707,28 @@ def test_native_beam_run_validates_canonical_launch_references_before_runner(
         beam_steps, "_materialize_native_outputs", lambda **_kwargs: None
     )
 
+    settings = _beam_settings()
+    settings.beam.admission = SimpleNamespace(linkstats=SimpleNamespace(mode="warn"))
+
     beam_steps._native_beam_run(
         inputs[BEAM_PLANS_IN],
         inputs[BEAM_HOUSEHOLDS_IN],
         inputs[BEAM_PERSONS_IN],
-        settings=_beam_settings(),
-        state=SimpleNamespace(year=2030, iteration=1),
+        settings=settings,
+        state=SimpleNamespace(
+            year=2030,
+            iteration=1,
+            run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+        ),
         workspace=workspace,
         beam_launch_config=launch_config,
         _consist_ctx=context,
     )
 
-    assert events == [
-        ("linkstats", context),
-        ("r5", context),
-        ("runner", context),
-    ]
+    assert events == ["validate", "admit", "r5", "runner"]
 
 
-def test_native_beam_run_fails_closed_before_starting_runner(
+def test_native_beam_run_blocks_runner_on_linkstats_admission_rejection(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -402,23 +744,55 @@ def test_native_beam_run_fails_closed_before_starting_runner(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
 
-    def reject_linkstats(**_kwargs) -> None:
-        raise RuntimeError("linkstats launch proof failed")
+    def validate_linkstats(**_kwargs) -> object:
+        return object()
+
+    def reject_linkstats_admission(**_kwargs) -> None:
+        from pilates.beam.admission import BeamInputAdmissionError
+
+        raise BeamInputAdmissionError("mismatched")
 
     class Runner:
         def __init__(self, *_args, **_kwargs) -> None:
-            raise AssertionError("BeamRunner must not start after failed launch proof")
+            raise AssertionError("BeamRunner must not start after admission rejection")
 
     monkeypatch.setattr(
-        beam_steps, "validate_staged_linkstats_reference", reject_linkstats
+        beam_steps, "validate_staged_linkstats_reference", validate_linkstats
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "preflight_staged_linkstats_admission",
+        reject_linkstats_admission,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "cr",
+        SimpleNamespace(
+            current_tracker=lambda: object(),
+            current_run=lambda: SimpleNamespace(meta={}),
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        beam_steps, "validate_r5_execution_reference", lambda **_kwargs: None
     )
     monkeypatch.setattr(beam_steps, "BeamRunner", Runner)
 
-    with pytest.raises(RuntimeError, match="linkstats launch proof failed"):
+    from pilates.beam.admission import BeamInputAdmissionError
+
+    settings = _beam_settings()
+    settings.beam.admission = SimpleNamespace(linkstats=SimpleNamespace(mode="strict"))
+
+    with pytest.raises(BeamInputAdmissionError, match="mismatched"):
         beam_steps._native_beam_run(
             *inputs,
-            settings=object(),
-            state=SimpleNamespace(year=2030, iteration=1),
+            settings=settings,
+            state=SimpleNamespace(
+                year=2030,
+                iteration=1,
+                run_info_path=str(tmp_path / "archive-run" / "run_state.yaml"),
+            ),
             workspace=workspace,
             beam_launch_config=BeamLaunchConfig(root=tmp_path, primary_config=config),
             _consist_ctx=SimpleNamespace(canonicalization=object()),
@@ -496,8 +870,10 @@ def test_beam_preprocess_binds_activitysim_outputs_without_duplicate_aliases(
     )
     settings = SimpleNamespace(
         run=SimpleNamespace(
+            region="test-region",
             models=SimpleNamespace(traffic_assignment=None, travel=None),
-        )
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
     )
     monkeypatch.setattr(
         beam_steps,
@@ -570,7 +946,13 @@ def test_beam_preprocess_preserves_atlas_vehicles_producer_basename(
     )
 
     resolved = _resolve_beam_preprocess_inputs(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        ),
         state=SimpleNamespace(year=2017, forecast_year=2019, current_inner_iter=0),
         workspace=workspace,
         coupler=Coupler(),
@@ -629,7 +1011,13 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
     )
 
     resolved = _resolve_beam_preprocess_inputs(
-        settings=SimpleNamespace(),
+        settings=SimpleNamespace(
+            run=SimpleNamespace(
+                region="test-region",
+                models=SimpleNamespace(traffic_assignment=None, travel=None),
+            ),
+            beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        ),
         state=SimpleNamespace(year=2030, current_inner_iter=0),
         workspace=SimpleNamespace(
             get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
@@ -639,6 +1027,263 @@ def test_beam_preprocess_requires_atlas_vehicles_when_vehicle_ownership_is_enabl
 
     with pytest.raises(RuntimeError, match="atlas_vehicles2_output"):
         resolved.require_complete()
+
+
+@pytest.mark.parametrize(
+    ("include_warmstart", "include_atlas_vehicles"),
+    (
+        (False, False),
+        (True, False),
+        (False, True),
+        (True, True),
+    ),
+)
+def test_beam_preprocess_uses_resolver_owned_context_after_workspace_is_poisoned(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_warmstart: bool,
+    include_atlas_vehicles: bool,
+) -> None:
+    """Execution uses the frozen resolver context across optional input surfaces."""
+
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    if include_warmstart:
+        inputs[LINKSTATS_WARMSTART] = tmp_path / "linkstats.parquet"
+    if include_atlas_vehicles:
+        inputs[ATLAS_VEHICLES2_OUTPUT] = tmp_path / "vehicles2_2030.csv"
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    resolved_mutable_root = tmp_path / "resolved-beam-input"
+    (resolved_mutable_root / "test-region").mkdir(parents=True)
+    primary_config = resolved_mutable_root / "test-region" / "beam.conf"
+    primary_config.write_text("beam {}\n", encoding="utf-8")
+    active_mutable_root = resolved_mutable_root
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(active_mutable_root),
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(config="beam.conf", scenario_folder=""),
+        activitysim=SimpleNamespace(file_format="parquet"),
+    )
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+    observed_context: dict[str, object] = {}
+
+    def _capture_preprocess(*_args, **kwargs):
+        observed_context.update(kwargs["beam_preprocess_context"])
+        return SimpleNamespace(prepared_inputs={})
+
+    monkeypatch.setattr(BeamPreprocessor, "preprocess", _capture_preprocess)
+    monkeypatch.setattr(
+        beam_steps, "_validate_native_outputs", lambda *_args, **_kwargs: None
+    )
+
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2030, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+    resolved.require_complete()
+    assert (
+        resolved.metadata["beam_preprocess_context"]["primary_config"] == primary_config
+    )
+    execution_options = beam_preprocess.execution_options(
+        settings=settings,
+        state=SimpleNamespace(),
+        workspace=workspace,
+        resolved_inputs=resolved,
+    )
+    assert execution_options.runtime_kwargs["beam_preprocess_context"] == dict(
+        resolved.metadata["beam_preprocess_context"]
+    )
+
+    active_mutable_root = tmp_path / "poisoned-beam-input"
+    _native_beam_preprocess(
+        **dict(resolved.binding.inputs or {}),
+        settings=settings,
+        state=SimpleNamespace(full_settings=settings),
+        workspace=workspace,
+        _consist_ctx=object(),
+        beam_preprocess_context=execution_options.runtime_kwargs[
+            "beam_preprocess_context"
+        ],
+    )
+    assert observed_context["primary_config"] == primary_config
+    assert observed_context["exchange_scenario_folder"] == (
+        resolved_mutable_root / "test-region"
+    )
+
+
+def test_beam_preprocess_resolver_does_not_close_canonical_zone_source(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An invalid resolver-selected zone source fails before preprocessing."""
+
+    poisoned_zone_source = tmp_path / "poisoned-zones.geojson"
+    mutable_root = tmp_path / "beam-input"
+    config_path = mutable_root / "test-region" / "beam.conf"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text("beam {}\n", encoding="utf-8")
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="",
+            skim_zone_geoid_col="TAZ",
+        ),
+        shared=SimpleNamespace(
+            geography=SimpleNamespace(
+                zones=SimpleNamespace(
+                    source_file=str(poisoned_zone_source),
+                    canonical_id_col="zone_id",
+                    activitysim_index_col="TAZ",
+                )
+            )
+        ),
+        vehicle_ownership_model_enabled=False,
+    )
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+
+    with pytest.raises(FileNotFoundError, match="poisoned-zones.geojson"):
+        _resolve_beam_preprocess_inputs(
+            settings=settings,
+            state=SimpleNamespace(year=2030, current_inner_iter=0),
+            workspace=SimpleNamespace(
+                get_beam_mutable_data_dir=lambda: str(mutable_root)
+            ),
+            coupler=Coupler(),
+        )
+
+
+def test_beam_preprocess_resolver_does_not_close_exchange_config_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Preprocessing uses the resolver-selected exchange path without rediscovery."""
+
+    mutable_root = tmp_path / "beam-input"
+    config_path = mutable_root / "test-region" / "beam.conf"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        'beam.exchange.scenario.folder = ${beam.inputDirectory}"/resolved-exchange"\n',
+        encoding="utf-8",
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(
+            region="test-region",
+            models=SimpleNamespace(traffic_assignment=None, travel=None),
+        ),
+        beam=SimpleNamespace(
+            config="beam.conf",
+            scenario_folder="fallback-exchange",
+        ),
+        shared=SimpleNamespace(geography=SimpleNamespace(zones=None)),
+        vehicle_ownership_model_enabled=False,
+    )
+    state = SimpleNamespace(
+        full_settings=settings,
+        current_inner_iter=0,
+        set_sub_stage_progress=lambda _progress: None,
+    )
+    workspace = SimpleNamespace(
+        get_beam_mutable_data_dir=lambda: str(mutable_root),
+    )
+    inputs = {
+        BEAM_PLANS_IN: tmp_path / "plans.parquet",
+        BEAM_HOUSEHOLDS_IN: tmp_path / "households.parquet",
+        BEAM_PERSONS_IN: tmp_path / "persons.parquet",
+    }
+    for path in inputs.values():
+        path.write_text(path.name, encoding="utf-8")
+
+    class Coupler:
+        def get(self, key: str, default: object = None) -> object:
+            return inputs.get(key, default)
+
+    monkeypatch.setattr(
+        beam_steps,
+        "build_enabled_workflow_surface",
+        lambda _settings: SimpleNamespace(
+            profile=SimpleNamespace(vehicle_ownership_model_enabled=False)
+        ),
+    )
+    resolved = _resolve_beam_preprocess_inputs(
+        settings=settings,
+        state=SimpleNamespace(year=2030, current_inner_iter=0),
+        workspace=workspace,
+        coupler=Coupler(),
+    )
+    context = resolved.metadata["beam_preprocess_context"]
+    observed_exchange_path: list[str] = []
+    preprocessor = BeamPreprocessor("beam_preprocess", state)
+    monkeypatch.setattr(
+        preprocessor,
+        "_preprocess",
+        lambda _workspace, _records: (
+            observed_exchange_path.append(
+                preprocessor._resolve_beam_exchange_scenario_folder(_workspace)
+            )
+            or RecordStore()
+        ),
+    )
+    monkeypatch.setattr(
+        beam_exchange,
+        "resolve_beam_exchange_scenario_folder",
+        lambda *_args, **_kwargs: pytest.fail(
+            "preprocess must not rediscover the exchange scenario folder"
+        ),
+    )
+
+    preprocessor.preprocess(
+        workspace,
+        beam_preprocess_inputs=inputs,
+        beam_preprocess_context=context,
+    )
+
+    assert observed_exchange_path == [
+        str(mutable_root / "test-region" / "resolved-exchange")
+    ]
 
 
 def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(
@@ -1158,7 +1803,10 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
     declared = beam_preprocess.output_paths(
-        settings=object(), state=object(), workspace=workspace, resolved_inputs=None
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -1176,7 +1824,7 @@ def test_beam_preprocess_projector_is_pure_and_validates_persisted_outputs(
             )
             for key, path in paths.items()
         },
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1192,7 +1840,10 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
     mutable_data_dir.mkdir()
     workspace = SimpleNamespace(get_beam_mutable_data_dir=lambda: str(mutable_data_dir))
     declared = beam_preprocess.output_paths(
-        settings=object(), state=object(), workspace=workspace, resolved_inputs=None
+        settings=SimpleNamespace(activitysim=None),
+        state=object(),
+        workspace=workspace,
+        resolved_inputs=None,
     )
     paths = {
         key: declared[key]
@@ -1204,7 +1855,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
 
     fresh = beam_preprocess.project_outputs(
         {key: SimpleNamespace(container_uri=str(path)) for key, path in paths.items()},
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1214,7 +1865,7 @@ def test_beam_preprocess_projector_has_fresh_hit_path_parity(
             key: SimpleNamespace(container_uri=f"archive://prior/{path.name}")
             for key, path in paths.items()
         },
-        settings=object(),
+        settings=SimpleNamespace(activitysim=None),
         state=object(),
         workspace=workspace,
         resolved_inputs=_empty_resolved_inputs(),
@@ -1414,7 +2065,7 @@ def test_beam_preprocess_projector_rejects_stale_mount_when_current_destination_
     ):
         beam_preprocess.project_outputs(
             outputs,
-            settings=object(),
+            settings=SimpleNamespace(activitysim=None),
             state=object(),
             workspace=workspace,
             resolved_inputs=_empty_resolved_inputs(),

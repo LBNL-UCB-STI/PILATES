@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ast
+import importlib.util
 import subprocess
 import sys
+import types
 from pathlib import Path
 from textwrap import dedent
 
@@ -215,6 +217,77 @@ def test_scaffold_generates_catalog_era_wiring_and_templates(tmp_path: Path) -> 
     assert "freight_preprocess," in steps_init_text
     assert "STEP_DEFINITIONS" in steps_init_text
     assert "make_freight_preprocess_step" not in steps_init_text
+
+
+def test_scaffolded_step_module_imports_with_native_input_contracts(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Catch generated definitions that omit the required native input contract."""
+    _seed_minimal_repo(tmp_path)
+    script_path = Path(__file__).resolve().parents[1] / "scripts/new_model_scaffold.py"
+
+    subprocess.run(
+        [sys.executable, str(script_path), "freight", "--repo-root", str(tmp_path)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    freight_package = types.ModuleType("pilates.freight")
+    freight_package.__path__ = []
+    freight_outputs = types.ModuleType("pilates.freight.outputs")
+    for name in (
+        "FreightPreprocessOutputs",
+        "FreightRunOutputs",
+        "FreightPostprocessOutputs",
+    ):
+        setattr(freight_outputs, name, type(name, (), {}))
+    monkeypatch.setitem(sys.modules, "pilates.freight", freight_package)
+    monkeypatch.setitem(sys.modules, "pilates.freight.outputs", freight_outputs)
+
+    module_path = tmp_path / "pilates/workflows/steps/freight.py"
+    module_name = "pilates.workflows.steps.scaffolded_freight"
+    module_spec = importlib.util.spec_from_file_location(module_name, module_path)
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    monkeypatch.setitem(sys.modules, module_name, module)
+    module_spec.loader.exec_module(module)
+
+    from consist.core.step_context import StepContext
+
+    monkeypatch.setattr(
+        "pilates.workflows.step_consist_meta.build_step_consist_kwargs",
+        lambda *_args, **_kwargs: {},
+    )
+
+    for definition, callable_ in (
+        (module.freight_preprocess, module._freight_preprocess_callable),
+        (module.freight_run, module._freight_run_callable),
+        (module.freight_postprocess, module._freight_postprocess_callable),
+    ):
+        assert definition.input_contract.status == "incomplete"
+        assert (
+            definition.input_contract.reason
+            == "model adapter inputs and workspace dependencies are not yet inventoried"
+        )
+        assert definition.input_contract.config_contract is not None
+        assert definition.input_contract.config_contract.adapter_name == "freight"
+        facet = callable_.__consist_step__.facet(
+            StepContext(
+                func_name=definition.name,
+                model=definition.name,
+                runtime_kwargs={"settings": object()},
+            )
+        )
+        contract = facet["native_input_contract"]
+        assert contract["status"] == "incomplete"
+        assert (
+            contract["reason"]
+            == "model adapter inputs and workspace dependencies are not yet inventoried"
+        )
+        assert contract["configuration"] == {"kind": "adapter", "available": False}
 
 
 @pytest.mark.parametrize(

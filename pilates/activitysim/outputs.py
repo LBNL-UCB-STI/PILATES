@@ -72,6 +72,9 @@ ASIM_OUTPUT_KEY_MAP: Dict[str, str] = {
 ASIM_PIPELINE_TABLE_ALIASES: Dict[str, str] = {"plans": "beam_plans"}
 
 ASIM_OPTIONAL_RUN_OUTPUT_KEYS: Tuple[str, ...] = (
+    ASIM_OUTPUT_KEY_MAP["accessibility"],
+    ASIM_OUTPUT_KEY_MAP["disaggregate_accessibility"],
+    ASIM_OUTPUT_KEY_MAP["non_mandatory_tour_destination_accessibility"],
     ASIM_OUTPUT_KEY_MAP["person_windows"],
     ASIM_OUTPUT_KEY_MAP["proto_disaggregate_accessibility"],
     ASIM_OUTPUT_KEY_MAP["proto_households"],

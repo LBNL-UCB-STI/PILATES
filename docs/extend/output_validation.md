@@ -33,9 +33,11 @@ semantic roles
 
 The resolver selects the current coupler artifacts once and records their exact
 destinations. `execute_step()` requires that selection to be complete, passes it
-to Consist, and gives the persisted output links to the projector. A projector
-must validate the declared current destinations and return the typed object the
-following stage consumes.
+to Consist, then refreshes post-run action evidence, archives configured outputs,
+and republishes archived artifacts to the coupler before it gives persisted
+output links to the projector. Model integrations must not recreate that
+sequence. A projector must validate the declared current destinations and
+return the typed object the following stage consumes.
 
 The same path applies to fresh execution, an admitted cache hit, and the sole
 committed mid-stage restart (`beam_run_completed -> beam_postprocess`).
@@ -122,10 +124,9 @@ Add focused tests next to the boundary being changed:
 - a fresh run, admitted cache hit, and supported checkpoint hand back the same
   typed output contract.
 
-Existing examples include `tests/test_output_validation_backbone.py`,
-`tests/test_activitysim_run_output_contract.py`,
-`tests/test_step_contract_validator.py`, and
-`tests/test_urbansim_atlas_typed_contracts.py`.
+Existing examples include `tests/test_step_execution.py`,
+`tests/test_step_definitions.py`, `tests/test_activitysim_step_definitions.py`,
+and `tests/test_urbansim_atlas_native_step_definitions.py`.
 
 ## Adjacent pages
 

@@ -22,6 +22,12 @@ output classes. Its workflow step module provides:
 - a projector consuming the current `RunResult.outputs`;
 - a `StepDefinition` that binds those pieces together.
 
+Every `StepDefinition` declares an `InputContract`. Its optional
+`config_contract` field is required for `complete`, which requires demonstrated
+portable identity closure; it may be absent for `incomplete`. `incomplete` is a
+status and evidence record for a boundary that remains open; it is not a
+cache-promotion mechanism.
+
 The catalog references that definition for static metadata while retaining only
 PILATES policy: stage placement, ordering, enablement, dependencies,
 provenance, and dynamic semantic families.
@@ -33,6 +39,12 @@ uses its concrete `ResolvedStepInputs.binding`, not a second key lookup. Give ea
 input a deterministic destination so Consist can materialize it. A projector
 must validate the declared current destination; it must not fall back to an
 archive source or a previous workspace.
+
+After `scenario.run(...)`, the shared `execute_step(...)` bridge refreshes its
+post-run action evidence, archives configured outputs, and republishes archived
+artifacts to the coupler before it invokes the projector. This central PILATES
+bridge policy must not be recreated as a second archive, refresh, or republish
+path in a model integration.
 
 Declare static roles in `@define_step`. Keep invocation-dependent behavior in
 the resolver and dynamic output-path provider. For example, ActivitySim selects
@@ -58,7 +70,10 @@ executes it once. Other restarts return to their normal stage/year frontier.
 4. Review `step_consist_meta.py` only for identity, facet, and config-adapter
    policy.
 
-Use `scripts/new_model_scaffold.py` rather than copying older integrations.
+`scripts/new_model_scaffold.py` creates a mechanical native starting point with
+conservative incomplete adapter contracts. Do not treat its output as a turnkey
+model integration; use the [Model Contract Checklist](model_contract_checklist.md)
+to establish the real native boundary.
 
 ## Adjacent pages
 

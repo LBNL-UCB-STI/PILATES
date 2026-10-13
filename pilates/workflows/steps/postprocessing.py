@@ -13,8 +13,19 @@ from consist import (
 from pilates.config.models import PilatesConfig
 from pilates.workspace import Workspace
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from workflow_state import WorkflowState
+
+
+_POSTPROCESSING_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="postprocessor still discovers model-owned workspace outputs",
+    config_contract=ConfigContract.payload(),
+)
 
 
 @define_step(
@@ -56,6 +67,7 @@ postprocessing = StepDefinition(
     function=_postprocessing_callable,
     resolve_inputs=_resolve_postprocessing_inputs,
     project_outputs=_project_postprocessing_outputs,
+    input_contract=_POSTPROCESSING_INPUT_CONTRACT,
     execution_options=lambda **_: ExecutionOptions(input_binding="paths"),
     cache_options=lambda **_: CacheOptions(cache_mode="overwrite"),
 )

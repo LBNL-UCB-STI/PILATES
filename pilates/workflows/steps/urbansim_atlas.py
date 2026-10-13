@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
 from pathlib import Path
 from typing import Any, Callable, Dict, Mapping, Sequence
 
@@ -18,14 +17,15 @@ from consist import (
 
 from pilates.atlas.postprocessor import AtlasPostprocessor
 from pilates.atlas.preprocessor import AtlasPreprocessor
-from pilates.atlas.runner import AtlasRunner
+from pilates.atlas.runner import AtlasLaunchContext, AtlasRunner
 from pilates.config.models import PilatesConfig
 from pilates.urbansim.outputs import (
     UrbanSimPostprocessOutputs as NativeUrbanSimPostprocessOutputs,
 )
 from pilates.urbansim.outputs import UrbanSimRunOutputs as NativeUrbanSimRunOutputs
 from pilates.urbansim.postprocessor import UrbansimPostprocessor
-from pilates.urbansim.runner import UrbansimRunner
+from pilates.urbansim.preprocessor import stage_urbansim_run_workspace
+from pilates.urbansim.runner import UrbanSimLaunchContext, UrbansimRunner
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
     FINAL_SKIMS_OMX,
@@ -36,11 +36,15 @@ from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.output_projection import require_output
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
-from pilates.workflows.step_definition import StepDefinition
+from pilates.workflows.step_definition import (
+    ConfigContract,
+    InputContract,
+    StepDefinition,
+)
 from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.step_consist_meta import consist_step_meta
 from pilates.utils.consist_runtime import require_runtime_kwargs
-from pilates.utils.usim_h5 import ensure_usim_population_year_table_aliases
+from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workspace import Workspace
 
 # Model-specific step factories for UrbanSim and ATLAS.
@@ -138,6 +142,7 @@ def _resolve_native_inputs(
     logical_destinations: Mapping[str, Path],
     coupler: CouplerProtocol,
     step_identity: StepIdentity | None = None,
+    metadata: Mapping[str, Any] | None = None,
 ) -> ResolvedStepInputs:
     """Select fixed semantic roles once and retain their Consist artifacts."""
 
@@ -194,6 +199,7 @@ def _resolve_native_inputs(
         source_by_role=source_by_role,
         selected_key_by_role=selected_key_by_role,
         logical_destinations=selected_destinations,
+        metadata=metadata or {},
     )
 
 
@@ -209,6 +215,58 @@ def _native_execution_options(
         input_paths=resolved_inputs.logical_destinations,
         input_materialization="requested",
         input_materialization_mode="copy",
+    )
+
+
+def _urbansim_run_execution_options(
+    *,
+    resolved_inputs: ResolvedStepInputs | None = None,
+    **_: Any,
+) -> ExecutionOptions:
+    """Pass the resolver-owned UrbanSim launch context through runtime kwargs."""
+
+    if resolved_inputs is None:
+        raise RuntimeError("urbansim_run requires resolved inputs before execution")
+    launch_context = resolved_inputs.metadata.get("urbansim_launch_context")
+    if not isinstance(launch_context, UrbanSimLaunchContext):
+        raise RuntimeError("urbansim_run is missing its resolved launch context")
+    options = _native_execution_options(resolved_inputs=resolved_inputs)
+    return ExecutionOptions(
+        load_inputs=options.load_inputs,
+        input_binding=options.input_binding,
+        input_paths=options.input_paths,
+        input_materialization=options.input_materialization,
+        input_materialization_mode=options.input_materialization_mode,
+        executor=options.executor,
+        container=options.container,
+        runtime_kwargs={"urbansim_launch_context": launch_context},
+        inject_context=options.inject_context,
+    )
+
+
+def _atlas_run_execution_options(
+    *,
+    resolved_inputs: ResolvedStepInputs | None = None,
+    **_: Any,
+) -> ExecutionOptions:
+    """Pass the resolver-owned ATLAS launch context through runtime kwargs."""
+
+    if resolved_inputs is None:
+        raise RuntimeError("atlas_run requires resolved inputs before execution")
+    launch_context = resolved_inputs.metadata.get("atlas_launch_context")
+    if not isinstance(launch_context, AtlasLaunchContext):
+        raise RuntimeError("atlas_run is missing its resolved launch context")
+    options = _native_execution_options(resolved_inputs=resolved_inputs)
+    return ExecutionOptions(
+        load_inputs=options.load_inputs,
+        input_binding=options.input_binding,
+        input_paths=options.input_paths,
+        input_materialization=options.input_materialization,
+        input_materialization_mode=options.input_materialization_mode,
+        executor=options.executor,
+        container=options.container,
+        runtime_kwargs={"atlas_launch_context": launch_context},
+        inject_context=options.inject_context,
     )
 
 
@@ -405,6 +463,13 @@ def _resolve_urbansim_run_inputs(
     region = settings.run.region
     region_id = settings.urbansim.region_mappings["region_to_region_id"][region]
     mutable_data_dir = Path(workspace.get_usim_mutable_data_dir())
+    output_datastore = Path(
+        _urbansim_run_native_output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )[USIM_DATASTORE_H5]
+    )
     return _resolve_native_inputs(
         step_name="urbansim_run",
         function=_native_urbansim_run,
@@ -419,6 +484,12 @@ def _resolve_urbansim_run_inputs(
             FINAL_SKIMS_OMX: mutable_data_dir / "final_skims.omx",
         },
         coupler=coupler,
+        metadata={
+            "urbansim_launch_context": UrbanSimLaunchContext(
+                mutable_data_dir=mutable_data_dir,
+                output_datastore=output_datastore,
+            )
+        },
     )
 
 
@@ -496,6 +567,10 @@ def _resolve_atlas_run_inputs(
         state=state,
         workspace=workspace,
     )
+    launch_context = AtlasLaunchContext(
+        input_root=Path(workspace.get_atlas_mutable_input_dir()),
+        output_root=Path(workspace.get_atlas_output_dir()),
+    )
     return _resolve_native_inputs(
         step_name="atlas_run",
         function=_native_atlas_run,
@@ -503,6 +578,7 @@ def _resolve_atlas_run_inputs(
         optional_roles=(),
         logical_destinations=prepared_inputs,
         coupler=coupler,
+        metadata={"atlas_launch_context": launch_context},
     )
 
 
@@ -554,6 +630,33 @@ def _resolve_atlas_postprocess_inputs(
     )
 
 
+_URBANSIM_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="static model data is identity-only rather than resolver-bound",
+    config_contract=ConfigContract.payload(),
+)
+_URBANSIM_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="previous mutable UrbanSim input H5 remains a model-visible read",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_PREPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="conditional workspace skim fallback remains available",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_RUN_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="static inputs are identity-only model-root reads",
+    config_contract=ConfigContract.payload(),
+)
+_ATLAS_POSTPROCESS_INPUT_CONTRACT = InputContract(
+    status="incomplete",
+    reason="vehicle mapping is discovered in the mutable ATLAS root",
+    config_contract=ConfigContract.payload(),
+)
+
+
 @define_step(
     model="urbansim_run",
     name_template="urbansim_run__y{year}__i{iteration}__phase_{phase}",
@@ -562,9 +665,9 @@ def _resolve_atlas_postprocess_inputs(
     schema_outputs=[USIM_DATASTORE_H5, USIM_FORECAST_OUTPUT],
     output_paths=_native_contract_output_paths(_urbansim_run_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("urbansim_run"),
+    **consist_step_meta("urbansim_run", input_contract=_URBANSIM_RUN_INPUT_CONTRACT),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs("settings", "state", "workspace", "urbansim_launch_context")
 def _native_urbansim_run(
     usim_datastore_h5: Path,
     final_skims_omx: Path | None = None,
@@ -572,12 +675,19 @@ def _native_urbansim_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    urbansim_launch_context: UrbanSimLaunchContext,
 ) -> None:
-    del settings
-    UrbansimRunner("urbansim", state).run(
+    inputs = stage_urbansim_run_workspace(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        mutable_data_dir=urbansim_launch_context.mutable_data_dir,
         usim_datastore_h5=usim_datastore_h5,
         final_skims_omx=final_skims_omx,
-        workspace=workspace,
+    )
+    UrbansimRunner("urbansim", state).run(
+        inputs,
+        launch_context=urbansim_launch_context,
     )
 
 
@@ -590,7 +700,9 @@ def _native_urbansim_run(
         _urbansim_postprocess_native_output_paths
     ),
     input_binding="paths",
-    **consist_step_meta("urbansim_postprocess"),
+    **consist_step_meta(
+        "urbansim_postprocess", input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_urbansim_postprocess(
@@ -604,24 +716,15 @@ def _native_urbansim_postprocess(
         NativeUrbanSimRunOutputs(usim_datastore_h5=usim_datastore_h5),
         workspace,
     )
-    population_source = _urbansim_population_source_path(
-        settings=settings,
-        state=state,
-        workspace=workspace,
-    )
-    population_source.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(usim_datastore_h5, population_source)
-    alias_result = ensure_usim_population_year_table_aliases(
-        h5_path=str(population_source),
+    create_usim_population_source_snapshot(
+        source_h5=usim_datastore_h5,
+        destination_h5=_urbansim_population_source_path(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        ),
         year=state.forecast_year,
     )
-    missing_root = alias_result.get("missing_root", ())
-    if missing_root:
-        raise RuntimeError(
-            "UrbanSim population-source snapshot is missing root tables: "
-            f"h5_path={population_source} year={state.forecast_year} "
-            f"missing_root={missing_root}"
-        )
 
 
 @define_step(
@@ -640,7 +743,9 @@ def _native_urbansim_postprocess(
     ],
     output_paths=_native_contract_output_paths(_atlas_preprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_preprocess"),
+    **consist_step_meta(
+        "atlas_preprocess", input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_preprocess(
@@ -677,9 +782,9 @@ def _native_atlas_preprocess(
     schema_outputs=[],
     output_paths=_native_contract_output_paths(_atlas_run_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_run"),
+    **consist_step_meta("atlas_run", input_contract=_ATLAS_RUN_INPUT_CONTRACT),
 )
-@require_runtime_kwargs("settings", "state", "workspace")
+@require_runtime_kwargs("settings", "state", "workspace", "atlas_launch_context")
 def _native_atlas_run(
     atlas_households_csv: Path,
     atlas_blocks_csv: Path,
@@ -692,8 +797,8 @@ def _native_atlas_run(
     settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
+    atlas_launch_context: AtlasLaunchContext,
 ) -> None:
-    mutable_input_root = Path(workspace.get_atlas_mutable_input_dir())
     received_inputs = {
         "atlas_households_csv": atlas_households_csv,
         "atlas_blocks_csv": atlas_blocks_csv,
@@ -719,10 +824,10 @@ def _native_atlas_run(
         )
     AtlasRunner("atlas", state).run(
         AtlasPreprocessOutputs(
-            atlas_mutable_input_dir=mutable_input_root,
+            atlas_mutable_input_dir=atlas_launch_context.input_root,
             prepared_inputs=received_inputs,
         ),
-        workspace,
+        atlas_launch_context,
     )
 
 
@@ -737,7 +842,9 @@ def _native_atlas_run(
     schema_outputs=[USIM_POPULATION_SOURCE_H5, ATLAS_VEHICLES2_OUTPUT],
     output_paths=_native_contract_output_paths(_atlas_postprocess_native_output_paths),
     input_binding="paths",
-    **consist_step_meta("atlas_postprocess"),
+    **consist_step_meta(
+        "atlas_postprocess", input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT
+    ),
 )
 @require_runtime_kwargs("settings", "state", "workspace")
 def _native_atlas_postprocess(
@@ -749,7 +856,6 @@ def _native_atlas_postprocess(
     state: WorkflowState,
     workspace: Workspace,
 ) -> None:
-    del settings
     forecast_year = state.forecast_year
     atlas_output_dir = Path(workspace.get_atlas_output_dir())
     expected_raw_outputs = {
@@ -776,12 +882,14 @@ def _native_atlas_postprocess(
         workspace,
         usim_datastore_h5=usim_datastore_h5,
     )
-    population_source = usim_datastore_h5.with_name(
-        f"{usim_datastore_h5.stem}_population_source{usim_datastore_h5.suffix}"
+    destination_h5 = Path(
+        _atlas_postprocess_native_output_paths(
+            settings=settings, state=state, workspace=workspace
+        )[USIM_POPULATION_SOURCE_H5]
     )
-    shutil.copy2(usim_datastore_h5, population_source)
-    ensure_usim_population_year_table_aliases(
-        h5_path=str(population_source),
+    create_usim_population_source_snapshot(
+        source_h5=usim_datastore_h5,
+        destination_h5=destination_h5,
         year=state.forecast_year,
     )
 
@@ -980,8 +1088,9 @@ URBANSIM_RUN = StepDefinition(
     function=_native_urbansim_run,
     resolve_inputs=_resolve_urbansim_run_inputs,
     project_outputs=_project_urbansim_run,
+    input_contract=_URBANSIM_RUN_INPUT_CONTRACT,
     output_paths=_urbansim_run_native_output_paths,
-    execution_options=_native_execution_options,
+    execution_options=_urbansim_run_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )
 
@@ -990,6 +1099,7 @@ URBANSIM_POSTPROCESS = StepDefinition(
     function=_native_urbansim_postprocess,
     resolve_inputs=_resolve_urbansim_postprocess_inputs,
     project_outputs=_project_urbansim_postprocess,
+    input_contract=_URBANSIM_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_urbansim_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
@@ -1001,6 +1111,7 @@ ATLAS_PREPROCESS = StepDefinition(
     function=_native_atlas_preprocess,
     resolve_inputs=_resolve_atlas_preprocess_inputs,
     project_outputs=_project_atlas_preprocess,
+    input_contract=_ATLAS_PREPROCESS_INPUT_CONTRACT,
     output_paths=_atlas_preprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,
@@ -1011,9 +1122,10 @@ ATLAS_RUN = StepDefinition(
     function=_native_atlas_run,
     resolve_inputs=_resolve_atlas_run_inputs,
     project_outputs=_project_atlas_run,
+    input_contract=_ATLAS_RUN_INPUT_CONTRACT,
     output_paths=_atlas_run_native_output_paths,
     output_sets=_atlas_run_output_sets,
-    execution_options=_native_execution_options,
+    execution_options=_atlas_run_execution_options,
     cache_options=_strict_requested_output_cache_options,
 )
 
@@ -1022,6 +1134,7 @@ ATLAS_POSTPROCESS = StepDefinition(
     function=_native_atlas_postprocess,
     resolve_inputs=_resolve_atlas_postprocess_inputs,
     project_outputs=_project_atlas_postprocess,
+    input_contract=_ATLAS_POSTPROCESS_INPUT_CONTRACT,
     output_paths=_atlas_postprocess_native_output_paths,
     execution_options=_native_execution_options,
     cache_options=_strict_requested_output_cache_options,

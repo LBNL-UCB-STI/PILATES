@@ -5,10 +5,13 @@ from pathlib import Path
 import shutil
 from types import SimpleNamespace
 from typing import cast
+from uuid import UUID
 
+import consist
 import pandas as pd
 import pytest
 from consist import ExecutionOptions, ResolvedBinding, Tracker, resolve_step_contract
+from consist.models.artifact import Artifact
 
 from pilates.workflows.artifact_keys import (
     ATLAS_OUTPUT_DIR,
@@ -22,7 +25,13 @@ from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.steps import STEP_DEFINITIONS, urbansim_atlas
 from pilates.workflows import step_consist_meta
 from pilates.urbansim import preprocessor as urbansim_preprocessor
+from pilates.urbansim.outputs import (
+    UrbanSimPreprocessOutputs as NativeUrbanSimPreprocessOutputs,
+)
 from pilates.urbansim.preprocessor import _stage_declared_urbansim_datastore
+from pilates.atlas.runner import AtlasLaunchContext
+from pilates.urbansim.runner import UrbanSimLaunchContext
+from pilates.utils.usim_h5 import create_usim_population_source_snapshot
 from pilates.workflows.steps.urbansim_atlas import (
     ATLAS_POSTPROCESS,
     ATLAS_PREPROCESS,
@@ -44,6 +53,7 @@ def _settings() -> SimpleNamespace:
             output_file_template="output_{year}.h5",
             region_id="001",
             region_mappings={"region_to_region_id": {"test": "001"}},
+            admission=None,
         ),
         atlas=SimpleNamespace(beamac=0),
     )
@@ -202,6 +212,7 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
         ),
         urbansim=SimpleNamespace(
             input_file_template="input_{region_id}.h5",
+            output_file_template="output_{year}.h5",
             region_mappings={"region_to_region_id": {"test": "001"}},
         ),
     )
@@ -217,19 +228,23 @@ def test_urbansim_run_resolver_requires_final_skims_only_after_beam_handoff(
 
     bootstrap = URBANSIM_RUN.resolve_inputs(
         settings=settings,
-        state=SimpleNamespace(current_year=2020, iteration=0),
+        state=SimpleNamespace(current_year=2020, forecast_year=2020, iteration=0),
         workspace=workspace,
         coupler=_Coupler(),
     )
     later = URBANSIM_RUN.resolve_inputs(
         settings=settings,
-        state=SimpleNamespace(current_year=2030, iteration=0),
+        state=SimpleNamespace(current_year=2030, forecast_year=2030, iteration=0),
         workspace=workspace,
         coupler=_Coupler(),
     )
 
     assert bootstrap.required_roles == (USIM_DATASTORE_H5,)
     assert bootstrap.optional_roles == (FINAL_SKIMS_OMX,)
+    assert bootstrap.metadata["urbansim_launch_context"] == UrbanSimLaunchContext(
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+        output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2020.h5",
+    )
     assert later.required_roles == (USIM_DATASTORE_H5, FINAL_SKIMS_OMX)
     assert later.optional_roles == ()
     assert later.logical_destinations == {
@@ -404,6 +419,22 @@ def test_urbansim_postprocess_rejects_snapshot_missing_required_root_tables(
             pass
 
     monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    population_source = urbansim_atlas._urbansim_population_source_path(
+        settings=_settings(), state=_state(), workspace=workspace
+    )
+
+    def _raise_missing_root(**_kwargs: object) -> Path:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing root tables: "
+            "h5_path=source year=2030 missing_root=['/blocks']"
+        )
+
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "create_usim_population_source_snapshot",
+        _raise_missing_root,
+        raising=False,
+    )
 
     with pytest.raises(RuntimeError, match="missing root tables"):
         urbansim_atlas._native_urbansim_postprocess(
@@ -412,6 +443,54 @@ def test_urbansim_postprocess_rejects_snapshot_missing_required_root_tables(
             state=_state(),
             workspace=workspace,
         )
+    assert not population_source.exists()
+
+
+def test_urbansim_postprocess_builds_population_snapshot_from_postprocessed_datastore(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = _workspace(tmp_path)
+    settings = _settings()
+    state = _state()
+    datastore = Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5"
+    datastore.parent.mkdir(parents=True)
+    datastore.touch()
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+    seen: dict[str, object] = {}
+
+    def _snapshot_builder(**kwargs: object) -> Path:
+        seen.update(kwargs)
+        return Path(kwargs["destination_h5"])
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "create_usim_population_source_snapshot",
+        _snapshot_builder,
+        raising=False,
+    )
+
+    urbansim_atlas._native_urbansim_postprocess(
+        datastore,
+        settings=settings,
+        state=state,
+        workspace=workspace,
+    )
+
+    assert seen == {
+        "source_h5": datastore,
+        "destination_h5": urbansim_atlas._urbansim_population_source_path(
+            settings=settings, state=state, workspace=workspace
+        ),
+        "year": state.forecast_year,
+    }
 
 
 def test_atlas_preprocess_declares_explicit_prepared_csv_outputs(
@@ -521,12 +600,12 @@ def test_atlas_prepared_csvs_and_continuation_set_archive_and_hydrate(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, _inputs: object, run_workspace: object) -> None:
-            output_root = Path(run_workspace.get_atlas_output_dir())
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
             output_root.mkdir(parents=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
-            year_root = Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
+            year_root = launch_context.input_root / "year2030"
             (year_root / "vehicles_output.RData").write_text("vehicles\n")
             (year_root / "households_output.RData").write_text("households\n")
 
@@ -727,14 +806,12 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, _inputs: object, run_workspace: object) -> None:
-            output_root = Path(run_workspace.get_atlas_output_dir())
+        def run(self, _inputs: object, launch_context: AtlasLaunchContext) -> None:
+            output_root = launch_context.output_root
             output_root.mkdir(parents=True, exist_ok=True)
             (output_root / "householdv_2030.csv").write_text("household_id\n1\n")
             (output_root / "vehicles_2030.csv").write_text("vehicle_id\n1\n")
-            continuation_root = (
-                Path(run_workspace.get_atlas_mutable_input_dir()) / "year2030"
-            )
+            continuation_root = launch_context.input_root / "year2030"
             continuation_root.mkdir(parents=True, exist_ok=True)
             (continuation_root / "vehicles_output.RData").write_text("vehicles")
             (continuation_root / "households_output.RData").write_text("households")
@@ -775,11 +852,6 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
 
     monkeypatch.setattr(urbansim_atlas, "AtlasRunner", _Runner)
     monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _Postprocessor)
-    monkeypatch.setattr(
-        urbansim_atlas,
-        "ensure_usim_population_year_table_aliases",
-        lambda **_kwargs: {},
-    )
     with tracker.scenario("atlas-scalar-handoff") as scenario:
         with tracker.start_run("seed-usim", "test"):
             h5_artifact = tracker.log_artifact(
@@ -799,6 +871,10 @@ def test_native_atlas_run_hands_scalar_outputs_to_postprocess_without_directory_
                 settings=settings,
                 state=state,
                 workspace=workspace,
+                atlas_launch_context=AtlasLaunchContext(
+                    input_root=Path(workspace.get_atlas_mutable_input_dir()),
+                    output_root=Path(workspace.get_atlas_output_dir()),
+                ),
             )
 
         run_result = tracker.run(
@@ -842,16 +918,33 @@ def test_native_atlas_postprocess_publishes_exact_year_population_snapshot(
         for table_name in ("households", "persons", "jobs", "blocks"):
             store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
 
+    events: list[str] = []
+
     class _AtlasPostprocessor:
         def __init__(self, *_args: object) -> None:
             pass
 
+        @staticmethod
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {}
+
         def postprocess(
             self, _outputs: object, _workspace: object, **_kwargs: object
         ) -> None:
-            pass
+            events.append("postprocess")
 
     monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _AtlasPostprocessor)
+
+    def _snapshot_builder(**kwargs: object) -> Path:
+        events.append("snapshot")
+        return create_usim_population_source_snapshot(**kwargs)
+
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "create_usim_population_source_snapshot",
+        _snapshot_builder,
+        raising=False,
+    )
 
     atlas_output_dir = Path(workspace.get_atlas_output_dir())
     atlas_output_dir.mkdir(parents=True)
@@ -871,10 +964,80 @@ def test_native_atlas_postprocess_publishes_exact_year_population_snapshot(
     population_source = (
         Path(workspace.get_usim_mutable_data_dir()) / "output_2030_population_source.h5"
     )
+    assert events == ["postprocess", "snapshot"]
+    assert population_source == Path(
+        urbansim_atlas._atlas_postprocess_native_output_paths(
+            settings=settings, state=state, workspace=workspace
+        )[USIM_POPULATION_SOURCE_H5]
+    )
     assert population_source.exists()
     with pd.HDFStore(population_source, mode="r") as store:
         for table_name in ("households", "persons", "jobs", "blocks"):
             assert f"/2030/{table_name}" in store
+
+
+def test_atlas_postprocess_rejects_snapshot_missing_required_root_tables(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    workspace = _workspace(tmp_path)
+    settings = _settings()
+    state = _state()
+    datastore = Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5"
+    datastore.parent.mkdir(parents=True)
+    with pd.HDFStore(datastore, mode="w") as store:
+        for table_name in ("households", "persons", "jobs"):
+            store.put(f"/{table_name}", pd.DataFrame({"value": [1]}))
+
+    class _AtlasPostprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        @staticmethod
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {}
+
+        def postprocess(
+            self, _outputs: object, _workspace: object, **_kwargs: object
+        ) -> None:
+            pass
+
+    destination_h5 = Path(
+        urbansim_atlas._atlas_postprocess_native_output_paths(
+            settings=settings, state=state, workspace=workspace
+        )[USIM_POPULATION_SOURCE_H5]
+    )
+
+    def _raise_missing_root(**_kwargs: object) -> Path:
+        raise RuntimeError(
+            "UrbanSim population-source snapshot is missing root tables: "
+            "h5_path=source year=2030 missing_root=['/blocks']"
+        )
+
+    monkeypatch.setattr(urbansim_atlas, "AtlasPostprocessor", _AtlasPostprocessor)
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "create_usim_population_source_snapshot",
+        _raise_missing_root,
+        raising=False,
+    )
+
+    atlas_output_dir = Path(workspace.get_atlas_output_dir())
+    atlas_output_dir.mkdir(parents=True)
+    householdv = atlas_output_dir / "householdv_2030.csv"
+    vehicles = atlas_output_dir / "vehicles_2030.csv"
+    householdv.write_text("household_id\n1\n", encoding="utf-8")
+    vehicles.write_text("vehicle_id\n1\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="missing root tables"):
+        urbansim_atlas._native_atlas_postprocess(
+            householdv,
+            vehicles,
+            datastore,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+    assert not destination_h5.exists()
 
 
 def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_output(
@@ -937,6 +1100,10 @@ def test_atlas_interval_start_postprocess_materializes_bound_h5_at_subyear_outpu
     class _Postprocessor:
         def __init__(self, *_args: object) -> None:
             pass
+
+        @staticmethod
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {}
 
         def postprocess(
             self,
@@ -1001,7 +1168,7 @@ def test_urbansim_run_staging_uses_bound_datastore_over_workspace_state(
 
     staged = _stage_declared_urbansim_datastore(
         settings=_settings(),
-        workspace=workspace,
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
         usim_datastore_h5=bound_snapshot,
     )
 
@@ -1109,8 +1276,9 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
     monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
     monkeypatch.setattr(
         urbansim_atlas,
-        "ensure_usim_population_year_table_aliases",
-        lambda **_kwargs: {},
+        "create_usim_population_source_snapshot",
+        lambda **kwargs: Path(kwargs["destination_h5"]),
+        raising=False,
     )
     definition = replace(
         URBANSIM_POSTPROCESS,
@@ -1141,6 +1309,97 @@ def test_urbansim_postprocess_consumes_the_strict_snapshot_path(
     assert snapshot.is_relative_to(tmp_path / "consist-runs" / ".resolved-bindings")
     assert output.read_bytes() == source.read_bytes()
     assert projected == result.outputs
+
+
+def test_urbansim_postprocess_binding_survives_later_h5_hash_override_after_reopen(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A later untrusted HDF5 observation must not rewrite the bound artifact."""
+    source = tmp_path / "source" / "urbansim-data.h5"
+    source.parent.mkdir()
+    source.write_bytes(b"tracked HDF5 bytes\n")
+    output = tmp_path / "workspace" / "outputs" / "processed.h5"
+    run_dir = tmp_path / "consist-runs"
+    db_path = tmp_path / "provenance.duckdb"
+    tracker = Tracker(
+        run_dir=run_dir,
+        db_path=str(db_path),
+        hashing_strategy="full",
+    )
+    with tracker.start_run("seed", "test"):
+        trusted = tracker.log_artifact(
+            source,
+            key=USIM_DATASTORE_H5,
+            direction="input",
+        )
+    trusted_identity = consist.ArtifactIdentity.from_artifact(trusted)
+
+    observed_override: dict[str, Artifact] = {}
+
+    class _Postprocessor:
+        def __init__(self, *_args: object) -> None:
+            pass
+
+        def postprocess(self, outputs: object, _workspace: object) -> None:
+            snapshot = outputs.usim_datastore_h5
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_bytes(snapshot.read_bytes())
+            observed_override["artifact"] = tracker.log_artifact(
+                trusted,
+                key=USIM_DATASTORE_H5,
+                direction="input",
+                content_hash=trusted.hash,
+                force_hash_override=True,
+            )
+
+    monkeypatch.setattr(urbansim_atlas, "UrbansimPostprocessor", _Postprocessor)
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "create_usim_population_source_snapshot",
+        lambda **kwargs: Path(kwargs["destination_h5"]),
+        raising=False,
+    )
+    definition = replace(
+        URBANSIM_POSTPROCESS,
+        output_paths=lambda **_kwargs: {USIM_DATASTORE_H5: output},
+        project_outputs=lambda outputs, **_kwargs: outputs,
+    )
+    settings = _settings()
+    state = _state()
+    workspace = _workspace(tmp_path / "workspace")
+
+    with tracker.scenario("urbansim") as scenario:
+        scenario.coupler.set_from_artifact(USIM_DATASTORE_H5, trusted)
+        result, _ = execute_step(
+            scenario=scenario,
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            stage="land_use",
+            year=state.year,
+            iteration=1,
+            phase="postprocess",
+        )
+
+    override = observed_override["artifact"]
+    assert override.id != trusted.id
+    assert override.run_id is None
+    assert override.meta["hash_semantics"]["source"] == "caller_supplied"
+
+    input_identity = result.run.meta["input_identity"]
+    assert input_identity["mode"] == "action-v2"
+    assert input_identity["strict_input_count"] == 1
+    assert input_identity["strict_binding_identity"]
+    assert input_identity["bindings"] == []
+    assert output.read_bytes() == source.read_bytes()
+
+    tracker.db.engine.dispose()
+    reopened = Tracker(run_dir=run_dir, db_path=str(db_path), hashing_strategy="full")
+    persisted = reopened.db.get_artifact(UUID(str(trusted.id)))
+
+    assert persisted is not None
+    assert consist.ArtifactIdentity.from_artifact(persisted) == trusted_identity
 
 
 def test_each_eligible_urbansim_atlas_resolver_freezes_preflight_identity(
@@ -1248,12 +1507,16 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, inputs: object, _workspace: object) -> None:
-            calls["atlas_run"] = inputs
+        def run(self, inputs: object, launch_context: object) -> None:
+            calls["atlas_run"] = (inputs, launch_context)
 
     class _AtlasPostprocessor:
         def __init__(self, *_args: object) -> None:
             pass
+
+        @staticmethod
+        def expected_outputs(*_args: object) -> dict[str, Path]:
+            return {}
 
         def postprocess(
             self, _outputs: object, _workspace: object, **kwargs: object
@@ -1270,6 +1533,10 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         state=state,
         workspace=workspace,
     )
+    atlas_launch_context = AtlasLaunchContext(
+        input_root=Path(workspace.get_atlas_mutable_input_dir()),
+        output_root=Path(workspace.get_atlas_output_dir()),
+    )
     urbansim_atlas._native_atlas_run(
         **{
             key: snapshots[key]
@@ -1282,6 +1549,7 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         settings=settings,
         state=state,
         workspace=workspace,
+        atlas_launch_context=atlas_launch_context,
     )
     snapshots["householdv_2030"] = (
         Path(workspace.get_atlas_output_dir()) / "householdv_2030.csv"
@@ -1306,9 +1574,11 @@ def test_native_callables_forward_resolved_paths_to_model_adapters(
         "final_skims_omx": None,
         "allow_workspace_skim_fallback": True,
     }
-    assert getattr(calls["atlas_run"], "atlas_mutable_input_dir") == Path(
+    atlas_run_inputs, captured_atlas_launch_context = calls["atlas_run"]
+    assert getattr(atlas_run_inputs, "atlas_mutable_input_dir") == Path(
         workspace.get_atlas_mutable_input_dir()
     )
+    assert captured_atlas_launch_context == atlas_launch_context
     assert calls["atlas_postprocess"] == {
         "usim_datastore_h5": snapshots["usim_datastore_h5"]
     }
@@ -1320,16 +1590,36 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
     datastore = tmp_path / "resolved" / "datastore.h5"
     final_skims = tmp_path / "resolved" / "final_skims.omx"
     workspace = _workspace(tmp_path)
+    launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=Path(workspace.get_usim_mutable_data_dir()),
+        output_datastore=Path(workspace.get_usim_mutable_data_dir()) / "output_2030.h5",
+    )
     calls: dict[str, object] = {}
 
     class _Runner:
         def __init__(self, *_args: object) -> None:
             pass
 
-        def run(self, **kwargs: object) -> None:
+        def run(
+            self,
+            inputs: object,
+            launch_context: object,
+            **kwargs: object,
+        ) -> None:
+            calls["inputs"] = inputs
+            calls["launch_context"] = launch_context
             calls.update(kwargs)
 
     monkeypatch.setattr(urbansim_atlas, "UrbansimRunner", _Runner)
+    staged = NativeUrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=launch_context.mutable_data_dir,
+        prepared_inputs={"usim_datastore_h5": datastore},
+    )
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "stage_urbansim_run_workspace",
+        lambda **_kwargs: staged,
+    )
 
     urbansim_atlas._native_urbansim_run(
         datastore,
@@ -1337,12 +1627,12 @@ def test_native_urbansim_run_forwards_scalar_inputs_to_runner(
         settings=_settings(),
         state=_state(),
         workspace=workspace,
+        urbansim_launch_context=launch_context,
     )
 
     assert calls == {
-        "usim_datastore_h5": datastore,
-        "final_skims_omx": final_skims,
-        "workspace": workspace,
+        "inputs": staged,
+        "launch_context": launch_context,
     }
 
 

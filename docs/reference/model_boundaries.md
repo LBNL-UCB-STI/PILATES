@@ -32,7 +32,14 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 ### Stage and step placement
 
 - Major stage: `land_use`
-- Step family: `urbansim_preprocess`, `urbansim_run`, `urbansim_postprocess`
+- Step family: `urbansim_run`, `urbansim_postprocess`
+
+Bootstrap owns admission and seeding of the initial UrbanSim datastore into the
+workflow frontier; there is no native `urbansim_preprocess` step. The native
+`urbansim_run` step materializes the resolved datastore and optional current
+skim handoff into UrbanSim's mutable workspace, then runs UrbanSim.
+`urbansim_postprocess` snapshots the population-source datastore and publishes
+the post-run handoff for downstream stages.
 
 ### Required inputs
 
@@ -49,6 +56,7 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 
 - `USIM_DATASTORE_CURRENT_H5` / `USIM_DATASTORE_H5`
 - `USIM_FORECAST_OUTPUT`
+- `USIM_POPULATION_SOURCE_H5`
 - `USIM_INPUT_ARCHIVE_PREFIX` (`usim_input_archive_{year}`)
 - `USIM_INPUT_MERGED_PREFIX` (`usim_input_merged_{year}`)
 
@@ -73,7 +81,7 @@ UrbanSim establishes the land-use-side regional state for the current forecast y
 
 ### Boundary owners
 
-- Typed outputs: `UrbanSimPreprocessOutputs`, `UrbanSimRunOutputs`, `UrbanSimPostprocessOutputs`
+- Typed outputs: `UrbanSimRunOutputs`, `UrbanSimPostprocessOutputs`
 - Trace it in code:
   - catalog: `pilates/workflows/catalog.py`
   - steps: `pilates/workflows/steps/urbansim_atlas.py`
@@ -199,9 +207,10 @@ ActivitySim converts the current regional state into staged demand-model inputs 
 
 Numba/Sharrow cache files are workspace-local execution preparation, not a
 workflow step or a shared artifact. They are not archived, recovered, or used
-in cache identity. If a primary `activitysim_run` must execute in
-multiprocessing mode and its local cache is empty, PILATES warms it privately
-first. A cache hit executes neither production ActivitySim nor this warmup.
+in cache identity. PILATES warms it privately only when multiprocessing and
+`persist_sharrow_cache` are enabled and the local cache is empty. Otherwise the
+warmup is intentionally skipped. A cache hit executes neither production
+ActivitySim nor this warmup.
 
 `activitysim_run` is the sole ActivitySim runtime boundary: it consumes
 `ZARR_SKIMS` when available, or consumes OMX skims and publishes finalized

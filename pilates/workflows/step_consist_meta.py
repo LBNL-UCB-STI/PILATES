@@ -60,6 +60,8 @@ from typing import Any, Dict, Optional
 
 from consist.core.step_context import StepContext
 
+from pilates.config.models import ActivitySimConfig
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.beam.config_hocon import beam_config_env_overrides, beam_config_root
 from pilates.atlas.preprocessor import selected_atlas_static_input_sources
 from pilates.urbansim.preprocessor import selected_urbansim_static_input_sources
@@ -71,8 +73,20 @@ from pilates.workflows.artifact_keys import (
     BEAM_VEHICLES_IN,
     LINKSTATS_WARMSTART,
 )
+from pilates.workflows.step_definition import InputContract
 
 _DISABLE_BEAM_CONFIG_ADAPTER_ENV = "PILATES_DISABLE_BEAM_CONFIG_ADAPTER"
+
+
+def activitysim_config_root_dirs(
+    settings: ActivitySimConfig,
+    mutable_configs_root: Path,
+) -> tuple[Path, ...]:
+    """Return ActivitySim config roots in the same order used for identity."""
+    return tuple(
+        config_root.path_under(mutable_configs_root)
+        for config_root in required_activitysim_config_roots(settings.main_configs_dir)
+    )
 
 
 def _adapter_covered_identity_input(item: Any, *, model: str) -> bool:
@@ -101,7 +115,11 @@ def _filter_adapter_covered_identity_inputs(
     return filtered or None
 
 
-def consist_step_meta(model: str) -> Dict[str, Any]:
+def consist_step_meta(
+    model: str,
+    *,
+    input_contract: InputContract | None = None,
+) -> Dict[str, Any]:
     """
     Build StepContext-callable metadata for Consist step defaults.
 
@@ -111,6 +129,25 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
     """
 
     cache_attr = "_pilates_step_meta_cache"
+
+    def _contract_report(*, adapter: Any, payload: Any) -> Dict[str, Any] | None:
+        if input_contract is None:
+            return None
+        config_contract = input_contract.config_contract
+        if config_contract is None:
+            configuration = {"kind": None, "available": False}
+        elif config_contract.kind == "adapter":
+            configuration = {"kind": "adapter", "available": adapter is not None}
+        else:
+            configuration = {
+                "kind": "payload",
+                "available": isinstance(payload, dict),
+            }
+        return {
+            "status": input_contract.status,
+            "reason": input_contract.reason,
+            "configuration": configuration,
+        }
 
     def _runtime_value(ctx: StepContext, name: str) -> Any:
         return ctx.get_runtime(name, default=None)
@@ -225,32 +262,28 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
         if mutable_configs_root is None:
             return None
 
-        main_configs_dir = getattr(activitysim_settings, "main_configs_dir", "configs")
-        candidates = [
-            main_configs_dir,
-            "configs",
-            "configs_extended",
-            "configs_mp",
-            "configs_sh_compile",
-        ]
-        seen = set()
-        ordered_unique_candidates = []
-        for name in candidates:
-            if name in seen:
-                continue
-            seen.add(name)
-            ordered_unique_candidates.append(name)
+        config_roots = activitysim_config_root_dirs(
+            activitysim_settings, mutable_configs_root
+        )
+        if model == "activitysim_run":
+            missing_roots = [
+                candidate for candidate in config_roots if not candidate.is_dir()
+            ]
+            if missing_roots:
+                missing = ", ".join(str(candidate) for candidate in missing_roots)
+                raise RuntimeError(
+                    "ActivitySim configuration identity is incomplete; missing roots: "
+                    f"{missing}"
+                )
+            selected_roots = config_roots
+        else:
+            selected_roots = tuple(
+                candidate for candidate in config_roots if candidate.is_dir()
+            )
+            if not selected_roots:
+                return None
 
-        config_roots = []
-        for dirname in ordered_unique_candidates:
-            candidate = mutable_configs_root / dirname
-            if candidate.exists():
-                config_roots.append(candidate)
-
-        if not config_roots:
-            return None
-
-        return ActivitySimConfigAdapter(root_dirs=config_roots)
+        return ActivitySimConfigAdapter(root_dirs=list(selected_roots))
 
     def _beam_adapter(ctx: StepContext) -> Any:
         if os.environ.get(_DISABLE_BEAM_CONFIG_ADAPTER_ENV, "").lower() in {
@@ -525,6 +558,22 @@ def consist_step_meta(model: str) -> Dict[str, Any]:
                 resolved["identity_inputs"] = identity_inputs
             else:
                 resolved.pop("identity_inputs", None)
+        if model == "beam_preprocess":
+            closure = _runtime_value(ctx, "beam_preprocess_identity_closure")
+            if isinstance(closure, dict):
+                resolved["config"] = {
+                    **dict(resolved.get("config") or {}),
+                    "beam_preprocess_identity": closure,
+                }
+        contract_report = _contract_report(
+            adapter=adapter,
+            payload=resolved.get("config"),
+        )
+        if contract_report is not None:
+            resolved["facet"] = {
+                **dict(resolved.get("facet") or {}),
+                "native_input_contract": contract_report,
+            }
         if cache is not None:
             cache[model] = resolved
         return resolved

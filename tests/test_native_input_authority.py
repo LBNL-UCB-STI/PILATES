@@ -7,6 +7,7 @@ import pytest
 from consist import BindingResult
 
 from pilates.workflows.artifact_keys import (
+    ASIM_OMX_SKIMS,
     FINAL_SKIMS_OMX,
     USIM_DATASTORE_H5,
     USIM_POPULATION_SOURCE_H5,
@@ -16,6 +17,8 @@ from pilates.workflows.atlas_state import AtlasSubState
 from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import activitysim, urbansim_atlas
+from pilates.urbansim.outputs import UrbanSimPreprocessOutputs
+from pilates.urbansim.runner import UrbanSimLaunchContext
 from pilates.beam.beam_input_staging import copy_vehicles_from_atlas
 
 
@@ -106,9 +109,11 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     settings.run.region = "test"
     settings.urbansim = SimpleNamespace(
         input_file_template="input_{region_id}.h5",
+        output_file_template="output_{year}.h5",
         region_mappings={"region_to_region_id": {"test": "001"}},
     )
     state = _state(current_year=2022)
+    state.forecast_year = 2022
     workspace = SimpleNamespace(
         full_path=".",
         get_usim_mutable_data_dir=lambda: "urbansim/data",
@@ -169,11 +174,15 @@ def test_native_resolvers_require_a_beam_skim_handoff_after_bootstrap(
     assert FINAL_SKIMS_OMX in captured["atlas"]
 
 
-def test_activitysim_uses_zarr_only_after_beam_bootstrap(monkeypatch) -> None:
+def test_activitysim_uses_zarr_only_after_beam_bootstrap(
+    monkeypatch, tmp_path: Path
+) -> None:
     """Later ActivitySim iterations must not select an OMX skim handoff."""
 
     captured: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {}
-    zarr = object()
+    zarr = tmp_path / "selected-skims.zarr"
+    zarr.mkdir()
+    (zarr / ".zgroup").write_text('{"zarr_format": 2}\n', encoding="utf-8")
     run_inputs = {
         "land_use_asim_in": object(),
         "households_asim_in": object(),
@@ -213,17 +222,24 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(monkeypatch) -> None:
         staticmethod(lambda *_args: {}),
     )
     state = _state(current_year=2020, iteration=1)
+    workspace = SimpleNamespace(
+        full_path="/workspace",
+        get_asim_mutable_data_dir=lambda: "/workspace/activitysim/data",
+        get_asim_output_dir=lambda: "/workspace/activitysim/output",
+        get_asim_mutable_configs_dir=lambda: "/workspace/activitysim/configs",
+        get_asim_runtime_cache_dir=lambda: "/workspace/activitysim/output/cache",
+    )
 
     activitysim._activitysim_preprocess_resolver(
         settings=_settings(),
         state=state,
-        workspace=SimpleNamespace(),
+        workspace=workspace,
         coupler=object(),
     )
     resolved_run = activitysim._activitysim_run_resolver(
         settings=_settings(),
         state=state,
-        workspace=SimpleNamespace(),
+        workspace=workspace,
         coupler=object(),
     )
 
@@ -236,9 +252,11 @@ def test_activitysim_uses_zarr_only_after_beam_bootstrap(monkeypatch) -> None:
             "land_use_asim_in",
             "households_asim_in",
             "persons_asim_in",
-            ZARR_SKIMS,
         ),
-        (),
+        (
+            ZARR_SKIMS,
+            ASIM_OMX_SKIMS,
+        ),
     )
     assert dict(resolved_run.binding.inputs or {}) == run_inputs
 
@@ -350,8 +368,11 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         def __init__(self, *_args):
             pass
 
-        def run(self, **kwargs):
-            captured["urbansim"] = kwargs
+        def run(self, inputs, launch_context):
+            captured["urbansim"] = {
+                "inputs": inputs,
+                "launch_context": launch_context,
+            }
 
     class _AtlasPreprocessor:
         def __init__(self, *_args):
@@ -366,6 +387,19 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
 
     population = Path("/bound/population.h5")
     skims = Path("/bound/final-skims.omx")
+    urbansim_launch_context = UrbanSimLaunchContext(
+        mutable_data_dir=Path("/resolved/urbansim"),
+        output_datastore=Path("/resolved/urbansim/output_2022.h5"),
+    )
+    staged = UrbanSimPreprocessOutputs(
+        usim_mutable_data_dir=urbansim_launch_context.mutable_data_dir,
+        prepared_inputs={"usim_datastore_h5": population},
+    )
+    monkeypatch.setattr(
+        urbansim_atlas,
+        "stage_urbansim_run_workspace",
+        lambda **_kwargs: staged,
+    )
     activitysim._activitysim_preprocess_callable(
         population,
         skims,
@@ -379,6 +413,7 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
         settings=settings,
         state=state,
         workspace=workspace,
+        urbansim_launch_context=urbansim_launch_context,
     )
     urbansim_atlas._native_atlas_preprocess(
         population,
@@ -392,9 +427,8 @@ def test_native_callables_disable_adapter_skim_rediscovery_after_beam(
     assert "final_skims_omx" not in captured["activitysim"]
     assert captured["atlas"]["allow_workspace_skim_fallback"] is False
     assert captured["urbansim"] == {
-        "usim_datastore_h5": population,
-        "final_skims_omx": skims,
-        "workspace": workspace,
+        "inputs": staged,
+        "launch_context": urbansim_launch_context,
     }
     assert captured["atlas"]["final_skims_omx"] == skims
 

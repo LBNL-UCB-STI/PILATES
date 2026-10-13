@@ -1,21 +1,17 @@
 """Focused BEAM restart diagnostics and explicit canary policy.
 
 Whole-stage and whole-year execution are exercised through the native golden
-workflow.  This module intentionally avoids legacy ``StageRunner``, manifest,
-and fake-scenario recreation of unsupported mid-stage restart policies.
+workflow.
 """
 
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from consist import Artifact, BindingResult
+from consist import BindingResult
 
-from pilates.workflows.artifact_keys import ZARR_SKIMS
-from pilates.workflows.beam_checkpoint import PinnedClosureMember
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.stages import supply_demand_beam as beam_stage
-from pilates.workflows.steps import beam as beam_steps
 from pilates.workflows.stages.supply_demand_beam import (
     _FAIL_AFTER_BEAM_RUN_ENV,
     _maybe_fail_after_beam_run_for_canary,
@@ -30,533 +26,6 @@ def test_beam_restart_canary_failpoint_requires_explicit_env(monkeypatch):
     monkeypatch.setenv(_FAIL_AFTER_BEAM_RUN_ENV, "1")
     with pytest.raises(RuntimeError, match="Injected failure after completed beam_run"):
         _maybe_fail_after_beam_run_for_canary(year=2021, iteration=0)
-
-
-def test_committed_checkpoint_dispatch_skips_native_preprocess_and_run(monkeypatch):
-    scenario = SimpleNamespace(coupler=object())
-    context = SimpleNamespace(
-        settings=object(),
-        state=SimpleNamespace(is_restart_run=True),
-        workspace=object(),
-    )
-    expected = {"events_parquet_2021_0_type_PathTraversal": "/tmp/events"}
-
-    monkeypatch.setattr(
-        beam_stage, "beam_checkpoint_resume_requested", lambda **_: True
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "_try_resume_committed_beam_postprocess",
-        lambda **kwargs: expected,
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "execute_step",
-        lambda **_kwargs: pytest.fail("resume must not execute preprocess or run"),
-    )
-
-    assert (
-        beam_stage._run_beam_steps(
-            scenario=scenario,
-            year=2021,
-            iteration=0,
-            context=context,
-        )
-        == expected
-    )
-
-
-def test_fresh_checkpoint_is_published_before_canary_failpoint(monkeypatch):
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={}),
-    )
-    scenario = SimpleNamespace(coupler=object())
-    context = SimpleNamespace(
-        settings=object(),
-        state=SimpleNamespace(is_restart_run=False),
-        workspace=object(),
-    )
-    calls: list[str] = []
-    tracked_run_outputs = {"raw_od_skims_zarr_2021_0": object()}
-    observed: dict[str, object] = {}
-
-    def resolve_postprocess_inputs(**kwargs):
-        observed["beam_run_outputs"] = kwargs["beam_run_outputs"]
-        return resolved_inputs
-
-    postprocess_definition = SimpleNamespace(resolve_inputs=resolve_postprocess_inputs)
-    run_outputs = SimpleNamespace(_iter_record_items=lambda: ())
-
-    def fake_execute_step(*, definition, phase, **_kwargs):
-        calls.append(phase)
-        if phase == "run":
-            return (
-                SimpleNamespace(
-                    run=SimpleNamespace(id="beam-run-1"),
-                    outputs=tracked_run_outputs,
-                ),
-                run_outputs,
-            )
-        if phase == "preprocess":
-            return SimpleNamespace(), SimpleNamespace()
-        pytest.fail("canary failure must happen before native postprocess")
-
-    def publish(**kwargs):
-        calls.append("published")
-        assert kwargs["producer_run_id"] == "beam-run-1"
-        assert kwargs["postprocess_inputs"] is resolved_inputs
-
-    def failpoint(**_kwargs):
-        assert calls == ["preprocess", "run", "published"]
-        raise RuntimeError("canary")
-
-    monkeypatch.setattr(
-        beam_stage, "beam_checkpoint_resume_requested", lambda **_: False
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_kwargs: SimpleNamespace(
-            root=Path("/tmp/launch"), primary_config=Path("/tmp/launch/beam.conf")
-        ),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "beam_run",
-        SimpleNamespace(
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_run", BindingResult(inputs={})
-            )
-        ),
-    )
-    monkeypatch.setattr(beam_stage, "beam_postprocess", postprocess_definition)
-    monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
-    monkeypatch.setattr(beam_stage, "_publish_completed_beam_run_checkpoint", publish)
-    monkeypatch.setattr(beam_stage, "_maybe_fail_after_beam_run_for_canary", failpoint)
-
-    with pytest.raises(RuntimeError, match="canary"):
-        beam_stage._run_beam_steps(
-            scenario=scenario,
-            year=2021,
-            iteration=0,
-            context=context,
-        )
-
-    assert calls == ["preprocess", "run", "published"]
-    assert observed["beam_run_outputs"] is tracked_run_outputs
-
-
-def test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache(
-    tmp_path: Path,
-) -> None:
-    """The selected input artifact, rather than transient scenario state, owns provenance."""
-
-    zarr_artifact = Artifact(
-        key=ZARR_SKIMS,
-        container_uri="workspace://activitysim/output/cache/skims.zarr",
-        run_id="activitysim-run-id",
-        hash="zarr-identity",
-        driver="zarr",
-        meta={"directory_artifact": True},
-    )
-    tracker = SimpleNamespace(
-        get_run_outputs=lambda run_id: (
-            {ZARR_SKIMS: zarr_artifact} if run_id == "activitysim-run-id" else {}
-        )
-    )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={ZARR_SKIMS: zarr_artifact}),
-        required_roles=(ZARR_SKIMS,),
-        source_by_role={ZARR_SKIMS: "coupler"},
-        selected_key_by_role={ZARR_SKIMS: ZARR_SKIMS},
-        logical_destinations={ZARR_SKIMS: tmp_path / "skims.zarr"},
-    )
-    closure = beam_stage._resolve_beam_postprocess_closure(
-        tracker=tracker,
-        resolved_inputs=resolved_inputs,
-        workspace=SimpleNamespace(),
-        year=2017,
-        iteration=0,
-        beam_run_id="beam-run-id",
-    )
-
-    assert closure[0].producer_run_id == "activitysim-run-id"
-    assert closure[0].output_key == ZARR_SKIMS
-    assert closure[0].artifact_identity == "zarr-identity"
-
-
-def test_fresh_zarr_postprocess_closure_keeps_current_run_artifact_provenance(
-    tmp_path: Path,
-) -> None:
-    """A fresh Zarr handoff binds the completed run's artifact, never history."""
-
-    current_skim_key = "raw_od_skims_zarr_2018_1"
-    stale_skim = Artifact(
-        key="raw_od_skims_zarr_2018_0",
-        container_uri="workspace://beam-output/stale.zarr",
-        run_id="prior-beam-run-id",
-        hash="stale-zarr-identity",
-        driver="zarr",
-        meta={"directory_artifact": True},
-    )
-    current_skim = Artifact(
-        key=current_skim_key,
-        container_uri="workspace://beam-output/current.zarr",
-        run_id="beam-run-id",
-        hash="current-zarr-identity",
-        driver="zarr",
-        meta={"directory_artifact": True},
-    )
-    activitysim_skim = Artifact(
-        key=ZARR_SKIMS,
-        container_uri="workspace://activitysim-output/skims.zarr",
-        run_id="activitysim-run-id",
-        hash="activitysim-zarr-identity",
-        driver="zarr",
-        meta={"directory_artifact": True},
-    )
-
-    class Coupler:
-        def get(self, key: str, default: object = None) -> object:
-            return {ZARR_SKIMS: activitysim_skim}.get(key, default)
-
-        def keys(self) -> tuple[str, ...]:
-            return (stale_skim.key, ZARR_SKIMS)
-
-    workspace = SimpleNamespace(
-        full_path=str(tmp_path),
-        get_beam_mutable_data_dir=lambda: str(tmp_path / "beam-input"),
-        get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
-        get_asim_output_dir=lambda: str(tmp_path / "activitysim-output"),
-    )
-    resolved_inputs = beam_steps._resolve_beam_postprocess_inputs(
-        settings=SimpleNamespace(activitysim=object()),
-        state=SimpleNamespace(year=2018, iteration=1),
-        workspace=workspace,
-        coupler=Coupler(),
-        beam_run_outputs={current_skim_key: current_skim},
-    )
-    tracker = SimpleNamespace(
-        get_run_outputs=lambda run_id: {
-            "beam-run-id": {current_skim_key: current_skim},
-            "activitysim-run-id": {ZARR_SKIMS: activitysim_skim},
-        }.get(run_id, {})
-    )
-
-    closure = beam_stage._resolve_beam_postprocess_closure(
-        tracker=tracker,
-        resolved_inputs=resolved_inputs,
-        workspace=workspace,
-        year=2018,
-        iteration=1,
-        beam_run_id="beam-run-id",
-    )
-
-    assert resolved_inputs.binding.inputs == {
-        current_skim_key: current_skim,
-        ZARR_SKIMS: activitysim_skim,
-    }
-    assert {(member.producer_run_id, member.output_key) for member in closure} == {
-        ("beam-run-id", current_skim_key),
-        ("activitysim-run-id", ZARR_SKIMS),
-    }
-
-
-def test_checkpoint_archives_selected_closure_sources_before_verification(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """Checkpoint publication mirrors producer bytes, not successor input paths."""
-
-    output_key = "events_parquet_2018_0"
-    artifact = Artifact(
-        key=output_key,
-        container_uri=(
-            "workspace://beam/beam_output/.pilates-consist-outputs/beam_run/"
-            f"{output_key}.parquet"
-        ),
-        run_id="beam-run-id",
-        hash="events-identity",
-        driver="parquet",
-        meta={},
-    )
-    successor_destination = tmp_path / ".pilates-consist-inputs" / output_key
-    producer_source = tmp_path / ".pilates-consist-outputs" / f"{output_key}.parquet"
-    member = PinnedClosureMember(
-        member_id=f"beam-run-id:{output_key}",
-        role=output_key,
-        producer_run_id="beam-run-id",
-        output_key=output_key,
-        artifact_identity="events-identity",
-        artifact_kind="file",
-        driver="parquet",
-        destination=successor_destination,
-        required=True,
-    )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={output_key: artifact}),
-        required_roles=(output_key,),
-        source_by_role={output_key: "coupler"},
-        logical_destinations={output_key: successor_destination},
-    )
-    calls: list[tuple[str, object]] = []
-    tracker = object()
-
-    monkeypatch.setattr(beam_stage.cr, "current_tracker", lambda: tracker)
-    monkeypatch.setattr(
-        beam_stage,
-        "_resolve_beam_postprocess_closure",
-        lambda **_kwargs: (member,),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "flush_archive_queue",
-        lambda **kwargs: calls.append(("flush", kwargs)),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "artifact_to_existing_path",
-        lambda value, _workspace: producer_source if value is artifact else None,
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "archive_copy_now",
-        lambda **kwargs: calls.append(("copy", kwargs)) or True,
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "verify_archive_visible_pinned_closure_bytes",
-        lambda **kwargs: calls.append(("verify", kwargs)),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "snapshot_and_publish_beam_run_checkpoint",
-        lambda **kwargs: calls.append(("publish", kwargs)),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "_beam_checkpoint_scope",
-        lambda **_kwargs: {"year": 2017, "forecast_year": 2018, "iteration": 0},
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "_beam_checkpoint_skim_variant",
-        lambda _settings: "raw",
-    )
-
-    beam_stage._publish_completed_beam_run_checkpoint(
-        scenario=SimpleNamespace(),
-        settings=object(),
-        state=SimpleNamespace(
-            run_info_path=tmp_path / "run_state.yaml",
-            year=2017,
-        ),
-        workspace=SimpleNamespace(),
-        postprocess_inputs=resolved_inputs,
-        year=2018,
-        iteration=0,
-        producer_run_id="beam-run-id",
-    )
-
-    assert [name for name, _ in calls] == ["flush", "copy", "verify", "publish"]
-    assert calls[0][1] == {"fail_on_timeout": True}
-    copy_kwargs = calls[1][1]
-    assert copy_kwargs["key"] == output_key
-    assert copy_kwargs["path"] == producer_source
-    assert copy_kwargs["path"] != successor_destination
-
-
-def test_beam_checkpoint_closure_keeps_requested_beam_run_on_cache_hit(
-    tmp_path: Path,
-) -> None:
-    """A cached BEAM output still belongs to the requested checkpoint run."""
-
-    cached_artifact = Artifact(
-        key="events_parquet_2018_0",
-        container_uri="workspace://beam/output/events.parquet",
-        run_id="beam-cache-source-id",
-        hash="events-identity",
-        driver="parquet",
-        meta={},
-    )
-    tracker = SimpleNamespace(
-        get_run_outputs=lambda run_id: (
-            {cached_artifact.key: cached_artifact}
-            if run_id in {"beam-cache-source-id", "beam-requested-id"}
-            else {}
-        )
-    )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={cached_artifact.key: cached_artifact}),
-        required_roles=(cached_artifact.key,),
-        source_by_role={cached_artifact.key: "coupler"},
-        selected_key_by_role={cached_artifact.key: cached_artifact.key},
-        logical_destinations={cached_artifact.key: tmp_path / "events.parquet"},
-    )
-
-    closure = beam_stage._resolve_beam_postprocess_closure(
-        tracker=tracker,
-        resolved_inputs=resolved_inputs,
-        workspace=SimpleNamespace(),
-        year=2017,
-        iteration=0,
-        beam_run_id="beam-requested-id",
-    )
-
-    assert closure[0].producer_run_id == "beam-requested-id"
-
-
-@pytest.mark.parametrize("run_mode", ("fresh", "cache"))
-def test_public_beam_handoff_is_postprocess_owned_across_run_modes_and_resume(
-    monkeypatch, run_mode
-):
-    """The public boundary exposes only the successor postprocess handoff."""
-    postprocess_artifact = SimpleNamespace(id="postprocess-artifact")
-
-    class Coupler:
-        def get(self, key, default=None):
-            if key == "postprocess_output":
-                return postprocess_artifact
-            return default
-
-    scenario = SimpleNamespace(coupler=Coupler())
-    context = SimpleNamespace(
-        settings=object(),
-        state=SimpleNamespace(is_restart_run=False),
-        workspace=object(),
-    )
-    resolved_inputs = ResolvedStepInputs(
-        step_name="beam_postprocess",
-        binding=BindingResult(inputs={}),
-    )
-    postprocess_definition = SimpleNamespace(
-        resolve_inputs=lambda **_kwargs: resolved_inputs
-    )
-    run_outputs = SimpleNamespace(
-        _iter_record_items=lambda: (("beam_run_output", "/tmp/beam-run", ""),)
-    )
-    postprocess_outputs = SimpleNamespace(
-        _iter_record_items=lambda: (("postprocess_output", "/tmp/postprocess", ""),)
-    )
-
-    def fake_execute_step(*, phase, **_kwargs):
-        if phase == "run":
-            return (
-                SimpleNamespace(
-                    run=SimpleNamespace(id=f"beam-run-{run_mode}"),
-                    cache_hit=run_mode == "cache",
-                    outputs={},
-                ),
-                run_outputs,
-            )
-        if phase == "postprocess":
-            return SimpleNamespace(), postprocess_outputs
-        return SimpleNamespace(), SimpleNamespace()
-
-    monkeypatch.setattr(
-        beam_stage, "beam_checkpoint_resume_requested", lambda **_: False
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "_compile_beam_launch_config",
-        lambda **_kwargs: SimpleNamespace(
-            root=Path("/tmp/launch"), primary_config=Path("/tmp/launch/beam.conf")
-        ),
-    )
-    monkeypatch.setattr(
-        beam_stage,
-        "beam_run",
-        SimpleNamespace(
-            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
-                "beam_run", BindingResult(inputs={})
-            )
-        ),
-    )
-    monkeypatch.setattr(beam_stage, "beam_postprocess", postprocess_definition)
-    monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
-    monkeypatch.setattr(
-        beam_stage, "_publish_completed_beam_run_checkpoint", lambda **_: None
-    )
-    monkeypatch.setattr(
-        beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
-    )
-    monkeypatch.setattr(beam_stage, "_archive_run_dir_for_restart", lambda _state: None)
-
-    handoff = beam_stage._run_beam_steps(
-        scenario=scenario,
-        year=2021,
-        iteration=0,
-        context=context,
-    )
-
-    assert set(handoff) == {"postprocess_output"}
-    assert "beam_run_output" not in handoff
-    assert handoff["postprocess_output"] is postprocess_artifact
-
-    monkeypatch.setattr(
-        beam_stage, "beam_checkpoint_resume_requested", lambda **_: True
-    )
-    monkeypatch.setattr(
-        beam_stage, "_try_resume_committed_beam_postprocess", lambda **_: handoff
-    )
-
-    resumed_handoff = beam_stage._run_beam_steps(
-        scenario=scenario,
-        year=2021,
-        iteration=0,
-        context=context,
-    )
-
-    assert resumed_handoff == handoff
-    assert resumed_handoff["postprocess_output"] is postprocess_artifact
-
-
-def test_rebound_checkpoint_requires_normal_resolver_identity_and_destination(tmp_path):
-    destination = tmp_path / "beam" / ".pilates-consist-inputs" / "events.parquet"
-    member = PinnedClosureMember(
-        member_id="beam-run-1:events_parquet_2021_0",
-        role="events_parquet_2021_0",
-        producer_run_id="beam-run-1",
-        output_key="events_parquet_2021_0",
-        artifact_identity="events-hash",
-        artifact_kind="file",
-        driver="parquet",
-        destination=destination,
-        required=True,
-    )
-
-    def resolved(*, artifact_hash: str, resolved_destination: Path):
-        return ResolvedStepInputs(
-            step_name="beam_postprocess",
-            binding=BindingResult(
-                inputs={"events_parquet_2021_0": SimpleNamespace(hash=artifact_hash)}
-            ),
-            required_roles=("events_parquet_2021_0",),
-            source_by_role={"events_parquet_2021_0": "coupler"},
-            selected_key_by_role={"events_parquet_2021_0": "events_parquet_2021_0"},
-            logical_destinations={"events_parquet_2021_0": resolved_destination},
-        )
-
-    checkpoint = SimpleNamespace(producer_run_id="beam-run-1")
-    beam_stage._validate_rebound_postprocess_inputs(
-        checkpoint=checkpoint,
-        members=(member,),
-        resolved_inputs=resolved(
-            artifact_hash="events-hash", resolved_destination=destination
-        ),
-    )
-
-    with pytest.raises(RuntimeError, match="identity drifted"):
-        beam_stage._validate_rebound_postprocess_inputs(
-            checkpoint=checkpoint,
-            members=(member,),
-            resolved_inputs=resolved(
-                artifact_hash="different-hash", resolved_destination=destination
-            ),
-        )
 
 
 def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
@@ -589,11 +58,19 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         def get(self, _key, default=None):
             return default
 
-    scenario = SimpleNamespace(coupler=Coupler())
+    scenario = SimpleNamespace(
+        coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
-        state=SimpleNamespace(is_restart_run=False),
-        workspace=SimpleNamespace(),
+        state=SimpleNamespace(
+            is_restart_run=False,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
+        workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
 
     def fake_execute_step(
@@ -617,9 +94,6 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         return run_inputs
 
     monkeypatch.setattr(
-        beam_stage, "beam_checkpoint_resume_requested", lambda **_: False
-    )
-    monkeypatch.setattr(
         beam_stage, "_compile_beam_launch_config", lambda **_: launch_config
     )
     monkeypatch.setattr(
@@ -632,7 +106,7 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     )
     monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
     monkeypatch.setattr(
-        beam_stage, "_publish_completed_beam_run_checkpoint", lambda **_: None
+        beam_stage, "_archive_beam_run_outputs_native", lambda **_: None
     )
     monkeypatch.setattr(
         beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
@@ -652,3 +126,186 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     assert observed["resolver"]["launch_config"] is launch_config
     assert observed["resolved"] is run_inputs
     assert observed["runtime"] == {"beam_launch_config": launch_config}
+
+
+def test_native_archive_is_called_with_verify_before_canary_failpoint(
+    monkeypatch, tmp_path: Path
+):
+    """Native verified archival executes after beam_run commits and before canary failpoint."""
+    resolved_inputs = ResolvedStepInputs(
+        step_name="beam_postprocess",
+        binding=BindingResult(inputs={}),
+    )
+    scenario = SimpleNamespace(
+        coupler=object(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
+    context = SimpleNamespace(
+        settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
+        state=SimpleNamespace(
+            is_restart_run=False,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
+        workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
+    )
+    calls: list[str] = []
+    tracked_run_outputs = {"linkstats": object()}
+
+    def fake_execute_step(*, phase, **_kwargs):
+        calls.append(phase)
+        if phase == "preprocess":
+            return SimpleNamespace(), SimpleNamespace()
+        if phase == "run":
+            return (
+                SimpleNamespace(
+                    run=SimpleNamespace(id="beam-run-1"), outputs=tracked_run_outputs
+                ),
+                SimpleNamespace(),
+            )
+        pytest.fail("canary failure must happen before native postprocess")
+
+    def fake_archive(**kwargs):
+        calls.append("archived")
+        assert kwargs["run_id"] == "beam-run-1"
+        assert kwargs["outputs"] is tracked_run_outputs
+
+    def failpoint(**_kwargs):
+        calls.append("failpoint")
+        raise RuntimeError("canary")
+
+    monkeypatch.setattr(
+        beam_stage,
+        "_compile_beam_launch_config",
+        lambda **_kwargs: SimpleNamespace(
+            root=tmp_path / "launch", primary_config=tmp_path / "launch" / "beam.conf"
+        ),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "beam_run",
+        SimpleNamespace(
+            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
+                "beam_run", BindingResult(inputs={})
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "beam_postprocess",
+        SimpleNamespace(resolve_inputs=lambda **_kwargs: resolved_inputs),
+    )
+    monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
+    monkeypatch.setattr(beam_stage, "_archive_beam_run_outputs_native", fake_archive)
+    monkeypatch.setattr(beam_stage, "_maybe_fail_after_beam_run_for_canary", failpoint)
+
+    with pytest.raises(RuntimeError, match="canary"):
+        beam_stage._run_beam_steps(
+            scenario=scenario,
+            year=2021,
+            iteration=0,
+            context=context,
+        )
+
+    assert calls == ["preprocess", "run", "archived", "failpoint"]
+
+
+def test_archive_beam_run_outputs_native_enforces_verification(tmp_path: Path):
+    """Archiving beam_run outputs with verify=True raises loudly on verification failure."""
+    from unittest.mock import patch
+
+    tracker = SimpleNamespace()
+    outputs = {"linkstats": SimpleNamespace(driver="parquet", meta={})}
+
+    failure_item = SimpleNamespace(
+        copy_status="ok",
+        verification_status="corrupted",
+        metadata_committed=False,
+        message="hash mismatch",
+    )
+    mock_report = SimpleNamespace(
+        complete=False,
+        items=lambda: [("linkstats", failure_item)],
+    )
+
+    with patch(
+        "pilates.workflows.stages.supply_demand_beam.archive_run_output_files",
+        return_value=mock_report,
+    ):
+        with pytest.raises(
+            RuntimeError, match="Archiving beam_run outputs failed verification"
+        ):
+            beam_stage._archive_beam_run_outputs_native(
+                run_id="run-123",
+                tracker=tracker,
+                recovery_root=tmp_path / "recovery",
+                outputs=outputs,
+            )
+
+
+def test_interrupted_postprocess_detected_refuses_restart_before_step_execution(
+    monkeypatch, tmp_path: Path
+):
+    """Interrupted postprocess marker causes immediate refusal before any step runs."""
+    scenario = SimpleNamespace(
+        coupler=object(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
+    context = SimpleNamespace(
+        settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
+        state=SimpleNamespace(
+            is_restart_run=True,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
+        workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
+    )
+
+    monkeypatch.setattr(
+        beam_stage, "_interrupted_beam_postprocess_detected", lambda **_: True
+    )
+    monkeypatch.setattr(
+        beam_stage,
+        "execute_step",
+        lambda **_kwargs: pytest.fail(
+            "execute_step must not be called when postprocess was interrupted"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="Interrupted BEAM postprocess detected"):
+        beam_stage._run_beam_steps(
+            scenario=scenario,
+            year=2021,
+            iteration=0,
+            context=context,
+        )
+
+
+# ==============================================================================
+# Semantic Gaps for Removed beam_checkpoint Tests (per spike brief instruction)
+# ==============================================================================
+# The following tests encoded beam_checkpoint semantics that have no direct native
+# equivalent in Consist, and are recorded here as architectural gaps:
+#
+# 1. test_beam_checkpoint_closure_uses_frozen_zarr_producer_not_scenario_cache:
+#    GAP: Consist lacks pinned producer closures; cache resolution dynamically
+#    queries scenario coupler rather than freezing the producer run's lineage.
+#
+# 2. test_fresh_zarr_postprocess_closure_keeps_current_run_artifact_provenance:
+#    GAP: Consist does not pin run-artifact bindings; Coupler re-resolves artifacts
+#    dynamically.
+#
+# 3. test_beam_checkpoint_closure_keeps_requested_beam_run_on_cache_hit:
+#    GAP: Stochastic BEAM output collisions cause Consist find_matching_run() to
+#    select the newest run (epoch_us DESC) rather than retaining the original producer.
+#
+# 4. test_public_beam_handoff_is_postprocess_owned_across_run_modes_and_resume:
+#    GAP: Checkpoint-based handoff bypass is replaced by Consist's standard step
+#    output mappings.
+#
+# 5. test_rebound_checkpoint_requires_normal_resolver_identity_and_destination:
+#    GAP: Rebound destination verification was part of checkpoint deserialization;
+#    native Consist relies on declared output_paths and step contracts.
+# ==============================================================================

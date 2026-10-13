@@ -17,7 +17,9 @@ summary: Generic HPC execution posture for PILATES and how it differs from local
 - `job_runner.sh` creates a per-job settings file when `${BEAM_MEMORY}` templating is present.
 - `job.sh` bootstraps a Python virtual environment inside the job.
 - `job.sh` installs PILATES dependencies from `hpc/requirements-hpc.txt` when that file exists, or from `requirements.txt` otherwise.
-- `job.sh` installs `consist` from local source when it can, and otherwise falls back to the configured PyPI package or the default `consist==0.1.5`.
+- `job.sh` prefers an editable Consist checkout when `CONSIST_SRC_DIR` exists;
+  otherwise it installs `CONSIST_PYPI_PACKAGE`, then a Consist requirement pin,
+  then the default `consist==0.2.0`.
 
 ## Most Important Difference From Local Runs
 
@@ -72,8 +74,8 @@ your cluster layout differs from the defaults.
 | `PILATES_DIR` | No | `/global/scratch/users/$USER/sources/PILATES`                                 | Checkout used by `job_runner.sh` and `job.sh`. Override this first if the repo lives elsewhere. |
 | `PILATES_VENV_PATH` | No | `$PILATES_DIR/PILATES-env`                                                    | Job-side Python virtual environment. |
 | `PILATES_REQUIREMENTS_FILE` | No | `$PILATES_DIR/hpc/requirements-hpc.txt`, then `$PILATES_DIR/requirements.txt` | Requirements file installed inside the job. |
-| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist`                                                     | Editable Consist checkout used when present. |
-| `CONSIST_PYPI_PACKAGE` | No | requirement pin when present, otherwise `consist==0.1.5`                      | Package spec used when editable Consist install is not available. |
+| `CONSIST_SRC_DIR` | No | `$PILATES_DIR/../consist` | Existing path takes precedence: the job attempts an editable install, then falls back to the resolved released package if it fails. Record its SHA for any acceptance claim. |
+| `CONSIST_PYPI_PACKAGE` | No | explicit value, then requirement pin, then `consist==0.2.0` | Released-wheel package spec used only when no editable source directory is present. |
 | `EXPECTED_EXECUTION_DURATION` | No | `3-00:00:00`                                                                  | Slurm wall time. |
 | `MEMORY_LIMIT_GB` | No | partition preset                                                              | Slurm memory request. Explicit env value overrides partition and `--high-mem` defaults. |
 | `BEAM_MEMORY` | No | partition preset                                                              | Value substituted into settings templates containing `${BEAM_MEMORY}`. Explicit env value overrides partition and `--high-mem` defaults. |
@@ -83,6 +85,11 @@ Memory precedence is: explicit `MEMORY_LIMIT_GB` / `BEAM_MEMORY` environment
 values first, then partition presets. On `lr7`, `--high-mem` changes only the
 default preset from `240G` / `180g` to `480G` / `400g`; explicit environment
 values still win. On `lr8`, the current defaults are `700G` / `600g`.
+
+An acceptance obtained with an editable Consist checkout is not released-wheel
+replay evidence. Do not treat this operational precedence as an HPC acceptance
+path; the formal SFBay structural checker and boundary-specific acceptance
+artifacts have their own stated scope.
 
 ## Adapting To Other Slurm Clusters
 

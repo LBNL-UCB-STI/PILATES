@@ -1,11 +1,16 @@
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from pilates.activitysim.runner import (
+    ActivitySimLaunchContext,
     ActivitysimNumbaWarmup,
     ActivitysimRunner,
     _asim_container_environment,
 )
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 
 
 def _settings() -> SimpleNamespace:
@@ -43,6 +48,112 @@ def test_activitysim_docker_vols_include_configs_mp_mount():
     assert vols[expected_local]["mode"] == "rw"
 
 
+def test_activitysim_docker_vols_mount_only_the_resolved_staged_launch_tree(
+    tmp_path: Path,
+) -> None:
+    """A native launch must not rediscover poisoned workspace input roots."""
+    settings = _settings()
+    staged_data = tmp_path / "native-launch" / "data"
+    staged_configs = tmp_path / "native-launch" / "configs"
+    for dirname in ("configs", "configs_extended", "configs_mp", "configs_sh_compile"):
+        (staged_configs / dirname).mkdir(parents=True)
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=staged_data,
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+    )
+    poisoned_working_dir = tmp_path / "poisoned-workspace"
+
+    vols = ActivitysimRunner.get_asim_docker_vols(
+        settings,
+        working_dir=str(poisoned_working_dir),
+        launch_context=launch_context,
+    )
+
+    assert str(poisoned_working_dir) not in " ".join(vols)
+    assert vols[os.path.abspath(staged_data)]["mode"] == "ro"
+    for dirname in ("configs_extended", "configs_mp", "configs_sh_compile"):
+        assert vols[os.path.abspath(staged_configs / dirname)]["mode"] == "ro"
+    assert vols[os.path.abspath(launch_context.output_dir)]["mode"] == "rw"
+
+
+def test_activitysim_docker_vols_preserve_nested_main_config_root(
+    tmp_path: Path,
+) -> None:
+    """The validated nested root is staged and mounted without ambient fallback."""
+
+    settings = _settings()
+    settings.activitysim.main_configs_dir = "scenarios/sfbay/configs"
+    config_roots = required_activitysim_config_roots(
+        settings.activitysim.main_configs_dir
+    )
+    staged_configs = tmp_path / "native-launch" / "configs"
+    for root in config_roots:
+        root.path_under(staged_configs).mkdir(parents=True)
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "native-launch" / "data",
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        requires_staged_config_dirs=True,
+        config_roots=config_roots,
+    )
+
+    vols = ActivitysimRunner.get_asim_docker_vols(
+        settings,
+        working_dir=str(tmp_path / "ambient-workspace"),
+        launch_context=launch_context,
+    )
+
+    nested_root = staged_configs / "scenarios" / "sfbay" / "configs"
+    remote_workdir = "/activitysim/activitysim/examples/prototype_mtc_clean"
+    assert vols[str(nested_root.resolve())] == {
+        "bind": f"{remote_workdir}/configs",
+        "mode": "ro",
+    }
+    assert str(tmp_path / "ambient-workspace") not in " ".join(vols)
+
+
+def test_activitysim_docker_vols_reject_missing_staged_config_before_launch(
+    tmp_path: Path,
+) -> None:
+    """A missing staged overlay must fail instead of falling back to workspace."""
+    settings = _settings()
+    staged_configs = tmp_path / "native-launch" / "configs"
+    (staged_configs / "configs_extended").mkdir(parents=True)
+    (staged_configs / "configs_mp").mkdir()
+    source = tmp_path / "identity-configs" / "configs_extended"
+    source.mkdir(parents=True)
+    config_roots = required_activitysim_config_roots("configs_extended")
+    launch_context = ActivitySimLaunchContext(
+        workspace_root=tmp_path,
+        mutable_data_dir=tmp_path / "native-launch" / "data",
+        output_dir=tmp_path / "private-output",
+        compile_output_dir=tmp_path / "private-compile-output",
+        mutable_configs_dir=staged_configs,
+        runtime_cache_dir=tmp_path / "private-output" / "cache",
+        runtime_zarr_path=tmp_path / "private-output" / "cache" / "skims.zarr",
+        shared_cache_dir=tmp_path / "shared-cache",
+        shared_tmp_dir=tmp_path / "tmp",
+        requires_staged_config_dirs=True,
+        config_roots=config_roots,
+    )
+
+    with pytest.raises(RuntimeError, match="missing staged configuration directory"):
+        ActivitysimRunner.get_asim_docker_vols(settings, launch_context=launch_context)
+
+
 def test_activitysim_numba_warmup_args_skip_configs_mp():
     settings = _settings()
     working_dir = "/tmp/pilates-workdir"
@@ -58,6 +169,22 @@ def test_activitysim_numba_warmup_args_skip_configs_mp():
         in args
     )
     assert "/activitysim/activitysim/examples/prototype_mtc_clean/configs" in args
+
+
+def test_activitysim_numba_warmup_args_keep_one_compile_output_destination():
+    settings = _settings()
+    working_dir = "/tmp/pilates-workdir"
+    vols = ActivitysimRunner.get_asim_docker_vols(settings, working_dir=working_dir)
+    vols["/tmp/private-compile-cache"] = {
+        "bind": "/activitysim/activitysim/examples/prototype_mtc_clean/output/cache",
+        "mode": "rw",
+    }
+
+    args = ActivitysimNumbaWarmup.get_asim_additional_args(settings, vols, True)
+
+    output_root = "/activitysim/activitysim/examples/prototype_mtc_clean/output"
+    assert args.count("-o") == 1
+    assert args[args.index("-o") + 1] == output_root
 
 
 def test_activitysim_run_args_include_configs_mp():
@@ -83,6 +210,25 @@ def test_activitysim_container_environment_blocks_user_site():
     assert env["NUMBA_CACHE_DIR"] == "/app/numba_cache/numba"
     assert env["XDG_CACHE_HOME"] == "/app/numba_cache"
     assert env["PYTHONNOUSERSITE"] == "1"
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1"
+
+
+def test_activitysim_container_environment_passes_thread_caps(monkeypatch):
+    monkeypatch.setenv("OMP_NUM_THREADS", "4")
+    monkeypatch.setenv("MKL_NUM_THREADS", "4")
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "4")
+    monkeypatch.setenv("NUMEXPR_NUM_THREADS", "4")
+    monkeypatch.setenv("BLIS_NUM_THREADS", "4")
+    monkeypatch.setenv("VECLIB_MAXIMUM_THREADS", "4")
+
+    env = _asim_container_environment()
+
+    assert env["OMP_NUM_THREADS"] == "4"
+    assert env["MKL_NUM_THREADS"] == "4"
+    assert env["OPENBLAS_NUM_THREADS"] == "4"
+    assert env["NUMEXPR_NUM_THREADS"] == "4"
+    assert env["BLIS_NUM_THREADS"] == "4"
+    assert env["VECLIB_MAXIMUM_THREADS"] == "4"
 
 
 def test_activitysim_container_environment_passes_zarr_debug_flags(monkeypatch):

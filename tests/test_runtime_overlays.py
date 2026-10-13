@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 from pilates.workflows.artifact_keys import (
     USIM_DATASTORE_BASE_H5,
     USIM_DATASTORE_CURRENT_H5,
@@ -8,6 +10,7 @@ from pilates.workflows.artifact_keys import (
 from pilates.workflows.runtime_overlays import (
     StepRuntimeOverlayRule,
     resolve_runtime_input_output_overrides,
+    resolve_runtime_output_overrides,
     resolve_runtime_role_policy_overrides,
 )
 from pilates.workflows.surface import RunMode
@@ -98,3 +101,39 @@ def test_runtime_overlays_promote_postprocess_h5_inputs_with_land_use() -> None:
         USIM_DATASTORE_CURRENT_H5,
     )
     assert optional_inputs == ("existing_optional", USIM_DATASTORE_BASE_H5)
+
+
+def test_runtime_outputs_treat_urbansim_forecast_alias_as_optional() -> None:
+    required_outputs, optional_outputs = resolve_runtime_output_overrides(
+        step_name="urbansim_run",
+        settings=SimpleNamespace(),
+        required_outputs=("usim_datastore_h5",),
+        optional_outputs=("usim_forecast_output",),
+    )
+
+    assert required_outputs == ("usim_datastore_h5",)
+    assert optional_outputs == ("usim_forecast_output",)
+
+
+def test_runtime_outputs_make_atlas_accessibility_conditional() -> None:
+    required_outputs, optional_outputs = resolve_runtime_output_overrides(
+        step_name="atlas_preprocess",
+        settings=SimpleNamespace(atlas=SimpleNamespace(beamac=0)),
+        required_outputs=("atlas_households_csv",),
+        optional_outputs=("atlas_accessibility_csv",),
+    )
+
+    assert required_outputs == ("atlas_households_csv",)
+    assert optional_outputs == ("atlas_accessibility_csv",)
+
+
+def test_runtime_outputs_require_atlas_accessibility_when_beamac_enabled() -> None:
+    required_outputs, optional_outputs = resolve_runtime_output_overrides(
+        step_name="atlas_preprocess",
+        settings=SimpleNamespace(atlas=SimpleNamespace(beamac=1)),
+        required_outputs=("atlas_households_csv",),
+        optional_outputs=("atlas_accessibility_csv",),
+    )
+
+    assert required_outputs == ("atlas_households_csv", "atlas_accessibility_csv")
+    assert optional_outputs == ()

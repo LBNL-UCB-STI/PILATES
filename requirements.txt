@@ -7,7 +7,7 @@ pydantic>=2.0
 pyparsing==3.2.5
 
 # Scientific/data packages
-numpy<2.0
+numpy>=2.0
 pandas>=1.5.0
 scipy>=1.11.0
 numexpr==2.10.2
@@ -16,7 +16,7 @@ py-cpuinfo
 blosc2>=2.3.0
 tables>=3.9.0,<4.0
 h5py
-matplotlib==3.7.1
+matplotlib>=3.8.0
 
 # Geospatial packages
 shapely>=1.8.5
@@ -24,7 +24,7 @@ pyproj>=3.6.1
 geopandas>=0.11.1
 
 # Data format packages
-pyarrow>=10.0.1
+pyarrow>=22.0.0
 fastparquet>=0.8.3
 cramjam>=2.3.0
 fsspec

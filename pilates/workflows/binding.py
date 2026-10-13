@@ -45,10 +45,7 @@ from pilates.utils.coupler_helpers import (
 from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
 from pilates.utils.io import get_traffic_assignment_model
 from pilates.utils.state_access import uses_input_datastore
-from pilates.utils.usim_h5 import (
-    ensure_usim_population_year_table_aliases,
-    resolve_usim_population_table_paths,
-)
+from pilates.utils.usim_h5 import resolve_usim_population_table_paths
 from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.artifact_keys import (
@@ -425,7 +422,10 @@ def _urbansim_datastore_candidates_for_year(
             mapping[_CANDIDATE_PATHS_METADATA_KEY] = candidate_paths
         return mapping or None
 
-    if is_start_year():
+    start_year = getattr(state, "start_year", None)
+    is_base_year = (year == start_year) if start_year is not None else is_start_year()
+
+    if is_base_year:
         candidate_paths.update(
             _candidate_paths_metadata(
                 (USIM_DATASTORE_CURRENT_H5, (input_path, input_archive_path)),
@@ -574,31 +574,6 @@ def _activitysim_population_source(
             selected_path = os.fspath(selected)
             if os.path.exists(selected_path):
                 require_exact_year = _requires_exact_activitysim_population_year(state)
-                if (
-                    require_exact_year
-                    and target_year is not None
-                    and Path(selected_path).stem.endswith("_population_source")
-                ):
-                    try:
-                        alias_result = ensure_usim_population_year_table_aliases(
-                            h5_path=selected_path,
-                            year=target_year,
-                        )
-                    except Exception:
-                        logger.debug(
-                            "Failed to repair ActivitySim population-source year "
-                            "aliases for %s",
-                            selected_path,
-                            exc_info=True,
-                        )
-                    else:
-                        created = alias_result.get("created") or []
-                        if created:
-                            logger.info(
-                                "Added exact-year population table aliases for %s: %s",
-                                selected_path,
-                                created,
-                            )
                 try:
                     mapping.update(
                         resolve_usim_population_table_paths(
@@ -828,7 +803,7 @@ def _pilot_binding_overrides() -> Dict[str, tuple[ArtifactBindingRule, ...]]:
             ArtifactBindingRule(
                 semantic_key=LINKSTATS_WARMSTART,
                 required=False,
-                preferred_keys=(LINKSTATS_WARMSTART, LINKSTATS),
+                preferred_keys=(LINKSTATS, LINKSTATS_WARMSTART),
             ),
             ArtifactBindingRule(
                 semantic_key=ATLAS_VEHICLES2_OUTPUT,
@@ -1246,9 +1221,17 @@ def _restart_urbansim_required_artifacts(
 
     usim_data_dir = workspace.get_usim_mutable_data_dir()
     usim_base_fname = get_usim_datastore_fname_fn(settings, io="input")
-    required: Dict[str, str] = {
-        USIM_DATASTORE_BASE_H5: os.path.join(usim_data_dir, usim_base_fname)
-    }
+    local_base_path = Path(usim_data_dir) / usim_base_fname
+    fallback_base_path = archive_fallback_path(
+        state=state,
+        workspace=workspace,
+        local_path=local_base_path,
+    )
+    existing_base = first_existing_path(local_base_path, fallback_base_path)
+    base_target = (
+        str(existing_base) if existing_base is not None else str(local_base_path)
+    )
+    required: Dict[str, str] = {USIM_DATASTORE_BASE_H5: base_target}
 
     region = getattr(getattr(settings, "run", None), "region", None)
     urbansim_cfg = getattr(settings, "urbansim", None)
@@ -1325,7 +1308,7 @@ def _restart_activitysim_required_artifacts(
             settings=settings,
             state=state,
             workspace=workspace,
-            year=getattr(state, "year", getattr(state, "forecast_year", None)),
+            year=resolve_forecast_year(state),
         )
         if datastore_candidates:
             for semantic_key in (
@@ -1450,4 +1433,11 @@ def is_restart_prebootstrap_deferred_artifact_key(key: str) -> bool:
         "beam_mutable_data_dir",
         "beam_region_input_dir",
         "beam_primary_config_file",
+        "usim_datastore_base_h5",
+        "omx_skims",
+        "hh_size",
+        "income_rates",
+        "relmap",
+        "schools",
+        "school_districts",
     }

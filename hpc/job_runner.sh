@@ -31,37 +31,103 @@ stage_file=""
 partition_arg="lr7"
 account_arg=""
 high_mem=false
+beam_preprocess_acceptance_manifest=""
+activitysim_run_acceptance_manifest=""
+editable_consist=""
+activitysim_run_acceptance_image=""
+urbansim_h5_snapshot_acceptance_manifest=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
     -c)
-        settings_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -c requires a settings file path." >&2
+            exit 2
+        fi
+        settings_file="$2"
         shift 2
         ;;
     -s)
-        stage_file="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -s requires a stage file path." >&2
+            exit 2
+        fi
+        stage_file="$2"
         shift 2
         ;;
     -p)
-        partition_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -p requires a partition name." >&2
+            exit 2
+        fi
+        partition_arg="$2"
         shift 2
         ;;
     -a|--account)
-        account_arg="${2:-}"
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: -a/--account requires an account name." >&2
+            exit 2
+        fi
+        account_arg="$2"
         shift 2
         ;;
     --high-mem|-H)
         high_mem=true
         shift
         ;;
+    --beam-preprocess-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --beam-preprocess-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        beam_preprocess_acceptance_manifest="$2"
+        shift 2
+        ;;
+    --activitysim-run-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --activitysim-run-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        activitysim_run_acceptance_manifest="$2"
+        shift 2
+        ;;
+    --editable-consist)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --editable-consist requires an absolute Consist checkout path." >&2
+            exit 2
+        fi
+        editable_consist="$2"
+        shift 2
+        ;;
+    --activitysim-image)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --activitysim-image requires an immutable docker:// image reference." >&2
+            exit 2
+        fi
+        activitysim_run_acceptance_image="$2"
+        shift 2
+        ;;
+    --urbansim-h5-snapshot-acceptance)
+        if [ -z "${2:-}" ]; then
+            echo "ERROR: --urbansim-h5-snapshot-acceptance requires an input manifest path." >&2
+            exit 2
+        fi
+        urbansim_h5_snapshot_acceptance_manifest="$2"
+        shift 2
+        ;;
     -h|--help)
-        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]"
+        echo "Usage: $0 [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json [--editable-consist /absolute/consist] [--activitysim-image docker://image@sha256:digest]] [--urbansim-h5-snapshot-acceptance input-manifest.json]"
         echo "  -a, --account: Slurm account name (required)"
         echo "  --high-mem: for lr7 only, request 480G instead of default 240G."
+        echo "  --beam-preprocess-acceptance: run the isolated cold-to-fresh BEAM preprocess acceptance harness."
+        echo "  --activitysim-run-acceptance: run the isolated cold-to-fresh ActivitySim run acceptance harness."
+        echo "  --editable-consist: explicit source for an editable ActivitySim pre-merge acceptance manifest."
+        echo "  --activitysim-image: immutable singularity image override for ActivitySim acceptance only."
+        echo "  --urbansim-h5-snapshot-acceptance: capture and reconcile the UrbanSim HDF5 snapshot acceptance harness."
         exit 0
         ;;
     *)
-        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H]\n" "$0"
+        printf "Usage: %s [-c settings file] [-s stage file] [-p partition] [-a account] [--high-mem|-H] [--beam-preprocess-acceptance input-manifest.json] [--activitysim-run-acceptance input-manifest.json [--editable-consist /absolute/consist] [--activitysim-image docker://image@sha256:digest]] [--urbansim-h5-snapshot-acceptance input-manifest.json]\n" "$0"
         exit 2
         ;;
     esac
@@ -163,10 +229,85 @@ stage_path=""
 if [ -n "$stage_file" ]; then
     stage_path="$(resolve_path "$stage_file")"
 fi
+beam_preprocess_acceptance_manifest_path=""
+if [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    beam_preprocess_acceptance_manifest_path="$(resolve_path "$beam_preprocess_acceptance_manifest")"
+fi
+activitysim_run_acceptance_manifest_path=""
+if [ -n "$activitysim_run_acceptance_manifest" ]; then
+    activitysim_run_acceptance_manifest_path="$(resolve_path "$activitysim_run_acceptance_manifest")"
+fi
+urbansim_h5_snapshot_acceptance_manifest_path=""
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    urbansim_h5_snapshot_acceptance_manifest_path="$(resolve_path "$urbansim_h5_snapshot_acceptance_manifest")"
+fi
 
 if [ ! -f "$settings_template_path" ]; then
     echo "ERROR: settings file not found: $settings_template_path"
     exit 1
+fi
+if [ -n "$beam_preprocess_acceptance_manifest" ] \
+    && [ ! -f "$beam_preprocess_acceptance_manifest_path" ]; then
+    echo "ERROR: beam preprocess acceptance input manifest not found: $beam_preprocess_acceptance_manifest_path" >&2
+    exit 1
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ ! -f "$activitysim_run_acceptance_manifest_path" ]; then
+    echo "ERROR: ActivitySim run acceptance input manifest not found: $activitysim_run_acceptance_manifest_path" >&2
+    exit 1
+fi
+if [ -n "$editable_consist" ] \
+    && [ -z "$activitysim_run_acceptance_manifest" ] \
+    && [ -z "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    echo "ERROR: --editable-consist is only valid with --activitysim-run-acceptance or --urbansim-h5-snapshot-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_image" ] \
+    && [ -z "$activitysim_run_acceptance_manifest" ]; then
+    echo "ERROR: --activitysim-image is only valid with --activitysim-run-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_image" ] \
+    && ! printf '%s\n' "$activitysim_run_acceptance_image" | grep -Eq '^docker://[A-Za-z0-9._/@:+-]+@sha256:[0-9a-f]{64}$'; then
+    echo "ERROR: --activitysim-image must be an immutable docker:// image digest." >&2
+    exit 2
+fi
+if [ -n "$editable_consist" ] \
+    && { [ "${editable_consist#/}" = "$editable_consist" ] || [ ! -d "$editable_consist" ]; }; then
+    echo "ERROR: --editable-consist must name an existing absolute Consist checkout." >&2
+    exit 2
+fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
+    && [ ! -f "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
+    echo "ERROR: UrbanSim HDF5 snapshot acceptance input manifest not found: $urbansim_h5_snapshot_acceptance_manifest_path" >&2
+    exit 1
+fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] \
+    && [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with --beam-preprocess-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ -n "$beam_preprocess_acceptance_manifest" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with --beam-preprocess-acceptance." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] \
+    && [ -n "$urbansim_h5_snapshot_acceptance_manifest" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with --urbansim-h5-snapshot-acceptance." >&2
+    exit 2
+fi
+if [ -n "$beam_preprocess_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --beam-preprocess-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
+if [ -n "$activitysim_run_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --activitysim-run-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
+fi
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest" ] && [ -n "$stage_file" ]; then
+    echo "ERROR: --urbansim-h5-snapshot-acceptance cannot be combined with -s/--stage." >&2
+    exit 2
 fi
 
 mkdir -p "/global/scratch/users/$USER/pilates_logs"
@@ -177,7 +318,74 @@ else
     sed "s|\${BEAM_MEMORY}|$BEAM_MEMORY|g" "$settings_template_path" > "$generated_settings_path"
 fi
 
+if [ -n "$activitysim_run_acceptance_image" ]; then
+    image_override_path="${generated_settings_path}.activitysim-image-override"
+    if ! awk -v image="$activitysim_run_acceptance_image" '
+        /^  singularity_images:[[:space:]]*$/ {
+            in_singularity_images = 1
+            print
+            next
+        }
+        in_singularity_images && /^  [[:alnum:]_]+:[[:space:]]*$/ { in_singularity_images = 0 }
+        in_singularity_images && /^    activitysim:[[:space:]]*/ {
+            print "    activitysim: " image
+            replaced = 1
+            next
+        }
+        { print }
+        END {
+            if (!replaced) {
+                exit 1
+            }
+        }
+    ' "$generated_settings_path" > "$image_override_path"; then
+        echo "ERROR: --activitysim-image could not replace infrastructure.singularity_images.activitysim in $settings_template_path." >&2
+        exit 2
+    fi
+    mv "$image_override_path" "$generated_settings_path"
+fi
+
 export BEAM_MEMORY
+
+beam_preprocess_acceptance_evidence_dir=""
+beam_preprocess_acceptance_evidence_manifest=""
+if [ -n "$beam_preprocess_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_BEAM_PREPROCESS_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    beam_preprocess_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    beam_preprocess_acceptance_evidence_manifest="$beam_preprocess_acceptance_evidence_dir/submitted-input-manifest.json"
+    mkdir -p "$beam_preprocess_acceptance_evidence_dir"
+    cp "$beam_preprocess_acceptance_manifest_path" "$beam_preprocess_acceptance_evidence_manifest"
+    cp "$generated_settings_path" "$beam_preprocess_acceptance_evidence_dir/generated-settings.yaml"
+    echo "BEAM preprocess acceptance evidence: $beam_preprocess_acceptance_evidence_dir"
+fi
+
+activitysim_run_acceptance_evidence_dir=""
+activitysim_run_acceptance_evidence_manifest=""
+if [ -n "$activitysim_run_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_ACTIVITYSIM_RUN_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    activitysim_run_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    activitysim_run_acceptance_evidence_manifest="$activitysim_run_acceptance_evidence_dir/submitted-input-manifest.json"
+    mkdir -p "$activitysim_run_acceptance_evidence_dir"
+    cp "$activitysim_run_acceptance_manifest_path" "$activitysim_run_acceptance_evidence_manifest"
+    cp "$generated_settings_path" "$activitysim_run_acceptance_evidence_dir/generated-settings.yaml"
+    if [ -n "$activitysim_run_acceptance_image" ]; then
+        printf '%s\n' "$activitysim_run_acceptance_image" \
+            > "$activitysim_run_acceptance_evidence_dir/activitysim-image-override.txt"
+    fi
+    echo "ActivitySim run acceptance evidence: $activitysim_run_acceptance_evidence_dir"
+fi
+
+urbansim_h5_snapshot_acceptance_evidence_dir=""
+urbansim_h5_snapshot_acceptance_evidence_manifest=""
+if [ -n "$urbansim_h5_snapshot_acceptance_manifest_path" ]; then
+    acceptance_root="${PILATES_URBANSIM_H5_SNAPSHOT_ACCEPTANCE_ROOT:-/global/scratch/users/$USER/pilates-boundary-promotions}"
+    urbansim_h5_snapshot_acceptance_evidence_dir="${acceptance_root%/}/$JOB_NAME"
+    urbansim_h5_snapshot_acceptance_evidence_manifest="$urbansim_h5_snapshot_acceptance_evidence_dir/submitted-input-manifest.json"
+    mkdir -p "$urbansim_h5_snapshot_acceptance_evidence_dir"
+    cp "$urbansim_h5_snapshot_acceptance_manifest_path" "$urbansim_h5_snapshot_acceptance_evidence_manifest"
+    cp "$generated_settings_path" "$urbansim_h5_snapshot_acceptance_evidence_dir/generated-settings.yaml"
+    echo "UrbanSim HDF5 snapshot acceptance evidence: $urbansim_h5_snapshot_acceptance_evidence_dir"
+fi
 
 sbatch_args=(
     --partition="$PARTITION"
@@ -189,10 +397,43 @@ sbatch_args=(
     --job-name="$JOB_NAME"
     --output="$JOB_LOG_FILE_PATH"
     --time="$EXPECTED_EXECUTION_DURATION"
+    --signal="${PILATES_SLURM_SIGNAL:-B:SIGTERM@120}"
     --export="ALL,JOB_LOG_FILE_PATH=$JOB_LOG_FILE_PATH"
     "$PILATES_DIR/hpc/job.sh"
-    "$generated_settings_path"
 )
+if [ -n "$activitysim_run_acceptance_evidence_dir" ]; then
+    sbatch_args+=(
+        --activitysim-run-acceptance
+        "$generated_settings_path"
+        "$activitysim_run_acceptance_evidence_manifest"
+        "$activitysim_run_acceptance_evidence_dir"
+    )
+    if [ -n "$editable_consist" ]; then
+        sbatch_args+=(
+            --editable-consist
+            "$editable_consist"
+        )
+    fi
+elif [ -n "$urbansim_h5_snapshot_acceptance_evidence_dir" ]; then
+    if [ -n "$editable_consist" ]; then
+        export CONSIST_SRC_DIR="$editable_consist"
+    fi
+    sbatch_args+=(
+        --urbansim-h5-snapshot-acceptance
+        "$generated_settings_path"
+        "$urbansim_h5_snapshot_acceptance_evidence_manifest"
+        "$urbansim_h5_snapshot_acceptance_evidence_dir"
+    )
+elif [ -n "$beam_preprocess_acceptance_evidence_dir" ]; then
+    sbatch_args+=(
+        --beam-preprocess-acceptance
+        "$generated_settings_path"
+        "$beam_preprocess_acceptance_evidence_manifest"
+        "$beam_preprocess_acceptance_evidence_dir"
+    )
+else
+    sbatch_args+=("$generated_settings_path")
+fi
 if [ -n "$stage_path" ]; then
     sbatch_args+=("$stage_path")
 fi

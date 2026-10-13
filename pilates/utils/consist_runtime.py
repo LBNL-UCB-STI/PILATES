@@ -475,3 +475,16 @@ def _ensure_legacy_table_path_meta(
     except Exception:
         pass
     return artifact
+
+
+def dispose_tracker(tracker: Optional[TrackerLike]) -> None:
+    """Safely dispose the underlying SQLAlchemy engine / DuckDB file handles."""
+    if tracker is None:
+        return
+    db = getattr(tracker, "db", None)
+    engine = getattr(db, "engine", None)
+    if engine is not None and hasattr(engine, "dispose"):
+        try:
+            engine.dispose()
+        except Exception:
+            logger.warning("Failed to dispose tracker database engine", exc_info=True)

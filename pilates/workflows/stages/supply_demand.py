@@ -17,7 +17,6 @@ from .supply_demand_activity import (
 from .supply_demand_beam import (
     TrafficAssignmentPhaseInputs,
     _run_traffic_assignment_phase,
-    beam_checkpoint_resume_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +28,7 @@ def run_supply_demand_stage(
     coupler: CouplerProtocol,
     year: int,
     handoff: LandUseToSupplyDemandHandoff,
+    on_activity_demand_boundary: Optional[Callable[[int], None]] = None,
     on_iteration_boundary: Optional[Callable[[int], None]] = None,
     context: WorkflowRuntimeContext,
 ) -> None:
@@ -58,6 +58,10 @@ def run_supply_demand_stage(
     on_iteration_boundary : Optional[Callable[[int], None]], optional
         Callback invoked after each outer iteration completes. Intended for
         orchestration-level safe-point actions such as DB snapshots.
+    on_activity_demand_boundary : Optional[Callable[[int], None]], optional
+        Callback invoked after a successful ActivitySim phase has been archived
+        and before BEAM begins. Intended for an orchestration-level durability
+        checkpoint of the ActivitySim handoff.
 
     A committed ``beam_run_completed -> beam_postprocess`` checkpoint is the
     only mid-stage restart boundary. Other resumed frontiers run their ordinary
@@ -87,16 +91,9 @@ def run_supply_demand_stage(
     for i in range(state.iteration, total_iters):
         state.iteration = i
         formatted_print(f"SUPPLY/DEMAND ITERATION {i + 1}/{total_iters}")
-        committed_beam_resume = beam_checkpoint_resume_requested(state=state)
 
         # C1. ACTIVITY DEMAND
-        if committed_beam_resume:
-            logger.info(
-                "[supply_demand][restart] committed BEAM checkpoint dispatch "
-                "preempts ActivitySim recovery for iteration=%s",
-                i,
-            )
-        elif state.should_run(
+        if state.should_run(
             state.Stage.supply_demand_loop,
             i,
             state.Stage.activity_demand,
@@ -110,6 +107,9 @@ def run_supply_demand_stage(
                 inputs=activity_demand_inputs,
                 context=context,
             )
+            flush_archive_queue(timeout=300, fail_on_timeout=False)
+            if on_activity_demand_boundary is not None:
+                on_activity_demand_boundary(i)
         elif settings.run.models.activity_demand is not None:
             raise RuntimeError(
                 "ActivitySim is skipped outside the committed BEAM checkpoint "

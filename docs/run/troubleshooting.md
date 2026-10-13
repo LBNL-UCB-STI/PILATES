@@ -22,7 +22,7 @@ often downstream of a missing bootstrap or staging artifact.
 - If restart startup complains about missing files, check the archive run directory and the local workspace roots that the launcher resolved.
 - If `restart_strict` is true, PILATES can fail after bootstrap when required restart artifacts are still missing.
 - If you expected rewind-style resume, make sure `--allow-rewind-resume` was passed on the command line.
-- If the launcher prints a restart command on failure, use that command as the next recovery step.
+- If restart raises `Interrupted BEAM postprocess detected`, a prior run died during `beam_postprocess` while modifying `skims.zarr` in place. Follow the manual recovery procedure: restore `skims.zarr` from the previous iteration/step's archived artifact, delete `.beam_postprocess_in_progress` from both the beam output directory and archive directory, and rerun. See [Restart and Resume](restart_and_resume.md#operator-recovery-procedure-for-interrupted-postprocess).
 - If a cache hit did not restore the file you expected, check whether that file is a declared workflow output or only model-local scratch.
 
 ## Data Layout

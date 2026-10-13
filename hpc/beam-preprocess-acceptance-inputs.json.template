@@ -1,0 +1,10 @@
+{
+  "beam_input_root": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_BEAM_INPUT_ROOT}",
+  "inputs": {
+    "plans_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/plans.parquet",
+    "households_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/households.parquet",
+    "persons_beam_in": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/persons.parquet",
+    "atlas_vehicles2_output": "${PILATES_BEAM_PREPROCESS_ACCEPTANCE_INPUT_ROOT}/vehicles2_2019.csv"
+  },
+  "cohort": {"workflow_year": 2017, "forecast_year": 2019, "iteration": 0}
+}

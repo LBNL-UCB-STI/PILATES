@@ -14,7 +14,6 @@ from pilates.generic.model import Model
 from abc import ABC
 
 from pilates.utils import consist_runtime as cr
-from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 from pilates.utils.settings_helper import get as get_setting
 
@@ -25,9 +24,14 @@ CONSIST_CONTAINER_DEBUG_STREAM_ENV = "CONSIST_CONTAINER_DEBUG_STREAM"
 
 RunnerInputsT = TypeVar("RunnerInputsT")
 RunnerOutputsT = TypeVar("RunnerOutputsT")
+RunnerLaunchContextT = TypeVar("RunnerLaunchContextT")
 
 
-class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
+class GenericRunner(
+    Model,
+    ABC,
+    Generic[RunnerInputsT, RunnerOutputsT, RunnerLaunchContextT],
+):
     """
     Base class for model runners with model-specific input and output types.
     """
@@ -83,27 +87,27 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
     def run(
         self,
-        store: RunnerInputsT,
-        workspace: Workspace,
+        inputs: RunnerInputsT,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Execute the model run.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            inputs: The model-specific input prepared by preprocessing.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
         """
         self.state.set_sub_stage_progress("runner")
-        return self._run(store, workspace)
+        return self._run(inputs, launch_context)
 
     @abc.abstractmethod
     def _run(
         self,
-        store: RunnerInputsT,
-        workspace: Workspace,
+        inputs: RunnerInputsT,
+        launch_context: RunnerLaunchContextT,
     ) -> RunnerOutputsT:
         """
         Do the model run.
@@ -112,8 +116,8 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
         effects.
 
         Args:
-            store: The model-specific input prepared by preprocessing.
-            workspace (Workspace): The workspace.
+            inputs: The model-specific input prepared by preprocessing.
+            launch_context: Model-specific resolved runtime values needed to launch.
 
         Returns:
             The model-specific outputs prepared by the runner.
@@ -152,6 +156,12 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
 
         mounts = GenericRunner._extract_mounts(volumes)
         consist_volumes = {host: container for host, container, _mode in mounts}
+        consist_volume_modes = {
+            host: mode for host, _container, mode in mounts if mode != "rw"
+        }
+        volume_mode_kwargs: dict[str, dict[str, str]] = {}
+        if consist_volume_modes:
+            volume_mode_kwargs["volume_modes"] = consist_volume_modes
         runtime_tmp_base = GenericRunner._resolve_runtime_tmp_base(mounts)
 
         # Handle command + args: Split if string, combine with args
@@ -233,6 +243,7 @@ class GenericRunner(Model, ABC, Generic[RunnerInputsT, RunnerOutputsT]):
                 image=image,
                 command=full_command_list,
                 volumes=consist_volumes,
+                **volume_mode_kwargs,
                 inputs=input_artifacts or [],
                 outputs=output_paths if output_paths is not None else [],
                 environment=environment or {},

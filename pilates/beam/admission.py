@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Mapping, Protocol
 
 import consist
 
@@ -38,9 +38,16 @@ def _linkstats_admission_config(
     return beam_config.admission.linkstats
 
 
+def has_staged_linkstats_admission_policy(*, settings: PilatesConfig) -> bool:
+    """Return whether BEAM must evaluate staged-linkstats admission policy."""
+    return _linkstats_admission_config(settings) is not None
+
+
 def preflight_staged_linkstats_admission(
     *,
     tracker: consist.Tracker,
+    metadata_logger: AdmissionMetadataTracker,
+    existing_admission_reports: Mapping[str, object],
     settings: PilatesConfig,
     launch_reference: BeamLaunchPathReference,
     report_dir: Path,
@@ -71,7 +78,12 @@ def preflight_staged_linkstats_admission(
         expected_run_id=str(linkstats_config.expected_run_id),
         expected_bytes_path=linkstats_config.expected_bytes_path,
     )
-    _persist_admission_report(report_dir=report_dir, tracker=tracker, report=report)
+    _persist_admission_report(
+        report_dir=report_dir,
+        metadata_logger=metadata_logger,
+        existing_admission_reports=existing_admission_reports,
+        report=report,
+    )
 
     if report.outcome == "verified":
         return report
@@ -104,7 +116,8 @@ def reject_or_warn_for_missing_staged_linkstats(*, settings: PilatesConfig) -> N
 def _persist_admission_report(
     *,
     report_dir: Path,
-    tracker: AdmissionMetadataTracker,
+    metadata_logger: AdmissionMetadataTracker,
+    existing_admission_reports: Mapping[str, object],
     report: consist.AdmissionReport,
 ) -> None:
     """Write deterministic sidecar and run metadata before policy can reject."""
@@ -112,4 +125,6 @@ def _persist_admission_report(
     report_path = Path(report_dir) / "admission" / "beam-linkstats-warmstart.json"
     report_path.parent.mkdir(parents=True, exist_ok=True)
     report_path.write_text(report.canonical_json() + "\n", encoding="utf-8")
-    tracker.log_meta(admission_reports={_LINKSTATS_ROLE: payload})
+    admission_reports = dict(existing_admission_reports)
+    admission_reports[_LINKSTATS_ROLE] = payload
+    metadata_logger.log_meta(admission_reports=admission_reports)

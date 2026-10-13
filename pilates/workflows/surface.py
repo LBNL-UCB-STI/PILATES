@@ -20,6 +20,7 @@ from pilates.workflows._profile import (
 )
 from pilates.workflows.runtime_overlays import (
     resolve_runtime_input_output_overrides,
+    resolve_runtime_output_overrides,
     resolve_runtime_role_policy_overrides,
 )
 
@@ -393,6 +394,12 @@ def _build_step_runtime_surface(
         run_mode=run_mode,
         required_inputs=required_inputs,
         optional_inputs=optional_inputs,
+    )
+    required_outputs, optional_outputs = resolve_runtime_output_overrides(
+        step_name=step_name,
+        settings=settings,
+        required_outputs=required_outputs,
+        optional_outputs=optional_outputs,
     )
 
     policy_overrides = resolve_runtime_role_policy_overrides(

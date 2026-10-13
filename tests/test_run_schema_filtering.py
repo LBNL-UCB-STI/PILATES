@@ -29,7 +29,11 @@ def _settings(
                 travel=traffic_assignment,
             )
         ),
-        activitysim=SimpleNamespace(replan_iters=0, main_configs_dir="configs"),
+        activitysim=SimpleNamespace(
+            replan_iters=0,
+            main_configs_dir="configs",
+            output_tables={"tables": []},
+        ),
         atlas=SimpleNamespace(scenario="baseline", adscen="baseline"),
     )
 

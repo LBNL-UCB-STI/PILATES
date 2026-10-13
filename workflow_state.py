@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from bisect import bisect_left
 from enum import Enum
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 import os
 import yaml
@@ -67,12 +70,17 @@ class WorkflowState:
         self.forecast_year: int | None = None
         self.file_loc = file_loc
         self.mirror_file_loc: Optional[str] = None
+        self.archive_run_dir: Optional[str | Path] = None
 
-        self.__asim_compiled = asim_compiled
+        # Kept as an ignored constructor argument so archived callers that
+        # still pass the legacy field can load. Numba warmup is node-local
+        # acceleration state, not durable workflow state.
+        del asim_compiled
 
         # Store settings for access by methods that need them
         self._settings = {
             "supply_demand_iters": 1,  # Default, will be updated in from_settings
+            "max_year_intervals": None,
             "land_use_enabled": land_use_enabled,
             "vehicle_ownership_model_enabled": vehicle_ownership_model_enabled,
             "activity_demand_enabled": activity_demand_enabled,
@@ -123,25 +131,6 @@ class WorkflowState:
         self._set_year_schedule(self._compute_year_schedule())
 
     @property
-    def asim_compiled(self):
-        if self.current_year is not None:
-            if self.__asim_compiled:
-                logger.info(
-                    "ActivitySim already compiled in year %s", self.current_year
-                )
-            else:
-                logger.info(
-                    "ActivitySim not compiled in year %s, so running compilation (this will take longer)",
-                    self.current_year,
-                )
-        return self.__asim_compiled
-
-    def compile_asim(self):
-        self.__asim_compiled = True
-        logger.info("Completed compiling activitysim in year %s", self.current_year)
-        self.write_state()
-
-    @property
     def year(self):
         return self.current_year
 
@@ -184,15 +173,24 @@ class WorkflowState:
         run_info_path: Optional[str] = None,
         data_initialized: bool = False,
     ):
+        stage_name: Optional[str] = None
+        if isinstance(current_stage, Enum):
+            stage_name = current_stage.name
+        elif isinstance(current_stage, str):
+            stage_name = current_stage
+
         to_save = {
             "year": year,
-            "stage": current_stage.name if current_stage else None,
+            "stage": stage_name,
             "iteration": iteration,
-            "asim_compiled": asim_compiled,
             "sub_stage_progress": sub_stage_progress,
             "run_info_path": run_info_path,
             "data_initialized": data_initialized,
         }
+        # Historic callers may still provide this positional field. It is
+        # intentionally ignored: a node-local Numba cache cannot determine
+        # cache eligibility or restart behavior.
+        del asim_compiled
         directory = os.path.dirname(file_loc)
         if directory:
             os.makedirs(directory, exist_ok=True)
@@ -215,7 +213,9 @@ class WorkflowState:
             else WorkflowState.Stage[stage_str]
         )
         iteration = data.get("iteration", 0) or 0
-        asim_compiled = data.get("asim_compiled", False)
+        # Accept old snapshots but never restore their warmup marker as
+        # workflow state.
+        asim_compiled = False
         sub_stage_progress = data.get("sub_stage_progress", None)
         run_info_path = data.get("run_info_path", None)
         data_initialized = data.get("data_initialized", False)
@@ -302,6 +302,7 @@ class WorkflowState:
         )
 
         out._settings["supply_demand_iters"] = settings.run.supply_demand_iters
+        out._settings["max_year_intervals"] = settings.run.max_year_intervals
 
         # If restarting from a saved state whose major stage is now disabled
         # (common during config/migration changes), reset to the first enabled stage.
@@ -447,7 +448,7 @@ class WorkflowState:
         targets = []
         if self.file_loc:
             targets.append(self.file_loc)
-        mirror = getattr(self, "mirror_file_loc", None)
+        mirror = self.mirror_file_loc
         if mirror and mirror not in targets:
             targets.append(mirror)
         for target in targets:
@@ -456,7 +457,7 @@ class WorkflowState:
                 self.current_sub_stage or self.current_major_stage,
                 target,
                 self.current_inner_iter,
-                self.__asim_compiled,
+                False,
                 self.sub_stage_progress,
                 self.run_info_path,
                 self.data_initialized,
@@ -551,7 +552,7 @@ class WorkflowState:
             cleanup_paths = []
             if self.file_loc:
                 cleanup_paths.append(self.file_loc)
-            mirror = getattr(self, "mirror_file_loc", None)
+            mirror = self.mirror_file_loc
             if mirror and mirror not in cleanup_paths:
                 cleanup_paths.append(mirror)
             for path in cleanup_paths:
@@ -709,7 +710,10 @@ class WorkflowState:
             )
             self._schedule_index = bisect_left(self._year_schedule, current_year)
         next_index = self._schedule_index + 1
-        if next_index < len(self._year_schedule):
+        max_year_intervals = self._settings["max_year_intervals"]
+        if next_index < len(self._year_schedule) and (
+            max_year_intervals is None or next_index < max_year_intervals
+        ):
             self.current_year = self._year_schedule[next_index]
             self._schedule_index = next_index
         else:

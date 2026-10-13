@@ -3,42 +3,29 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Mapping, Optional, TYPE_CHECKING
 
-from consist import Artifact
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
-from pilates.utils import consist_runtime as cr
 from pilates.utils.consist_types import (
     CouplerProtocol,
     ScenarioWithCoupler,
 )
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
-    archive_copy_now,
     artifact_to_existing_path,
-    flush_archive_queue,
-    set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
-from pilates.workflows.beam_checkpoint import (
-    PinnedClosureMember,
-    beam_checkpoint_record_present,
-    beam_postprocess_is_in_progress,
-    checkpoint_fingerprint_matches,
-    hydrate_pinned_closure,
-    mark_beam_postprocess_in_progress,
-    read_beam_run_checkpoint,
-    snapshot_and_publish_beam_run_checkpoint,
-    validate_pinned_closure_snapshot,
-    verify_archive_visible_pinned_closure_bytes,
-)
+from pilates.workflows.coupler_namespace import coupler_storage_value
+from consist import Artifact, Tracker
+from consist.api import archive_run_output_files
+from consist.protocols import ArtifactRecordLike
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import (
@@ -109,11 +96,11 @@ class TrafficAssignmentPhaseOutputs:
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
-    beam_cfg = getattr(settings, "beam", None)
-    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+    beam_cfg = settings.beam
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
     if skim_cfg is None:
         return "disabled"
-    return getattr(skim_cfg, "run_schedule", "standalone")
+    return skim_cfg.run_schedule
 
 
 def _stringify_mapping_values(mapping: Optional[Mapping[str, Any]]) -> Dict[str, str]:
@@ -186,7 +173,7 @@ def beam_preprocess_binding_diagnostic_payload(
             workspace.get_beam_mutable_data_dir(),
             settings.run.region,
         )
-        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config = settings.beam.config if settings.beam is not None else None
         if beam_config:
             beam_primary_config_file = os.path.join(
                 beam_region_input_dir,
@@ -246,14 +233,10 @@ def beam_preprocess_binding_diagnostic_payload(
         "key": "beam_restart_binding",
         "artifact_family": "beam_restart_diagnostic",
         "diagnostic": "beam_restart_binding",
-        "restart_run": bool(getattr(state, "is_restart_run", False)),
-        "workflow_year": getattr(state, "year", getattr(state, "current_year", None)),
-        "forecast_year": getattr(state, "forecast_year", None),
-        "iteration": getattr(
-            state,
-            "iteration",
-            getattr(state, "current_inner_iter", None),
-        ),
+        "restart_run": bool(state.is_restart_run),
+        "workflow_year": state.year,
+        "forecast_year": state.forecast_year,
+        "iteration": state.iteration,
         "input_keys": sorted(binding.required_roles),
         "optional_input_keys": sorted(binding.optional_roles),
         "bound_input_keys": sorted((binding.binding.inputs or {}).keys()),
@@ -281,7 +264,7 @@ def _emit_beam_preprocess_binding_diagnostic(
     workspace: Workspace,
     scenario: Optional[Any] = None,
 ) -> None:
-    if not bool(getattr(state, "is_restart_run", False)):
+    if not state.is_restart_run:
         return
     payload = beam_preprocess_binding_diagnostic_payload(
         binding=binding,
@@ -306,7 +289,7 @@ def _raise_if_restart_beam_config_missing(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> None:
-    if not bool(getattr(state, "is_restart_run", False)):
+    if not state.is_restart_run:
         return
 
     try:
@@ -420,13 +403,12 @@ def _collect_previous_beam_outputs(
     if previous_beam_outputs is not None:
         return previous_beam_outputs
 
-    get_value = getattr(coupler, "get", None)
-    if not callable(get_value):
+    if not isinstance(coupler, (CouplerProtocol, Mapping)):
         return None
 
     promoted_outputs: Dict[str, Any] = {}
     for key in (LINKSTATS_WARMSTART, LINKSTATS, BEAM_PLANS_OUT):
-        value = get_value(key)
+        value = coupler_storage_value(coupler, key)
         if value is None:
             continue
         if artifact_to_existing_path(value, workspace):
@@ -435,479 +417,120 @@ def _collect_previous_beam_outputs(
 
 
 def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
+    run_info_path = state.run_info_path
     if not run_info_path:
-        return None
+        archive_dir = state.archive_run_dir
+        return Path(archive_dir).expanduser().resolve() if archive_dir else None
     try:
         return Path(run_info_path).expanduser().resolve().parent
     except Exception:
         return None
 
 
-def _beam_checkpoint_scope(
-    *, state: WorkflowState, year: int, iteration: int
-) -> dict[str, int]:
-    return {
-        "year": int(state.year),
-        "forecast_year": int(year),
-        "iteration": int(iteration),
-    }
-
-
-def _beam_checkpoint_skim_variant(settings: PilatesConfig) -> str:
-    full_skim = settings.beam.full_skim
-    return str(full_skim.run_schedule) if full_skim is not None else "disabled"
-
-
-def beam_checkpoint_resume_requested(*, state: WorkflowState) -> bool:
-    """Whether restart state contains an authoritative BEAM checkpoint record."""
-
-    if not state.is_restart_run:
-        return False
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    return archive_run_dir is not None and beam_checkpoint_record_present(
-        archive_run_dir
-    )
-
-
-def _closure_artifact_kind(artifact: Any) -> str:
-    meta = artifact.meta
-    if not isinstance(meta, dict):
-        raise RuntimeError(
-            f"BEAM checkpoint artifact {artifact.key!r} has invalid metadata."
-        )
-    if meta.get("directory_artifact") is True:
-        return "directory"
-    if meta.get("file_bundle_artifact") is True:
-        return "file_bundle"
-    return "file"
-
-
-def _beam_postprocess_destination(
+def _archive_beam_run_outputs_native(
     *,
-    role: str,
-    output_key: str,
-    workspace: Workspace,
-    year: int,
-    iteration: int,
-) -> Path:
-    """Return the native resolver's exact postprocess input destination."""
-
-    if role == ZARR_SKIMS:
-        return Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-    del year, iteration
-    input_root = Path(workspace.get_beam_output_dir()) / ".pilates-consist-inputs"
-    if output_key.startswith("events_parquet_"):
-        return input_root / f"{output_key}.parquet"
-    if output_key.startswith("raw_od_skims_zarr"):
-        return input_root / f"{output_key}.zarr"
-    if output_key.startswith("raw_od_skims"):
-        return input_root / f"{output_key}.omx"
-    raise RuntimeError(
-        f"BEAM postprocess role has no exact native destination: {role}."
-    )
-
-
-def _rebind_beam_postprocess_closure_destinations(
-    *,
-    members: tuple[PinnedClosureMember, ...],
-    workspace: Workspace,
-    archive_run_dir: Path,
-    year: int,
-    iteration: int,
-) -> tuple[PinnedClosureMember, ...]:
-    """Bind a prior job's logical destinations to this job's workspace root."""
-
-    workspace_root = Path(workspace.full_path).expanduser().resolve()
-    run_name = archive_run_dir.name
-    rebound: list[PinnedClosureMember] = []
-    for member in members:
-        destination = (
-            _beam_postprocess_destination(
-                role=member.role,
-                output_key=member.output_key,
-                workspace=workspace,
-                year=year,
-                iteration=iteration,
-            )
-            .expanduser()
-            .resolve()
-        )
-        try:
-            workspace_relative = destination.relative_to(workspace_root)
-        except ValueError as error:
-            raise RuntimeError(
-                "BEAM checkpoint destination resolver escaped the current workspace: "
-                f"{destination}."
-            ) from error
-
-        expected_suffix = (run_name, *workspace_relative.parts)
-        if member.destination.parts[-len(expected_suffix) :] != expected_suffix:
-            raise RuntimeError(
-                "Committed BEAM checkpoint has a wrong logical destination for "
-                f"{member.output_key}: {member.destination}."
-            )
-        rebound.append(replace(member, destination=destination))
-    return tuple(rebound)
-
-
-def _resolve_beam_postprocess_closure(
-    *,
-    tracker: Any,
-    resolved_inputs: ResolvedStepInputs,
-    workspace: Workspace,
-    year: int,
-    iteration: int,
-    beam_run_id: str,
-) -> tuple[PinnedClosureMember, ...]:
-    """Freeze exactly one resolved native postprocess input closure."""
-
-    outputs_by_run: dict[str, Mapping[str, Any]] = {}
-    members: list[PinnedClosureMember] = []
-    destinations_seen: dict[Path, tuple[str, str]] = {}
-    selected_roles = tuple(
-        role
-        for role in (*resolved_inputs.required_roles, *resolved_inputs.optional_roles)
-        if resolved_inputs.source_by_role.get(role) != "missing"
-    )
-    if not selected_roles:
-        raise RuntimeError("Cannot commit an empty BEAM postprocess input closure.")
-
-    for role in selected_roles:
-        if role not in (resolved_inputs.binding.inputs or {}):
-            raise RuntimeError(
-                f"BEAM postprocess resolved role {role!r} is not a concrete input."
-            )
-        selected_artifact = (resolved_inputs.binding.inputs or {})[role]
-        if not isinstance(selected_artifact, Artifact):
-            raise RuntimeError(
-                "Cannot commit BEAM postprocess input without tracked artifact "
-                f"provenance for {role!r}."
-            )
-        producer_run_id = (
-            selected_artifact.run_id if role == ZARR_SKIMS else beam_run_id
-        )
-        output_key = selected_artifact.key
-        artifact_identity = selected_artifact.hash
-        driver = selected_artifact.driver
-        if not producer_run_id or not output_key:
-            raise RuntimeError(
-                "Cannot commit BEAM postprocess input without producer/output "
-                f"provenance for {role!r}."
-            )
-        if not artifact_identity:
-            raise RuntimeError(
-                f"Cannot commit BEAM postprocess input without identity {output_key}."
-            )
-        destination = resolved_inputs.logical_destinations.get(role)
-        if destination is None:
-            raise RuntimeError(
-                f"BEAM postprocess input {role!r} has no logical destination."
-            )
-        destination = Path(destination).expanduser().resolve()
-        producer_output = (producer_run_id, output_key)
-        prior_producer_output = destinations_seen.get(destination)
-        if prior_producer_output is not None:
-            if prior_producer_output == producer_output:
+    run_id: str,
+    tracker: Tracker,
+    recovery_root: Path,
+    outputs: Mapping[str, Any],
+) -> None:
+    """Archive beam_run output files to recovery_root with verify=True."""
+    file_keys: list[str] = []
+    for key, artifact in outputs.items():
+        if isinstance(artifact, (Artifact, ArtifactRecordLike)):
+            if artifact.driver == "artifact_set":
                 continue
-            raise RuntimeError(
-                "BEAM postprocess closure has conflicting artifacts for "
-                f"destination {destination}: {prior_producer_output!r} and "
-                f"{producer_output!r}."
-            )
-        destinations_seen[destination] = producer_output
-        outputs = outputs_by_run.get(producer_run_id)
-        if outputs is None:
-            outputs = tracker.get_run_outputs(producer_run_id)
-            outputs_by_run[producer_run_id] = outputs
-        artifact = outputs.get(output_key)
-        if artifact is None:
-            raise RuntimeError(
-                f"Cannot commit BEAM postprocess input without output link {output_key}."
-            )
-        if artifact.hash != artifact_identity:
-            raise RuntimeError(
-                f"BEAM postprocess input identity does not match output link {output_key}."
-            )
-        if artifact.driver != driver:
-            raise RuntimeError(
-                f"BEAM postprocess input driver does not match output link {output_key}."
-            )
-        artifact_kind = _closure_artifact_kind(selected_artifact)
-        if _closure_artifact_kind(artifact) != artifact_kind:
-            raise RuntimeError(
-                f"BEAM postprocess input kind does not match output link {output_key}."
-            )
-        members.append(
-            PinnedClosureMember(
-                member_id=f"{producer_run_id}:{output_key}",
-                role=role,
-                producer_run_id=producer_run_id,
-                output_key=output_key,
-                artifact_identity=str(artifact_identity),
-                artifact_kind=artifact_kind,
-                driver=(str(driver) if driver is not None else None),
-                destination=destination,
-                required=role in resolved_inputs.required_roles,
-            )
-        )
-    return tuple(members)
+            if (
+                isinstance(artifact.meta, dict)
+                and artifact.meta.get("directory_artifact") is True
+            ):
+                continue
+            file_keys.append(key)
 
+    if isinstance(tracker, Tracker):
+        ws_mount = tracker.mounts.get("workspace")
+        if ws_mount:
+            ws_path = Path(ws_mount).resolve()
+            for key in file_keys:
+                artifact = outputs.get(key)
+                if isinstance(artifact, Artifact):
+                    tracker.set_artifact_recovery_roots(
+                        artifact, [ws_path], append=True
+                    )
 
-def _open_beam_checkpoint_tracker(snapshot_path: Path, archive_run_dir: Path) -> Any:
-    """Open only the pinned archive-local DB for committed BEAM restoration."""
-
-    return cr.consist.Tracker(
-        run_dir=archive_run_dir,
-        db_path=snapshot_path,
-        allow_external_paths=True,
-        access_mode="read_only",
+    report = archive_run_output_files(
+        run_id=run_id,
+        recovery_root=recovery_root,
+        tracker=tracker,
+        keys=file_keys if file_keys else None,
+        preserve_existing=True,
+        verify=True,
+        append=True,
     )
+    if not report.complete:
+        failures = [
+            f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
+            for key, f in report.items()
+            if not (
+                f.metadata_committed
+                and f.verification_status in {"verified", "not_requested"}
+            )
+        ]
+        raise RuntimeError(
+            "Archiving beam_run outputs failed verification or copy: "
+            + "; ".join(failures)
+        )
 
 
-def _publish_completed_beam_run_checkpoint(
+def _interrupted_beam_postprocess_detected(
     *,
-    scenario: ScenarioWithCoupler,
-    settings: PilatesConfig,
     state: WorkflowState,
     workspace: Workspace,
-    postprocess_inputs: ResolvedStepInputs,
-    year: int,
-    iteration: int,
-    producer_run_id: Optional[str] = None,
-) -> None:
-    """Commit a BEAM-only overlay without advancing traffic-assignment state."""
-
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is None:
-        return
-    tracker = cr.current_tracker()
-    if tracker is None:
-        raise RuntimeError(
-            "Cannot commit completed BEAM run without an active tracker."
-        )
-    if producer_run_id is None:
-        try:
-            run_id = scenario._beam_run_ids[(year, iteration)]  # type: ignore[attr-defined]
-        except (AttributeError, KeyError) as error:
-            raise RuntimeError(
-                "Cannot commit completed BEAM run without its direct run ID."
-            ) from error
-    else:
-        run_id = producer_run_id
-    closure_members = _resolve_beam_postprocess_closure(
-        tracker=tracker,
-        resolved_inputs=postprocess_inputs,
-        workspace=workspace,
-        year=year,
-        iteration=iteration,
-        beam_run_id=run_id,
-    )
-    flush_archive_queue(fail_on_timeout=True)
-    selected_inputs = postprocess_inputs.binding.inputs or {}
-    for member in closure_members:
-        selected_artifact = selected_inputs.get(member.role)
-        if not isinstance(selected_artifact, Artifact):
-            raise RuntimeError(
-                "Cannot archive BEAM checkpoint closure member without a tracked "
-                f"artifact: {member.role!r}."
-            )
-        source_path = artifact_to_existing_path(selected_artifact, workspace)
-        if source_path is None:
-            raise RuntimeError(
-                "Cannot archive BEAM checkpoint closure member because its selected "
-                f"artifact is unavailable: {member.role!r}."
-            )
-        if not archive_copy_now(
-            key=member.output_key,
-            path=source_path,
-            workspace=workspace,
-        ):
-            raise RuntimeError(
-                f"Cannot archive BEAM checkpoint closure member: {member.output_key!r}."
-            )
-    verify_archive_visible_pinned_closure_bytes(
-        tracker=tracker,
-        archive_run_dir=archive_run_dir,
-        members=closure_members,
-    )
-    snapshot_and_publish_beam_run_checkpoint(
-        tracker=tracker,
-        open_snapshot=lambda snapshot_path: _open_beam_checkpoint_tracker(
-            snapshot_path, archive_run_dir
-        ),
-        archive_run_dir=archive_run_dir,
-        producer_run_id=run_id,
-        scope=_beam_checkpoint_scope(state=state, year=year, iteration=iteration),
-        skim_variant=_beam_checkpoint_skim_variant(settings),
-        output_requests=(),
-        closure_members=closure_members,
-    )
-
-
-def _validate_rebound_postprocess_inputs(
-    *,
-    checkpoint: Any,
-    members: tuple[PinnedClosureMember, ...],
-    resolved_inputs: ResolvedStepInputs,
-) -> None:
-    """Fail closed unless the normal resolver exactly reproduces the closure."""
-
-    closure_by_role = {member.role: member for member in members}
-    if len(closure_by_role) != len(members):
-        raise RuntimeError("Committed BEAM checkpoint closure has duplicate roles.")
-    resolved_roles = {
-        role
-        for role in (*resolved_inputs.required_roles, *resolved_inputs.optional_roles)
-        if resolved_inputs.source_by_role.get(role) != "missing"
-    }
-    if resolved_roles != set(closure_by_role):
-        raise RuntimeError(
-            "Committed BEAM checkpoint closure does not match normal postprocess "
-            "resolver roles."
-        )
-
-    inputs = resolved_inputs.binding.inputs or {}
-    for role, member in closure_by_role.items():
-        if member.required != (role in resolved_inputs.required_roles):
-            raise RuntimeError(
-                f"Committed BEAM checkpoint requiredness drifted for {role!r}."
-            )
-        if resolved_inputs.selected_key_by_role.get(role, role) != member.output_key:
-            raise RuntimeError(
-                f"Committed BEAM checkpoint selected key drifted for {role!r}."
-            )
-        destination = resolved_inputs.logical_destinations.get(role)
-        if (
-            destination is None
-            or Path(destination).expanduser().resolve() != member.destination
-        ):
-            raise RuntimeError(
-                f"Committed BEAM checkpoint destination drifted for {role!r}."
-            )
-        artifact = inputs.get(role)
-        if getattr(artifact, "hash", None) != member.artifact_identity:
-            raise RuntimeError(
-                f"Committed BEAM checkpoint hydrated identity drifted for {role!r}."
-            )
-    if checkpoint.producer_run_id not in {member.producer_run_id for member in members}:
-        raise RuntimeError("Committed BEAM checkpoint producer is absent from closure.")
-
-
-def _try_resume_committed_beam_postprocess(
-    *,
-    scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
-    year: int,
-    iteration: int,
-    context: WorkflowRuntimeContext,
-) -> Optional[Dict[str, Any]]:
-    """Hydrate one committed successor closure and invoke postprocess only."""
-
-    state = context.state
-    if not state.is_restart_run:
-        return None
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is None or not beam_checkpoint_record_present(archive_run_dir):
-        return None
-    if beam_postprocess_is_in_progress(archive_run_dir):
-        raise RuntimeError(
-            "BEAM checkpoint is non-restartable: beam_postprocess_in_progress."
-        )
-    checkpoint = read_beam_run_checkpoint(archive_run_dir)
-    if checkpoint is None or not checkpoint.closure_members:
-        raise RuntimeError("Committed BEAM checkpoint is invalid or incomplete.")
-    snapshot_path = (archive_run_dir / checkpoint.snapshot_ref).resolve()
+    archive_run_dir: Optional[Path],
+) -> bool:
+    """Detect whether a prior BEAM postprocess was interrupted."""
+    if state.sub_stage_progress == "beam_postprocess_in_progress":
+        return True
     if (
-        not snapshot_path.is_relative_to(archive_run_dir.resolve())
-        or not snapshot_path.is_file()
+        archive_run_dir is not None
+        and (archive_run_dir / ".beam_postprocess_in_progress").exists()
     ):
-        raise RuntimeError(
-            "Committed BEAM checkpoint snapshot is missing or outside archive."
-        )
-    expected_scope = _beam_checkpoint_scope(
-        state=state,
-        year=year,
-        iteration=iteration,
-    )
-    if not checkpoint_fingerprint_matches(
-        checkpoint,
-        scope=expected_scope,
-        skim_variant=_beam_checkpoint_skim_variant(context.settings),
-        output_requests=(),
-        closure_members=checkpoint.closure_members,
-    ):
-        raise RuntimeError(
-            "Committed BEAM checkpoint recovery fingerprint does not match."
-        )
+        return True
+    beam_out = Path(workspace.get_beam_output_dir())
+    if (beam_out / ".beam_postprocess_in_progress").exists():
+        return True
+    return False
 
-    snapshot_tracker = _open_beam_checkpoint_tracker(
-        snapshot_path,
-        archive_run_dir,
-    )
-    validate_pinned_closure_snapshot(
-        tracker=snapshot_tracker,
-        members=checkpoint.closure_members,
-        scope=expected_scope,
-    )
-    closure_members = _rebind_beam_postprocess_closure_destinations(
-        members=checkpoint.closure_members,
-        workspace=context.workspace,
-        archive_run_dir=archive_run_dir,
-        year=year,
-        iteration=iteration,
-    )
-    restored = hydrate_pinned_closure(
-        tracker=snapshot_tracker,
-        source_root=archive_run_dir,
-        members=closure_members,
-    )
 
-    for member in closure_members:
-        item = restored[member.member_id]
-        if item.path is None:
-            raise RuntimeError(
-                f"Committed BEAM checkpoint restored no path for {member.output_key}."
-            )
-        set_coupler_from_artifact(
-            coupler,
-            member.output_key,
-            item.artifact,
-            fallback=str(item.path),
-        )
-        if member.role != member.output_key:
-            set_coupler_from_artifact(
-                coupler,
-                member.role,
-                item.artifact,
-                fallback=str(item.path),
-            )
-    postprocess_inputs = beam_postprocess.resolve_inputs(
-        settings=context.settings,
-        state=state,
-        workspace=context.workspace,
-        coupler=coupler,
-    )
-    postprocess_inputs.require_complete()
-    _validate_rebound_postprocess_inputs(
-        checkpoint=checkpoint,
-        members=closure_members,
-        resolved_inputs=postprocess_inputs,
-    )
-    mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
-    _, postprocess_outputs = execute_step(
-        scenario=scenario,
-        definition=beam_postprocess,
-        settings=context.settings,
-        state=state,
-        workspace=context.workspace,
-        stage="supply_demand",
-        year=year,
-        iteration=iteration,
-        phase="postprocess",
-        resolved_inputs=postprocess_inputs,
-    )
-    return step_output_handoff_mapping(postprocess_outputs, coupler=coupler)
+def _mark_beam_postprocess_in_progress(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+    archive_run_dir: Optional[Path] = None,
+) -> None:
+    state.set_sub_stage_progress("beam_postprocess_in_progress")
+    if archive_run_dir is not None:
+        archive_run_dir.mkdir(parents=True, exist_ok=True)
+        (archive_run_dir / ".beam_postprocess_in_progress").write_text("in_progress\n")
+    beam_out = Path(workspace.get_beam_output_dir())
+    beam_out.mkdir(parents=True, exist_ok=True)
+    (beam_out / ".beam_postprocess_in_progress").write_text("in_progress\n")
+
+
+def _clear_beam_postprocess_in_progress(
+    *,
+    state: WorkflowState,
+    workspace: Workspace,
+    archive_run_dir: Optional[Path] = None,
+) -> None:
+    state.set_sub_stage_progress(None)
+    if archive_run_dir is not None:
+        marker = archive_run_dir / ".beam_postprocess_in_progress"
+        if marker.exists():
+            marker.unlink()
+    marker = Path(workspace.get_beam_output_dir()) / ".beam_postprocess_in_progress"
+    if marker.exists():
+        marker.unlink()
 
 
 def _derive_beam_run_input_keys(
@@ -1025,19 +648,32 @@ def _run_beam_steps(
     iteration: int,
     context: WorkflowRuntimeContext,
 ) -> Optional[Dict[str, Any]]:
-    """Dispatch the single public BEAM run/postprocess checkpoint boundary."""
+    """Dispatch native BEAM steps with Consist caching and verified archival."""
 
     settings = context.settings
     state = context.state
     workspace = context.workspace
-    if beam_checkpoint_resume_requested(state=state):
-        return _try_resume_committed_beam_postprocess(
-            scenario=scenario,
-            coupler=scenario.coupler,
-            year=year,
-            iteration=iteration,
-            context=context,
+    archive_run_dir = _archive_run_dir_for_restart(state)
+
+    if _interrupted_beam_postprocess_detected(
+        state=state, workspace=workspace, archive_run_dir=archive_run_dir
+    ):
+        raise RuntimeError(
+            "Interrupted BEAM postprocess detected; cannot safely restart "
+            "because postprocessing modifies workspace data in place (e.g. skims.zarr). "
+            "Refusing restart to prevent silent data corruption.\n\n"
+            "Operator Recovery Procedure:\n"
+            "1. Identify the uncorrupted input skims from prior step or iteration:\n"
+            "   - Iteration 0: restore skims.zarr from the ActivitySim output archive or initial seed.\n"
+            "   - Iteration > 0: restore skims.zarr from the previous iteration's archived artifact.\n"
+            "2. Overwrite the corrupted workspace skims.zarr with that clean copy.\n"
+            "3. Clear the in-progress marker file(s):\n"
+            "   - In scratch: <beam_output_dir>/.beam_postprocess_in_progress\n"
+            "   - In archive: <archive_run_dir>/.beam_postprocess_in_progress\n"
+            "4. Rerun PILATES from the traffic assignment stage.\n"
+            "For full instructions, see docs/run/restart_and_resume.md."
         )
+
     _, preprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_preprocess,
@@ -1077,6 +713,28 @@ def _run_beam_steps(
         runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=run_inputs,
     )
+
+    # Archive beam_run outputs natively with verify=True
+    base_archive = (
+        archive_run_dir
+        if archive_run_dir is not None
+        else Path(scenario.tracker.run_dir) / "archive"
+    )
+    recovery_root = (
+        base_archive
+        if base_archive.name == run_result.run.id
+        else base_archive / run_result.run.id
+    )
+    _archive_beam_run_outputs_native(
+        run_id=run_result.run.id,
+        tracker=scenario.tracker,
+        recovery_root=recovery_root,
+        outputs=run_result.outputs,
+    )
+
+    logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
+    _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
+
     postprocess_inputs = beam_postprocess.resolve_inputs(
         settings=settings,
         state=state,
@@ -1085,26 +743,10 @@ def _run_beam_steps(
         beam_run_outputs=run_result.outputs,
     )
     postprocess_inputs.require_complete()
-    _publish_completed_beam_run_checkpoint(
-        scenario=scenario,
-        settings=settings,
-        state=state,
-        workspace=workspace,
-        postprocess_inputs=postprocess_inputs,
-        year=year,
-        iteration=iteration,
-        producer_run_id=run_result.run.id,
+
+    _mark_beam_postprocess_in_progress(
+        state=state, workspace=workspace, archive_run_dir=archive_run_dir
     )
-    logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
-    _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
-    archive_run_dir = _archive_run_dir_for_restart(state)
-    if archive_run_dir is not None:
-        checkpoint = read_beam_run_checkpoint(archive_run_dir)
-        if checkpoint is None:
-            raise RuntimeError(
-                "BEAM checkpoint publication did not commit before postprocess."
-            )
-        mark_beam_postprocess_in_progress(archive_run_dir, checkpoint)
     _, postprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
@@ -1117,6 +759,10 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
+    _clear_beam_postprocess_in_progress(
+        state=state, workspace=workspace, archive_run_dir=archive_run_dir
+    )
+
     combined_outputs = step_output_handoff_mapping(
         postprocess_outputs, coupler=scenario.coupler
     )

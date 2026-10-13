@@ -19,6 +19,7 @@ import yaml
 
 from pilates.config import PilatesConfig
 from pilates.activitysim.outputs import ActivitySimPreprocessOutputs
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.generic.preprocessor import GenericPreprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils import consist_runtime as cr
@@ -366,21 +367,9 @@ def required_asim_config_dirs(main_configs_dir: str) -> list[str]:
     The mutable config tree may contain a scenario-specific main root plus the
     standard overlay directories used by compile/run flows.
     """
-    ordered = [
-        main_configs_dir,
-        "configs",
-        "configs_extended",
-        "configs_mp",
-        "configs_sh_compile",
+    return [
+        root.as_posix() for root in required_activitysim_config_roots(main_configs_dir)
     ]
-    seen = set()
-    result = []
-    for dirname in ordered:
-        if not dirname or dirname in seen:
-            continue
-        seen.add(dirname)
-        result.append(dirname)
-    return result
 
 
 def _is_atlas_vehicle_ownership_enabled(settings: PilatesConfig) -> bool:
@@ -468,6 +457,28 @@ def _disable_activitysim_vehicle_ownership_models_for_atlas(
 
 
 ####################################
+def _resolve_preprocessor_workers(num_tasks: int) -> int:
+    """
+    Resolve bounded worker pool size for OD matrix preprocessing.
+
+    Prevents CPU oversubscription and OOM kills on high-core HPC nodes (e.g. 128 cores),
+    where cpu_count() - 1 would spawn 127 processes competing with OpenMP threads.
+    """
+    if num_tasks <= 0:
+        return 1
+    available_cpus = max(1, cpu_count() - 1)
+    env_cap = os.environ.get("PILATES_PREPROCESSOR_WORKERS") or os.environ.get(
+        "PILATES_THREADS"
+    )
+    if env_cap:
+        try:
+            available_cpus = min(available_cpus, max(1, int(env_cap)))
+        except ValueError:
+            pass
+    workers = min(available_cpus, num_tasks, 16)
+    return max(1, workers)
+
+
 #### RAW BEAM SKIMS TO SKIMS.OMX ###
 ####################################
 def read_skim(filename: str) -> pd.DataFrame:
@@ -528,9 +539,9 @@ def _load_raw_beam_skims(
         else:  # Assume path is a folder with multiple CSV files
             all_files = glob.glob(path_to_beam_skims + "/*")
             # Use multiprocessing to read multiple CSVs in parallel
-            agents = len(all_files)
-            pool = Pool(processes=agents)
-            result = pool.map(read_skim, all_files)
+            agents = _resolve_preprocessor_workers(len(all_files))
+            with Pool(processes=agents) as pool:
+                result = pool.map(read_skim, all_files)
             # Concatenate all read DataFrames
             skims = pd.concat(result, axis=0, ignore_index=True)
     except KeyError:
@@ -1177,7 +1188,8 @@ def _transit_skims(
     groupBy = transit_df.groupby(level=[0, 1])
 
     # Use a multiprocessing Pool to build OD matrices in parallel.
-    with Pool(cpu_count() - 1) as p:
+    workers = _resolve_preprocessor_workers(len(groupBy))
+    with Pool(workers) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
             [
@@ -1732,7 +1744,8 @@ def _auto_skims(
     groupBy = auto_df.groupby(level=[0, 1])
 
     # Use a multiprocessing Pool to build OD matrices in parallel.
-    with Pool(cpu_count() - 1) as p:
+    workers = _resolve_preprocessor_workers(len(groupBy))
+    with Pool(workers) as p:
         ret_list = p.map(
             _build_od_matrix_parallel,
             [

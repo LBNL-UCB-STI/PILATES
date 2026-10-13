@@ -803,7 +803,28 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
         from pilates.utils.consist_runtime import require_runtime_kwargs
         from pilates.workflows.resolved_inputs import ResolvedStepInputs
         from pilates.workflows.step_consist_meta import consist_step_meta
-        from pilates.workflows.step_definition import StepDefinition
+        from pilates.workflows.step_definition import (
+            ConfigContract,
+            InputContract,
+            StepDefinition,
+        )
+
+
+        _{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
+        _{spec.model.upper()}_RUN_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
+        _{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT = InputContract(
+            status="incomplete",
+            reason="model adapter inputs and workspace dependencies are not yet inventoried",
+            config_contract=ConfigContract.adapter("{spec.model}"),
+        )
 
 
         def _resolve_{spec.model}_inputs(**_: Any) -> ResolvedStepInputs:
@@ -838,7 +859,10 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             model="{spec.preprocess_step_name}",
             schema_outputs=[],
             input_binding="paths",
-            **consist_step_meta("{spec.preprocess_step_name}"),
+            **consist_step_meta(
+                "{spec.preprocess_step_name}",
+                input_contract=_{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT,
+            ),
         )
         @require_runtime_kwargs("settings", "state", "workspace")
         def _{spec.model}_preprocess_callable(*, settings: Any, state: Any, workspace: Any) -> None:
@@ -850,7 +874,10 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             model="{spec.run_step_name}",
             schema_outputs=[],
             input_binding="paths",
-            **consist_step_meta("{spec.run_step_name}"),
+            **consist_step_meta(
+                "{spec.run_step_name}",
+                input_contract=_{spec.model.upper()}_RUN_INPUT_CONTRACT,
+            ),
         )
         @require_runtime_kwargs("settings", "state", "workspace")
         def _{spec.model}_run_callable(*, settings: Any, state: Any, workspace: Any) -> None:
@@ -862,7 +889,10 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             model="{spec.postprocess_step_name}",
             schema_outputs=[],
             input_binding="paths",
-            **consist_step_meta("{spec.postprocess_step_name}"),
+            **consist_step_meta(
+                "{spec.postprocess_step_name}",
+                input_contract=_{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT,
+            ),
         )
         @require_runtime_kwargs("settings", "state", "workspace")
         def _{spec.model}_postprocess_callable(*, settings: Any, state: Any, workspace: Any) -> None:
@@ -877,6 +907,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
                 outputs, output_type={spec.preprocess_output_class}, **kwargs
             ),
+            input_contract=_{spec.model.upper()}_PREPROCESS_INPUT_CONTRACT,
         )
         {spec.model}_run = StepDefinition(
             name="{spec.run_step_name}",
@@ -885,6 +916,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
                 outputs, output_type={spec.run_output_class}, **kwargs
             ),
+            input_contract=_{spec.model.upper()}_RUN_INPUT_CONTRACT,
         )
         {spec.model}_postprocess = StepDefinition(
             name="{spec.postprocess_step_name}",
@@ -893,6 +925,7 @@ def _render_step_module(spec: ScaffoldSpec) -> str:
             project_outputs=lambda outputs, **kwargs: _project_{spec.model}_outputs(
                 outputs, output_type={spec.postprocess_output_class}, **kwargs
             ),
+            input_contract=_{spec.model.upper()}_POSTPROCESS_INPUT_CONTRACT,
         )
         '''
         ).strip()

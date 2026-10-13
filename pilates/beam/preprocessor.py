@@ -96,7 +96,13 @@ def _record_store_from_artifact_mappings(
 
 
 def _prepare_beam_zone_shapefile(
-    workspace: "Workspace", settings: PilatesConfig
+    workspace: "Workspace",
+    settings: PilatesConfig,
+    *,
+    canonical_zone_source: Path | None = None,
+    canonical_zone_id_column: str | None = None,
+    canonical_zone_index_column: str | None = None,
+    zone_output_path: Path | None = None,
 ) -> Optional[str]:
     """
     Creates a sorted zone shapefile for BEAM from the canonical zone definitions
@@ -104,15 +110,44 @@ def _prepare_beam_zone_shapefile(
     """
     logger.info("--- Preparing BEAM Zone Shapefile ---")
     try:
-        from pilates.utils.zone_utils import load_canonical_zones
+        if canonical_zone_source is None:
+            from pilates.utils.zone_utils import load_canonical_zones
 
-        canonical_zones_gdf = load_canonical_zones(settings, workspace)
+            canonical_zones_gdf = load_canonical_zones(settings, workspace)
+        else:
+            if canonical_zone_id_column is None or canonical_zone_index_column is None:
+                raise RuntimeError(
+                    "BEAM resolver-selected zone source is missing its identity columns."
+                )
+            import geopandas as gpd
+
+            canonical_zones_gdf = gpd.read_file(canonical_zone_source)
+            if canonical_zone_id_column not in canonical_zones_gdf.columns:
+                raise KeyError(
+                    "BEAM resolver-selected canonical zone source is missing "
+                    f"{canonical_zone_id_column!r}: {canonical_zone_source}"
+                )
+            if not canonical_zones_gdf[canonical_zone_id_column].is_unique:
+                raise ValueError(
+                    "BEAM resolver-selected canonical zone source has duplicate "
+                    f"{canonical_zone_id_column!r} values: {canonical_zone_source}"
+                )
+            canonical_zones_gdf = canonical_zones_gdf.set_index(
+                canonical_zone_id_column
+            ).sort_index()
+            canonical_zones_gdf.index.name = canonical_zone_index_column
+            canonical_zones_gdf.index = canonical_zones_gdf.index.astype(str)
 
         region = settings.run.region
-        beam_mutable_folder = workspace.get_beam_mutable_data_dir()
-        output_shapefile_name = "canonical_zones_sorted.geojson"
-        output_shapefile_path = os.path.join(
-            beam_mutable_folder, region, "shape", output_shapefile_name
+        output_shapefile_path = (
+            str(zone_output_path)
+            if zone_output_path is not None
+            else os.path.join(
+                workspace.get_beam_mutable_data_dir(),
+                region,
+                "shape",
+                "canonical_zones_sorted.geojson",
+            )
         )
         os.makedirs(os.path.dirname(output_shapefile_path), exist_ok=True)
 
@@ -259,6 +294,8 @@ class BeamPreprocessor(GenericPreprocessor):
             "beam_plans_out",
         ]
         self.settings = self.state.full_settings
+        self._resolved_exchange_scenario_folder: Optional[str] = None
+        self._resolved_zone_context: Optional[Mapping[str, Any]] = None
 
     def _default_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
         return beam_exchange.default_beam_exchange_scenario_folder(
@@ -275,6 +312,8 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def _resolve_beam_exchange_scenario_folder(self, workspace: "Workspace") -> str:
+        if self._resolved_exchange_scenario_folder is not None:
+            return self._resolved_exchange_scenario_folder
         return beam_exchange.resolve_beam_exchange_scenario_folder(
             self.settings,
             workspace,
@@ -447,17 +486,32 @@ class BeamPreprocessor(GenericPreprocessor):
         activity_demand_outputs: Optional[Mapping[str, Any]] = None,
         previous_beam_outputs: Optional[Mapping[str, Any]] = None,
         beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
+        beam_preprocess_context: Optional[Mapping[str, Any]] = None,
     ) -> BeamPreprocessOutputs:
         """
         Build BEAM inputs from plain artifact mappings and return typed outputs.
         """
         self.state.set_sub_stage_progress("preprocessor")
+        if beam_preprocess_context is not None:
+            exchange_scenario_folder = beam_preprocess_context.get(
+                "exchange_scenario_folder"
+            )
+            if not isinstance(exchange_scenario_folder, Path):
+                raise RuntimeError(
+                    "beam_preprocess resolver context is missing exchange_scenario_folder."
+                )
+            self._resolved_exchange_scenario_folder = str(exchange_scenario_folder)
+            self._resolved_zone_context = beam_preprocess_context
         input_store = _record_store_from_artifact_mappings(
             activity_demand_outputs=activity_demand_outputs,
             previous_beam_outputs=previous_beam_outputs,
             beam_preprocess_inputs=beam_preprocess_inputs,
         )
-        record_store = self._preprocess(workspace, input_store)
+        try:
+            record_store = self._preprocess(workspace, input_store)
+        finally:
+            self._resolved_exchange_scenario_folder = None
+            self._resolved_zone_context = None
         prepared_inputs: Dict[str, Path] = {}
         prepared_input_metadata: Dict[str, Dict[str, Any]] = {}
         record_mapping = record_store.to_mapping()
@@ -541,7 +595,31 @@ class BeamPreprocessor(GenericPreprocessor):
         Creates a sorted zone shapefile for the later derived launch config.
         """
 
-        output_shapefile_path = _prepare_beam_zone_shapefile(workspace, self.settings)
+        zone_context = self._resolved_zone_context
+        output_shapefile_path = _prepare_beam_zone_shapefile(
+            workspace,
+            self.settings,
+            canonical_zone_source=(
+                zone_context.get("canonical_zone_source")
+                if zone_context is not None
+                else None
+            ),
+            canonical_zone_id_column=(
+                zone_context.get("canonical_zone_id_column")
+                if zone_context is not None
+                else None
+            ),
+            canonical_zone_index_column=(
+                zone_context.get("canonical_zone_index_column")
+                if zone_context is not None
+                else None
+            ),
+            zone_output_path=(
+                zone_context.get("zone_output_path")
+                if zone_context is not None
+                else None
+            ),
+        )
         return output_shapefile_path
 
     def _copy_vehicles_from_atlas(

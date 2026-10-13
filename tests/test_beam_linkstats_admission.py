@@ -82,6 +82,8 @@ def test_strict_linkstats_admission_writes_report_before_rejecting(
     with pytest.raises(admission.BeamInputAdmissionError, match="mismatched"):
         admission.preflight_staged_linkstats_admission(
             tracker=tracker,
+            metadata_logger=tracker,
+            existing_admission_reports={},
             settings=_settings("strict"),
             launch_reference=_reference(staged),
             report_dir=tmp_path / "run-a",
@@ -119,6 +121,8 @@ def test_warn_linkstats_admission_records_and_continues(
 
     report = admission.preflight_staged_linkstats_admission(
         tracker=tracker,
+        metadata_logger=tracker,
+        existing_admission_reports={},
         settings=_settings("warn"),
         launch_reference=_reference(staged),
         report_dir=tmp_path / "run-a",
@@ -126,6 +130,39 @@ def test_warn_linkstats_admission_records_and_continues(
 
     assert report.outcome == "unverified"
     assert (tmp_path / "run-a" / "admission" / "beam-linkstats-warmstart.json").exists()
+
+
+def test_linkstats_admission_merges_existing_child_run_reports(
+    monkeypatch, tmp_path: Path
+) -> None:
+    from pilates.beam import admission
+
+    staged = tmp_path / "warmstart.csv.gz"
+    staged.write_bytes(b"observed")
+    tracker = _Tracker(tmp_path)
+    metadata_logger = _Tracker(tmp_path)
+    monkeypatch.setattr(
+        admission.consist,
+        "check_admission_reference",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            outcome="verified",
+            canonical_json=lambda: '{"outcome":"verified"}',
+        ),
+    )
+
+    admission.preflight_staged_linkstats_admission(
+        tracker=tracker,
+        metadata_logger=metadata_logger,
+        existing_admission_reports={"other_input": {"outcome": "verified"}},
+        settings=_settings("warn"),
+        launch_reference=_reference(staged),
+        report_dir=tmp_path / "run-a",
+    )
+
+    assert metadata_logger.meta["admission_reports"] == {
+        "other_input": {"outcome": "verified"},
+        "beam_linkstats_warmstart": {"outcome": "verified"},
+    }
 
 
 def test_linkstats_admission_is_disabled_without_an_expectation(
@@ -143,6 +180,8 @@ def test_linkstats_admission_is_disabled_without_an_expectation(
 
     report = admission.preflight_staged_linkstats_admission(
         tracker=_Tracker(tmp_path),
+        metadata_logger=_Tracker(tmp_path),
+        existing_admission_reports={},
         settings=_settings(None),
         launch_reference=_reference(staged),
         report_dir=tmp_path / "run-a",
@@ -171,6 +210,8 @@ def test_linkstats_admission_reports_are_isolated_by_run_directory(
     for run_name in ("run-a", "run-b"):
         admission.preflight_staged_linkstats_admission(
             tracker=tracker,
+            metadata_logger=tracker,
+            existing_admission_reports={},
             settings=_settings("warn"),
             launch_reference=_reference(staged),
             report_dir=tmp_path / "outputs" / run_name,

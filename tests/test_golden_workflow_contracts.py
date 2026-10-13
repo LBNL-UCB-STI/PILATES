@@ -72,8 +72,7 @@ def test_golden_workflow_preserves_current_stage_surfaces_on_scenario_outputs(
         _self, _inputs, runner_workspace, _model_run_hash=None
     ) -> UrbanSimRunOutputs:
         return UrbanSimRunOutputs(
-            usim_datastore_h5=Path(runner_workspace.get_usim_mutable_data_dir())
-            / settings.urbansim.output_file_template.format(year=state.forecast_year),
+            usim_datastore_h5=runner_workspace.output_datastore,
             raw_outputs={},
         )
 

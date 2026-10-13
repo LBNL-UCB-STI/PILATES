@@ -36,39 +36,45 @@ the normal stage-policy path selected by its durable frontier.
 
 ## The Sole Mid-Stage Boundary
 
-`beam_run_completed -> beam_postprocess` is the sole committed mid-stage
-restart boundary. At BEAM run completion, PILATES records a pinned successor
-closure: completed producer run IDs, output keys, artifact identities and
-forms, and the exact absolute destinations required by `beam_postprocess`.
+`beam_run -> beam_postprocess` is the sole mid-stage boundary. BEAM execution is split into two discrete Consist `@define_step` steps:
 
-On restart PILATES:
+1. `beam_run`: Executes the compute-intensive simulation container. Its outputs are tracked by Consist and verified into the recovery root (`archive_run_dir`).
+2. `beam_postprocess`: Merges raw iteration skims into the master skims and extracts link statistics and events.
 
-1. validates the pinned snapshot and every linked completed producer output;
-2. verifies the closure can be hydrated from the archive;
-3. hydrates it to the successor resolver's exact current destinations;
-4. re-resolves `beam_postprocess` and executes its native `StepDefinition`.
+### Restart Across the Boundary
+If a failure occurs after `beam_run` commits but before `beam_postprocess` completes:
+- Consist automatically recognizes `beam_run` as a cache hit.
+- If scratch was wiped or purged, Consist's native `cache_hydration="outputs-requested"` automatically hydrates required outputs directly from the recovery root.
+- `beam_postprocess` executes without re-running the hours-long container.
 
-The closure must be complete, non-overlapping, and cleanly materialized. An
-ambiguous producer, absent output link, identity/form mismatch, unavailable
-archive bytes, or wrong destination rejects the checkpoint. PILATES does not
-accept a leftover workspace file or a coupler value as evidence.
+### Postprocess Refusal Gate (`.beam_postprocess_in_progress`)
+Because `beam_postprocess` currently modifies the workspace skims store (`skims.zarr`) in place, a crash mid-postprocess leaves the store partially mutated. Rerunning postprocess over a partially mutated store would double-merge trips and silently corrupt data.
 
-`beam_postprocess_in_progress` is a mutation gate, not a checkpoint. Once that
-gate has begun, the operation remains non-restartable.
+To prevent this:
+- When postprocess begins, PILATES sets an in-progress marker (`.beam_postprocess_in_progress`) in both scratch (`<beam_output_dir>`) and the permanent recovery root (`<archive_run_dir>`).
+- If postprocess is interrupted, any restart attempt detects the marker and raises `RuntimeError`, refusing to restart automatically.
+
+### Operator Recovery Procedure for Interrupted Postprocess
+If a run halts with `Interrupted BEAM postprocess detected`:
+
+1. **Restore Clean Skims**:
+   - For iteration 0: Copy clean `skims.zarr` from the ActivitySim output archive (`<archive_run_dir>/activitysim/output/cache/skims.zarr`) or initial scenario seed back to `<workspace>/activitysim/output/cache/skims.zarr`.
+   - For iteration > 0: Copy `skims.zarr` from the previous iteration's archived artifact.
+2. **Clear the In-Progress Marker(s)**:
+   - Remove `<beam_output_dir>/.beam_postprocess_in_progress` (if present in scratch).
+   - Remove `<archive_run_dir>/.beam_postprocess_in_progress` (if present in permanent archive).
+3. **Resume the Workflow**:
+   - Rerun PILATES with the restart command printed by the launcher (or `--restart` flag).
+   - `beam_run` will cache-hit, and `beam_postprocess` will run fresh against the restored clean skims.
 
 ## Operator Checks
 
 When validating a restart, check:
 
 1. the durable state and its normal stage/year frontier;
-2. for the BEAM boundary only, the pinned checkpoint scope and successor
-   closure;
-3. the archive-visible artifacts and exact current destinations;
+2. for the BEAM boundary, that `beam_run` committed successfully and its outputs are visible in the recovery root;
+3. that no stale `.beam_postprocess_in_progress` markers remain from an unhandled crash;
 4. the native step's typed projected outputs after execution or cache admission.
-
-If the pinned BEAM closure cannot be proven, stop and investigate the archive
-or checkpoint. Do not attempt to reconstruct a missing boundary from local
-scratch files.
 
 ## Adjacent Pages
 

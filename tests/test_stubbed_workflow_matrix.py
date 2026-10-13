@@ -18,6 +18,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Polygon
 
+from pilates.activitysim.config_roots import required_activitysim_config_roots
 from pilates.activitysim.outputs import (
     normalize_asim_output_key,
 )
@@ -331,6 +332,14 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
     sharrow_cache_dir = Path(env["sharrow_cache_dir"])
     zarr_path = Path(env["zarr_path"])
     raw_beam_zarr_path = beam_output_dir / "raw-od-skims.zarr"
+    mutable_configs_root = Path(workspace.get_asim_mutable_configs_dir())
+    for config_root in required_activitysim_config_roots(
+        settings.activitysim.main_configs_dir
+    ):
+        _write_file(
+            config_root.path_under(mutable_configs_root) / "settings.yaml",
+            "models: []\n",
+        )
 
     temp_names = (
         "accessibility",
@@ -449,6 +458,28 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
 
     monkeypatch.setattr(BeamRunner, "_run", _fake_beam_run)
 
+    # The shared golden fixture's dummy runner predates typed launch contexts:
+    # BEAM still passes its workspace positionally, while ActivitySim passes a
+    # launch context positionally and the Workspace by keyword.
+    from tests.test_golden_stub_workflow import DummyRunner
+
+    def _run_dummy_runner(
+        self, input_store, launch_context_or_workspace, *, workspace=None, **kwargs
+    ):
+        del kwargs
+        runner_workspace = (
+            workspace if workspace is not None else launch_context_or_workspace
+        )
+        return self._record_builder(
+            self.model_name,
+            "run",
+            state=self._state,
+            workspace=runner_workspace,
+            input_store=input_store,
+        )
+
+    monkeypatch.setattr(DummyRunner, "run", _run_dummy_runner)
+
     _run_supply_demand_stage(
         scenario=scenario,
         coupler=coupler,
@@ -532,11 +563,9 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
         return UrbanSimRunOutputs(usim_datastore_h5=usim_output_path)
 
     def _fake_atlas_run(self, _inputs, _workspace):
-        atlas_output_dir = Path(_workspace.get_atlas_output_dir())
+        atlas_output_dir = _workspace.output_root
         output_year = self.state.forecast_year
-        continuation_dir = (
-            Path(_workspace.get_atlas_mutable_input_dir()) / f"year{output_year}"
-        )
+        continuation_dir = _workspace.input_root / f"year{output_year}"
         households_path = atlas_output_dir / f"householdv_{output_year}.csv"
         vehicles_path = atlas_output_dir / f"vehicles_{output_year}.csv"
         pd.DataFrame(
