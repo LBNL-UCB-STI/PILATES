@@ -478,26 +478,16 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
         get_beam_output_dir=lambda: str(tmp_path / "beam-output"),
     )
 
-    output_set = beam_run.output_sets(
-        settings=_beam_settings(),
-        state=SimpleNamespace(forecast_year=2030, iteration=2),
-        workspace=workspace,
-    )["beam_run_outputs"]
+    assert beam_run.output_sets is None
     scalar_paths = beam_run.output_paths(
         settings=_beam_settings(),
         state=SimpleNamespace(forecast_year=2030, iteration=2),
         workspace=workspace,
         resolved_inputs=None,
     )
-
-    assert output_set.root == (
-        tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
-    )
-    assert output_set.include == "**/*"
-    assert output_set.exclude == "**/*.zarr/**"
-    assert output_set.recursive is True
+    expected_root = tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
     assert all(
-        Path(path).is_relative_to(Path(output_set.root))
+        Path(path).is_relative_to(expected_root)
         for path in scalar_paths.values()
     )
     assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)

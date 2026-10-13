@@ -467,60 +467,7 @@ def _archive_beam_run_outputs_native(
         )
 
 
-def _interrupted_beam_postprocess_detected(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path],
-) -> bool:
-    """Detect whether a prior BEAM postprocess was interrupted."""
-    if getattr(state, "current_sub_stage", None) == "beam_postprocess_in_progress":
-        return True
-    if getattr(state, "sub_stage_progress", None) == "beam_postprocess_in_progress":
-        return True
-    if archive_run_dir is not None and (archive_run_dir / ".beam_postprocess_in_progress").exists():
-        return True
-    beam_out = Path(workspace.get_beam_output_dir())
-    if (beam_out / ".beam_postprocess_in_progress").exists():
-        return True
-    return False
 
-
-def _mark_beam_postprocess_in_progress(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path] = None,
-) -> None:
-    if hasattr(state, "current_sub_stage"):
-        state.current_sub_stage = "beam_postprocess_in_progress"
-    if hasattr(state, "set_sub_stage_progress"):
-        state.set_sub_stage_progress("beam_postprocess_in_progress")
-    if archive_run_dir is not None:
-        archive_run_dir.mkdir(parents=True, exist_ok=True)
-        (archive_run_dir / ".beam_postprocess_in_progress").write_text("in_progress\n")
-    beam_out = Path(workspace.get_beam_output_dir())
-    beam_out.mkdir(parents=True, exist_ok=True)
-    (beam_out / ".beam_postprocess_in_progress").write_text("in_progress\n")
-
-
-def _clear_beam_postprocess_in_progress(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path] = None,
-) -> None:
-    if hasattr(state, "current_sub_stage") and state.current_sub_stage == "beam_postprocess_in_progress":
-        state.current_sub_stage = None
-    if hasattr(state, "set_sub_stage_progress"):
-        state.set_sub_stage_progress(None)
-    if archive_run_dir is not None:
-        marker = archive_run_dir / ".beam_postprocess_in_progress"
-        if marker.exists():
-            marker.unlink()
-    marker = Path(workspace.get_beam_output_dir()) / ".beam_postprocess_in_progress"
-    if marker.exists():
-        marker.unlink()
 
 
 def _derive_beam_run_input_keys(
@@ -645,15 +592,6 @@ def _run_beam_steps(
     workspace = context.workspace
     archive_run_dir = _archive_run_dir_for_restart(state)
 
-    if _interrupted_beam_postprocess_detected(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
-    ):
-        raise RuntimeError(
-            "Interrupted BEAM postprocess detected; cannot safely restart "
-            "because postprocessing modifies workspace data in place (e.g. skims.zarr). "
-            "Refusing restart."
-        )
-
     _, preprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_preprocess,
@@ -724,9 +662,6 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    _mark_beam_postprocess_in_progress(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
-    )
     _, postprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
@@ -738,9 +673,6 @@ def _run_beam_steps(
         iteration=iteration,
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
-    )
-    _clear_beam_postprocess_in_progress(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
     )
 
     combined_outputs = step_output_handoff_mapping(

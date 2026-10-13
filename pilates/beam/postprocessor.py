@@ -2716,17 +2716,32 @@ def _merge_beam_skims_to_zarr(
         input_format = "omx"
         partialSkims = omx.open_file(current_skims_path, mode="r")
 
-    # Ensure the main skims.zarr is 0-based and flagged before opening for merge
+    staging_path = f"{all_skims_path}.tmp_{os.getpid()}_{int(time.time() * 1000)}"
+    if os.path.exists(staging_path):
+        shutil.rmtree(staging_path)
+
+    if not os.path.exists(all_skims_path):
+        logger.error(f"Failed to find target Zarr skims file {all_skims_path}")
+        if partial_skims_ds:
+            partial_skims_ds.close()
+        return None
+
+    # Copy to staging directory for isolated copy-on-write mutation
+    shutil.copytree(all_skims_path, staging_path)
+
+    # Ensure the staged skims.zarr is 0-based and flagged before opening for merge
     try:
-        ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
+        ensure_0_based_and_flag_zarr_skims(staging_path, settings, workspace)
     except Exception as e:
-        logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
+        logger.error(f"Failed to ensure 0-based and flag staged Zarr skims: {e}")
+        if os.path.exists(staging_path):
+            shutil.rmtree(staging_path, ignore_errors=True)
         return all_skims_path
 
-    # Open the Zarr dataset in append mode to modify it in place
+    # Open the Zarr dataset from the staging path
     try:
-        skims_ds = xr.open_zarr(all_skims_path)
-        logger.info(f"Opened Zarr skims file: {all_skims_path}")
+        skims_ds = xr.open_zarr(staging_path)
+        logger.info(f"Opened staged Zarr skims file: {staging_path}")
         logger.info(
             f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
         )
@@ -2746,9 +2761,11 @@ def _merge_beam_skims_to_zarr(
                 original_zone_ids = canonical_zones_df.index.tolist()
                 skims_ds.attrs["original_zone_ids"] = original_zone_ids
     except Exception as e:
-        logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
+        logger.error(f"Failed to open staged Zarr skims file {staging_path}: {e}")
         if partial_skims_ds:
             partial_skims_ds.close()
+        if os.path.exists(staging_path):
+            shutil.rmtree(staging_path, ignore_errors=True)
         return None
 
     timePeriods = get_setting(settings, "shared.skims.periods")
@@ -3039,11 +3056,11 @@ def _merge_beam_skims_to_zarr(
 
         skims_ds = zone_utils.normalize_dimension_coords_for_zarr(skims_ds)
 
-        skims_ds.to_zarr(all_skims_path, mode="a", consolidated=False, zarr_format=2)
+        skims_ds.to_zarr(staging_path, mode="a", consolidated=False, zarr_format=2)
 
         import zarr
 
-        zgroup = zarr.open_group(all_skims_path, mode="a")
+        zgroup = zarr.open_group(staging_path, mode="a")
         if otaz_corrected and "otaz" in zgroup:
             zgroup["otaz"][:] = expected_coords
         if dtaz_corrected and "dtaz" in zgroup:
@@ -3052,30 +3069,30 @@ def _merge_beam_skims_to_zarr(
         if "original_zone_ids" in skims_ds.attrs:
             zgroup.attrs["original_zone_ids"] = skims_ds.attrs["original_zone_ids"]
 
-        zarr.consolidate_metadata(all_skims_path)
-        logger.info("Completed writing zarr skims successfully.")
+        zarr.consolidate_metadata(staging_path)
+        logger.info("Completed writing zarr skims successfully to staging.")
         merge_successful = (
             True  # Indicate merge/post-processing was attempted successfully
         )
     except Exception as e:
-        logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
+        logger.error(f"FAILED to write updated zarr skims to {staging_path}: {e}")
         raise
 
-        # Independent verification of the written Zarr file
+    # Independent verification of the written Zarr file
     try:
-        with xr.open_zarr(all_skims_path) as verified_ds:
+        with xr.open_zarr(staging_path) as verified_ds:
             logger.info(
-                f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
+                f"DEBUG: VERIFICATION - Staged Zarr file on disk ({staging_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
             )
             if "time_period" in verified_ds.coords:
                 logger.debug(
                     "Post-write time_period coords for %s: %s",
-                    all_skims_path,
+                    staging_path,
                     list(verified_ds.coords["time_period"].values),
                 )
     except Exception as e:
         logger.error(
-            f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}"
+            f"DEBUG: VERIFICATION FAILED - Could not open or verify staged {staging_path}: {e}"
         )
 
     # Close the datasets
@@ -3086,11 +3103,19 @@ def _merge_beam_skims_to_zarr(
     if skims_ds:
         skims_ds.close()
 
-    # Return the updated Zarr skims path whenever we successfully wrote them.
-    # This ensures downstream logging captures the rewritten master skims even
-    # if no new OMX skims were found.
+    # Atomically commit updated Zarr skims
     if merge_successful:
+        backup_path = f"{all_skims_path}.old_{os.getpid()}_{int(time.time() * 1000)}"
+        if os.path.exists(backup_path):
+            shutil.rmtree(backup_path, ignore_errors=True)
+        os.rename(all_skims_path, backup_path)
+        os.rename(staging_path, all_skims_path)
+        shutil.rmtree(backup_path, ignore_errors=True)
+        logger.info(f"Atomically committed updated Zarr skims to {all_skims_path}")
         return all_skims_path
+
+    if os.path.exists(staging_path):
+        shutil.rmtree(staging_path, ignore_errors=True)
     logger.warning("No new OMX skims found, returning None.")
     return None
 

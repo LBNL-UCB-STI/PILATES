@@ -312,72 +312,106 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
 
 
 # ==============================================================================
-# Scenario 3: Crash partway through postprocess refuses restart
+# Scenario 3: Crash partway through postprocess; restart matches uninterrupted run
 # ==============================================================================
-def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
+def test_scenario_3_crash_partway_through_postprocess_restart_matches_uninterrupted_run(
     tmp_path: Path,
 ) -> None:
-    """Scenario 3: Interrupted postprocess leaves in-progress marker; restart refuses."""
-    env = _create_test_environment(tmp_path)
+    """Scenario 3: Crash partway through postprocess; restart matches uninterrupted run.
+
+    Because skims merging is isolated copy-on-write and does not mutate workspace data in place,
+    an interrupted postprocess leaves no corrupted state. Restarting automatically cache-hits
+    beam_run, completes postprocess, and produces outputs identical to an uninterrupted run.
+    """
     container_stub = _make_container_stub()
 
-    def fail_mid_postprocess(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated mid-postprocess crash")
-
-    # Monkeypatch 1: Container stub
-    # Monkeypatch 2: Postprocess hook fails mid-run leaving progress marker
+    # 1. Run uninterrupted baseline
+    env_baseline = _create_test_environment(tmp_path / "baseline")
     with patch.object(BeamRunner, "run_container", container_stub):
+        with env_baseline["tracker"].scenario("beam_scenario") as scenario:
+            for k, art in env_baseline["seed_artifacts"].items():
+                scenario.coupler.set_from_artifact(k, art)
+            baseline_outputs = _run_beam_steps(
+                scenario=scenario, year=2020, iteration=0, context=env_baseline["context"]
+            )
+    assert baseline_outputs is not None
+
+    # 2. Run interrupted environment
+    env_interrupted = _create_test_environment(tmp_path / "interrupted")
+    run_counts = {"container": 0, "postprocess_attempts": 0}
+
+    def tracked_container(self: Any, **kwargs: Any) -> bool:
+        run_counts["container"] += 1
+        return container_stub(self, **kwargs)
+
+
+    # Attempt 1: Fails mid-postprocess after beam_run has committed
+    with patch.object(BeamRunner, "run_container", tracked_container):
         with patch.object(
             BeamPostprocessor,
             "postprocess",
-            side_effect=fail_mid_postprocess,
+            side_effect=RuntimeError("Simulated mid-postprocess crash"),
         ):
-            with env["tracker"].scenario("beam_scenario") as scenario:
-                for k, art in env["seed_artifacts"].items():
+            with env_interrupted["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env_interrupted["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
                 with pytest.raises(RuntimeError, match="Simulated mid-postprocess crash"):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario, year=2020, iteration=0, context=env_interrupted["context"]
                     )
 
-        # In-progress marker or state must exist
-        marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
-        assert marker.exists() or env["context"].state.current_sub_stage == "beam_postprocess_in_progress"
+    assert run_counts["container"] == 1
 
-        # Attempt 2: Restart without clearing marker must refuse to restart
-        with env["tracker"].scenario("beam_scenario") as scenario:
-            for k, art in env["seed_artifacts"].items():
+    # Attempt 2: Restart without failure. beam_run is a cache hit; real postprocess succeeds.
+    with patch.object(BeamRunner, "run_container", tracked_container):
+        with env_interrupted["tracker"].scenario("beam_scenario") as scenario:
+            for k, art in env_interrupted["seed_artifacts"].items():
                 scenario.coupler.set_from_artifact(k, art)
 
-            with pytest.raises(
-                RuntimeError,
-                match="Interrupted BEAM postprocess detected.*Refusing restart",
-            ):
-                _run_beam_steps(
-                    scenario=scenario, year=2020, iteration=0, context=env["context"]
-                )
+            restart_outputs = _run_beam_steps(
+                scenario=scenario, year=2020, iteration=0, context=env_interrupted["context"]
+            )
+
+    # Verify:
+    # 1. No second container execution (beam_run cache hit)
+    assert run_counts["container"] == 1
+    assert restart_outputs is not None
+
+    # 2. Output keys and files match uninterrupted baseline run
+    assert set(restart_outputs.keys()) == set(baseline_outputs.keys())
+    for key, art in restart_outputs.items():
+        base_art = baseline_outputs[key]
+        path = art.abs_path or (Path(env_interrupted["local_run_dir"]) / art.container_uri)
+        base_path = base_art.abs_path or (Path(env_baseline["local_run_dir"]) / base_art.container_uri)
+        assert Path(path).exists()
+        assert Path(base_path).exists()
+        if Path(path).is_file():
+            assert Path(path).stat().st_size == Path(base_path).stat().st_size
 
 
 # ==============================================================================
 # Scenario 4: Scratch wiped after beam_run committed
 # ==============================================================================
-def test_scenario_4_scratch_wiped_after_beam_run_committed_exposes_hydration_gap(
+def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recovery_root(
     tmp_path: Path,
 ) -> None:
-    """Scenario 4: Scratch wiped after beam_run exposes Consist's cache_hydration='outputs-all' gap.
+    """Scenario 4: Scratch wiped after beam_run hydrates declared destinations from recovery root.
 
-    Consist's native cache_hydration='outputs-all' materializes cached outputs into
-    tracker.run_dir / 'outputs' / <preview_path> rather than the artifact's declared
-    destination paths in the workspace. Consequently, step output validation
-    raises when verifying declared destinations.
+    With cache_hydration='outputs-requested', Consist checks registered artifact recovery roots
+    and hydrates cached outputs directly into their declared destination paths in scratch.
     """
     env = _create_test_environment(tmp_path)
+    run_counts = {"container": 0}
     container_stub = _make_container_stub()
+
+    def tracked_container(self: Any, **kwargs: Any) -> bool:
+        run_counts["container"] += 1
+        return container_stub(self, **kwargs)
 
     # Monkeypatch 1: Container stub
     # Monkeypatch 2: Hook crashing after beam_run commits and archives
-    with patch.object(BeamRunner, "run_container", container_stub):
+    with patch.object(BeamRunner, "run_container", tracked_container):
         with patch(
             "pilates.workflows.stages.supply_demand_beam._maybe_fail_after_beam_run_for_canary",
             side_effect=RuntimeError("Simulated crash after beam_run committed"),
@@ -393,23 +427,34 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_exposes_hydration_gap
                         scenario=scenario, year=2020, iteration=0, context=env["context"]
                     )
 
+    assert run_counts["container"] == 1
+
     # Wipe scratch beam_output directory
     beam_out = Path(env["ws"].get_beam_output_dir())
     assert beam_out.exists()
     shutil.rmtree(beam_out)
     assert not beam_out.exists()
 
-    # Attempt 2: Restart. Demonstrates that Consist cache_hydration='outputs-all'
-    # does NOT restore declared destination paths in scratch.
-    with patch.object(BeamRunner, "run_container", container_stub):
+    # Attempt 2: Restart. Consist cache_hydration='outputs-requested' probes
+    # recovery roots and restores declared destination paths in scratch.
+    with patch.object(BeamRunner, "run_container", tracked_container):
         with env["tracker"].scenario("beam_scenario") as scenario:
             for k, art in env["seed_artifacts"].items():
                 scenario.coupler.set_from_artifact(k, art)
 
-            with pytest.raises(RuntimeError, match="is missing at declared destination"):
-                _run_beam_steps(
-                    scenario=scenario, year=2020, iteration=0, context=env["context"]
-                )
+            res = _run_beam_steps(
+                scenario=scenario, year=2020, iteration=0, context=env["context"]
+            )
+            assert res is not None
+
+    # Verify no second container run (cache hit) and outputs restored to scratch
+    assert run_counts["container"] == 1
+    assert beam_out.exists()
+    restored_parquet = (
+        beam_out
+        / "test-region/year-2020-iteration-0/.pilates-consist-outputs/beam_run/events_parquet_2020_0.parquet"
+    )
+    assert restored_parquet.exists()
 
 
 # ==============================================================================

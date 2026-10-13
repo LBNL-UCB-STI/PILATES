@@ -23,7 +23,6 @@ from consist import (
     BindingResult,
     CacheOptions,
     ExecutionOptions,
-    OutputSet,
     define_step,
 )
 
@@ -314,32 +313,6 @@ def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
         / f"year-{year}-iteration-{int(state.iteration)}"
     )
 
-
-def _beam_run_output_sets(
-    *,
-    settings: Any,
-    state: Any,
-    workspace: Any,
-    resolved_inputs: ResolvedStepInputs | None = None,
-) -> Mapping[str, OutputSet]:
-    """Declare the exact renamed BEAM run tree as one logical artifact."""
-
-    del resolved_inputs
-    return {
-        "beam_run_outputs": OutputSet(
-            root=_beam_run_output_root(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            ),
-            include="**/*",
-            # Zarr has a first-class immutable-directory artifact contract in
-            # Consist.  It is logged directly after BEAM selects its final
-            # iteration rather than represented as a member of this file set.
-            exclude="**/*.zarr/**",
-            recursive=True,
-        )
-    }
 
 
 def _beam_postprocess_native_output_paths(
@@ -843,7 +816,7 @@ def _beam_run_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-all",
+        cache_hydration="outputs-requested",
         cache_hydration_failure="warn",
         cache_version=1,
     )
@@ -1428,7 +1401,7 @@ def _native_beam_preprocess(
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-all",
+    cache_hydration="outputs-requested",
     inputs={
         BEAM_PLANS_IN: None,
         BEAM_HOUSEHOLDS_IN: None,
@@ -1700,7 +1673,6 @@ beam_run = StepDefinition(
     project_outputs=_project_beam_run_outputs,
     input_contract=_BEAM_RUN_INPUT_CONTRACT,
     output_paths=_beam_run_native_output_paths,
-    output_sets=_beam_run_output_sets,
     execution_options=_native_execution_options,
     archive_outputs=False,
     cache_options=_beam_run_output_cache,
