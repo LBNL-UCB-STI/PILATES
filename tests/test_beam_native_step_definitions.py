@@ -487,8 +487,7 @@ def test_beam_run_declares_only_exact_region_year_iteration_output_set(
     )
     expected_root = tmp_path / "beam-output" / "test-region" / "year-2030-iteration-2"
     assert all(
-        Path(path).is_relative_to(expected_root)
-        for path in scalar_paths.values()
+        Path(path).is_relative_to(expected_root) for path in scalar_paths.values()
     )
     assert not any(key.startswith("raw_od_skims_zarr_") for key in scalar_paths)
 

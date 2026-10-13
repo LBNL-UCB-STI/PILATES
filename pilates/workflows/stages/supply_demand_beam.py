@@ -459,7 +459,10 @@ def _archive_beam_run_outputs_native(
         failures = [
             f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
             for key, f in report.items()
-            if not (f.metadata_committed and f.verification_status in {"verified", "not_requested"})
+            if not (
+                f.metadata_committed
+                and f.verification_status in {"verified", "not_requested"}
+            )
         ]
         raise RuntimeError(
             "Archiving beam_run outputs failed verification or copy: "
@@ -478,7 +481,10 @@ def _interrupted_beam_postprocess_detected(
         return True
     if getattr(state, "sub_stage_progress", None) == "beam_postprocess_in_progress":
         return True
-    if archive_run_dir is not None and (archive_run_dir / ".beam_postprocess_in_progress").exists():
+    if (
+        archive_run_dir is not None
+        and (archive_run_dir / ".beam_postprocess_in_progress").exists()
+    ):
         return True
     beam_out = Path(workspace.get_beam_output_dir())
     if (beam_out / ".beam_postprocess_in_progress").exists():
@@ -510,7 +516,10 @@ def _clear_beam_postprocess_in_progress(
     workspace: Workspace,
     archive_run_dir: Optional[Path] = None,
 ) -> None:
-    if hasattr(state, "current_sub_stage") and state.current_sub_stage == "beam_postprocess_in_progress":
+    if (
+        hasattr(state, "current_sub_stage")
+        and state.current_sub_stage == "beam_postprocess_in_progress"
+    ):
         state.current_sub_stage = None
     if hasattr(state, "set_sub_stage_progress"):
         state.set_sub_stage_progress(None)

@@ -241,7 +241,9 @@ def test_scenario_1_crash_during_beam_run(tmp_path: Path) -> None:
                 scenario.coupler.set_from_artifact(k, art)
 
             # Attempt 1: Crashes during container execution
-            with pytest.raises(RuntimeError, match="Simulated crash during container execution"):
+            with pytest.raises(
+                RuntimeError, match="Simulated crash during container execution"
+            ):
                 _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
@@ -293,7 +295,10 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
                     RuntimeError, match="Simulated crash after beam_run commits"
                 ):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario,
+                        year=2020,
+                        iteration=0,
+                        context=env["context"],
                     )
 
         assert run_counts["container"] == 1
@@ -336,14 +341,22 @@ def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
                 for k, art in env["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
-                with pytest.raises(RuntimeError, match="Simulated mid-postprocess crash"):
+                with pytest.raises(
+                    RuntimeError, match="Simulated mid-postprocess crash"
+                ):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario,
+                        year=2020,
+                        iteration=0,
+                        context=env["context"],
                     )
 
         # In-progress marker or state must exist
         marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
-        assert marker.exists() or env["context"].state.current_sub_stage == "beam_postprocess_in_progress"
+        assert (
+            marker.exists()
+            or env["context"].state.current_sub_stage == "beam_postprocess_in_progress"
+        )
 
         # Attempt 2: Restart without clearing marker must refuse to restart
         with env["tracker"].scenario("beam_scenario") as scenario:
@@ -385,13 +398,20 @@ def test_scenario_3_scratch_wiped_after_interrupted_postprocess_still_refuses_re
                 for k, art in env["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
-                with pytest.raises(RuntimeError, match="Simulated mid-postprocess crash"):
+                with pytest.raises(
+                    RuntimeError, match="Simulated mid-postprocess crash"
+                ):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario,
+                        year=2020,
+                        iteration=0,
+                        context=env["context"],
                     )
 
     # In-progress marker must exist in BOTH scratch and the archive recovery root
-    scratch_marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
+    scratch_marker = (
+        Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
+    )
     archive_marker = archive_dir / ".beam_postprocess_in_progress"
     assert scratch_marker.exists()
     assert archive_marker.exists()
@@ -451,7 +471,10 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
                     RuntimeError, match="Simulated crash after beam_run committed"
                 ):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario,
+                        year=2020,
+                        iteration=0,
+                        context=env["context"],
                     )
 
     assert run_counts["container"] == 1
@@ -635,7 +658,10 @@ def test_scenario_7_archive_copy_failure_raises(tmp_path: Path) -> None:
                     RuntimeError, match="Simulated disk full during archive copy"
                 ):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                        scenario=scenario,
+                        year=2020,
+                        iteration=0,
+                        context=env["context"],
                     )
 
     # Recovery root must NOT have been recorded on artifacts in duckdb

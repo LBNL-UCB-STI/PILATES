@@ -314,7 +314,6 @@ def _beam_run_output_root(*, settings: Any, state: Any, workspace: Any) -> Path:
     )
 
 
-
 def _beam_postprocess_native_output_paths(
     *,
     settings: Any,

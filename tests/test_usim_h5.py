@@ -297,4 +297,3 @@ def test_create_snapshot_fails_when_table_missing_from_both_scopes(
             source_h5=source, destination_h5=destination, year=2019
         )
     assert not destination.exists()
-

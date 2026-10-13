@@ -58,7 +58,9 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
         def get(self, _key, default=None):
             return default
 
-    scenario = SimpleNamespace(coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path))
+    scenario = SimpleNamespace(
+        coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path)
+    )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
         state=SimpleNamespace(is_restart_run=False),
