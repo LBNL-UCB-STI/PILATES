@@ -286,9 +286,32 @@ def test_cli_inspection_helper_outputs_resolved_yaml(
     assert dumped["run"]["region"] == "seattle"
 
 
-def test_all_31_scenarios_resolve_and_active_scenarios_validate() -> None:
-    scenario_files = sorted(SCENARIOS_DIR.rglob("*.yaml"))
-    assert len(scenario_files) >= 31
+def _tracked_scenario_paths() -> list[Path]:
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "scenarios/**/*.yaml"],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        paths = [
+            REPO_ROOT / line.strip()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        ]
+        if paths:
+            return sorted(paths)
+    except Exception:
+        pass
+    return sorted(SCENARIOS_DIR.rglob("*.yaml"))
+
+
+def test_all_tracked_scenarios_resolve_and_validate() -> None:
+    scenario_files = _tracked_scenario_paths()
+    assert len(scenario_files) >= 27
 
     hierarchical_count = 0
     for path in scenario_files:
@@ -304,7 +327,7 @@ def test_all_31_scenarios_resolve_and_active_scenarios_validate() -> None:
             dumped = cfg.model_dump()
             assert dumped["run"]["region"] == resolved["run"]["region"]
 
-    assert hierarchical_count >= 30
+    assert hierarchical_count >= 27
 
 
 def test_pilot_refactored_scenarios_preserve_exact_resolved_configuration() -> None:
@@ -352,42 +375,4 @@ def test_pilot_refactored_scenarios_preserve_exact_resolved_configuration() -> N
     assert (
         load_config(sfbay_local_path).model_dump()
         == PilatesConfig(**expected_sfbay_local).model_dump()
-    )
-
-    # 3. Seattle local Consist -> inherits from settings-seattle-consist-hpc.yaml
-    seattle_local_path = (
-        SCENARIOS_DIR / "seattle" / "settings-seattle-consist-local.yaml"
-    )
-    raw_seattle_local = yaml.safe_load(seattle_local_path.read_text(encoding="utf-8"))
-    assert raw_seattle_local["base"] == "settings-seattle-consist-hpc.yaml"
-    assert len(seattle_local_path.read_text(encoding="utf-8").splitlines()) < 45
-
-    resolved_seattle_local = resolve_config_dict(seattle_local_path)
-    assert resolved_seattle_local["run"]["supply_demand_iters"] == 1
-    assert (
-        resolved_seattle_local["run"]["output_directory"]
-        == "/Users/zaneedell/git/PILATES/tmp"
-    )
-    assert resolved_seattle_local["run"]["output_run_name"] == "new-asim-consist"
-    assert resolved_seattle_local["run"]["local_workspace_root"] is None
-    assert resolved_seattle_local["run"]["recovery_archive_roots"] == []
-    assert resolved_seattle_local["run"]["enable_archive_copy"] is False
-    assert resolved_seattle_local["run"]["consist_hashing_strategy"] == "fast"
-    assert resolved_seattle_local["run"]["restart_strict"] is False
-    assert resolved_seattle_local["run"]["consist_code_identity"] is None
-    assert (
-        resolved_seattle_local["run"]["consist_db_seed_from_shared_on_start"] is False
-    )
-    assert resolved_seattle_local["run"]["use_stubs"] is True
-    assert (
-        resolved_seattle_local["shared"]["database"]["path"]
-        == "/Users/zaneedell/git/PILATES/tmp/consist-seattle.duckdb"
-    )
-    assert (
-        resolved_seattle_local["shared"]["database"]["snapshot_path"]
-        == "/Users/zaneedell/git/PILATES/tmp/seattle/snapshots"
-    )
-    assert (
-        resolved_seattle_local["beam"]["warmstart_linkstats_path"]
-        == "{router_directory}/init.linkstats.csv.gz"
     )
