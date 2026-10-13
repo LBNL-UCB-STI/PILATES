@@ -312,82 +312,51 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
 
 
 # ==============================================================================
-# Scenario 3: Crash partway through postprocess; restart matches uninterrupted run
+# Scenario 3: Crash partway through postprocess refuses restart
 # ==============================================================================
-def test_scenario_3_crash_partway_through_postprocess_restart_matches_uninterrupted_run(
+def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
     tmp_path: Path,
 ) -> None:
-    """Scenario 3: Crash partway through postprocess; restart matches uninterrupted run.
-
-    Because skims merging is isolated copy-on-write and does not mutate workspace data in place,
-    an interrupted postprocess leaves no corrupted state. Restarting automatically cache-hits
-    beam_run, completes postprocess, and produces outputs identical to an uninterrupted run.
-    """
+    """Scenario 3: Interrupted postprocess leaves in-progress marker; restart refuses."""
+    env = _create_test_environment(tmp_path)
     container_stub = _make_container_stub()
 
-    # 1. Run uninterrupted baseline
-    env_baseline = _create_test_environment(tmp_path / "baseline")
+    def fail_mid_postprocess(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Simulated mid-postprocess crash")
+
+    # Monkeypatch 1: Container stub
+    # Monkeypatch 2: Postprocess hook fails mid-run leaving progress marker
     with patch.object(BeamRunner, "run_container", container_stub):
-        with env_baseline["tracker"].scenario("beam_scenario") as scenario:
-            for k, art in env_baseline["seed_artifacts"].items():
-                scenario.coupler.set_from_artifact(k, art)
-            baseline_outputs = _run_beam_steps(
-                scenario=scenario, year=2020, iteration=0, context=env_baseline["context"]
-            )
-    assert baseline_outputs is not None
-
-    # 2. Run interrupted environment
-    env_interrupted = _create_test_environment(tmp_path / "interrupted")
-    run_counts = {"container": 0, "postprocess_attempts": 0}
-
-    def tracked_container(self: Any, **kwargs: Any) -> bool:
-        run_counts["container"] += 1
-        return container_stub(self, **kwargs)
-
-
-    # Attempt 1: Fails mid-postprocess after beam_run has committed
-    with patch.object(BeamRunner, "run_container", tracked_container):
         with patch.object(
             BeamPostprocessor,
             "postprocess",
-            side_effect=RuntimeError("Simulated mid-postprocess crash"),
+            side_effect=fail_mid_postprocess,
         ):
-            with env_interrupted["tracker"].scenario("beam_scenario") as scenario:
-                for k, art in env_interrupted["seed_artifacts"].items():
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
                     scenario.coupler.set_from_artifact(k, art)
 
                 with pytest.raises(RuntimeError, match="Simulated mid-postprocess crash"):
                     _run_beam_steps(
-                        scenario=scenario, year=2020, iteration=0, context=env_interrupted["context"]
+                        scenario=scenario, year=2020, iteration=0, context=env["context"]
                     )
 
-    assert run_counts["container"] == 1
+        # In-progress marker or state must exist
+        marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
+        assert marker.exists() or env["context"].state.current_sub_stage == "beam_postprocess_in_progress"
 
-    # Attempt 2: Restart without failure. beam_run is a cache hit; real postprocess succeeds.
-    with patch.object(BeamRunner, "run_container", tracked_container):
-        with env_interrupted["tracker"].scenario("beam_scenario") as scenario:
-            for k, art in env_interrupted["seed_artifacts"].items():
+        # Attempt 2: Restart without clearing marker must refuse to restart
+        with env["tracker"].scenario("beam_scenario") as scenario:
+            for k, art in env["seed_artifacts"].items():
                 scenario.coupler.set_from_artifact(k, art)
 
-            restart_outputs = _run_beam_steps(
-                scenario=scenario, year=2020, iteration=0, context=env_interrupted["context"]
-            )
-
-    # Verify:
-    # 1. No second container execution (beam_run cache hit)
-    assert run_counts["container"] == 1
-    assert restart_outputs is not None
-
-    # 2. Output keys and files match uninterrupted baseline run
-    assert set(restart_outputs.keys()) == set(baseline_outputs.keys())
-    for key, art in restart_outputs.items():
-        base_art = baseline_outputs[key]
-        path = art.abs_path or (Path(env_interrupted["local_run_dir"]) / art.container_uri)
-        base_path = base_art.abs_path or (Path(env_baseline["local_run_dir"]) / base_art.container_uri)
-        assert Path(path).exists()
-        assert Path(base_path).exists()
-        if Path(path).is_file():
-            assert Path(path).stat().st_size == Path(base_path).stat().st_size
+            with pytest.raises(
+                RuntimeError,
+                match="Interrupted BEAM postprocess detected.*Refusing restart",
+            ):
+                _run_beam_steps(
+                    scenario=scenario, year=2020, iteration=0, context=env["context"]
+                )
 
 
 # ==============================================================================
