@@ -211,3 +211,90 @@ def test_validate_usim_h5_filename_year_with_population_source_snapshot(
         )
     with pytest.raises(ValueError, match="filename/year mismatch"):
         _validate_usim_h5_filename_year(h5_path="model_data_2020.h5", year=2025)
+
+
+def test_ensure_usim_population_year_table_aliases_creates_root_links_from_year_tables(
+    tmp_path: Path,
+) -> None:
+    h5_path = tmp_path / "population.h5"
+    _write_population_store(
+        h5_path,
+        ("2023/households", "2023/persons", "2023/jobs", "2023/blocks"),
+    )
+
+    result = ensure_usim_population_year_table_aliases(
+        h5_path=str(h5_path),
+        year=2023,
+    )
+
+    assert result == {
+        "created": [
+            "/households",
+            "/persons",
+            "/jobs",
+            "/blocks",
+        ],
+        "existing": [
+            "/2023/households",
+            "/2023/persons",
+            "/2023/jobs",
+            "/2023/blocks",
+        ],
+        "missing_root": [],
+    }
+
+    with h5py.File(h5_path, "r") as handle:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/{table_name}" in handle
+            assert handle[f"/2023/{table_name}"].id == handle[f"/{table_name}"].id
+
+
+def test_create_snapshot_from_exact_year_source_creates_bidirectional_links(
+    tmp_path: Path,
+) -> None:
+    source = _write_population_store(
+        tmp_path / "model_data_2019.h5",
+        ("2019/households", "2019/persons", "2019/jobs", "2019/blocks"),
+    )
+    destination = tmp_path / "model_data_2019_population_source.h5"
+
+    result = create_usim_population_source_snapshot(
+        source_h5=source, destination_h5=destination, year=2019
+    )
+
+    assert result == destination
+    resolved = resolve_usim_population_table_paths(
+        h5_path=str(destination), year=2019, require_exact_year=True
+    )
+    assert set(resolved.values()) == {
+        "/2019/households",
+        "/2019/persons",
+        "/2019/jobs",
+        "/2019/blocks",
+    }
+    with h5py.File(destination, "r") as handle:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/{table_name}" in handle
+            assert f"/2019/{table_name}" in handle
+            assert handle[f"/2019/{table_name}"].id == handle[f"/{table_name}"].id
+    # Source is unchanged and does not have root tables
+    with h5py.File(source, "r") as handle:
+        for table_name in ("households", "persons", "jobs", "blocks"):
+            assert f"/{table_name}" not in handle
+
+
+def test_create_snapshot_fails_when_table_missing_from_both_scopes(
+    tmp_path: Path,
+) -> None:
+    source = _write_population_store(
+        tmp_path / "source.h5",
+        ("2019/households", "2019/persons", "2019/jobs"),
+    )
+    destination = tmp_path / "destination.h5"
+
+    with pytest.raises(RuntimeError, match="missing population tables"):
+        create_usim_population_source_snapshot(
+            source_h5=source, destination_h5=destination, year=2019
+        )
+    assert not destination.exists()
+
