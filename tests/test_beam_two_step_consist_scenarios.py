@@ -359,6 +359,64 @@ def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
                 )
 
 
+def test_scenario_3_scratch_wiped_after_interrupted_postprocess_still_refuses_restart(
+    tmp_path: Path,
+) -> None:
+    """Scenario 3b: If scratch is wiped after an interrupted postprocess, the recovery root marker still refuses restart."""
+    env = _create_test_environment(tmp_path)
+    archive_dir = tmp_path / "archive_run"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    env["context"].state.archive_run_dir = str(archive_dir)
+
+    container_stub = _make_container_stub()
+
+    def fail_mid_postprocess(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("Simulated mid-postprocess crash")
+
+    # Monkeypatch 1: Container stub
+    # Monkeypatch 2: Postprocess fails mid-run
+    with patch.object(BeamRunner, "run_container", container_stub):
+        with patch.object(
+            BeamPostprocessor,
+            "postprocess",
+            side_effect=fail_mid_postprocess,
+        ):
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
+                    scenario.coupler.set_from_artifact(k, art)
+
+                with pytest.raises(RuntimeError, match="Simulated mid-postprocess crash"):
+                    _run_beam_steps(
+                        scenario=scenario, year=2020, iteration=0, context=env["context"]
+                    )
+
+    # In-progress marker must exist in BOTH scratch and the archive recovery root
+    scratch_marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
+    archive_marker = archive_dir / ".beam_postprocess_in_progress"
+    assert scratch_marker.exists()
+    assert archive_marker.exists()
+
+    # Now simulate a scratch purge / wipe
+    beam_out = Path(env["ws"].get_beam_output_dir())
+    shutil.rmtree(beam_out)
+    assert not scratch_marker.exists()
+    assert not beam_out.exists()
+    assert archive_marker.exists()
+
+    # Attempt 2: Restart after scratch wipe must STILL refuse because recovery root marker survives
+    with env["tracker"].scenario("beam_scenario") as scenario:
+        for k, art in env["seed_artifacts"].items():
+            scenario.coupler.set_from_artifact(k, art)
+
+        with pytest.raises(
+            RuntimeError,
+            match="Interrupted BEAM postprocess detected.*Refusing restart",
+        ):
+            _run_beam_steps(
+                scenario=scenario, year=2020, iteration=0, context=env["context"]
+            )
+
+
 # ==============================================================================
 # Scenario 4: Scratch wiped after beam_run committed
 # ==============================================================================

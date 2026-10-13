@@ -651,7 +651,17 @@ def _run_beam_steps(
         raise RuntimeError(
             "Interrupted BEAM postprocess detected; cannot safely restart "
             "because postprocessing modifies workspace data in place (e.g. skims.zarr). "
-            "Refusing restart."
+            "Refusing restart to prevent silent data corruption.\n\n"
+            "Operator Recovery Procedure:\n"
+            "1. Identify the uncorrupted input skims from prior step or iteration:\n"
+            "   - Iteration 0: restore skims.zarr from the ActivitySim output archive or initial seed.\n"
+            "   - Iteration > 0: restore skims.zarr from the previous iteration's archived artifact.\n"
+            "2. Overwrite the corrupted workspace skims.zarr with that clean copy.\n"
+            "3. Clear the in-progress marker file(s):\n"
+            "   - In scratch: <beam_output_dir>/.beam_postprocess_in_progress\n"
+            "   - In archive: <archive_run_dir>/.beam_postprocess_in_progress\n"
+            "4. Rerun PILATES from the traffic assignment stage.\n"
+            "For full instructions, see docs/run/restart_and_resume.md."
         )
 
     _, preprocess_outputs = execute_step(
