@@ -63,7 +63,13 @@ def test_beam_stage_passes_one_compiled_launch_config_to_binding_and_execution(
     )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
-        state=SimpleNamespace(is_restart_run=False),
+        state=SimpleNamespace(
+            is_restart_run=False,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
         workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
 
@@ -135,7 +141,13 @@ def test_native_archive_is_called_with_verify_before_canary_failpoint(
     )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
-        state=SimpleNamespace(is_restart_run=False),
+        state=SimpleNamespace(
+            is_restart_run=False,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
         workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
     calls: list[str] = []
@@ -241,7 +253,13 @@ def test_interrupted_postprocess_detected_refuses_restart_before_step_execution(
     )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
-        state=SimpleNamespace(is_restart_run=True),
+        state=SimpleNamespace(
+            is_restart_run=True,
+            sub_stage_progress=None,
+            run_info_path=None,
+            archive_run_dir=None,
+            set_sub_stage_progress=lambda _: None,
+        ),
         workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
 

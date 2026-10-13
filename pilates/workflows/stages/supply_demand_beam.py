@@ -22,7 +22,9 @@ from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+from consist import Artifact, Tracker
 from consist.api import archive_run_output_files
+from consist.protocols import ArtifactRecordLike
 from pilates.workflows.outputs_base import step_output_handoff_mapping
 from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.steps import (
@@ -93,11 +95,11 @@ class TrafficAssignmentPhaseOutputs:
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
-    beam_cfg = getattr(settings, "beam", None)
-    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+    beam_cfg = settings.beam
+    skim_cfg = beam_cfg.full_skim if beam_cfg is not None else None
     if skim_cfg is None:
         return "disabled"
-    return getattr(skim_cfg, "run_schedule", "standalone")
+    return skim_cfg.run_schedule
 
 
 def _stringify_mapping_values(mapping: Optional[Mapping[str, Any]]) -> Dict[str, str]:
@@ -170,7 +172,7 @@ def beam_preprocess_binding_diagnostic_payload(
             workspace.get_beam_mutable_data_dir(),
             settings.run.region,
         )
-        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config = settings.beam.config if settings.beam is not None else None
         if beam_config:
             beam_primary_config_file = os.path.join(
                 beam_region_input_dir,
@@ -230,14 +232,10 @@ def beam_preprocess_binding_diagnostic_payload(
         "key": "beam_restart_binding",
         "artifact_family": "beam_restart_diagnostic",
         "diagnostic": "beam_restart_binding",
-        "restart_run": bool(getattr(state, "is_restart_run", False)),
-        "workflow_year": getattr(state, "year", getattr(state, "current_year", None)),
-        "forecast_year": getattr(state, "forecast_year", None),
-        "iteration": getattr(
-            state,
-            "iteration",
-            getattr(state, "current_inner_iter", None),
-        ),
+        "restart_run": bool(state.is_restart_run),
+        "workflow_year": state.year,
+        "forecast_year": state.forecast_year,
+        "iteration": state.iteration,
         "input_keys": sorted(binding.required_roles),
         "optional_input_keys": sorted(binding.optional_roles),
         "bound_input_keys": sorted((binding.binding.inputs or {}).keys()),
@@ -265,7 +263,7 @@ def _emit_beam_preprocess_binding_diagnostic(
     workspace: Workspace,
     scenario: Optional[Any] = None,
 ) -> None:
-    if not bool(getattr(state, "is_restart_run", False)):
+    if not state.is_restart_run:
         return
     payload = beam_preprocess_binding_diagnostic_payload(
         binding=binding,
@@ -290,7 +288,7 @@ def _raise_if_restart_beam_config_missing(
     settings: PilatesConfig,
     workspace: Workspace,
 ) -> None:
-    if not bool(getattr(state, "is_restart_run", False)):
+    if not state.is_restart_run:
         return
 
     try:
@@ -404,13 +402,12 @@ def _collect_previous_beam_outputs(
     if previous_beam_outputs is not None:
         return previous_beam_outputs
 
-    get_value = getattr(coupler, "get", None)
-    if not callable(get_value):
+    if not isinstance(coupler, (CouplerProtocol, Mapping)):
         return None
 
     promoted_outputs: Dict[str, Any] = {}
     for key in (LINKSTATS_WARMSTART, LINKSTATS, BEAM_PLANS_OUT):
-        value = get_value(key)
+        value = coupler.get(key)
         if value is None:
             continue
         if artifact_to_existing_path(value, workspace):
@@ -419,9 +416,9 @@ def _collect_previous_beam_outputs(
 
 
 def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
-    run_info_path = getattr(state, "run_info_path", None)
+    run_info_path = state.run_info_path
     if not run_info_path:
-        archive_dir = getattr(state, "archive_run_dir", None)
+        archive_dir = state.archive_run_dir
         return Path(archive_dir).expanduser().resolve() if archive_dir else None
     try:
         return Path(run_info_path).expanduser().resolve().parent
@@ -432,20 +429,34 @@ def _archive_run_dir_for_restart(state: WorkflowState) -> Optional[Path]:
 def _archive_beam_run_outputs_native(
     *,
     run_id: str,
-    tracker: Any,
+    tracker: Tracker,
     recovery_root: Path,
     outputs: Mapping[str, Any],
 ) -> None:
     """Archive beam_run output files to recovery_root with verify=True."""
-    file_keys = [
-        key
-        for key, artifact in outputs.items()
-        if getattr(artifact, "driver", None) != "artifact_set"
-        and not (
-            isinstance(getattr(artifact, "meta", None), dict)
-            and artifact.meta.get("directory_artifact") is True
-        )
-    ]
+    file_keys: list[str] = []
+    for key, artifact in outputs.items():
+        if isinstance(artifact, (Artifact, ArtifactRecordLike)):
+            if artifact.driver == "artifact_set":
+                continue
+            if (
+                isinstance(artifact.meta, dict)
+                and artifact.meta.get("directory_artifact") is True
+            ):
+                continue
+            file_keys.append(key)
+
+    if isinstance(tracker, Tracker):
+        ws_mount = tracker.mounts.get("workspace")
+        if ws_mount:
+            ws_path = Path(ws_mount).resolve()
+            for key in file_keys:
+                artifact = outputs.get(key)
+                if isinstance(artifact, Artifact):
+                    tracker.set_artifact_recovery_roots(
+                        artifact, [ws_path], append=True
+                    )
+
     report = archive_run_output_files(
         run_id=run_id,
         recovery_root=recovery_root,
@@ -477,9 +488,7 @@ def _interrupted_beam_postprocess_detected(
     archive_run_dir: Optional[Path],
 ) -> bool:
     """Detect whether a prior BEAM postprocess was interrupted."""
-    if getattr(state, "current_sub_stage", None) == "beam_postprocess_in_progress":
-        return True
-    if getattr(state, "sub_stage_progress", None) == "beam_postprocess_in_progress":
+    if state.sub_stage_progress == "beam_postprocess_in_progress":
         return True
     if (
         archive_run_dir is not None
@@ -498,10 +507,7 @@ def _mark_beam_postprocess_in_progress(
     workspace: Workspace,
     archive_run_dir: Optional[Path] = None,
 ) -> None:
-    if hasattr(state, "current_sub_stage"):
-        state.current_sub_stage = "beam_postprocess_in_progress"
-    if hasattr(state, "set_sub_stage_progress"):
-        state.set_sub_stage_progress("beam_postprocess_in_progress")
+    state.set_sub_stage_progress("beam_postprocess_in_progress")
     if archive_run_dir is not None:
         archive_run_dir.mkdir(parents=True, exist_ok=True)
         (archive_run_dir / ".beam_postprocess_in_progress").write_text("in_progress\n")
@@ -516,13 +522,7 @@ def _clear_beam_postprocess_in_progress(
     workspace: Workspace,
     archive_run_dir: Optional[Path] = None,
 ) -> None:
-    if (
-        hasattr(state, "current_sub_stage")
-        and state.current_sub_stage == "beam_postprocess_in_progress"
-    ):
-        state.current_sub_stage = None
-    if hasattr(state, "set_sub_stage_progress"):
-        state.set_sub_stage_progress(None)
+    state.set_sub_stage_progress(None)
     if archive_run_dir is not None:
         marker = archive_run_dir / ".beam_postprocess_in_progress"
         if marker.exists():

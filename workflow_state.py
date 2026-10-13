@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 from bisect import bisect_left
 from enum import Enum
+from pathlib import Path
 from typing import Dict, Optional, Tuple
 import os
 import yaml
@@ -67,6 +70,7 @@ class WorkflowState:
         self.forecast_year: int | None = None
         self.file_loc = file_loc
         self.mirror_file_loc: Optional[str] = None
+        self.archive_run_dir: Optional[str | Path] = None
 
         # Kept as an ignored constructor argument so archived callers that
         # still pass the legacy field can load. Numba warmup is node-local
@@ -169,9 +173,15 @@ class WorkflowState:
         run_info_path: Optional[str] = None,
         data_initialized: bool = False,
     ):
+        stage_name: Optional[str] = None
+        if isinstance(current_stage, Enum):
+            stage_name = current_stage.name
+        elif isinstance(current_stage, str):
+            stage_name = current_stage
+
         to_save = {
             "year": year,
-            "stage": current_stage.name if current_stage else None,
+            "stage": stage_name,
             "iteration": iteration,
             "sub_stage_progress": sub_stage_progress,
             "run_info_path": run_info_path,
@@ -438,7 +448,7 @@ class WorkflowState:
         targets = []
         if self.file_loc:
             targets.append(self.file_loc)
-        mirror = getattr(self, "mirror_file_loc", None)
+        mirror = self.mirror_file_loc
         if mirror and mirror not in targets:
             targets.append(mirror)
         for target in targets:
@@ -542,7 +552,7 @@ class WorkflowState:
             cleanup_paths = []
             if self.file_loc:
                 cleanup_paths.append(self.file_loc)
-            mirror = getattr(self, "mirror_file_loc", None)
+            mirror = self.mirror_file_loc
             if mirror and mirror not in cleanup_paths:
                 cleanup_paths.append(mirror)
             for path in cleanup_paths:
