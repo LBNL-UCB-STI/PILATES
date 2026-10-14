@@ -35,9 +35,7 @@ def _resolve_cache_options(
     workspace: Any,
 ) -> CacheOptions | None:
     cache_options = (
-        definition.cache_options(
-            settings=settings, state=state, workspace=workspace
-        )
+        definition.cache_options(settings=settings, state=state, workspace=workspace)
         if definition.cache_options is not None
         else None
     )

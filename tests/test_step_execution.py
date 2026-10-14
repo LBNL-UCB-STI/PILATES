@@ -1044,4 +1044,3 @@ def test_execute_step_propagates_configured_code_identity_into_cache_options() -
             code_identity="callable_source",
         ),
     ]
-

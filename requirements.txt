@@ -64,3 +64,4 @@ httpx>=0.27.0
 build>=1.2.2
 pytest-cov
 ruff>=0.15.5
+pre-commit>=3.0.0
