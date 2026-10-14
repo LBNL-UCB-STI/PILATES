@@ -245,7 +245,7 @@ urbansim:
       seattle: '53199100'
 activitysim:
   household_sample_size: 250000
-  chunk_size: 12000000000
+  chunk_size: 0
   num_processes: 25
   file_format: parquet
   local_input_folder: pilates/activitysim/data/
