@@ -722,12 +722,20 @@ class FullSkimsCreatorConfig(BaseModel):
     )
     router_type: str = Field("r5+gh", description="Router: r5, r5+gh, or gh")
     skims_geo_type: str = Field("taz", description="Geography: taz or h3")
-    skims_kind: str = Field("od", description="Skim type: od")
+    skims_kind: Literal["activitySimOmx", "activitySimZarr", "activitySim", "od"] = (
+        Field(
+            "activitySimOmx",
+            description=(
+                "Skim output format: activitySimOmx, activitySimZarr, "
+                "activitySim, or od"
+            ),
+        )
+    )
     peak_hours: List[float] = Field(
         default_factory=lambda: [8.5], description="Peak hours (8.5 = 8:30 AM)"
     )
     modes_to_build: Dict[str, bool] = Field(
-        default_factory=lambda: {"drive": True, "walk": False, "transit": False},
+        default_factory=lambda: {"drive": True, "walk": True, "transit": True},
         description="Modes to generate skims for",
     )
     parallelism_thread_ratio: Optional[float] = Field(
@@ -739,6 +747,58 @@ class FullSkimsCreatorConfig(BaseModel):
         ge=0.0,
         le=1.0,
     )
+    bifurcate_tolls: bool = Field(
+        True,
+        description=(
+            "When true, auto trips are routed twice: once toll-free (SOV) "
+            "and once toll-permitted (SOVTOLL)."
+        ),
+    )
+    generate_return_trips: bool = Field(
+        True,
+        description=(
+            "When true, generates both outbound Drive-Transit-Walk and "
+            "inbound Walk-Transit-Drive itineraries."
+        ),
+    )
+    toll_file_path: Optional[str] = Field(
+        None,
+        description="Optional path to toll-prices.csv (overrides beam.agentsim.toll.filePath).",
+    )
+    directory2: Optional[str] = Field(
+        None,
+        description="Optional path to secondary R5 network directory for dual-router mode.",
+    )
+    od_skims_path: Optional[str] = Field(
+        None,
+        description="Optional path to an existing skim .csv.gz to reuse pre-computed OD pairs or warm-start.",
+    )
+    input_path: Optional[str] = Field(
+        None,
+        description="Optional path to a custom OD pairs CSV with origin,destination columns.",
+    )
+    linkstats_path: Optional[str] = Field(
+        None,
+        description="Optional explicit path to congested linkstats.csv.gz or .parquet.",
+    )
+
+    def to_consist_facet(self) -> Dict[str, Any]:
+        return {
+            "run_schedule": self.run_schedule,
+            "router_type": self.router_type,
+            "skims_geo_type": self.skims_geo_type,
+            "skims_kind": self.skims_kind,
+            "peak_hours": list(self.peak_hours),
+            "modes_to_build": dict(self.modes_to_build),
+            "parallelism_thread_ratio": self.parallelism_thread_ratio,
+            "bifurcate_tolls": self.bifurcate_tolls,
+            "generate_return_trips": self.generate_return_trips,
+            "toll_file_path": self.toll_file_path,
+            "directory2": self.directory2,
+            "od_skims_path": self.od_skims_path,
+            "input_path": self.input_path,
+            "linkstats_path": self.linkstats_path,
+        }
 
 
 class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):

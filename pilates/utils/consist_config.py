@@ -17,7 +17,11 @@ from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from consist.types import HasConsistFacet
 
-from pilates.config.models import PilatesConfig, admission_policy_fingerprint
+from pilates.config.models import (
+    FullSkimsCreatorConfig,
+    PilatesConfig,
+    admission_policy_fingerprint,
+)
 from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.catalog import provenance_builder_key_for_step_name
 
@@ -334,7 +338,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     linkstats_admission = (
         admission_config.linkstats if admission_config is not None else None
     )
-    return {
+    identity_config: Dict[str, Any] = {
         "config": cfg.config,
         "sample": cfg.sample,
         "replanning_portion": cfg.replanning_portion,
@@ -355,6 +359,10 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
             else None
         ),
     }
+    full_skim = getattr(cfg, "full_skim", None)
+    if isinstance(full_skim, FullSkimsCreatorConfig):
+        identity_config["full_skim"] = full_skim.to_consist_facet()
+    return identity_config
 
 
 def build_beam_facet(settings: PilatesConfig) -> Dict[str, Any]:
