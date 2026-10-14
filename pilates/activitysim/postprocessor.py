@@ -64,13 +64,14 @@ def _align_overlay_series(series: pd.Series, target_dtype: Any) -> pd.Series:
         return series
 
     if pd.api.types.is_string_dtype(target_dtype):
-        numeric = pd.to_numeric(series, errors="coerce")
-        valid_numeric = numeric.dropna()
-        if not valid_numeric.empty and (valid_numeric % 1 == 0).all():
-            int_candidate = numeric.round().astype("Int64")
-            if target_dtype is object or target_dtype == "object":
-                return int_candidate.astype(pd.StringDtype()).astype(object)
-            return int_candidate.astype(target_dtype)
+        if pd.api.types.is_numeric_dtype(series.dtype):
+            numeric = pd.to_numeric(series, errors="coerce")
+            valid_numeric = numeric.dropna()
+            if not valid_numeric.empty and (valid_numeric % 1 == 0).all():
+                int_candidate = numeric.round().astype("Int64")
+                if target_dtype is object or target_dtype == "object":
+                    return int_candidate.astype(pd.StringDtype()).astype(object)
+                return int_candidate.astype(target_dtype)
         if target_dtype is object or target_dtype == "object":
             return series.astype(object)
         return series.astype(target_dtype)
@@ -685,11 +686,9 @@ def _prepare_updated_tables(
             dtypes = usim_output_store[h5_key].dtypes.to_dict()
             for col in required_cols[table_name]:
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
-                    asim_output_dict[table_name][col] = (
-                        asim_output_dict[table_name]
-                        .loc[~asim_output_dict[table_name][col].isna(), col]
-                        .fillna(0)
-                        .astype(dtypes[col])
+                    asim_output_dict[table_name][col] = _align_overlay_series(
+                        asim_output_dict[table_name][col],
+                        dtypes[col],
                     )
     usim_output_store.close()
 
@@ -995,13 +994,18 @@ def update_usim_inputs_after_warm_start(
     assert p.shape[0] == warm_start_persons.shape[0]
     assert hh.shape[0] == warm_start_households.shape[0]
 
-    p.loc[:, "work_zone_id"] = warm_start_persons.loc[:, "workplace_taz"].reindex(
-        p.index
+    p.loc[:, "work_zone_id"] = _align_overlay_series(
+        warm_start_persons.loc[:, "workplace_taz"].reindex(p.index),
+        p["work_zone_id"].dtype,
     )
-    p.loc[:, "school_zone_id"] = warm_start_persons.loc[:, "school_taz"].reindex(
-        p.index
+    p.loc[:, "school_zone_id"] = _align_overlay_series(
+        warm_start_persons.loc[:, "school_taz"].reindex(p.index),
+        p["school_zone_id"].dtype,
     )
-    hh.loc[:, "cars"] = warm_start_households["auto_ownership"].reindex(hh.index)
+    hh.loc[:, "cars"] = _align_overlay_series(
+        warm_start_households["auto_ownership"].reindex(hh.index),
+        hh["cars"].dtype,
+    )
 
     usim_datastore["persons"] = p
     usim_datastore["households"] = hh

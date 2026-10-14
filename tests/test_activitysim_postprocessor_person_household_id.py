@@ -607,6 +607,14 @@ def test_align_overlay_series_conversions():
     assert aligned_np_int.dtype == np.dtype("int64")
     assert aligned_np_int.tolist() == [555, -1, -1]
 
+    # 7. Zero-padded and alphanumeric strings are preserved without integer coercion
+    padded_str = pd.Series(["00100", "A200", np.nan], index=[1, 2, 3], dtype=object)
+    aligned_padded = _align_overlay_series(padded_str, str_dtype)
+    assert aligned_padded.dtype == str_dtype
+    assert aligned_padded.iloc[0] == "00100"
+    assert aligned_padded.iloc[1] == "A200"
+    assert pd.isna(aligned_padded.iloc[2])
+
 
 def test_prepare_updated_tables_with_pyarrow_string_zone_ids(tmp_path):
     h5_path = tmp_path / "model_data_2023.h5"
