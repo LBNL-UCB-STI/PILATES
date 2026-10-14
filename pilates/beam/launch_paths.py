@@ -348,7 +348,61 @@ def prepare_r5_raw_rebuild(
             reference.secondary_network_directory,
             mutable_root=mutable_root,
         )
+    else:
+        full_skim_dir2 = _resolve_full_skim_directory2_reference(
+            settings=settings,
+            workspace=workspace,
+            config_root=config_root,
+        )
+        if full_skim_dir2 is not None:
+            _remove_r5_derived_caches(
+                full_skim_dir2,
+                mutable_root=mutable_root,
+            )
     return reference
+
+
+def _resolve_full_skim_directory2_reference(
+    *,
+    settings: Any,
+    workspace: Any,
+    config_root: Path | None = None,
+) -> Optional[BeamLaunchPathReference]:
+    beam_cfg = getattr(settings, "beam", None)
+    skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg is not None else None
+    directory2 = getattr(skim_cfg, "directory2", None) if skim_cfg is not None else None
+    if not directory2 or not str(directory2).strip():
+        return None
+    mutable_root = _mutable_input_root(workspace, config_root=config_root)
+    raw_val = str(directory2).strip()
+    region = getattr(getattr(settings, "run", None), "region", "") or ""
+    if raw_val.startswith("/app/input/"):
+        rel = raw_val[len("/app/input/") :]
+        candidate = mutable_root / rel
+    elif Path(raw_val).is_absolute():
+        candidate = Path(raw_val)
+    else:
+        region_candidate = (
+            mutable_root / region / raw_val if region else mutable_root / raw_val
+        )
+        root_candidate = mutable_root / raw_val
+        candidate = region_candidate if region_candidate.exists() else root_candidate
+    if not candidate.exists() or not candidate.is_dir():
+        return None
+    physical_target_path = _physical_target(
+        candidate,
+        mutable_root=mutable_root,
+        config_key="beam.full_skim.directory2",
+    )
+    return BeamLaunchPathReference(
+        config_key="beam.full_skim.directory2",
+        raw_value=raw_val,
+        canonical_value=str(physical_target_path),
+        configured_path=candidate,
+        execution_path=candidate,
+        physical_target_path=physical_target_path,
+        container_path=_container_path(candidate, mutable_root=mutable_root),
+    )
 
 
 def _align_generated_network_paths(*, settings: Any, workspace: Any) -> None:
@@ -391,6 +445,7 @@ def _remove_r5_derived_caches(
         "osm.mapdb",
         "osm.mapdb.p",
         "physsim-network.xml",
+        "tolls.dat",
     ):
         cache_path = directory.execution_path / filename
         if not cache_path.exists() and not cache_path.is_symlink():

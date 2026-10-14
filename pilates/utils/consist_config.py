@@ -280,7 +280,7 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
     cfg = settings.activitysim
     if cfg is None:
         return {}
-    return {
+    identity_config: Dict[str, Any] = {
         "household_sample_size": cfg.household_sample_size,
         "chunk_size": cfg.chunk_size,
         "num_processes": cfg.num_processes,
@@ -300,6 +300,12 @@ def build_activitysim_identity_config(settings: PilatesConfig) -> Dict[str, Any]
             else None
         ),
     }
+    admission = getattr(cfg, "admission", None)
+    if admission is not None and getattr(admission, "initial_skims", None) is not None:
+        identity_config["admission"] = {
+            "initial_skims": admission_policy_fingerprint(admission.initial_skims)
+        }
+    return identity_config
 
 
 def build_activitysim_facet(settings: PilatesConfig) -> Dict[str, Any]:

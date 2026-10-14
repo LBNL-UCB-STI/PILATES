@@ -368,7 +368,7 @@ def consist_step_meta(
                 else "delegated_to_artifacts"
             ),
             role="beam_vehicle_input",
-            required=model != "beam_preprocess",
+            required=model not in ("beam_preprocess", "beam_full_skim"),
             reason=(
                 "generated_by_beam_preprocess_from_declared_atlas_vehicle_input"
                 if model == "beam_preprocess"
@@ -397,7 +397,7 @@ def consist_step_meta(
             "beam.exchange.scenario.folder": BeamReferencePolicy(
                 identity_policy="delegated_to_artifacts",
                 role="beam_population_input_root",
-                required=True,
+                required=model != "beam_full_skim",
                 reason="population_inputs_declared_as_step_artifacts",
                 delegated_artifact_keys=(
                     BEAM_PLANS_IN,

@@ -447,14 +447,22 @@ class InfrastructureConfig(BaseModel):
 
 
 class PriorRunExpectation(BaseModel):
-    """Select one persisted input artifact from a completed Consist run."""
+    """Select one persisted artifact from a completed Consist run."""
 
     kind: Literal["prior_run"] = "prior_run"
     expected_run_id: str = Field(
-        ..., description="Completed Consist run supplying the expected input."
+        ..., description="Completed Consist run supplying the expected artifact."
     )
     artifact_key: str = Field(
-        ..., description="Exact persisted input artifact key on expected_run_id."
+        ..., description="Exact persisted artifact key on expected_run_id."
+    )
+    direction: Literal["input", "output", "any"] = Field(
+        "input",
+        description="Whether the expected artifact on expected_run_id is an input, output, or either.",
+    )
+    source_tracker_db: Optional[str] = Field(
+        None,
+        description="Optional path to an external Consist DuckDB database when expected_run_id lives in another tracker.",
     )
     expected_bytes_path: Optional[str] = Field(
         None,
@@ -477,6 +485,10 @@ class DeclaredDigestExpectation(BaseModel):
     source_label: Optional[str] = Field(
         None,
         description="Optional human-readable source label retained outside cache identity.",
+    )
+    provenance_sidecar_path: Optional[str] = Field(
+        None,
+        description="Optional path to a .provenance.json sidecar retained outside cache identity.",
     )
 
     @field_validator("identity")
@@ -524,6 +536,8 @@ def admission_policy_fingerprint(
     else:
         fingerprint["expected_run_id"] = expectation.expected_run_id
         fingerprint["artifact_key"] = expectation.artifact_key
+        if expectation.direction != "input":
+            fingerprint["direction"] = expectation.direction
     return fingerprint
 
 
@@ -595,6 +609,15 @@ class ActivitySimDatabaseConfig(BaseModel):
         True, description="Use pre-processed data (fast path)"
     )
     year: Optional[int] = Field(None, description="Year for data retrieval")
+
+
+class ActivitySimAdmissionConfig(BaseModel):
+    """Optional inbound-admission policy for ActivitySim bootstrap skims."""
+
+    initial_skims: Optional[AdmissionPolicyConfig] = Field(
+        None,
+        description="Optional expectation for the initial ActivitySim OMX skims.",
+    )
 
 
 class ActivitySimConfig(BaseModel):
@@ -683,9 +706,13 @@ class ActivitySimConfig(BaseModel):
         le=1.0,
     )
     final_plans_folder: str = Field(..., description="Final plans output folder")
+    admission: Optional[ActivitySimAdmissionConfig] = Field(
+        None,
+        description="Optional inbound-admission policy; omitted means disabled.",
+    )
 
     def to_consist_facet(self) -> Dict[str, Any]:
-        return {
+        facet: Dict[str, Any] = {
             "household_sample_size": self.household_sample_size,
             "chunk_size": self.chunk_size,
             "num_processes": self.num_processes,
@@ -700,6 +727,9 @@ class ActivitySimConfig(BaseModel):
             "school_reassignment_share": self.school_reassignment_share,
             "database": self.database.model_dump() if self.database else None,
         }
+        if self.admission is not None:
+            facet["admission"] = self.admission.model_dump()
+        return facet
 
 
 class FullSkimsCreatorConfig(BaseModel):
@@ -1198,6 +1228,18 @@ class PilatesConfig(BaseModel):
                 }
                 if self.urbansim is not None and self.urbansim.admission is not None
                 else None
+            ),
+            **(
+                {
+                    "activitysim_admission": {
+                        "initial_skims": admission_policy_fingerprint(
+                            self.activitysim.admission.initial_skims
+                        )
+                    }
+                }
+                if self.activitysim is not None
+                and self.activitysim.admission is not None
+                else {}
             ),
         }
 

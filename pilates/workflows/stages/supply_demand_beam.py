@@ -783,7 +783,50 @@ def _run_beam_full_skim_step(
         runtime_kwargs={"beam_launch_config": launch_config},
         resolved_inputs=full_skim_inputs,
     )
-    return {key: path for key, path, _description in outputs._iter_record_items()}
+    handoff = step_output_handoff_mapping(outputs, coupler=scenario.coupler)
+    result = {key: path for key, path, _description in outputs._iter_record_items()}
+    result.update(handoff)
+    return result
+
+
+def _has_beam_population_inputs_in_coupler(coupler: Any) -> bool:
+    return all(
+        coupler_storage_value(coupler, key) is not None
+        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
+    )
+
+
+def _standalone_full_skim_preprocess_outputs(
+    *,
+    scenario: ScenarioWithCoupler,
+    workspace: Workspace,
+) -> Any:
+    from pilates.beam.outputs import BeamPreprocessOutputs
+
+    prepared: Dict[str, Path] = {}
+    for key in (
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+    ):
+        existing = artifact_to_existing_path(
+            coupler_storage_value(scenario.coupler, key),
+            workspace=workspace,
+        )
+        if existing is not None:
+            prepared[key] = Path(existing)
+    if LINKSTATS_WARMSTART not in prepared:
+        existing_linkstats = artifact_to_existing_path(
+            coupler_storage_value(scenario.coupler, LINKSTATS),
+            workspace=workspace,
+        )
+        if existing_linkstats is not None:
+            prepared[LINKSTATS_WARMSTART] = Path(existing_linkstats)
+    return BeamPreprocessOutputs(
+        beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
+        prepared_inputs=prepared,
+    )
 
 
 def _run_traffic_assignment_phase(
@@ -824,14 +867,20 @@ def _run_traffic_assignment_phase(
 
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
-        preprocess_outputs = _run_beam_preprocess_step(
-            scenario=scenario,
-            settings=settings,
-            state=state,
-            workspace=workspace,
-            year=inputs.year,
-            iteration=inputs.iteration,
-        )
+        if _has_beam_population_inputs_in_coupler(scenario.coupler):
+            preprocess_outputs = _run_beam_preprocess_step(
+                scenario=scenario,
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                year=inputs.year,
+                iteration=inputs.iteration,
+            )
+        else:
+            preprocess_outputs = _standalone_full_skim_preprocess_outputs(
+                scenario=scenario,
+                workspace=workspace,
+            )
         launch_config = _compile_beam_launch_config(
             scenario=scenario,
             settings=settings,
@@ -854,6 +903,7 @@ def _run_traffic_assignment_phase(
             iteration=inputs.iteration,
             context=context,
         )
+    del combined_beam_outputs
 
     state.complete_step(
         state.Stage.supply_demand_loop,

@@ -1046,6 +1046,38 @@ def _activitysim_preprocess_callable(
     prepare_omx_skims = not requires_prior_beam_skim_handoff(
         settings=settings, state=state
     )
+    if prepare_omx_skims:
+        from pilates.activitysim.admission import (
+            has_initial_skims_admission_policy,
+            preflight_activitysim_initial_skims_admission,
+        )
+        from pilates.utils import consist_runtime as cr
+
+        if has_initial_skims_admission_policy(settings):
+            active_run = cr.current_run()
+            active_tracker = cr.current_tracker()
+            existing_reports: Mapping[str, object] | None = None
+            if active_run is not None and isinstance(active_run.meta, Mapping):
+                reports = active_run.meta.get("admission_reports")
+                if isinstance(reports, Mapping):
+                    existing_reports = reports
+            report_dir = (
+                Path(active_tracker.run_dir)
+                if active_tracker is not None
+                and getattr(active_tracker, "run_dir", None)
+                else Path(workspace.full_path)
+            )
+            preflight_activitysim_initial_skims_admission(
+                settings=settings,
+                metadata_logger=active_tracker,
+                tracker=active_tracker,
+                workspace_path=Path(workspace.full_path),
+                report_dir=report_dir,
+                existing_admission_reports=existing_reports,
+                explicit_skims_path=(
+                    Path(final_skims_omx) if final_skims_omx is not None else None
+                ),
+            )
     preprocess_kwargs: dict[str, Any] = {
         "population_source_h5_path": str(usim_population_source_h5),
         "prepare_omx_skims": prepare_omx_skims,
