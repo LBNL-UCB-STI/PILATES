@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeVar
+from dataclasses import replace
+from typing import Any, Literal, Protocol, TypeVar, runtime_checkable
 
-from consist import ExecutionOptions, RunResult, StepIdentity
+from consist import CacheOptions, ExecutionOptions, RunResult, StepIdentity
 
 from pilates.runtime.run_output_archive import archive_completed_run
 from pilates.utils.coupler_helpers import set_coupler_from_artifact
@@ -12,6 +13,46 @@ from pilates.workflows.resolved_inputs import ResolvedStepInputs
 from pilates.workflows.step_definition import StepDefinition
 
 OutputT = TypeVar("OutputT")
+
+CodeIdentityMode = Literal["repo_git", "callable_module", "callable_source"]
+
+
+@runtime_checkable
+class _RunCodeIdentityConfig(Protocol):
+    consist_code_identity: CodeIdentityMode | None
+
+
+@runtime_checkable
+class _SettingsWithRunCodeIdentity(Protocol):
+    run: _RunCodeIdentityConfig
+
+
+def _resolve_cache_options(
+    *,
+    definition: StepDefinition[Any],
+    settings: Any,
+    state: Any,
+    workspace: Any,
+) -> CacheOptions | None:
+    cache_options = (
+        definition.cache_options(
+            settings=settings, state=state, workspace=workspace
+        )
+        if definition.cache_options is not None
+        else None
+    )
+    configured_code_identity: CodeIdentityMode | None = None
+    if isinstance(settings, _SettingsWithRunCodeIdentity) and isinstance(
+        settings.run, _RunCodeIdentityConfig
+    ):
+        configured_code_identity = settings.run.consist_code_identity
+    if configured_code_identity is None:
+        return cache_options
+    if cache_options is None:
+        return CacheOptions(code_identity=configured_code_identity)
+    if cache_options.code_identity is not None:
+        return cache_options
+    return replace(cache_options, code_identity=configured_code_identity)
 
 
 def execute_step(
@@ -112,12 +153,11 @@ def execute_step(
             if definition.output_sets is not None
             else None
         ),
-        cache_options=(
-            definition.cache_options(
-                settings=settings, state=state, workspace=workspace
-            )
-            if definition.cache_options is not None
-            else None
+        cache_options=_resolve_cache_options(
+            definition=definition,
+            settings=settings,
+            state=state,
+            workspace=workspace,
         ),
         execution_options=options,
         step_identity=step_identity,

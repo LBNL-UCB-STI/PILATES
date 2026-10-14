@@ -949,3 +949,99 @@ def test_execute_step_evaluates_dynamic_metadata_once(tmp_path: Path) -> None:
 
     assert projected == {}
     assert metadata_calls == [(2035, "settings")]
+
+
+def test_execute_step_propagates_configured_code_identity_into_cache_options() -> None:
+    supplied = ResolvedStepInputs(step_name="example", binding=BindingResult(inputs={}))
+
+    @define_step(model="example", outputs=["result"])
+    def example(*, settings, state, workspace) -> None:
+        return None
+
+    scenario = SimpleNamespace(coupler="coupler", tracker=None)
+    seen: list[CacheOptions | None] = []
+    scenario.run = lambda **kwargs: (
+        seen.append(kwargs["cache_options"])
+        or SimpleNamespace(outputs={"result": "persisted"})
+    )
+    settings = SimpleNamespace(
+        run=SimpleNamespace(consist_code_identity="callable_module")
+    )
+
+    definition_without_cache_options = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: supplied,
+        project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    execute_step(
+        scenario=scenario,
+        definition=definition_without_cache_options,
+        settings=settings,
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+        resolved_inputs=supplied,
+    )
+
+    definition_with_default_code_identity = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: supplied,
+        cache_options=lambda **_: CacheOptions(cache_hydration="materialize"),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    execute_step(
+        scenario=scenario,
+        definition=definition_with_default_code_identity,
+        settings=settings,
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+        resolved_inputs=supplied,
+    )
+
+    definition_with_explicit_code_identity = StepDefinition(
+        name="example",
+        function=example,
+        resolve_inputs=lambda **_: supplied,
+        cache_options=lambda **_: CacheOptions(
+            cache_hydration="materialize",
+            code_identity="callable_source",
+        ),
+        project_outputs=lambda outputs, **_: outputs["result"],
+        input_contract=_EXAMPLE_INPUT_CONTRACT,
+    )
+    execute_step(
+        scenario=scenario,
+        definition=definition_with_explicit_code_identity,
+        settings=settings,
+        state="state",
+        workspace="workspace",
+        stage="stage",
+        year=None,
+        iteration=None,
+        phase=None,
+        resolved_inputs=supplied,
+    )
+
+    assert seen == [
+        CacheOptions(code_identity="callable_module"),
+        CacheOptions(
+            cache_hydration="materialize",
+            code_identity="callable_module",
+        ),
+        CacheOptions(
+            cache_hydration="materialize",
+            code_identity="callable_source",
+        ),
+    ]
+
