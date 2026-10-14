@@ -332,6 +332,13 @@ if [ "$acceptance_mode" = "activitysim-run" ] && [ -n "${PYTHONPATH:-}" ]; then
 fi
 
 echo "Setting up HPC runtime environment..."
+if ! type module >/dev/null 2>&1 || [ "$(type -t module)" != "function" ]; then
+    if [ -f /etc/profile.d/modules.sh ]; then
+        source /etc/profile.d/modules.sh
+    elif [ -f /usr/share/Modules/init/bash ]; then
+        source /usr/share/Modules/init/bash
+    fi
+fi
 set +u
 module load gcc/11.4.0
 module load proj/9.2.1

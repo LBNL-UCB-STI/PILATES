@@ -1,11 +1,14 @@
 from types import SimpleNamespace
 
+import numpy as np
 import pandas as pd
 import pandas.testing as pdt
+import pyarrow as pa
 import pytest
 
 from pilates.activitysim.postprocessor import (
     ActivitysimPostprocessor,
+    _align_overlay_series,
     _next_iter_usim_input_store_path,
     _prepare_updated_tables,
     create_usim_input_data,
@@ -560,3 +563,99 @@ def test_prepare_updated_tables_preserves_usim_person_fields_but_updates_zone_id
     assert persons["student"].tolist() == [1, 0]
     assert persons["work_zone_id"].tolist() == [555, 666]
     assert persons["school_zone_id"].tolist() == [777, 888]
+
+
+def test_align_overlay_series_conversions():
+    # 1. Overlay floats (e.g. 555.0, NaN, -1.0) to Arrow string
+    pa_str_dtype = pd.ArrowDtype(pa.string())
+    overlay_float = pd.Series([555.0, -1.0, np.nan], index=[1, 2, 3])
+    aligned_pa = _align_overlay_series(overlay_float, pa_str_dtype)
+    assert aligned_pa.dtype == pa_str_dtype
+    assert aligned_pa.iloc[0] == "555"
+    assert aligned_pa.iloc[1] == "-1"
+    assert pd.isna(aligned_pa.iloc[2])
+
+    # 2. Overlay int to Arrow string
+    overlay_int = pd.Series([100, 200], index=[1, 2])
+    aligned_pa_int = _align_overlay_series(overlay_int, pa_str_dtype)
+    assert aligned_pa_int.dtype == pa_str_dtype
+    assert aligned_pa_int.tolist() == ["100", "200"]
+
+    # 3. Overlay to string / object dtype
+    aligned_obj = _align_overlay_series(overlay_float, object)
+    assert aligned_obj.iloc[0] == "555"
+    assert aligned_obj.iloc[1] == "-1"
+    assert pd.isna(aligned_obj.iloc[2])
+
+    # 4. Overlay to StringDtype (e.g. string[pyarrow])
+    str_dtype = pd.StringDtype(storage="pyarrow")
+    aligned_str = _align_overlay_series(overlay_float, str_dtype)
+    assert aligned_str.dtype == str_dtype
+    assert aligned_str.iloc[0] == "555"
+    assert aligned_str.iloc[1] == "-1"
+    assert pd.isna(aligned_str.iloc[2])
+
+    # 5. Overlay floats to nullable integer Int64
+    aligned_int64 = _align_overlay_series(overlay_float, pd.Int64Dtype())
+    assert aligned_int64.dtype == pd.Int64Dtype()
+    assert aligned_int64.iloc[0] == 555
+    assert aligned_int64.iloc[1] == -1
+    assert pd.isna(aligned_int64.iloc[2])
+
+    # 6. Overlay floats to numpy int64 (NaN fills with -1)
+    aligned_np_int = _align_overlay_series(overlay_float, np.dtype("int64"))
+    assert aligned_np_int.dtype == np.dtype("int64")
+    assert aligned_np_int.tolist() == [555, -1, -1]
+
+
+def test_prepare_updated_tables_with_pyarrow_string_zone_ids(tmp_path):
+    h5_path = tmp_path / "model_data_2023.h5"
+    with pd.HDFStore(str(h5_path), mode="w") as store:
+        store["households"] = pd.DataFrame(
+            {"cars": [1, 2], "block_id": ["0001", "0002"]},
+            index=pd.Index([1, 2], name="household_id"),
+        )
+        store["persons"] = pd.DataFrame(
+            {
+                "household_id": [1, 2],
+                "member_id": [1, 1],
+                "worker": [0, 1],
+                "student": [1, 0],
+                "work_zone_id": ["-1", "200"],
+                "school_zone_id": ["100", "-1"],
+            },
+            index=pd.Index([11, 21], name="person_id"),
+        )
+
+    with pd.option_context("future.infer_string", True):
+        prepared = _prepare_updated_tables(
+            settings=_settings(vehicle_ownership="atlas"),
+            state=SimpleNamespace(forecast_year=2023),
+            asim_output_dict={
+                "households": pd.DataFrame(
+                    {"auto_ownership": [3, 4], "block_id": ["0001", "0002"]},
+                    index=pd.Index([1, 2], name="household_id"),
+                ),
+                "persons": pd.DataFrame(
+                    {
+                        "person_id": [11, 21],
+                        "household_id": [99, 98],
+                        "member_id": [7, 8],
+                        "worker": [1, 0],
+                        "student": [0, 1],
+                        "workplace_taz": [555.0, 666.0],
+                        "school_taz": [777.0, 888.0],
+                    }
+                ),
+            },
+            tables_updated_by_asim=["households", "persons"],
+            population_source_store_path=str(h5_path),
+            prefix=None,
+        )
+
+        persons = prepared["persons"]
+        assert pd.api.types.is_string_dtype(persons["work_zone_id"].dtype)
+        assert pd.api.types.is_string_dtype(persons["school_zone_id"].dtype)
+        assert persons["household_id"].tolist() == [1, 2]
+        assert persons["work_zone_id"].tolist() == ["555", "666"]
+        assert persons["school_zone_id"].tolist() == ["777", "888"]
