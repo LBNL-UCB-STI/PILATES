@@ -47,10 +47,19 @@ def _initial_skims_admission_config(
     settings: PilatesConfig,
 ) -> AdmissionPolicyConfig | None:
     """Return the optional typed admission policy for initial ActivitySim skims."""
-    asim_config = settings.activitysim
-    if asim_config is None or asim_config.admission is None:
+    try:
+        asim_config = settings.activitysim
+    except AttributeError:
         return None
-    return asim_config.admission.initial_skims
+    if asim_config is None:
+        return None
+    try:
+        admission = asim_config.admission
+    except AttributeError:
+        return None
+    if admission is None:
+        return None
+    return admission.initial_skims
 
 
 def has_initial_skims_admission_policy(settings: PilatesConfig) -> bool:

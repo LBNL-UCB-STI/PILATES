@@ -599,10 +599,16 @@ def _emit_skim_provenance_sidecars(
     context: Any,
     skim_keys: Iterable[str],
 ) -> None:
-    active_run = cr.current_run()
-    tracker = cr.current_tracker()
-    run_id = getattr(active_run, "id", None) if active_run is not None else None
-    tracker_db_path = getattr(tracker, "db_path", None) if tracker is not None else None
+    try:
+        active_run = cr.current_run()
+    except RuntimeError:
+        active_run = None
+    try:
+        tracker = cr.current_tracker()
+    except RuntimeError:
+        tracker = None
+    run_id = active_run.id if active_run is not None else None
+    tracker_db_path = tracker.db_path if tracker is not None else None
     run_cfg = getattr(settings, "run", None)
     scenario_name = getattr(run_cfg, "scenario", None)
     region_name = getattr(run_cfg, "region", None)
