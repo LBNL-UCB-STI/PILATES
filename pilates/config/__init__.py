@@ -5,10 +5,11 @@ This package handles configuration loading, validation, and migration
 for PILATES simulation runs.
 """
 
-from .models import PilatesConfig, load_config, validate_config
+from .models import PilatesConfig, load_config, resolve_config_dict, validate_config
 
 __all__ = [
     "PilatesConfig",
     "load_config",
+    "resolve_config_dict",
     "validate_config",
 ]
