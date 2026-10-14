@@ -69,11 +69,11 @@ itself make that archive-validation and refreshed-publication guarantee.
 
 ## Restart Boundary
 
-The only committed mid-stage restart is `beam_run_completed` to
-`beam_postprocess`. PILATES pins and validates that successor's exact input
-closure, Consist hydrates it to the resolver's current destinations, and the
-native postprocess step executes once. The
-`beam_postprocess_in_progress` mutation gate is intentionally non-restartable.
+The only committed mid-stage restart is `beam_run` to `beam_postprocess`. Once
+`beam_run` commits and archives its outputs, a restart cache-hits `beam_run`
+(hydrating outputs from the recovery root when needed) and executes
+`beam_postprocess` idempotently by reading the immutable input `zarr_skims`
+store and writing merged iteration skims to a fresh run-scoped output store.
 All other restart behavior resumes at the normal durable stage/year frontier;
 an interrupted ActivitySim region fails closed.
 

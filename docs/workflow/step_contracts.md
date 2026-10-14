@@ -64,13 +64,13 @@ boundary-specific work, including a separate HDF5 promotion gate.
 
 ## Restart boundary
 
-There is one committed mid-stage restart boundary: `beam_run_completed` to
-`beam_postprocess`. PILATES snapshots the exact resolved successor closure,
-then a restart validates that snapshot, hydrates the recorded artifacts to the
-current resolver destinations, re-resolves the successor, and executes native
-postprocess once. The `beam_postprocess_in_progress` mutation gate remains
-non-restartable. Other restarts resume their normal stage/year frontier; a
-skipped ActivitySim mid-stage does not receive a second recovery path.
+There is one committed mid-stage restart boundary: `beam_run` to
+`beam_postprocess`. When `beam_run` commits, its outputs are archived to the
+recovery root; on restart, Consist cache-hits `beam_run` (hydrating requested
+outputs if scratch was cleared) and `beam_postprocess` executes idempotently by
+reading the immutable input `zarr_skims` store and writing a fresh run-scoped
+output store. Other restarts resume their normal stage/year frontier; a skipped
+ActivitySim mid-stage does not receive a second recovery path.
 
 ## Adjacent pages
 

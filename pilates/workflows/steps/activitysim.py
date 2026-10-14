@@ -68,7 +68,7 @@ from pilates.workflows.step_definition import (
 from pilates.workflows.outputs_base import ValidationContext
 from pilates.workspace import Workspace
 from pilates.generic.model_factory import ModelFactory
-from pilates.utils.coupler_helpers import artifact_to_path
+from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 
 # Model-specific step factories for ActivitySim.
 # Shared helpers/infrastructure are imported from shared.py.
@@ -284,12 +284,23 @@ def _activitysim_launch_context(
     staged_data_dir: Path,
     staged_configs_dir: Path,
     config_roots: tuple[ActivitySimConfigRoot, ...],
+    runtime_zarr_path: Path | None = None,
 ) -> ActivitySimLaunchContext:
     """Build one launch tree from resolver-owned model input destinations."""
 
     workspace_root = Path(workspace.full_path)
     output_dir = Path(workspace.get_asim_output_dir())
-    runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
+    default_runtime_cache_dir = Path(workspace.get_asim_runtime_cache_dir())
+    resolved_zarr_path = (
+        Path(runtime_zarr_path)
+        if runtime_zarr_path is not None
+        else default_runtime_cache_dir / "skims.zarr"
+    )
+    runtime_cache_dir = (
+        resolved_zarr_path.parent
+        if resolved_zarr_path.name == "skims.zarr"
+        else default_runtime_cache_dir
+    )
     return ActivitySimLaunchContext(
         workspace_root=workspace_root,
         mutable_data_dir=staged_data_dir,
@@ -297,7 +308,7 @@ def _activitysim_launch_context(
         compile_output_dir=output_dir.parent / "compile-output",
         mutable_configs_dir=staged_configs_dir,
         runtime_cache_dir=runtime_cache_dir,
-        runtime_zarr_path=runtime_cache_dir / "skims.zarr",
+        runtime_zarr_path=resolved_zarr_path,
         shared_cache_dir=workspace_root / "shared_cache",
         shared_tmp_dir=workspace_root / "tmp",
         requires_staged_config_dirs=True,
@@ -456,7 +467,9 @@ def _activitysim_run_resolver(
     zarr_rejection: str | None = None
     if zarr_source != "missing":
         zarr_input = (resolved.binding.inputs or {}).get(ZARR_SKIMS)
-        zarr_path = artifact_to_path(zarr_input, workspace=workspace)
+        zarr_path = artifact_to_existing_path(
+            zarr_input, workspace=workspace
+        ) or artifact_to_path(zarr_input, workspace=workspace)
         zarr_rejection = (
             "could not resolve a concrete path"
             if zarr_path is None
@@ -519,6 +532,17 @@ def _activitysim_run_resolver(
         _ACTIVITYSIM_SKIM_MODE_METADATA_KEY: decision.mode,
         _ACTIVITYSIM_PRODUCES_ZARR_METADATA_KEY: decision.produces_zarr,
     }
+    logical_destinations = {
+        key: value
+        for key, value in resolved.logical_destinations.items()
+        if key in selected_roles
+    }
+    if decision.role == ZARR_SKIMS:
+        zarr_existing = artifact_to_existing_path(
+            binding_inputs.get(ZARR_SKIMS), workspace=workspace
+        ) or artifact_to_path(binding_inputs.get(ZARR_SKIMS), workspace=workspace)
+        if zarr_existing is not None:
+            logical_destinations[ZARR_SKIMS] = Path(zarr_existing)
     selected = ResolvedStepInputs(
         step_name=resolved.step_name,
         binding=BindingResult(
@@ -537,11 +561,7 @@ def _activitysim_run_resolver(
             for key, value in resolved.selected_key_by_role.items()
             if key in selected_roles
         },
-        logical_destinations={
-            key: value
-            for key, value in resolved.logical_destinations.items()
-            if key in selected_roles
-        },
+        logical_destinations=logical_destinations,
         metadata=metadata,
     )
     return selected
@@ -691,6 +711,12 @@ def _activitysim_execution_options(
             / "native-launch"
             / "configs",
             config_roots=config_roots,
+            runtime_zarr_path=(
+                Path(resolved_inputs.logical_destinations[ZARR_SKIMS])
+                if ZARR_SKIMS in selected_roles
+                and ZARR_SKIMS in resolved_inputs.logical_destinations
+                else None
+            ),
         )
         runtime_kwargs["activitysim_launch_context"] = launch_context
         runtime_kwargs["activitysim_config_staging_plan"] = (

@@ -1350,7 +1350,7 @@ def test_beam_postprocess_resolver_stages_dynamic_closure_at_exact_destinations(
         tmp_path / "beam-output" / ".pilates-consist-inputs" / "raw_od_skims_2030_2.omx"
     )
     assert resolved.logical_destinations[ZARR_SKIMS] == (
-        tmp_path / "asim-output" / "cache" / "skims.zarr"
+        tmp_path / "beam-output" / ".pilates-consist-inputs" / "zarr_skims_2030_2.zarr"
     )
     assert resolved.metadata["beam_postprocess_output_paths"] == {
         "events_parquet_2030_2_type_Event_A": (

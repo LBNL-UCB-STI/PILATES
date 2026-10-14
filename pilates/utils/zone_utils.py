@@ -386,6 +386,40 @@ def get_block_to_zone_mapping(settings, year, workspace):
     return mapping
 
 
+def normalize_0_based_and_flag_zarr_dataset(
+    skims_ds: xr.Dataset, settings, workspace
+) -> tuple[xr.Dataset, bool]:
+    """
+    Ensure an in-memory xarray Dataset is 0-based indexed and has the
+    'preprocessed' flag without mutating any backing Zarr store on disk.
+    """
+    needs_correction = False
+    if len(skims_ds.coords["otaz"]) > 0 and skims_ds.coords["otaz"].values[0] == 1:
+        logger.warning("Skims appear to be 1-based. Re-indexing to 0-based.")
+        canonical_zones_df = load_canonical_zones(settings, workspace)
+        new_coords = np.arange(len(canonical_zones_df))
+        skims_ds = skims_ds.assign_coords(otaz=new_coords, dtaz=new_coords)
+        logger.info(
+            f"Corrected skims otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
+        )
+        needs_correction = True
+    else:
+        logger.info("Skims already appear to be 0-based.")
+
+    if "preprocessed" not in skims_ds["otaz"].attrs:
+        logger.info("Adding 'preprocessed' flag.")
+        skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
+        skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
+        needs_correction = True
+    else:
+        logger.info("'preprocessed' flag already present.")
+
+    if needs_correction:
+        skims_ds = normalize_dimension_coords_for_zarr(skims_ds)
+
+    return skims_ds, needs_correction
+
+
 def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
     """
     Ensures a Zarr skim file is 0-based indexed and has the 'preprocessed' flag.
@@ -412,33 +446,11 @@ def ensure_0_based_and_flag_zarr_skims(skim_path: str, settings, workspace):
         _log_zarr_runtime_context()
         with xr.open_zarr(skim_path) as skims_ds:
             _log_zarr_store_state("Pre-correction", skim_path, skims_ds)
-            needs_correction = False
-            if (
-                len(skims_ds.coords["otaz"]) > 0
-                and skims_ds.coords["otaz"].values[0] == 1
-            ):
-                logger.warning("Skims appear to be 1-based. Re-indexing to 0-based.")
-                canonical_zones_df = load_canonical_zones(settings, workspace)
-                new_coords = np.arange(len(canonical_zones_df))
-                skims_ds = skims_ds.assign_coords(otaz=new_coords, dtaz=new_coords)
-                logger.info(
-                    f"Corrected skims otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
-                )
-                needs_correction = True
-            else:
-                logger.info("Skims already appear to be 0-based.")
-
-            # Ensure 'preprocessed' flag is present
-            if "preprocessed" not in skims_ds["otaz"].attrs:
-                logger.info("Adding 'preprocessed' flag.")
-                skims_ds["otaz"].attrs["preprocessed"] = "zero-based-contiguous"
-                skims_ds["dtaz"].attrs["preprocessed"] = "zero-based-contiguous"
-                needs_correction = True
-            else:
-                logger.info("'preprocessed' flag already present.")
+            skims_ds, needs_correction = normalize_0_based_and_flag_zarr_dataset(
+                skims_ds, settings, workspace
+            )
 
             if needs_correction:
-                skims_ds = normalize_dimension_coords_for_zarr(skims_ds)
                 # Overwrite the Zarr store with the corrected version
                 # Use a temporary path for atomic write
                 temp_path = f"{skim_path}_temp_corrected"

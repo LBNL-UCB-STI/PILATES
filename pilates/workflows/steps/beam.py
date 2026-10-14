@@ -675,6 +675,10 @@ def _project_beam_full_skim_outputs(
 
 
 def _input_destination(*, workspace: Any, key: str, source: Any) -> Path:
+    if key == ZARR_SKIMS:
+        existing = artifact_to_existing_path(source, workspace=workspace)
+        if existing is not None:
+            return Path(existing)
     source_path = artifact_to_path(source, workspace=workspace)
     if key == ATLAS_VEHICLES2_OUTPUT:
         source_name = Path(source_path).name if source_path is not None else ""
@@ -828,8 +832,8 @@ def _beam_postprocess_output_cache(
 
     del settings, state, workspace
     return CacheOptions(
-        cache_hydration="outputs-all",
-        cache_hydration_failure="warn",
+        cache_hydration="outputs-requested",
+        cache_hydration_failure="miss",
         cache_version=1,
     )
 
@@ -1186,13 +1190,19 @@ def _resolve_beam_postprocess_inputs(
         )
         for key in dynamic_keys
     }
-    if (
-        settings.activitysim is not None
-        and coupler_storage_value(coupler, ZARR_SKIMS) is not None
-    ):
-        destinations[ZARR_SKIMS] = (
-            Path(workspace.get_asim_output_dir()) / "cache" / "skims.zarr"
-        )
+    from pilates.beam.postprocessor import _activitysim_skims_target_enabled
+
+    zarr_artifact = coupler_storage_value(coupler, ZARR_SKIMS)
+    if _activitysim_skims_target_enabled(settings) and zarr_artifact is not None:
+        zarr_existing = artifact_to_existing_path(zarr_artifact, workspace=workspace)
+        if zarr_existing is not None:
+            destinations[ZARR_SKIMS] = Path(zarr_existing)
+        else:
+            destinations[ZARR_SKIMS] = (
+                Path(workspace.get_beam_output_dir())
+                / ".pilates-consist-inputs"
+                / f"zarr_skims_{int(year)}_{int(iteration)}.zarr"
+            )
         optional_roles = (ZARR_SKIMS,)
     else:
         optional_roles = ()
@@ -1501,7 +1511,7 @@ def _native_beam_run(
 @define_step(
     model="beam_postprocess",
     name_template="beam_postprocess__y{year}__i{iteration}__phase_{phase}",
-    cache_hydration="outputs-all",
+    cache_hydration="outputs-requested",
     optional_input_keys=(ZARR_SKIMS,),
     schema_outputs=[ZARR_SKIMS, "final_skims_omx"],
     output_paths=_native_contract_output_paths(_beam_postprocess_native_output_paths),

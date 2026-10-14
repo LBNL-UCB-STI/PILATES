@@ -11,18 +11,25 @@ Per the BEAM Two-Step Spike v2 Brief:
 from __future__ import annotations
 
 import gzip
+import json
 import shutil
 from pathlib import Path
 from typing import Any, Callable
 from unittest.mock import patch
 
+import numpy as np
+import openmatrix as omx
 import pandas as pd
 import pytest
+import xarray as xr
 
 from consist import Tracker
 from consist.types import CacheOptions
 import dataclasses
-from pilates.beam.postprocessor import BeamPostprocessor
+from pilates.beam.postprocessor import (
+    BeamPostprocessor,
+    beam_postprocess_zarr_skims_output_path,
+)
 from pilates.beam.runner import BeamRunner
 from pilates.config import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
@@ -30,6 +37,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    ZARR_SKIMS,
 )
 from pilates.workflows.stages import supply_demand_beam
 from pilates.workflows.stages.supply_demand_beam import (
@@ -39,15 +47,48 @@ from pilates.workflows.steps.beam import beam_run
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
 
+_TEST_ZONE_IDS = ["101", "102"]
+_TEST_TIME_PERIODS = ["EA", "AM", "MD", "PM", "EV"]
 
-def _create_test_environment(base_dir: Path) -> dict[str, Any]:
+
+def _create_test_environment(
+    base_dir: Path,
+    *,
+    enable_activitysim_skims: bool = False,
+) -> dict[str, Any]:
     """Build a minimal, real PILATES BEAM execution environment."""
     ws_root = base_dir / "workspace"
     sim_name = "sim_output"
     db_path = base_dir / "provenance.duckdb"
     shared_db = base_dir / "shared.duckdb"
 
-    data = {
+    zones_cfg = None
+    if enable_activitysim_skims:
+        zones_geojson = base_dir / "canonical_zones.geojson"
+        zones_geojson.write_text(
+            json.dumps(
+                {
+                    "type": "FeatureCollection",
+                    "features": [
+                        {
+                            "type": "Feature",
+                            "properties": {"zone_key": geoid},
+                            "geometry": {"type": "Point", "coordinates": [0, 0]},
+                        }
+                        for geoid in _TEST_ZONE_IDS
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        zones_cfg = {
+            "source_file": str(zones_geojson),
+            "activitysim_index_col": "TAZ",
+            "zone_type": "taz",
+            "canonical_id_col": "zone_key",
+        }
+
+    data: dict[str, Any] = {
         "run": {
             "region": "test-region",
             "scenario": "test-scenario",
@@ -58,7 +99,7 @@ def _create_test_environment(base_dir: Path) -> dict[str, Any]:
             "models": {
                 "land_use": None,
                 "travel": "beam",
-                "activity_demand": None,
+                "activity_demand": "activitysim" if enable_activitysim_skims else None,
                 "vehicle_ownership": None,
             },
         },
@@ -66,13 +107,14 @@ def _create_test_environment(base_dir: Path) -> dict[str, Any]:
             "geography": {
                 "FIPS": {"county": ["06001"]},
                 "local_crs": "EPSG:32048",
-                "zones": None,
+                "zones": zones_cfg,
             },
             "skims": {
                 "zone_type": "taz",
                 "fname": "skimsActivitySimOD_current",
                 "geoms_fname": "geoms.geojson",
                 "geoms_index_col": "TAZ",
+                "periods": _TEST_TIME_PERIODS,
             },
             "database": {
                 "enabled": True,
@@ -97,8 +139,23 @@ def _create_test_environment(base_dir: Path) -> dict[str, Any]:
             "skims_shapefile": "shape.shp",
             "skim_zone_source_id_col": "TAZ",
             "skim_zone_geoid_col": "TAZ",
+            "ridehail_path_map": {},
         },
     }
+    if enable_activitysim_skims:
+        data["beam"]["artifact_formats"] = {"activitysim_skims": "omx"}
+        data["activitysim"] = {
+            "local_input_folder": "asim_input",
+            "local_mutable_data_folder": "asim_mutable",
+            "local_output_folder": "asim_output",
+            "local_configs_folder": "asim_configs",
+            "local_mutable_configs_folder": "asim_mutable_configs",
+            "validation_folder": "asim_val",
+            "command_template": "echo asim",
+            "final_plans_folder": "asim_final_plans",
+            "file_format": "csv",
+            "region_mappings": {"region_to_subdir": {"test-region": "test"}},
+        }
     cfg = PilatesConfig(**data)
     ws = Workspace(cfg, str(ws_root), sim_name)
 
@@ -147,7 +204,7 @@ matsim.modules.network.inputNetworkFile = ""
         travel_model_freq=1,
         land_use_enabled=False,
         vehicle_ownership_model_enabled=False,
-        activity_demand_enabled=False,
+        activity_demand_enabled=enable_activitysim_skims,
         traffic_assignment_enabled=True,
         year=2020,
         major_stage=WorkflowState.Stage.traffic_assignment,
@@ -167,6 +224,36 @@ matsim.modules.network.inputNetworkFile = ""
         hashing_strategy="full",
     )
 
+    initial_skims_path: Path | None = None
+    if enable_activitysim_skims:
+        initial_skims_path = Path(ws.get_asim_output_dir()) / "cache" / "skims.zarr"
+        initial_skims_path.parent.mkdir(parents=True, exist_ok=True)
+        n_zones = len(_TEST_ZONE_IDS)
+        n_periods = len(_TEST_TIME_PERIODS)
+        ds = xr.Dataset(
+            {
+                "SOV_TRIPS": (
+                    ("otaz", "dtaz", "time_period"),
+                    np.full((n_zones, n_zones, n_periods), 100.0, dtype=np.float32),
+                ),
+                "SOV_FAILURES": (
+                    ("otaz", "dtaz", "time_period"),
+                    np.zeros((n_zones, n_zones, n_periods), dtype=np.float32),
+                ),
+                "SOV_TIME": (
+                    ("otaz", "dtaz", "time_period"),
+                    np.full((n_zones, n_zones, n_periods), 20.0, dtype=np.float32),
+                ),
+            },
+            coords={
+                "otaz": np.arange(n_zones),
+                "dtaz": np.arange(n_zones),
+                "time_period": _TEST_TIME_PERIODS,
+            },
+            attrs={"original_zone_ids": list(_TEST_ZONE_IDS)},
+        )
+        ds.to_zarr(initial_skims_path, mode="w", consolidated=True, zarr_format=2)
+
     seed_artifacts = {}
     with tracker.start_run("seed", "test"):
         seed_artifacts[BEAM_PLANS_IN] = tracker.log_artifact(
@@ -178,6 +265,12 @@ matsim.modules.network.inputNetworkFile = ""
         seed_artifacts[BEAM_PERSONS_IN] = tracker.log_artifact(
             persons_file, key=BEAM_PERSONS_IN, direction="input"
         )
+        if initial_skims_path is not None:
+            seed_artifacts[ZARR_SKIMS] = tracker.log_artifact(
+                initial_skims_path,
+                key=ZARR_SKIMS,
+                direction="input",
+            )
 
     return {
         "cfg": cfg,
@@ -187,12 +280,15 @@ matsim.modules.network.inputNetworkFile = ""
         "seed_artifacts": seed_artifacts,
         "beam_conf_path": beam_conf_path,
         "local_run_dir": local_run_dir,
+        "initial_skims_path": initial_skims_path,
     }
 
 
 def _make_container_stub(
     events_content: str = "PathTraversal",
     linkstats_content: str = "link,time\n1,10\n",
+    *,
+    write_real_omx_skims: bool = False,
 ) -> Callable[..., bool]:
     """Factory creating a realistic stub for BeamRunner.run_container."""
 
@@ -213,7 +309,23 @@ def _make_container_stub(
             f.write(linkstats_content)
         with gzip.open(sim_out / "0.plans.csv.gz", "wt", encoding="utf-8") as f:
             f.write("person_id,trip_id\n1,1\n")
-        (sim_out / "0.skimsActivitySimOD_current.omx").write_bytes(b"omx_content")
+        omx_path = sim_out / "0.skimsActivitySimOD_current.omx"
+        if write_real_omx_skims:
+            n_zones = len(_TEST_ZONE_IDS)
+            trips_mat = np.zeros((n_zones, n_zones), dtype=np.float32)
+            trips_mat[0, 0] = 5.0
+            with omx.open_file(str(omx_path), mode="w") as f_omx:
+                f_omx.create_mapping("TAZ", list(_TEST_ZONE_IDS))
+                for period in _TEST_TIME_PERIODS:
+                    f_omx[f"SOV_TRIPS__{period}"] = trips_mat
+                    f_omx[f"SOV_FAILURES__{period}"] = np.zeros(
+                        (n_zones, n_zones), dtype=np.float32
+                    )
+                    f_omx[f"SOV_TIME__{period}"] = np.full(
+                        (n_zones, n_zones), 30.0, dtype=np.float32
+                    )
+        else:
+            omx_path.write_bytes(b"omx_content")
         return True
 
     return stub
@@ -317,25 +429,38 @@ def test_scenario_2_crash_after_beam_run_commits_cache_hits_and_runs_postprocess
 
 
 # ==============================================================================
-# Scenario 3: Crash partway through postprocess refuses restart
+# Scenario 3: Crash partway through postprocess restarts idempotently
 # ==============================================================================
-def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
+def test_scenario_3_crash_partway_through_postprocess_restarts_idempotently(
     tmp_path: Path,
 ) -> None:
-    """Scenario 3: Interrupted postprocess leaves in-progress marker; restart refuses."""
-    env = _create_test_environment(tmp_path)
-    container_stub = _make_container_stub()
+    """Scenario 3: Interrupted postprocess restarts cleanly without double-counting skims."""
+    env = _create_test_environment(tmp_path, enable_activitysim_skims=True)
+    run_counts = {"container": 0}
+    container_stub = _make_container_stub(write_real_omx_skims=True)
+    real_postprocess = BeamPostprocessor.postprocess
+    postprocess_calls = {"count": 0}
 
-    def fail_mid_postprocess(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated mid-postprocess crash")
+    def tracked_container(self: Any, **kwargs: Any) -> bool:
+        run_counts["container"] += 1
+        return container_stub(self, **kwargs)
+
+    def fail_after_writing_output_skims(
+        self: BeamPostprocessor, *args: Any, **kwargs: Any
+    ) -> Any:
+        postprocess_calls["count"] += 1
+        result = real_postprocess(self, *args, **kwargs)
+        if postprocess_calls["count"] == 1:
+            raise RuntimeError("Simulated mid-postprocess crash")
+        return result
 
     # Monkeypatch 1: Container stub
-    # Monkeypatch 2: Postprocess hook fails mid-run leaving progress marker
-    with patch.object(BeamRunner, "run_container", container_stub):
+    # Monkeypatch 2: Postprocess hook crashes after writing the output Zarr store on Attempt 1
+    with patch.object(BeamRunner, "run_container", tracked_container):
         with patch.object(
             BeamPostprocessor,
             "postprocess",
-            side_effect=fail_mid_postprocess,
+            fail_after_writing_output_skims,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
                 for k, art in env["seed_artifacts"].items():
@@ -351,48 +476,87 @@ def test_scenario_3_crash_partway_through_postprocess_refuses_restart(
                         context=env["context"],
                     )
 
-        # In-progress marker or state must exist
-        marker = Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
-        assert (
-            marker.exists()
-            or env["context"].state.current_sub_stage == "beam_postprocess_in_progress"
-        )
+            assert run_counts["container"] == 1
+            assert postprocess_calls["count"] == 1
 
-        # Attempt 2: Restart without clearing marker must refuse to restart
-        with env["tracker"].scenario("beam_scenario") as scenario:
-            for k, art in env["seed_artifacts"].items():
-                scenario.coupler.set_from_artifact(k, art)
+            # Verify no legacy in-progress marker exists and input Zarr skims remain untouched (100.0)
+            marker = (
+                Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
+            )
+            assert not marker.exists()
+            initial_skims_path = env["initial_skims_path"]
+            assert initial_skims_path is not None
+            with xr.open_zarr(initial_skims_path) as input_ds:
+                np.testing.assert_allclose(input_ds["SOV_TRIPS"].values, 100.0)
 
-            with pytest.raises(
-                RuntimeError,
-                match="Interrupted BEAM postprocess detected.*Refusing restart",
-            ):
-                _run_beam_steps(
+            # Attempt 2: Direct restart with zero manual intervention succeeds idempotently
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
+                    scenario.coupler.set_from_artifact(k, art)
+
+                res = _run_beam_steps(
                     scenario=scenario, year=2020, iteration=0, context=env["context"]
                 )
+                assert res is not None
+                coupler_skims_path = scenario.coupler.path(ZARR_SKIMS)
+
+    # Container was NOT rerun; beam_run hit cache while beam_postprocess reran cleanly
+    assert run_counts["container"] == 1
+    assert postprocess_calls["count"] == 2
+
+    expected_output_skims = Path(
+        beam_postprocess_zarr_skims_output_path(env["ws"], env["context"].state)
+    )
+    assert Path(res[ZARR_SKIMS].path).resolve() == expected_output_skims.resolve()
+    assert coupler_skims_path.resolve() == expected_output_skims.resolve()
+    assert expected_output_skims.resolve() != initial_skims_path.resolve()
+
+    # Input store remains strictly read-only (100.0)
+    with xr.open_zarr(initial_skims_path) as input_ds:
+        np.testing.assert_allclose(input_ds["SOV_TRIPS"].values, 100.0)
+
+    # Output store has single-merged trips:
+    # - observed OD cell (0, 0) has 5.0
+    # - unobserved OD cell (0, 1) decayed once: ceil(0.9 * 100.0 + 0.0) = 90.0 (NOT double-merged 81.0)
+    with xr.open_zarr(expected_output_skims) as output_ds:
+        np.testing.assert_allclose(output_ds["SOV_TRIPS"].values[0, 0, :], 5.0)
+        np.testing.assert_allclose(output_ds["SOV_TRIPS"].values[0, 1, :], 90.0)
 
 
-def test_scenario_3_scratch_wiped_after_interrupted_postprocess_still_refuses_restart(
+def test_scenario_3_scratch_wiped_after_interrupted_postprocess_restarts_idempotently(
     tmp_path: Path,
 ) -> None:
-    """Scenario 3b: If scratch is wiped after an interrupted postprocess, the recovery root marker still refuses restart."""
-    env = _create_test_environment(tmp_path)
-    archive_dir = tmp_path / "archive_run"
+    """Scenario 3b: If scratch is wiped after an interrupted postprocess, restart hydrates beam_run and succeeds idempotently."""
+    env = _create_test_environment(tmp_path, enable_activitysim_skims=True)
+    archive_dir = env["local_run_dir"] / "archive_run"
     archive_dir.mkdir(parents=True, exist_ok=True)
     env["context"].state.archive_run_dir = str(archive_dir)
 
-    container_stub = _make_container_stub()
+    run_counts = {"container": 0}
+    container_stub = _make_container_stub(write_real_omx_skims=True)
+    real_postprocess = BeamPostprocessor.postprocess
+    postprocess_calls = {"count": 0}
 
-    def fail_mid_postprocess(*args: Any, **kwargs: Any) -> None:
-        raise RuntimeError("Simulated mid-postprocess crash")
+    def tracked_container(self: Any, **kwargs: Any) -> bool:
+        run_counts["container"] += 1
+        return container_stub(self, **kwargs)
+
+    def fail_after_writing_output_skims(
+        self: BeamPostprocessor, *args: Any, **kwargs: Any
+    ) -> Any:
+        postprocess_calls["count"] += 1
+        result = real_postprocess(self, *args, **kwargs)
+        if postprocess_calls["count"] == 1:
+            raise RuntimeError("Simulated mid-postprocess crash")
+        return result
 
     # Monkeypatch 1: Container stub
-    # Monkeypatch 2: Postprocess fails mid-run
-    with patch.object(BeamRunner, "run_container", container_stub):
+    # Monkeypatch 2: Postprocess fails mid-run after writing output Zarr skims
+    with patch.object(BeamRunner, "run_container", tracked_container):
         with patch.object(
             BeamPostprocessor,
             "postprocess",
-            side_effect=fail_mid_postprocess,
+            fail_after_writing_output_skims,
         ):
             with env["tracker"].scenario("beam_scenario") as scenario:
                 for k, art in env["seed_artifacts"].items():
@@ -408,33 +572,41 @@ def test_scenario_3_scratch_wiped_after_interrupted_postprocess_still_refuses_re
                         context=env["context"],
                     )
 
-    # In-progress marker must exist in BOTH scratch and the archive recovery root
-    scratch_marker = (
-        Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
-    )
-    archive_marker = archive_dir / ".beam_postprocess_in_progress"
-    assert scratch_marker.exists()
-    assert archive_marker.exists()
+            assert run_counts["container"] == 1
+            assert postprocess_calls["count"] == 1
 
-    # Now simulate a scratch purge / wipe
-    beam_out = Path(env["ws"].get_beam_output_dir())
-    shutil.rmtree(beam_out)
-    assert not scratch_marker.exists()
-    assert not beam_out.exists()
-    assert archive_marker.exists()
-
-    # Attempt 2: Restart after scratch wipe must STILL refuse because recovery root marker survives
-    with env["tracker"].scenario("beam_scenario") as scenario:
-        for k, art in env["seed_artifacts"].items():
-            scenario.coupler.set_from_artifact(k, art)
-
-        with pytest.raises(
-            RuntimeError,
-            match="Interrupted BEAM postprocess detected.*Refusing restart",
-        ):
-            _run_beam_steps(
-                scenario=scenario, year=2020, iteration=0, context=env["context"]
+            # Neither scratch nor archive recovery root should have an in-progress marker
+            scratch_marker = (
+                Path(env["ws"].get_beam_output_dir()) / ".beam_postprocess_in_progress"
             )
+            archive_marker = archive_dir / ".beam_postprocess_in_progress"
+            assert not scratch_marker.exists()
+            assert not archive_marker.exists()
+
+            # Simulate a scratch purge / wipe after the interrupted postprocess
+            beam_out = Path(env["ws"].get_beam_output_dir())
+            shutil.rmtree(beam_out)
+            assert not beam_out.exists()
+
+            # Attempt 2: Restart after scratch wipe hydrates beam_run outputs from recovery root
+            # and completes beam_postprocess cleanly without double-counting
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
+                    scenario.coupler.set_from_artifact(k, art)
+
+                res = _run_beam_steps(
+                    scenario=scenario, year=2020, iteration=0, context=env["context"]
+                )
+                assert res is not None
+
+    assert run_counts["container"] == 1
+    assert postprocess_calls["count"] == 2
+    expected_output_skims = Path(
+        beam_postprocess_zarr_skims_output_path(env["ws"], env["context"].state)
+    )
+    with xr.open_zarr(expected_output_skims) as output_ds:
+        np.testing.assert_allclose(output_ds["SOV_TRIPS"].values[0, 0, :], 5.0)
+        np.testing.assert_allclose(output_ds["SOV_TRIPS"].values[0, 1, :], 90.0)
 
 
 # ==============================================================================
@@ -505,6 +677,102 @@ def test_scenario_4_scratch_wiped_after_beam_run_committed_hydrates_from_recover
         / "test-region/year-2020-iteration-0/.pilates-consist-outputs/beam_run/events_parquet_2020_0.parquet"
     )
     assert restored_parquet.exists()
+
+
+def test_scenario_4b_scratch_wiped_after_iteration_0_postprocess_hydrates_zarr_skims_for_iteration_1(
+    tmp_path: Path,
+) -> None:
+    """Scenario 4b: Scratch wiped after Iteration 0 beam_postprocess hydrates zarr_skims for Iteration 1.
+
+    Verifies that beam_postprocess archives its declared zarr_skims directory artifact
+    and registers recovery_roots so restarting after a scratch wipe cache-hydrates
+    Iteration 0's zarr_skims from the archive (without re-running Iteration 0) and
+    Iteration 1 merges cleanly on top of it.
+    """
+    env = _create_test_environment(tmp_path, enable_activitysim_skims=True)
+    archive_dir = tmp_path / "archive_root"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    env["context"].state.archive_run_dir = str(archive_dir)
+    run_counts = {"container": 0, "postprocess": 0}
+    container_stub = _make_container_stub(write_real_omx_skims=True)
+
+    def tracked_container(self_runner: Any, **kwargs: Any) -> None:
+        run_counts["container"] += 1
+        return container_stub(self_runner, **kwargs)
+
+    orig_postprocess = BeamPostprocessor.postprocess
+
+    def tracked_postprocess(self_pp: Any, *args: Any, **kwargs: Any) -> Any:
+        run_counts["postprocess"] += 1
+        return orig_postprocess(self_pp, *args, **kwargs)
+
+    # Attempt 1: Complete Iteration 0, then crash before Iteration 1
+    with patch.object(BeamRunner, "run_container", tracked_container):
+        with patch.object(BeamPostprocessor, "postprocess", tracked_postprocess):
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
+                    scenario.coupler.set_from_artifact(k, art)
+
+                env["context"].state.inner_iter = 0
+                res0 = _run_beam_steps(
+                    scenario=scenario, year=2020, iteration=0, context=env["context"]
+                )
+                assert res0 is not None
+                iter0_zarr_art = scenario.coupler.require(ZARR_SKIMS)
+                assert isinstance(iter0_zarr_art.meta, dict)
+                assert iter0_zarr_art.meta.get("recovery_roots")
+
+    assert run_counts["container"] == 1
+    assert run_counts["postprocess"] == 1
+
+    iter0_output_skims = Path(
+        beam_postprocess_zarr_skims_output_path(env["ws"], env["context"].state)
+    )
+    assert iter0_output_skims.exists()
+
+    # Wipe scratch beam_output directory after Iteration 0 completes
+    beam_out = Path(env["ws"].get_beam_output_dir())
+    shutil.rmtree(beam_out)
+    assert not beam_out.exists()
+    assert not iter0_output_skims.exists()
+
+    # Attempt 2: Restart scenario. Iteration 0 hits cache and hydrates zarr_skims
+    # from archive_dir; Iteration 1 runs and merges on top of hydrated zarr_skims.
+    with patch.object(BeamRunner, "run_container", tracked_container):
+        with patch.object(BeamPostprocessor, "postprocess", tracked_postprocess):
+            with env["tracker"].scenario("beam_scenario") as scenario:
+                for k, art in env["seed_artifacts"].items():
+                    scenario.coupler.set_from_artifact(k, art)
+
+                env["context"].state.inner_iter = 0
+                res0_restart = _run_beam_steps(
+                    scenario=scenario, year=2020, iteration=0, context=env["context"]
+                )
+                assert res0_restart is not None
+                assert run_counts["container"] == 1
+                assert run_counts["postprocess"] == 1
+                assert iter0_output_skims.exists()
+
+                # Simulate ActivitySim Iteration 1 publishing fresh plans/hh/persons
+                # while keeping ZARR_SKIMS from Iteration 0's hydrated postprocess.
+                for k in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN):
+                    scenario.coupler.set_from_artifact(k, env["seed_artifacts"][k])
+
+                env["context"].state.inner_iter = 1
+                res1 = _run_beam_steps(
+                    scenario=scenario, year=2020, iteration=1, context=env["context"]
+                )
+                assert res1 is not None
+                assert run_counts["container"] == 2
+                assert run_counts["postprocess"] == 2
+
+    iter1_output_skims = Path(
+        beam_postprocess_zarr_skims_output_path(env["ws"], env["context"].state)
+    )
+    assert iter1_output_skims.exists()
+    with xr.open_zarr(iter1_output_skims) as output_ds:
+        # Iter 0 merged 100.0 -> 90.0; Iter 1 merges ceil(0.9 * 90.0) -> 81.0
+        np.testing.assert_allclose(output_ds["SOV_TRIPS"].values[0, 1, :], 81.0)
 
 
 # ==============================================================================
