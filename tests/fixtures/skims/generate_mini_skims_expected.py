@@ -51,6 +51,8 @@ def main() -> None:
     finally:
         src.close()
 
+    output_path = work_dir / "merged_output_skims.zarr"
+
     # Patch dependencies to keep deterministic + avoid filesystem requirements.
     pp.verify_skim_zone_order = lambda settings, skim_file_path, workspace: list(
         range(5)
@@ -58,7 +60,6 @@ def main() -> None:
     pp.zone_utils.load_canonical_zones = lambda settings, workspace: pd.DataFrame(
         index=range(5)
     )
-    pp.ensure_0_based_and_flag_zarr_skims = lambda *args, **kwargs: None
 
     def _get_setting(settings, key, default=None):
         if key == "shared.skims.periods":
@@ -80,11 +81,12 @@ def main() -> None:
         settings=None,
         workspace=None,
         override=str(partial_path),
+        output_skims_path=str(output_path),
     )
 
     if expected_path.exists():
         shutil.rmtree(expected_path)
-    shutil.copytree(main_path, expected_path)
+    shutil.copytree(output_path, expected_path)
     print(f"Wrote expected fixture to {expected_path}")
 
 
