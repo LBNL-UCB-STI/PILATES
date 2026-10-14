@@ -47,25 +47,13 @@ If a failure occurs after `beam_run` commits but before `beam_postprocess` compl
 - If scratch was wiped or purged, Consist's native `cache_hydration="outputs-requested"` automatically hydrates required outputs directly from the recovery root.
 - `beam_postprocess` executes without re-running the hours-long container.
 
-### Postprocess Refusal Gate (`.beam_postprocess_in_progress`)
-Because `beam_postprocess` currently modifies the workspace skims store (`skims.zarr`) in place, a crash mid-postprocess leaves the store partially mutated. Rerunning postprocess over a partially mutated store would double-merge trips and silently corrupt data.
+### Postprocess Restart Idempotency (Separate Stores)
+`beam_postprocess` treats its input skims store (`zarr_skims`) as strictly read-only and writes merged iteration skims into a newly declared, run-scoped output store (`<beam_output_dir>/.pilates-consist-outputs/beam_postprocess/year-{year}-iteration-{iteration}/skims.zarr`) in a single pass.
 
-To prevent this:
-- When postprocess begins, PILATES sets an in-progress marker (`.beam_postprocess_in_progress`) in both scratch (`<beam_output_dir>`) and the permanent recovery root (`<archive_run_dir>`).
-- If postprocess is interrupted, any restart attempt detects the marker and raises `RuntimeError`, refusing to restart automatically.
-
-### Operator Recovery Procedure for Interrupted Postprocess
-If a run halts with `Interrupted BEAM postprocess detected`:
-
-1. **Restore Clean Skims**:
-   - For iteration 0: Copy clean `skims.zarr` from the ActivitySim output archive (`<archive_run_dir>/activitysim/output/cache/skims.zarr`) or initial scenario seed back to `<workspace>/activitysim/output/cache/skims.zarr`.
-   - For iteration > 0: Copy `skims.zarr` from the previous iteration's archived artifact.
-2. **Clear the In-Progress Marker(s)**:
-   - Remove `<beam_output_dir>/.beam_postprocess_in_progress` (if present in scratch).
-   - Remove `<archive_run_dir>/.beam_postprocess_in_progress` (if present in permanent archive).
-3. **Resume the Workflow**:
-   - Rerun PILATES with the restart command printed by the launcher (or `--restart` flag).
-   - `beam_run` will cache-hit, and `beam_postprocess` will run fresh against the restored clean skims.
+Because the input skims store is never mutated in place:
+- If `beam_postprocess` crashes partway through execution, the input `zarr_skims` store remains completely untouched.
+- Rerunning or restarting the workflow automatically cache-hits `beam_run`, discards any partial output store at the declared destination, and re-executes `beam_postprocess` cleanly against the immutable input skims without double-merging trips or requiring manual recovery.
+- In subsequent iterations, `activitysim_run` dynamically binds `ZARR_SKIMS` from the coupler's latest published output store rather than assuming a static workspace path.
 
 ## Operator Checks
 
@@ -73,8 +61,7 @@ When validating a restart, check:
 
 1. the durable state and its normal stage/year frontier;
 2. for the BEAM boundary, that `beam_run` committed successfully and its outputs are visible in the recovery root;
-3. that no stale `.beam_postprocess_in_progress` markers remain from an unhandled crash;
-4. the native step's typed projected outputs after execution or cache admission.
+3. the native step's typed projected outputs after execution or cache admission.
 
 ## Adjacent Pages
 

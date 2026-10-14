@@ -471,6 +471,7 @@ def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
 
     workspace = MagicMock()
     workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam" / "input")
+    workspace.get_beam_output_dir.return_value = str(tmp_path / "beam" / "output")
     workspace.get_asim_output_dir.return_value = str(
         tmp_path / "activitysim" / "output"
     )
@@ -482,7 +483,14 @@ def test_beam_postprocessor_expected_outputs_accumulates_hybrid_skim_formats(
     )
 
     assert outputs == {
-        "zarr_skims": str(tmp_path / "activitysim" / "output" / "cache" / "skims.zarr"),
+        "zarr_skims": str(
+            tmp_path
+            / "beam"
+            / "output"
+            / ".pilates-consist-outputs"
+            / "beam_postprocess"
+            / "skims.zarr"
+        ),
         "final_skims_omx": str(tmp_path / "beam" / "input" / "seattle" / "skims.omx"),
     }
 

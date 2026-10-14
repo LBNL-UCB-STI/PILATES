@@ -52,12 +52,12 @@ def _minimal_base_dict() -> dict[str, Any]:
             "container_manager": "singularity",
             "singularity_images": {
                 "urbansim": "docker://jdcaicedo/urbansim_demos:v0.1.1",
-                "activitysim": "docker://zaneedell/activitysim:0.2.17",
+                "activitysim": "docker://zaneedell/activitysim:0.2.18",
                 "beam": "docker://zaneedell/beam:1.1-beta-v261009",
             },
             "docker_images": {
                 "urbansim": "jdcaicedo/urbansim_demos:v0.1.1",
-                "activitysim": "zaneedell/activitysim:0.1.4",
+                "activitysim": "zaneedell/activitysim:0.2.18",
                 "beam": "zaneedell/beam:1.1-beta-v261009",
             },
         },

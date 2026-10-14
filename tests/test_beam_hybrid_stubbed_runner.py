@@ -91,16 +91,20 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
         settings,
         workspace,
         override=None,
+        output_skims_path=None,
     ):
+        target = output_skims_path if output_skims_path is not None else all_skims_path
+        _write_file(Path(target), b"merged-zarr")
         merge_calls.append(
             {
                 "all_skims_path": all_skims_path,
                 "iteration_skims_path": iteration_skims_path,
                 "beam_output_dir": beam_output_dir,
                 "override": override,
+                "output_skims_path": output_skims_path,
             }
         )
-        return all_skims_path
+        return target
 
     final_omx = Path(workspace.get_beam_mutable_data_dir()) / "test" / "skims.omx"
 
@@ -147,12 +151,20 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     if outputs.final_skims_omx is not None:
         output_keys.add("final_skims_omx")
 
+    expected_output_zarr = (
+        beam_output_dir
+        / ".pilates-consist-outputs"
+        / "beam_postprocess"
+        / f"year-{state.forecast_year}-iteration-{state.iteration}"
+        / "skims.zarr"
+    )
     assert split_calls == [(str(events_sub1), True)]
     assert len(merge_calls) == 1
     assert merge_calls[0]["all_skims_path"] == str(zarr_skims_target)
     assert merge_calls[0]["iteration_skims_path"] == str(raw_skims)
     assert merge_calls[0]["beam_output_dir"] == str(beam_output_dir)
     assert merge_calls[0]["override"] == str(raw_skims)
+    assert merge_calls[0]["output_skims_path"] == str(expected_output_zarr)
 
     assert (
         f"events_parquet_{state.forecast_year}_{state.iteration}_type_PathTraversal"
@@ -167,7 +179,7 @@ def test_beam_postprocess_hybrid_orchestrates_stubbed_runner_outputs(
     )
     assert "zarr_skims" in output_keys
     assert "final_skims_omx" in output_keys
-    assert outputs.zarr_skims == zarr_skims_target
+    assert outputs.zarr_skims == expected_output_zarr
     assert outputs.final_skims_omx == final_omx
     assert state.sub_stage_progress == "postprocessor"
 
@@ -284,14 +296,18 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         settings,
         workspace,
         override=None,
+        output_skims_path=None,
     ):
+        target = output_skims_path if output_skims_path is not None else all_skims_path
+        _write_file(Path(target), b"merged-zarr")
         merge_calls.append(
             {
                 "all_skims_path": all_skims_path,
                 "iteration_skims_path": iteration_skims_path,
+                "output_skims_path": output_skims_path,
             }
         )
-        return all_skims_path
+        return target
 
     monkeypatch.setattr(
         "pilates.beam.postprocessor.split_events_parquet_by_type",
@@ -316,7 +332,15 @@ def test_beam_postprocess_prefers_explicit_zarr_skims_input_when_local_target_mi
         zarr_skims=str(restored_zarr),
     )
 
+    expected_output_zarr = (
+        beam_output_dir
+        / ".pilates-consist-outputs"
+        / "beam_postprocess"
+        / f"year-{state.year}-iteration-{state.iteration}"
+        / "skims.zarr"
+    )
     assert len(merge_calls) == 1
     assert merge_calls[0]["all_skims_path"] == str(restored_zarr)
     assert merge_calls[0]["iteration_skims_path"] == str(raw_skims)
-    assert outputs.zarr_skims == restored_zarr
+    assert merge_calls[0]["output_skims_path"] == str(expected_output_zarr)
+    assert outputs.zarr_skims == expected_output_zarr

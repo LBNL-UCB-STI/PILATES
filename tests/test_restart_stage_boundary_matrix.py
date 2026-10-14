@@ -244,43 +244,91 @@ def test_archive_beam_run_outputs_native_enforces_verification(tmp_path: Path):
             )
 
 
-def test_interrupted_postprocess_detected_refuses_restart_before_step_execution(
+def test_interrupted_postprocess_restart_proceeds_directly_through_step_execution(
     monkeypatch, tmp_path: Path
 ):
-    """Interrupted postprocess marker causes immediate refusal before any step runs."""
+    """Restarting after an interrupted postprocess proceeds directly through step execution without refusal."""
+    launch_root = tmp_path / "launch"
+    launch_primary = launch_root / "beam.conf"
+    launch_root.mkdir()
+    launch_primary.write_text("beam {}\n", encoding="utf-8")
+
+    class Coupler:
+        def get(self, _key, default=None):
+            return default
+
     scenario = SimpleNamespace(
-        coupler=object(), tracker=SimpleNamespace(run_dir=tmp_path)
+        coupler=Coupler(), tracker=SimpleNamespace(run_dir=tmp_path)
     )
     context = SimpleNamespace(
         settings=SimpleNamespace(beam=SimpleNamespace(full_skim=None)),
         state=SimpleNamespace(
             is_restart_run=True,
-            sub_stage_progress=None,
+            sub_stage_progress="postprocessor",
             run_info_path=None,
             archive_run_dir=None,
             set_sub_stage_progress=lambda _: None,
         ),
         workspace=SimpleNamespace(get_beam_output_dir=lambda: tmp_path),
     )
+    calls: list[str] = []
+
+    def fake_execute_step(*, phase, **_kwargs):
+        calls.append(phase)
+        if phase == "preprocess":
+            return SimpleNamespace(), SimpleNamespace(prepared_inputs={})
+        if phase == "run":
+            return (
+                SimpleNamespace(run=SimpleNamespace(id="run-1"), outputs={}),
+                SimpleNamespace(),
+            )
+        if phase == "postprocess":
+            return SimpleNamespace(), SimpleNamespace()
+        pytest.fail(f"unexpected phase {phase}")
 
     monkeypatch.setattr(
-        beam_stage, "_interrupted_beam_postprocess_detected", lambda **_: True
+        beam_stage,
+        "_compile_beam_launch_config",
+        lambda **_: SimpleNamespace(root=launch_root, primary_config=launch_primary),
     )
     monkeypatch.setattr(
         beam_stage,
-        "execute_step",
-        lambda **_kwargs: pytest.fail(
-            "execute_step must not be called when postprocess was interrupted"
+        "beam_run",
+        SimpleNamespace(
+            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
+                "beam_run", BindingResult(inputs={})
+            )
         ),
     )
+    monkeypatch.setattr(
+        beam_stage,
+        "beam_postprocess",
+        SimpleNamespace(
+            resolve_inputs=lambda **_kwargs: ResolvedStepInputs(
+                "beam_postprocess", BindingResult(inputs={})
+            )
+        ),
+    )
+    monkeypatch.setattr(beam_stage, "execute_step", fake_execute_step)
+    monkeypatch.setattr(
+        beam_stage, "_archive_beam_run_outputs_native", lambda **_: None
+    )
+    monkeypatch.setattr(
+        beam_stage, "_maybe_fail_after_beam_run_for_canary", lambda **_: None
+    )
+    monkeypatch.setattr(beam_stage, "_archive_run_dir_for_restart", lambda _state: None)
+    monkeypatch.setattr(
+        beam_stage, "step_output_handoff_mapping", lambda *_args, **_kwargs: {}
+    )
 
-    with pytest.raises(RuntimeError, match="Interrupted BEAM postprocess detected"):
-        beam_stage._run_beam_steps(
-            scenario=scenario,
-            year=2021,
-            iteration=0,
-            context=context,
-        )
+    beam_stage._run_beam_steps(
+        scenario=scenario,
+        year=2021,
+        iteration=0,
+        context=context,
+    )
+
+    assert calls == ["preprocess", "run", "postprocess"]
 
 
 # ==============================================================================

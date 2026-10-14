@@ -41,10 +41,56 @@ def _postprocess_output_stem(output_key: str) -> str:
 def _atlas_owns_vehicle_ownership(settings: PilatesConfig) -> bool:
     """Return whether ATLAS, rather than ActivitySim, owns household cars."""
 
-    return (
-        settings.vehicle_ownership_model_enabled
-        and settings.run.models.vehicle_ownership == "atlas"
-    )
+    if not bool(settings.vehicle_ownership_model_enabled):
+        return False
+    run_cfg = settings.run
+    if run_cfg is None:
+        return False
+    models = run_cfg.models
+    if models is None:
+        return False
+    return models.vehicle_ownership == "atlas"
+
+
+def _align_overlay_series(series: pd.Series, target_dtype: Any) -> pd.Series:
+    """
+    Align overlay series dtype to match target column dtype safely.
+
+    Handles conversions between numeric ActivitySim outputs (which may contain
+    NaN or -1 for unassigned locations) and target UrbanSim dtypes (such as
+    Arrow string arrays, object strings, nullable or non-nullable integers).
+    """
+    if series.dtype == target_dtype:
+        return series
+
+    if pd.api.types.is_string_dtype(target_dtype):
+        if pd.api.types.is_numeric_dtype(series.dtype):
+            numeric = pd.to_numeric(series, errors="coerce")
+            valid_numeric = numeric.dropna()
+            if not valid_numeric.empty and (valid_numeric % 1 == 0).all():
+                int_candidate = numeric.round().astype("Int64")
+                if target_dtype is object or target_dtype == "object":
+                    return int_candidate.astype(pd.StringDtype()).astype(object)
+                return int_candidate.astype(target_dtype)
+        if target_dtype is object or target_dtype == "object":
+            return series.astype(object)
+        return series.astype(target_dtype)
+
+    if pd.api.types.is_integer_dtype(target_dtype):
+        numeric = pd.to_numeric(series, errors="coerce")
+        if isinstance(
+            target_dtype,
+            (pd.Int64Dtype, pd.Int32Dtype, pd.Int16Dtype, pd.Int8Dtype),
+        ) or (
+            isinstance(target_dtype, pd.ArrowDtype) and target_dtype.kind in ("i", "u")
+        ):
+            return numeric.round().astype("Int64").astype(target_dtype)
+        return numeric.fillna(-1).round().astype(target_dtype)
+
+    if pd.api.types.is_float_dtype(target_dtype):
+        return pd.to_numeric(series, errors="coerce").astype(target_dtype)
+
+    return series.astype(target_dtype)
 
 
 def _read_household_table(path: Path) -> pd.DataFrame:
@@ -423,10 +469,7 @@ def _prepare_updated_tables(
     required_cols = {}
     usim_tables = {}
 
-    vehicle_ownership_model = getattr(
-        getattr(settings, "run", None), "models", None
-    ) and getattr(settings.run.models, "vehicle_ownership", None)
-    use_asim_auto_ownership = vehicle_ownership_model != "atlas"
+    use_asim_auto_ownership = not _atlas_owns_vehicle_ownership(settings)
 
     def _ensure_index(df: pd.DataFrame, index_col: str) -> pd.DataFrame:
         if df.index.name == index_col:
@@ -584,7 +627,10 @@ def _prepare_updated_tables(
         if overlay_cols:
             common_idx = persons.index.intersection(persons_overlay.index)
             for col in overlay_cols:
-                persons.loc[common_idx, col] = persons_overlay.loc[common_idx, col]
+                persons.loc[common_idx, col] = _align_overlay_series(
+                    persons_overlay.loc[common_idx, col],
+                    persons[col].dtype,
+                )
 
         persons = _normalize_person_household_ids(
             persons, usim_persons["household_id"].dtype
@@ -602,9 +648,10 @@ def _prepare_updated_tables(
         if use_asim_auto_ownership and "cars" in required_cols["households"]:
             if "auto_ownership" in households_overlay.columns:
                 common_idx = households.index.intersection(households_overlay.index)
-                households.loc[common_idx, "cars"] = households_overlay.loc[
-                    common_idx, "auto_ownership"
-                ]
+                households.loc[common_idx, "cars"] = _align_overlay_series(
+                    households_overlay.loc[common_idx, "auto_ownership"],
+                    households["cars"].dtype,
+                )
             else:
                 logger.warning(
                     "ASim households output missing auto_ownership; preserving UrbanSim cars."
@@ -639,11 +686,9 @@ def _prepare_updated_tables(
             dtypes = usim_output_store[h5_key].dtypes.to_dict()
             for col in required_cols[table_name]:
                 if asim_output_dict[table_name][col].dtype != dtypes[col]:
-                    asim_output_dict[table_name][col] = (
-                        asim_output_dict[table_name]
-                        .loc[~asim_output_dict[table_name][col].isna(), col]
-                        .fillna(0)
-                        .astype(dtypes[col])
+                    asim_output_dict[table_name][col] = _align_overlay_series(
+                        asim_output_dict[table_name][col],
+                        dtypes[col],
                     )
     usim_output_store.close()
 
@@ -949,13 +994,18 @@ def update_usim_inputs_after_warm_start(
     assert p.shape[0] == warm_start_persons.shape[0]
     assert hh.shape[0] == warm_start_households.shape[0]
 
-    p.loc[:, "work_zone_id"] = warm_start_persons.loc[:, "workplace_taz"].reindex(
-        p.index
+    p.loc[:, "work_zone_id"] = _align_overlay_series(
+        warm_start_persons.loc[:, "workplace_taz"].reindex(p.index),
+        p["work_zone_id"].dtype,
     )
-    p.loc[:, "school_zone_id"] = warm_start_persons.loc[:, "school_taz"].reindex(
-        p.index
+    p.loc[:, "school_zone_id"] = _align_overlay_series(
+        warm_start_persons.loc[:, "school_taz"].reindex(p.index),
+        p["school_zone_id"].dtype,
     )
-    hh.loc[:, "cars"] = warm_start_households["auto_ownership"].reindex(hh.index)
+    hh.loc[:, "cars"] = _align_overlay_series(
+        warm_start_households["auto_ownership"].reindex(hh.index),
+        hh["cars"].dtype,
+    )
 
     usim_datastore["persons"] = p
     usim_datastore["households"] = hh

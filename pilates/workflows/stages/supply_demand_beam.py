@@ -23,7 +23,7 @@ from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_confi
 from pilates.beam.config_hocon import beam_config_root
 from pilates.beam.launch_paths import prepare_r5_raw_rebuild
 from pilates.workflows.coupler_namespace import coupler_storage_value
-from consist import Artifact, Tracker
+from consist import Artifact, RunResult, Tracker
 from consist.api import archive_run_output_files
 from consist.protocols import ArtifactRecordLike
 from pilates.workflows.outputs_base import step_output_handoff_mapping
@@ -434,8 +434,11 @@ def _archive_beam_run_outputs_native(
     recovery_root: Path,
     outputs: Mapping[str, Any],
 ) -> None:
-    """Archive beam_run output files to recovery_root with verify=True."""
+    """Archive beam step output files and directory artifacts to recovery_root."""
+    from pilates.runtime.run_output_archive import _snapshot_directory_artifact
+
     file_keys: list[str] = []
+    dir_keys: list[str] = []
     for key, artifact in outputs.items():
         if isinstance(artifact, (Artifact, ArtifactRecordLike)):
             if artifact.driver == "artifact_set":
@@ -444,93 +447,77 @@ def _archive_beam_run_outputs_native(
                 isinstance(artifact.meta, dict)
                 and artifact.meta.get("directory_artifact") is True
             ):
+                dir_keys.append(key)
                 continue
             file_keys.append(key)
 
     if isinstance(tracker, Tracker):
+        persisted_outputs = tracker.get_run_outputs(run_id)
         ws_mount = tracker.mounts.get("workspace")
         if ws_mount:
             ws_path = Path(ws_mount).resolve()
-            for key in file_keys:
-                artifact = outputs.get(key)
+            for key in [*file_keys, *dir_keys]:
+                artifact = persisted_outputs.get(key) or outputs.get(key)
                 if isinstance(artifact, Artifact):
                     tracker.set_artifact_recovery_roots(
                         artifact, [ws_path], append=True
                     )
+                    existing_artifact = outputs.get(key)
+                    if (
+                        isinstance(existing_artifact, Artifact)
+                        and isinstance(existing_artifact.meta, dict)
+                        and isinstance(artifact.meta, dict)
+                    ):
+                        existing_artifact.meta.update(artifact.meta)
+        resolved_recovery_root = recovery_root.resolve()
+        for key in dir_keys:
+            artifact = persisted_outputs.get(key) or outputs.get(key)
+            if isinstance(artifact, Artifact):
+                _snapshot_directory_artifact(
+                    tracker=tracker,
+                    artifact=artifact,
+                    recovery_root=resolved_recovery_root,
+                )
+                existing_artifact = outputs.get(key)
+                if (
+                    isinstance(existing_artifact, Artifact)
+                    and isinstance(existing_artifact.meta, dict)
+                    and isinstance(artifact.meta, dict)
+                ):
+                    existing_artifact.meta.update(artifact.meta)
 
-    report = archive_run_output_files(
-        run_id=run_id,
-        recovery_root=recovery_root,
-        tracker=tracker,
-        keys=file_keys if file_keys else None,
-        preserve_existing=True,
-        verify=True,
-        append=True,
-    )
-    if not report.complete:
-        failures = [
-            f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
-            for key, f in report.items()
-            if not (
-                f.metadata_committed
-                and f.verification_status in {"verified", "not_requested"}
-            )
-        ]
-        raise RuntimeError(
-            "Archiving beam_run outputs failed verification or copy: "
-            + "; ".join(failures)
+    if file_keys or not dir_keys:
+        report = archive_run_output_files(
+            run_id=run_id,
+            recovery_root=recovery_root,
+            tracker=tracker,
+            keys=file_keys if file_keys else None,
+            preserve_existing=True,
+            verify=True,
+            append=True,
         )
+        if not report.complete:
+            failures = [
+                f"{key}: copy={f.copy_status}, verify={f.verification_status}, msg={f.message}"
+                for key, f in report.items()
+                if not (
+                    f.metadata_committed
+                    and f.verification_status in {"verified", "not_requested"}
+                )
+            ]
+            raise RuntimeError(
+                "Archiving beam_run outputs failed verification or copy: "
+                + "; ".join(failures)
+            )
 
-
-def _interrupted_beam_postprocess_detected(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path],
-) -> bool:
-    """Detect whether a prior BEAM postprocess was interrupted."""
-    if state.sub_stage_progress == "beam_postprocess_in_progress":
-        return True
-    if (
-        archive_run_dir is not None
-        and (archive_run_dir / ".beam_postprocess_in_progress").exists()
-    ):
-        return True
-    beam_out = Path(workspace.get_beam_output_dir())
-    if (beam_out / ".beam_postprocess_in_progress").exists():
-        return True
-    return False
-
-
-def _mark_beam_postprocess_in_progress(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path] = None,
-) -> None:
-    state.set_sub_stage_progress("beam_postprocess_in_progress")
-    if archive_run_dir is not None:
-        archive_run_dir.mkdir(parents=True, exist_ok=True)
-        (archive_run_dir / ".beam_postprocess_in_progress").write_text("in_progress\n")
-    beam_out = Path(workspace.get_beam_output_dir())
-    beam_out.mkdir(parents=True, exist_ok=True)
-    (beam_out / ".beam_postprocess_in_progress").write_text("in_progress\n")
-
-
-def _clear_beam_postprocess_in_progress(
-    *,
-    state: WorkflowState,
-    workspace: Workspace,
-    archive_run_dir: Optional[Path] = None,
-) -> None:
-    state.set_sub_stage_progress(None)
-    if archive_run_dir is not None:
-        marker = archive_run_dir / ".beam_postprocess_in_progress"
-        if marker.exists():
-            marker.unlink()
-    marker = Path(workspace.get_beam_output_dir()) / ".beam_postprocess_in_progress"
-    if marker.exists():
-        marker.unlink()
+        for key, archived_file in report.items():
+            existing_artifact = outputs.get(key)
+            if (
+                isinstance(existing_artifact, Artifact)
+                and isinstance(existing_artifact.meta, dict)
+                and isinstance(archived_file.artifact.meta, dict)
+            ):
+                existing_artifact.meta.update(archived_file.artifact.meta)
 
 
 def _derive_beam_run_input_keys(
@@ -655,25 +642,6 @@ def _run_beam_steps(
     workspace = context.workspace
     archive_run_dir = _archive_run_dir_for_restart(state)
 
-    if _interrupted_beam_postprocess_detected(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
-    ):
-        raise RuntimeError(
-            "Interrupted BEAM postprocess detected; cannot safely restart "
-            "because postprocessing modifies workspace data in place (e.g. skims.zarr). "
-            "Refusing restart to prevent silent data corruption.\n\n"
-            "Operator Recovery Procedure:\n"
-            "1. Identify the uncorrupted input skims from prior step or iteration:\n"
-            "   - Iteration 0: restore skims.zarr from the ActivitySim output archive or initial seed.\n"
-            "   - Iteration > 0: restore skims.zarr from the previous iteration's archived artifact.\n"
-            "2. Overwrite the corrupted workspace skims.zarr with that clean copy.\n"
-            "3. Clear the in-progress marker file(s):\n"
-            "   - In scratch: <beam_output_dir>/.beam_postprocess_in_progress\n"
-            "   - In archive: <archive_run_dir>/.beam_postprocess_in_progress\n"
-            "4. Rerun PILATES from the traffic assignment stage.\n"
-            "For full instructions, see docs/run/restart_and_resume.md."
-        )
-
     _, preprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_preprocess,
@@ -744,10 +712,7 @@ def _run_beam_steps(
     )
     postprocess_inputs.require_complete()
 
-    _mark_beam_postprocess_in_progress(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
-    )
-    _, postprocess_outputs = execute_step(
+    postprocess_result, postprocess_outputs = execute_step(
         scenario=scenario,
         definition=beam_postprocess,
         settings=settings,
@@ -759,9 +724,18 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    _clear_beam_postprocess_in_progress(
-        state=state, workspace=workspace, archive_run_dir=archive_run_dir
-    )
+    if isinstance(postprocess_result, RunResult):
+        postprocess_recovery_root = (
+            base_archive
+            if base_archive.name == postprocess_result.run.id
+            else base_archive / postprocess_result.run.id
+        )
+        _archive_beam_run_outputs_native(
+            run_id=postprocess_result.run.id,
+            tracker=scenario.tracker,
+            recovery_root=postprocess_recovery_root,
+            outputs=postprocess_result.outputs,
+        )
 
     combined_outputs = step_output_handoff_mapping(
         postprocess_outputs, coupler=scenario.coupler

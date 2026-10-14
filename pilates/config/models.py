@@ -213,10 +213,10 @@ class RunConfig(BaseModel):
     consist_code_identity: Optional[
         Literal["repo_git", "callable_module", "callable_source"]
     ] = Field(
-        None,
+        "callable_module",
         description=(
             "Optional Consist cache code-identity mode override for step runs. "
-            "When omitted, Consist defaults to repo_git."
+            "Defaults to callable_module; when set to None, Consist falls back to repo_git."
         ),
     )
     consist_hashing_strategy: Literal["fast", "full"] = Field(

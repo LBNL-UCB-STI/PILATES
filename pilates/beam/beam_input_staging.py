@@ -482,7 +482,7 @@ def _write_vehicle_table(df: pd.DataFrame, path: str, *, file_format: str) -> No
     if file_format == "parquet":
         df.to_parquet(path, index=False)
         return
-    df.to_csv(path, compression="gzip", index=False)
+    df.to_csv(path, compression={"method": "gzip", "mtime": 0}, index=False)
 
 
 def _vehicle_file_format_from_path(path: str) -> str:
@@ -897,7 +897,11 @@ def copy_with_compression_asim_file_to_beam(
     if file_format == "parquet":
         df.to_parquet(beam_file_path, index=True)
     else:
-        df.to_csv(beam_file_path, compression="gzip", index=False)
+        df.to_csv(
+            beam_file_path,
+            compression={"method": "gzip", "mtime": 0},
+            index=False,
+        )
 
     return format_specific_output_records(
         file_stem=beam_file_name,
@@ -1016,7 +1020,11 @@ def merge_replanned_asim_files(
         if file_format == "parquet":
             df.to_parquet(path, index=True)
         else:
-            df.to_csv(path, index=False, compression="gzip")
+            df.to_csv(
+                path,
+                index=False,
+                compression={"method": "gzip", "mtime": 0},
+            )
 
         record_list.extend(
             format_specific_output_records_fn(

@@ -17,7 +17,6 @@ from pilates.beam.outputs import (
     requires_omx_skim_output,
 )
 import pilates.utils.zone_utils as zone_utils
-from pilates.utils.zone_utils import ensure_0_based_and_flag_zarr_skims
 
 try:
     import xarray as xr
@@ -29,6 +28,7 @@ from pilates.generic.postprocessor import GenericPostprocessor
 from pilates.generic.records import RecordStore, FileRecord
 from pilates.utils.coupler_helpers import artifact_to_existing_path, artifact_to_path
 from pilates.utils.beam import get_beam_omx_skims_name
+from pilates.workflows.state_helpers import resolve_forecast_year
 from pilates.workspace import Workspace
 from pilates.utils.settings_helper import get as get_setting
 
@@ -90,10 +90,13 @@ def _normalize_beam_partial_time_period_coords(
     return zone_utils.normalize_dimension_coords_for_zarr(partial_skims_ds)
 
 
-def _activitysim_skims_target_enabled(settings: PilatesConfig) -> bool:
-    run_cfg = getattr(settings, "run", None)
-    model_cfg = getattr(run_cfg, "models", None)
-    return getattr(model_cfg, "activity_demand", None) == "activitysim"
+def _activitysim_skims_target_enabled(settings: Any) -> bool:
+    if isinstance(settings, PilatesConfig):
+        return settings.run.models.activity_demand == "activitysim"
+    activity_demand = get_setting(settings, "run.models.activity_demand", None)
+    if activity_demand is not None:
+        return activity_demand == "activitysim"
+    return get_setting(settings, "activitysim", None) is not None
 
 
 def _format_missing_beam_skim_error(
@@ -2589,7 +2592,7 @@ def verify_skim_zone_order(
                 mapping_items = sorted(
                     f.mapping("TAZ").items(), key=lambda item: item[1]
                 )
-                skim_order = [item[0] for item in mapping_items]
+                skim_order = [str(item[0]) for item in mapping_items]
                 logger.info(f"Extracted {len(skim_order)} zone IDs from OMX mapping.")
             else:
                 raise ValueError("OMX file does not contain 'TAZ' mapping.")
@@ -2654,21 +2657,19 @@ def _merge_beam_skims_to_zarr(
     settings,
     workspace,
     override=None,
+    output_skims_path: Optional[str] = None,
 ) -> Optional[str]:
     """
-    Merges current BEAM OMX skims into the main Zarr skims file.
-    Handles TNC consolidation if enabled.
-    Records provenance for all skims lineage.
-    Creates zarr version snapshots for skim evolution tracking.
-
-    Parameters
-    ----------
-    state : WorkflowState, optional
-        Current workflow state (for year/iteration tracking)
-    run_id : str, optional
-        PILATES run ID (for zarr snapshot tracking)
+    Merges current BEAM OMX skims into a Zarr skims store in a single pass.
+    Reads from ``all_skims_path`` strictly read-only and writes the merged
+    result to ``output_skims_path`` (or ``all_skims_path`` when omitted).
     """
-    logger.info(f"Starting merge of current BEAM skims into Zarr at {all_skims_path}")
+    target_skims_path = (
+        output_skims_path if output_skims_path is not None else all_skims_path
+    )
+    logger.info(
+        f"Starting merge of current BEAM skims from {all_skims_path} into Zarr at {target_skims_path}"
+    )
 
     # Load canonical order for coordinate validation and correction
     canonical_zones_df = zone_utils.load_canonical_zones(settings, workspace)
@@ -2716,17 +2717,14 @@ def _merge_beam_skims_to_zarr(
         input_format = "omx"
         partialSkims = omx.open_file(current_skims_path, mode="r")
 
-    # Ensure the main skims.zarr is 0-based and flagged before opening for merge
+    # Open the input Zarr dataset strictly read-only and materialize in memory
     try:
-        ensure_0_based_and_flag_zarr_skims(all_skims_path, settings, workspace)
-    except Exception as e:
-        logger.error(f"Failed to ensure 0-based and flag main Zarr skims: {e}")
-        return all_skims_path
-
-    # Open the Zarr dataset in append mode to modify it in place
-    try:
-        skims_ds = xr.open_zarr(all_skims_path)
-        logger.info(f"Opened Zarr skims file: {all_skims_path}")
+        with xr.open_zarr(all_skims_path) as raw_skims_ds:
+            skims_ds = raw_skims_ds.load().copy(deep=True)
+        skims_ds, _ = zone_utils.normalize_0_based_and_flag_zarr_dataset(
+            skims_ds, settings, workspace
+        )
+        logger.info(f"Opened Zarr skims file (read-only): {all_skims_path}")
         logger.info(
             f"DEBUG: Initial skims_ds otaz coords: {skims_ds.coords['otaz'].values[:5]}...{skims_ds.coords['otaz'].values[-5:]}"
         )
@@ -2739,14 +2737,9 @@ def _merge_beam_skims_to_zarr(
                     "original_zone_ids"
                 ]
             else:
-                # Get from settings
-                canonical_zones_df = zone_utils.load_canonical_zones(
-                    settings, workspace
-                )
-                original_zone_ids = canonical_zones_df.index.tolist()
-                skims_ds.attrs["original_zone_ids"] = original_zone_ids
+                skims_ds.attrs["original_zone_ids"] = list(canonical_order)
     except Exception as e:
-        logger.error(f"Failed to open target Zarr skims file {all_skims_path}: {e}")
+        logger.error(f"Failed to open input Zarr skims file {all_skims_path}: {e}")
         if partial_skims_ds:
             partial_skims_ds.close()
         return None
@@ -3016,8 +3009,8 @@ def _merge_beam_skims_to_zarr(
     )  # Add setting
     copy_skims_for_unobserved_modes(mapping, skims_ds)
 
-    # Step 6: Save the updated Zarr dataset
-    logger.info(f"Started writing updated zarr skims to {all_skims_path}")
+    # Step 6: Save the updated Zarr dataset to target_skims_path in a single pass
+    logger.info(f"Started writing updated zarr skims to {target_skims_path}")
     try:
         # Defensively ensure coordinates are correct before saving, to counteract any
         # potential corruption or misalignment that may have occurred during the merge.
@@ -3038,12 +3031,20 @@ def _merge_beam_skims_to_zarr(
             dtaz_corrected = True
 
         skims_ds = zone_utils.normalize_dimension_coords_for_zarr(skims_ds)
+        for var_name in skims_ds.variables:
+            skims_ds[var_name].encoding = {}
 
-        skims_ds.to_zarr(all_skims_path, mode="a", consolidated=False, zarr_format=2)
+        target_parent = os.path.dirname(target_skims_path)
+        if target_parent:
+            os.makedirs(target_parent, exist_ok=True)
+        if output_skims_path is not None and os.path.exists(target_skims_path):
+            shutil.rmtree(target_skims_path)
+
+        skims_ds.to_zarr(target_skims_path, mode="w", consolidated=False, zarr_format=2)
 
         import zarr
 
-        zgroup = zarr.open_group(all_skims_path, mode="a")
+        zgroup = zarr.open_group(target_skims_path, mode="a")
         if otaz_corrected and "otaz" in zgroup:
             zgroup["otaz"][:] = expected_coords
         if dtaz_corrected and "dtaz" in zgroup:
@@ -3052,30 +3053,30 @@ def _merge_beam_skims_to_zarr(
         if "original_zone_ids" in skims_ds.attrs:
             zgroup.attrs["original_zone_ids"] = skims_ds.attrs["original_zone_ids"]
 
-        zarr.consolidate_metadata(all_skims_path)
+        zarr.consolidate_metadata(target_skims_path)
         logger.info("Completed writing zarr skims successfully.")
         merge_successful = (
             True  # Indicate merge/post-processing was attempted successfully
         )
     except Exception as e:
-        logger.error(f"FAILED to write updated zarr skims to {all_skims_path}: {e}")
+        logger.error(f"FAILED to write updated zarr skims to {target_skims_path}: {e}")
         raise
 
-        # Independent verification of the written Zarr file
+    # Independent verification of the written Zarr file
     try:
-        with xr.open_zarr(all_skims_path) as verified_ds:
+        with xr.open_zarr(target_skims_path) as verified_ds:
             logger.info(
-                f"DEBUG: VERIFICATION - Zarr file on disk ({all_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
+                f"DEBUG: VERIFICATION - Zarr file on disk ({target_skims_path}) otaz coords: {verified_ds.coords['otaz'].values[:5]}...{verified_ds.coords['otaz'].values[-5:]}"
             )
             if "time_period" in verified_ds.coords:
                 logger.debug(
                     "Post-write time_period coords for %s: %s",
-                    all_skims_path,
+                    target_skims_path,
                     list(verified_ds.coords["time_period"].values),
                 )
     except Exception as e:
         logger.error(
-            f"DEBUG: VERIFICATION FAILED - Could not open or verify {all_skims_path}: {e}"
+            f"DEBUG: VERIFICATION FAILED - Could not open or verify {target_skims_path}: {e}"
         )
 
     # Close the datasets
@@ -3090,7 +3091,7 @@ def _merge_beam_skims_to_zarr(
     # This ensures downstream logging captures the rewritten master skims even
     # if no new OMX skims were found.
     if merge_successful:
-        return all_skims_path
+        return target_skims_path
     logger.warning("No new OMX skims found, returning None.")
     return None
 
@@ -3481,241 +3482,29 @@ def validate_zone_alignment(zarr_path, land_use_df):
     return True
 
 
-def trim_inaccessible_ods_zarr(all_skims_path, settings):
-    """
-    Zero out inaccessible ODs in Zarr-format skims, similar to trim_inaccessible_ods for OMX.
-    Uses direct .data access for in-place modification.
-    """
-    logger.info("Starting trim of inaccessible ODs in Zarr skims.")
-    try:
-        skims = xr.open_zarr(all_skims_path)  # Open in append/write mode
-    except Exception as e:
-        logger.error(
-            f"Failed to open skims file {all_skims_path} for trimming inaccessible ODs: {e}"
+def beam_postprocess_zarr_skims_output_path(
+    workspace: Workspace,
+    state: Optional["WorkflowState"] = None,
+) -> str:
+    """Return the declared output Zarr skims path for BEAM postprocessing."""
+    year = resolve_forecast_year(state) if state is not None else None
+    iteration = state.iteration if state is not None else None
+    has_year = isinstance(year, int) and not isinstance(year, bool)
+    has_iter = isinstance(iteration, int) and not isinstance(iteration, bool)
+    if has_year and has_iter:
+        return os.path.join(
+            workspace.get_beam_output_dir(),
+            ".pilates-consist-outputs",
+            "beam_postprocess",
+            f"year-{year}-iteration-{iteration}",
+            "skims.zarr",
         )
-        return
-
-    try:
-        order = zone_order(
-            settings, get_setting(settings, "run.start_year", 2015)
-        )  # Use .get for start_year safety
-        periods = get_setting(settings, "shared.skims.periods")
-        transit_paths_settings = get_setting(
-            settings, "shared.skims.transit_paths", {}
-        )  # Use .get for safety
-    except Exception as e:
-        logger.error(f"Error reading settings for trimming: {e}. Skipping trim.")
-        skims.close()
-        return
-
-    if not transit_paths_settings:
-        logger.warning(
-            "No 'transit_paths' defined in settings for trimming inaccessible ODs. Skipping trim."
-        )
-        skims.close()
-        return
-
-    num_zones = len(order)
-
-    # Calculate total trips per OD pair across all non-RH transit/walk/bike modes for each period
-    # Initialize totalTrips as a 3D array [zones, zones, periods]
-    totalTrips = np.zeros((num_zones, num_zones, len(periods)), dtype=np.float32)
-
-    all_vars = list(skims.data_vars)
-
-    for var_name in all_vars:
-        parts = var_name.split("__")
-        if (
-            len(parts) == 2
-        ):  # Variable name is in PATH_MEASURE__PERIOD format (old OMX style, sometimes kept in Zarr)
-            measure_part, tp = parts
-            if tp in periods:
-                # Check if it's a TRIPS matrix for a non-RH mode
-                if "TRIPS" in measure_part and not measure_part.startswith("RH_"):
-                    try:
-                        tp_idx = periods.index(tp)
-                        if skims[var_name].ndim == 2 and skims[var_name].shape == (
-                            num_zones,
-                            num_zones,
-                        ):
-                            totalTrips[:, :, tp_idx] += np.nan_to_num(
-                                skims[var_name].data
-                            )
-                        else:
-                            logger.debug(
-                                f"Skipping '{var_name}' for total trips calculation due to unexpected shape {skims[var_name].shape}."
-                            )
-                    except ValueError:
-                        logger.warning(
-                            f"Period '{tp}' from key '{var_name}' not found in settings periods. Skipping."
-                        )
-                    except Exception as e:
-                        logger.error(
-                            f"Error reading '{var_name}' for total trips calculation: {e}"
-                        )
-
-        elif (
-            skims[var_name].ndim == 3
-        ):  # Variable name is in PATH_MEASURE format (new Zarr style)
-            # Check if it's a TRIPS matrix for a non-RH mode
-            if var_name.endswith("_TRIPS") and not var_name.startswith("RH_"):
-                try:
-                    # Assuming 3D shape is [zones, zones, periods]
-                    if skims[var_name].shape[:2] == (num_zones, num_zones) and skims[
-                        var_name
-                    ].shape[-1] >= len(periods):
-                        # Sum across all periods we care about (as defined by settings)
-                        for tp_idx in range(len(periods)):
-                            totalTrips[:, :, tp_idx] += np.nan_to_num(
-                                skims[var_name].data[:, :, tp_idx]
-                            )
-                    else:
-                        logger.debug(
-                            f"Skipping '{var_name}' for total trips calculation due to unexpected shape {skims[var_name].shape}."
-                        )
-                except Exception as e:
-                    logger.error(
-                        f"Error reading '{var_name}' for total trips calculation: {e}"
-                    )
-
-    # Calculate total trips BY ZONE (sum across rows and columns for each zone) for each period
-    completedAllTripsByOandD_3d = totalTrips.sum(axis=1) + totalTrips.sum(
-        axis=0
-    )  # Shape (zones, periods)
-
-    # Now, check transit modes for trimming
-    for path, metrics in transit_paths_settings.items():
-        trip_name_zarr = f"{path}_TRIPS"  # Zarr key format
-        fail_name_zarr = f"{path}_FAILURES"  # Zarr key format
-
-        trip_da = skims.get(trip_name_zarr)
-        fail_da = skims.get(fail_name_zarr)
-
-        if trip_da is None or fail_da is None:
-            logger.debug(
-                f"Skipping trim for {path}: missing {trip_name_zarr} or {fail_name_zarr} in skims_ds."
-            )
-            continue
-
-        # Get 3D completed/failed transit trips for this mode
-        try:
-            completedTransitTrips_3d = np.nan_to_num(
-                trip_da.data[:, :, : len(periods)]
-            )  # Slice to match settings periods
-            failedTransitTrips_3d = np.nan_to_num(
-                fail_da.data[:, :, : len(periods)]
-            )  # Slice to match settings periods
-            if completedTransitTrips_3d.shape[:2] != (
-                num_zones,
-                num_zones,
-            ) or completedTransitTrips_3d.shape[-1] != len(periods):
-                logger.warning(
-                    f"Shape mismatch for {trip_name_zarr} or {fail_name_zarr} ({completedTransitTrips_3d.shape}) vs expected ({num_zones}, {num_zones}, {len(periods)}). Skipping trim for {path}."
-                )
-                continue
-        except Exception as e:
-            logger.error(
-                f"Error reading trip data for {path} from Zarr: {e}. Skipping trim for this path."
-            )
-            continue
-
-        # Calculate completed and failed transit trips BY ZONE for each period
-        completedTransitTripsByOandD_3d = completedTransitTrips_3d.sum(
-            axis=1
-        ) + completedTransitTrips_3d.sum(axis=0)  # Shape (zones, periods)
-        failedTransitTripsByOandD_3d = failedTransitTrips_3d.sum(
-            axis=1
-        ) + failedTransitTrips_3d.sum(axis=0)  # Shape (zones, periods)
-
-        # Determine which zones to delete for each period
-        # Condition: (Total trips > 1000) & (Failed transit trips > 200) & (Completed transit trips == 0)
-        toDelete_3d = (
-            (completedAllTripsByOandD_3d > 1000)
-            & (failedTransitTripsByOandD_3d > 200)
-            & (completedTransitTripsByOandD_3d == 0)
-        )  # Shape (zones, periods)
-
-        # Apply trimming for each period where zones need deletion
-        for tpIdx, period in enumerate(periods):
-            zones_to_delete_tp = toDelete_3d[
-                :, tpIdx
-            ]  # Boolean array (zones,) for this period
-            num_zones_to_delete_tp = np.sum(zones_to_delete_tp)
-
-            if num_zones_to_delete_tp > 0:
-                logger.info(
-                    f"Trimming {path} service for {num_zones_to_delete_tp} zones in {period} because no completed transit trips were observed for these zones (conditions met)."
-                )
-
-                # Apply deletion mask to metrics for this path and period
-                for metric in metrics:
-                    name_zarr = f"{path}_{metric}"  # Zarr key format
-                    metric_da = skims.get(name_zarr)
-
-                    if metric_da is not None:
-                        try:
-                            # Ensure the DataArray has enough dimensions and size for the period
-                            if (
-                                metric_da.ndim == 3
-                                and metric_da.shape[-1] > tpIdx
-                                and metric_da.shape[:2] == (num_zones, num_zones)
-                            ):
-                                # Get the 2D slice for this period
-                                arr_slice = metric_da.data[:, :, tpIdx]
-                                # Apply the deletion mask. This sets values to 0 where the origin OR destination zone is in `zones_to_delete_tp`.
-                                arr_slice[
-                                    zones_to_delete_tp[:, None]
-                                    | zones_to_delete_tp[None, :]
-                                ] = 0.0
-                                # Update the data in the Zarr array
-                                metric_da.data[:, :, tpIdx] = arr_slice
-                                logger.debug(
-                                    f"Trimmed {name_zarr} for {period} for {num_zones_to_delete_tp} zones."
-                                )
-                            elif (
-                                metric_da.ndim == 2
-                                and len(periods) == 1
-                                and periods[0] == period
-                                and metric_da.shape == (num_zones, num_zones)
-                            ):
-                                # Handle 2D case (single period)
-                                arr_slice = metric_da.data[:, :]
-                                arr_slice[
-                                    zones_to_delete_tp[:, None]
-                                    | zones_to_delete_tp[None, :]
-                                ] = 0.0
-                                metric_da.data[:, :] = arr_slice
-                                logger.debug(
-                                    f"Trimmed {name_zarr} (2D) for {period} for {num_zones_to_delete_tp} zones."
-                                )
-                            else:
-                                logger.warning(
-                                    f"Skipping trim for metric {name_zarr} in {period} due to unexpected shape {metric_da.shape} or period mismatch."
-                                )
-                        except Exception as e:
-                            logger.error(
-                                f"Error applying trim mask for metric {name_zarr} in {period}: {e}. Skipping."
-                            )
-                    else:
-                        logger.debug(
-                            f"Skipping trim for metric {name_zarr} in {period}: variable not found in skims_ds."
-                        )
-
-    # Save the updated Zarr dataset after trimming
-    logger.info(
-        f"Started writing zarr skims after trimming inaccessible ODs to {all_skims_path}"
+    return os.path.join(
+        workspace.get_beam_output_dir(),
+        ".pilates-consist-outputs",
+        "beam_postprocess",
+        "skims.zarr",
     )
-    try:
-        skims.to_zarr(
-            all_skims_path, mode="w", consolidated=True, zarr_format=2
-        )  # Use mode='w' to overwrite
-        logger.info("Completed writing zarr skims after trimming successfully.")
-    except Exception as e:
-        logger.error(
-            f"FAILED to write zarr skims after trimming inaccessible ODs to {all_skims_path}: {e}"
-        )
-
-    skims.close()
 
 
 class BeamPostprocessor(GenericPostprocessor):
@@ -3732,7 +3521,7 @@ class BeamPostprocessor(GenericPostprocessor):
         """
         beam_output_dir = workspace.get_beam_output_dir()
         zarr_path = None
-        if getattr(settings, "activitysim", None) is not None:
+        if _activitysim_skims_target_enabled(settings):
             candidate = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
@@ -3765,8 +3554,8 @@ class BeamPostprocessor(GenericPostprocessor):
         """
         outputs: Dict[str, Any] = {}
         if _activitysim_skims_target_enabled(settings):
-            outputs["zarr_skims"] = os.path.join(
-                workspace.get_asim_output_dir(), "cache", "skims.zarr"
+            outputs["zarr_skims"] = beam_postprocess_zarr_skims_output_path(
+                workspace, state
             )
 
         if requires_omx_skim_output(settings):
@@ -3796,7 +3585,7 @@ class BeamPostprocessor(GenericPostprocessor):
         zarr_skims: Optional[Any] = None,
     ) -> RecordStore:
         """
-        Postprocesses the raw outputs from a BEAM run by merging skims into the main Zarr store.
+        Postprocesses the raw outputs from a BEAM run by merging skims into a new Zarr store.
         """
         logger.info("Running BEAM postprocessor...")
         settings = self.state.full_settings
@@ -3807,7 +3596,7 @@ class BeamPostprocessor(GenericPostprocessor):
         events_record = _select_last_events_parquet_record(
             raw_outputs, self.state.forecast_year, self.state.iteration
         )
-        if events_record is not None and getattr(events_record, "file_path", None):
+        if events_record is not None and events_record.file_path:
             events_path = events_record.file_path
             try:
                 written_paths, links_path = split_events_parquet_by_type(
@@ -3854,16 +3643,21 @@ class BeamPostprocessor(GenericPostprocessor):
                     "Failed to split events parquet for %s", events_path, exc_info=True
                 )
 
-        all_skims_path = artifact_to_existing_path(
+        input_skims_path = artifact_to_existing_path(
             zarr_skims,
             workspace=workspace,
         )
-        if all_skims_path is None and _activitysim_skims_target_enabled(settings):
+        if input_skims_path is None and _activitysim_skims_target_enabled(settings):
             candidate = os.path.join(
                 workspace.get_asim_output_dir(), "cache", "skims.zarr"
             )
             if os.path.exists(candidate):
-                all_skims_path = candidate
+                input_skims_path = candidate
+
+        output_skims_path = beam_postprocess_zarr_skims_output_path(
+            workspace, self.state
+        )
+        active_skims_path: Optional[str] = None
 
         zarr_skim_name = (
             f"{self.skim_format}_{self.state.forecast_year}_{self.state.iteration}"
@@ -3912,9 +3706,9 @@ class BeamPostprocessor(GenericPostprocessor):
                     )
                 )
 
-        elif all_skims_path is None or not os.path.exists(all_skims_path):
+        elif input_skims_path is None or not os.path.exists(input_skims_path):
             logger.warning(
-                f"Target Zarr skims file not found at {all_skims_path}. Cannot proceed with merging."
+                f"Input Zarr skims file not found at {input_skims_path}. Cannot proceed with merging."
             )
         else:
             skim_name = skim_name_found
@@ -3941,24 +3735,29 @@ class BeamPostprocessor(GenericPostprocessor):
 
                 logger.info(f"Processing {raw_od_skims_path} for iteration {it}")
 
-                # Call the main merging and post-processing logic for Zarr skims
+                source_skims_path = (
+                    input_skims_path
+                    if it == 0
+                    else (active_skims_path or output_skims_path)
+                )
                 updated_skims_path = _merge_beam_skims_to_zarr(
-                    all_skims_path=all_skims_path,
+                    all_skims_path=source_skims_path,
                     iteration_skims_path=raw_od_skims_path,
                     beam_output_dir=beam_output_dir,
                     settings=settings,
                     workspace=workspace,
                     override=raw_od_skims_path,
+                    output_skims_path=output_skims_path,
                 )
 
-                # The main output is the modified Zarr store.
                 if updated_skims_path:
                     merged_any = True
+                    active_skims_path = updated_skims_path
 
-            if merged_any:
+            if merged_any and active_skims_path is not None:
                 processed_records.append(
                     FileRecord(
-                        file_path=all_skims_path,
+                        file_path=active_skims_path,
                         year=self.state.current_year,
                         description="Zarr skims store updated with BEAM outputs.",
                         short_name="zarr_skims",
@@ -3969,7 +3768,7 @@ class BeamPostprocessor(GenericPostprocessor):
             logger.info(
                 "Writing skims to OMX file for UrbanSim, ATLAS, or other downstream models..."
             )
-            if all_skims_path is None or not os.path.exists(all_skims_path):
+            if active_skims_path is None or not os.path.exists(active_skims_path):
                 logger.error(
                     "Main Zarr skims file not available. Cannot write skims to OMX."
                 )
@@ -3977,7 +3776,7 @@ class BeamPostprocessor(GenericPostprocessor):
                 try:
                     # Exclude intermediate trip/failure tables from the final OMX
                     vars_to_exclude = []
-                    with xr.open_zarr(all_skims_path) as skims_ds:
+                    with xr.open_zarr(active_skims_path) as skims_ds:
                         for key in skims_ds.data_vars:
                             if (
                                 key.endswith("_TRIPS")
@@ -3987,7 +3786,7 @@ class BeamPostprocessor(GenericPostprocessor):
                                 vars_to_exclude.append(key)
 
                     final_omx_path = write_zarr_skim_as_omx_new(
-                        all_skims_path,
+                        active_skims_path,
                         settings,
                         get_beam_omx_skims_name(settings),
                         exclude_tables=vars_to_exclude,
