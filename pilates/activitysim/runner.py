@@ -537,7 +537,9 @@ class ActivitysimNumbaWarmup(GenericRunner):
 
         compile_output_dir = str(launch_context.compile_output_dir)
         runtime_cache_dir = str(launch_context.runtime_cache_dir)
-        runtime_cache_mode: Literal["ro", "rw"] = "ro" if skim_mode == "zarr" else "rw"
+        # ActivitySim unconditionally writes output/cache/.gitignore on startup,
+        # so runtime_cache_dir must be mounted read-write even when reading Zarr.
+        runtime_cache_mode: Literal["ro", "rw"] = "rw"
         os.makedirs(compile_output_dir, exist_ok=True)
         os.makedirs(os.path.join(compile_output_dir, "cache"), exist_ok=True)
         if skim_mode == "zarr":
@@ -1115,7 +1117,6 @@ class ActivitysimRunner(GenericRunner):
         )
         if configured_runtime_cache_dir and (
             os.path.abspath(configured_runtime_cache_dir) != default_runtime_cache_dir
-            or runtime_cache_mode == "ro"
         ):
             asim_docker_vols[os.path.abspath(configured_runtime_cache_dir)] = {
                 "bind": asim_remote_runtime_cache_folder,
@@ -1173,7 +1174,7 @@ class ActivitysimRunner(GenericRunner):
         asim_docker_vols = self.get_asim_docker_vols(
             settings,
             launch_context=launch_context,
-            runtime_cache_mode="ro" if skim_mode == "zarr" else "rw",
+            runtime_cache_mode="rw",
         )
 
         asim_docker_vols.update(

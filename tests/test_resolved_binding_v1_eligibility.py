@@ -362,11 +362,6 @@ def test_activitysim_run_uses_only_staged_model_inputs_after_resolution(
             "mode": "rw",
         },
     }
-    if selected_skim_role == ZARR_SKIMS:
-        expected_mounts[str(launch_context.runtime_cache_dir.resolve())] = {
-            "bind": f"{remote_root}/output/cache",
-            "mode": "ro",
-        }
     assert mounts == expected_mounts
     assert str(launch_context.compile_output_dir.resolve()) not in mounts
     captured_inputs = captured["inputs"]
