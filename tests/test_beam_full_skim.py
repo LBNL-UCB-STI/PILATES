@@ -881,3 +881,90 @@ class TestBeamFullSkimMode:
             "transit": True,
         }
         assert cfg.beam.full_skim.toll_file_path == "toll-prices.csv"
+
+    def test_native_beam_full_skim_runs_linkstats_and_r5_preflight(self, tmp_path):
+        """_native_beam_full_skim runs linkstats admission and R5 execution reference preflight before launching BeamFullSkimRunner."""
+        from pilates.beam.launch_config import BeamLaunchConfig
+        from pilates.workflows.steps.beam import _native_beam_full_skim
+
+        launch_root = tmp_path / "launch"
+        launch_root.mkdir()
+        primary_conf = launch_root / "sfbay.conf"
+        primary_conf.write_text("# beam conf\n", encoding="utf-8")
+        launch_config = BeamLaunchConfig(
+            root=launch_root,
+            primary_config=primary_conf,
+        )
+
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = str(
+            tmp_path / "beam" / "input"
+        )
+        state = SimpleNamespace(
+            run_info_path=str(tmp_path / "run_info.json"),
+            year=2019,
+            iteration=0,
+        )
+        settings = SimpleNamespace()
+        consist_ctx = SimpleNamespace(
+            run_metadata={"admission_reports": {"existing": True}}
+        )
+        fake_ref = SimpleNamespace(staged_path=tmp_path / "init.linkstats.parquet")
+
+        from contextlib import ExitStack
+
+        fn = getattr(_native_beam_full_skim, "__wrapped__", _native_beam_full_skim)
+        with ExitStack() as stack:
+            mock_validate_linkstats = stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.validate_staged_linkstats_reference",
+                    return_value=fake_ref,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.has_staged_linkstats_admission_policy",
+                    return_value=True,
+                )
+            )
+            mock_preflight_admission = stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.preflight_staged_linkstats_admission"
+                )
+            )
+            mock_validate_r5 = stack.enter_context(
+                patch("pilates.workflows.steps.beam.validate_r5_execution_reference")
+            )
+            mock_runner_cls = stack.enter_context(
+                patch("pilates.beam.runner.BeamFullSkimRunner")
+            )
+            stack.enter_context(
+                patch("pilates.workflows.steps.beam._validate_native_outputs")
+            )
+            mock_runner_cls.return_value.run.return_value = SimpleNamespace(
+                full_skims=None,
+                final_skims_omx=None,
+            )
+            fn(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                beam_launch_config=launch_config,
+                _consist_ctx=consist_ctx,
+            )
+
+        mock_validate_linkstats.assert_called_once_with(
+            settings=settings,
+            workspace=workspace,
+            run_context=consist_ctx,
+            config_root=launch_root,
+        )
+        mock_preflight_admission.assert_called_once()
+        assert mock_preflight_admission.call_args.kwargs["launch_reference"] is fake_ref
+        mock_validate_r5.assert_called_once_with(
+            settings=settings,
+            workspace=workspace,
+            run_context=consist_ctx,
+            config_root=launch_root,
+        )
+        mock_runner_cls.return_value.run.assert_called_once()

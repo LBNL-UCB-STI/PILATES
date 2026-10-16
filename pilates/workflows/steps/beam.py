@@ -1633,6 +1633,54 @@ def _native_beam_preprocess(
     del _consist_ctx
 
 
+def _preflight_beam_launch_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Workspace,
+    beam_launch_config: BeamLaunchConfig,
+    run_context: Any,
+) -> None:
+    launch_reference = validate_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
+    if launch_reference is None:
+        reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(settings=settings):
+        try:
+            active_run = cr.current_run()
+        except RuntimeError:
+            active_run = None
+        existing_admission_reports = (
+            active_run.meta.get("admission_reports", {})
+            if active_run is not None
+            else {}
+        )
+        if not isinstance(existing_admission_reports, Mapping):
+            existing_admission_reports = {}
+        try:
+            tracker = cr.current_tracker()
+        except RuntimeError:
+            tracker = None
+        preflight_staged_linkstats_admission(
+            tracker=tracker,
+            metadata_logger=run_context,
+            existing_admission_reports=existing_admission_reports,
+            settings=settings,
+            launch_reference=launch_reference,
+            report_dir=Path(state.run_info_path).parent,
+        )
+    validate_r5_execution_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
+
+
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
@@ -1665,36 +1713,12 @@ def _native_beam_run(
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
-    launch_reference = validate_staged_linkstats_reference(
+    _preflight_beam_launch_inputs(
         settings=settings,
+        state=state,
         workspace=workspace,
+        beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
-    )
-    if launch_reference is None:
-        reject_or_warn_for_missing_staged_linkstats(settings=settings)
-    elif has_staged_linkstats_admission_policy(settings=settings):
-        active_run = cr.current_run()
-        existing_admission_reports = (
-            active_run.meta.get("admission_reports", {})
-            if active_run is not None
-            else {}
-        )
-        if not isinstance(existing_admission_reports, Mapping):
-            existing_admission_reports = {}
-        preflight_staged_linkstats_admission(
-            tracker=cr.current_tracker(),
-            metadata_logger=_consist_ctx,
-            existing_admission_reports=existing_admission_reports,
-            settings=settings,
-            launch_reference=launch_reference,
-            report_dir=Path(state.run_info_path).parent,
-        )
-    validate_r5_execution_reference(
-        settings=settings,
-        workspace=workspace,
-        run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
     )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
@@ -1867,6 +1891,13 @@ def _native_beam_full_skim(
         raise FileNotFoundError(
             f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
+    _preflight_beam_launch_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=beam_launch_config,
+        run_context=_consist_ctx,
+    )
     prepared: dict[str, Path] = {}
     if plans_beam_in is not None:
         prepared[BEAM_PLANS_IN] = plans_beam_in
