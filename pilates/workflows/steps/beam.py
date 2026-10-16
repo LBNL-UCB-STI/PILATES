@@ -27,6 +27,7 @@ from consist import (
     define_step,
 )
 from consist.core.persistence import DatabaseManager
+from consist.models.artifact import get_tracker_ref
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -566,60 +567,73 @@ def _attach_skim_provenance_to_output_artifacts(
     skim_keys: Iterable[str],
 ) -> None:
     db_cache: dict[str, DatabaseManager] = {}
-    for key in skim_keys:
-        artifact = outputs.get(key)
-        if artifact is None:
-            continue
-        path = artifact_to_path(artifact, workspace=workspace)
-        if path is None:
-            continue
-        sidecar_path = skim_provenance_sidecar_path(path)
-        if not sidecar_path.is_file():
-            continue
-        try:
-            payload = read_skim_provenance_sidecar(sidecar_path)
-        except Exception as exc:
-            logger.debug(
-                "Unable to attach skim provenance sidecar from %s: %s",
-                sidecar_path,
-                exc,
-            )
-            continue
-        updates: dict[str, Any] = {"skim_provenance": payload}
-        identity = payload.get("identity")
-        if isinstance(identity, str) and identity:
-            updates["admission_file_identity"] = identity
-        if isinstance(artifact, Artifact):
-            current_meta = (
-                dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
-            )
-            needs_persist = any(
-                current_meta.get(meta_key) != meta_val
-                for meta_key, meta_val in updates.items()
-            )
-            current_meta.update(updates)
-            artifact.meta = current_meta
-            producer_info = payload.get("producer")
-            tracker_db_path = (
-                producer_info.get("tracker_db_path")
-                if isinstance(producer_info, Mapping)
-                else None
-            ) or payload.get("tracker_db_path")
-            if (
-                needs_persist
-                and isinstance(tracker_db_path, str)
-                and tracker_db_path
-                and Path(tracker_db_path).is_file()
-            ):
-                db = db_cache.get(tracker_db_path)
-                if db is None:
-                    db = DatabaseManager(tracker_db_path)
-                    db_cache[tracker_db_path] = db
-                db.update_artifact_meta(artifact, updates)
-        else:
-            meta = getattr(artifact, "meta", None)
-            if isinstance(meta, dict):
-                meta.update(updates)
+    try:
+        for key in skim_keys:
+            artifact = outputs.get(key)
+            if artifact is None:
+                continue
+            path = artifact_to_path(artifact, workspace=workspace)
+            if path is None:
+                continue
+            sidecar_path = skim_provenance_sidecar_path(path)
+            if not sidecar_path.is_file():
+                continue
+            try:
+                payload = read_skim_provenance_sidecar(sidecar_path)
+            except Exception as exc:
+                logger.debug(
+                    "Unable to attach skim provenance sidecar from %s: %s",
+                    sidecar_path,
+                    exc,
+                )
+                continue
+            updates: dict[str, Any] = {"skim_provenance": payload}
+            identity = payload.get("identity")
+            if isinstance(identity, str) and identity.startswith("sha256:file:"):
+                updates["admission_file_identity"] = identity
+            if isinstance(artifact, Artifact):
+                current_meta = (
+                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+                )
+                needs_persist = any(
+                    current_meta.get(meta_key) != meta_val
+                    for meta_key, meta_val in updates.items()
+                )
+                current_meta.update(updates)
+                artifact.meta = current_meta
+                if not needs_persist:
+                    continue
+                tracker_ref = get_tracker_ref(artifact)
+                owner_tracker = (
+                    tracker_ref() if tracker_ref is not None else None
+                ) or cr.current_tracker()
+                if owner_tracker is not None and owner_tracker.db is not None:
+                    owner_tracker.db.update_artifact_meta(artifact, updates)
+                    owner_tracker._run_artifacts_cache.clear()
+                    continue
+                producer_info = payload.get("producer")
+                tracker_db_path = (
+                    producer_info.get("tracker_db_path")
+                    if isinstance(producer_info, Mapping)
+                    else None
+                ) or payload.get("tracker_db_path")
+                if (
+                    isinstance(tracker_db_path, str)
+                    and tracker_db_path
+                    and Path(tracker_db_path).is_file()
+                ):
+                    db = db_cache.get(tracker_db_path)
+                    if db is None:
+                        db = DatabaseManager(tracker_db_path)
+                        db_cache[tracker_db_path] = db
+                    db.update_artifact_meta(artifact, updates)
+            else:
+                meta = getattr(artifact, "meta", None)
+                if isinstance(meta, dict):
+                    meta.update(updates)
+    finally:
+        for db in db_cache.values():
+            db.engine.dispose()
 
 
 def _emit_skim_provenance_sidecars(

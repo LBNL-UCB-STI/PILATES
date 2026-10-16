@@ -389,11 +389,24 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
             iteration=0,
             tracker_db_path=producer_db_path,
         )
-        _attach_skim_provenance_to_output_artifacts(
-            {"beam_full_skims": art},
-            workspace=MagicMock(full_path=tmp_path),
-            skim_keys=("beam_full_skims",),
-        )
+
+    # Simulate archive_completed_run populating _run_artifacts_cache before project_outputs
+    cached_before = producer_tracker.get_run_outputs("fast_beam_full_skim_run")
+    assert "admission_file_identity" not in (
+        cached_before["beam_full_skims"].meta or {}
+    )
+
+    _attach_skim_provenance_to_output_artifacts(
+        {"beam_full_skims": art},
+        workspace=MagicMock(full_path=tmp_path),
+        skim_keys=("beam_full_skims",),
+    )
+
+    # Verify _run_artifacts_cache was invalidated so subsequent queries see updated meta
+    cached_after = producer_tracker.get_run_outputs("fast_beam_full_skim_run")
+    assert str(
+        cached_after["beam_full_skims"].meta.get("admission_file_identity", "")
+    ).startswith("sha256:file:")
 
     consumer_db_path = tmp_path / "consumer_db" / "provenance.duckdb"
     consumer_db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -407,13 +420,13 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
     staged_skim.parent.mkdir(parents=True, exist_ok=True)
     staged_skim.write_bytes(producer_skim.read_bytes())
 
-    # Test with expected_direction alias and default direction="any"
+    # Test with expected_direction and run_id aliases and default direction="any"
     policy_alias = AdmissionPolicyConfig.model_validate(
         {
             "mode": "strict",
             "expectation": {
                 "kind": "prior_run",
-                "expected_run_id": "fast_beam_full_skim_run",
+                "run_id": "fast_beam_full_skim_run",
                 "artifact_key": "beam_full_skims",
                 "expected_direction": "output",
                 "source_tracker_db": str(producer_db_path),
@@ -421,8 +434,31 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
         }
     )
     assert isinstance(policy_alias.expectation, PriorRunExpectation)
+    assert policy_alias.expectation.expected_run_id == "fast_beam_full_skim_run"
+    assert policy_alias.expectation.run_id == "fast_beam_full_skim_run"
     assert policy_alias.expectation.direction == "output"
     assert policy_alias.expectation.expected_direction == "output"
+
+    with pytest.raises(ValueError, match="Conflicting 'run_id' and 'expected_run_id'"):
+        PriorRunExpectation.model_validate(
+            {
+                "run_id": "run_a",
+                "expected_run_id": "run_b",
+                "artifact_key": "beam_full_skims",
+            }
+        )
+
+    with pytest.raises(
+        ValueError, match="Conflicting 'direction' and 'expected_direction'"
+    ):
+        PriorRunExpectation.model_validate(
+            {
+                "expected_run_id": "run_a",
+                "artifact_key": "beam_full_skims",
+                "direction": "input",
+                "expected_direction": "output",
+            }
+        )
 
     policy_default = AdmissionPolicyConfig.model_validate(
         {
@@ -454,3 +490,41 @@ def test_activitysim_skim_admission_fast_hashing_producer_with_persisted_identit
     )
     assert report is not None
     assert report.outcome == "verified"
+
+
+def test_attach_skim_provenance_skips_admission_file_identity_for_zarr_directory(
+    tmp_path: Path,
+) -> None:
+    """Directory/Zarr sidecars record sha256:dir_manifest:... in skim_provenance without polluting admission_file_identity."""
+    from pilates.beam.skim_provenance import write_skim_provenance_sidecar
+    from pilates.workflows.steps.beam import (
+        _attach_skim_provenance_to_output_artifacts,
+    )
+
+    zarr_dir = tmp_path / "skims.zarr"
+    zarr_dir.mkdir(parents=True, exist_ok=True)
+    (zarr_dir / ".zgroup").write_text('{"zarr_format": 2}', encoding="utf-8")
+
+    write_skim_provenance_sidecar(
+        zarr_dir,
+        producer_step="beam_postprocess",
+        run_id="zarr_skim_run",
+        region="sfbay",
+        iteration=0,
+    )
+
+    dummy_artifact = MagicMock()
+    dummy_artifact.meta = {}
+    dummy_artifact.path = zarr_dir
+
+    _attach_skim_provenance_to_output_artifacts(
+        {"zarr_skims": dummy_artifact},
+        workspace=MagicMock(full_path=tmp_path),
+        skim_keys=("zarr_skims",),
+    )
+
+    assert "skim_provenance" in dummy_artifact.meta
+    assert str(dummy_artifact.meta["skim_provenance"]["identity"]).startswith(
+        "sha256:dir_manifest:"
+    )
+    assert "admission_file_identity" not in dummy_artifact.meta

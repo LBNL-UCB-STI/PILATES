@@ -14,7 +14,17 @@ import re
 import sys
 import warnings
 from dataclasses import dataclass, field as dataclass_field
-from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
+from typing import (
+    Annotated,
+    Any,
+    Dict,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Union,
+)
 from pydantic import (
     AliasChoices,
     BaseModel,
@@ -454,7 +464,9 @@ class PriorRunExpectation(BaseModel):
 
     kind: Literal["prior_run"] = "prior_run"
     expected_run_id: str = Field(
-        ..., description="Completed Consist run supplying the expected artifact."
+        ...,
+        validation_alias=AliasChoices("expected_run_id", "run_id"),
+        description="Completed Consist run supplying the expected artifact.",
     )
     artifact_key: str = Field(
         ..., description="Exact persisted artifact key on expected_run_id."
@@ -472,6 +484,31 @@ class PriorRunExpectation(BaseModel):
         None,
         description="Optional immutable historical bytes for hash re-verification.",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_conflicting_aliases(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping):
+            return data
+        payload = dict(data)
+        if "run_id" in payload and "expected_run_id" in payload:
+            if payload["run_id"] != payload["expected_run_id"]:
+                raise ValueError(
+                    "Conflicting 'run_id' and 'expected_run_id' values in PriorRunExpectation."
+                )
+            payload.pop("run_id")
+        if "direction" in payload and "expected_direction" in payload:
+            if payload["direction"] != payload["expected_direction"]:
+                raise ValueError(
+                    "Conflicting 'direction' and 'expected_direction' values in PriorRunExpectation."
+                )
+            payload.pop("expected_direction")
+        return payload
+
+    @property
+    def run_id(self) -> str:
+        """Alias matching Consist's PriorRunExpectation.run_id."""
+        return self.expected_run_id
 
     @property
     def expected_direction(self) -> Literal["input", "output", "any"]:
