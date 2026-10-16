@@ -556,13 +556,15 @@ def test_native_steps_declare_static_consist_metadata() -> None:
             "schema_outputs": {ZARR_SKIMS, "final_skims_omx"},
         },
         "beam_full_skim": {
-            "inputs": {
+            "inputs": set(),
+            "optional": {
                 BEAM_PLANS_IN,
                 BEAM_HOUSEHOLDS_IN,
                 BEAM_PERSONS_IN,
+                LINKSTATS_WARMSTART,
+                LINKSTATS,
             },
-            "optional": {LINKSTATS_WARMSTART},
-            "schema_outputs": {"beam_full_skims"},
+            "schema_outputs": {"beam_full_skims", "final_skims_omx"},
         },
     }
 

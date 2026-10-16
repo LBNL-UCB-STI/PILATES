@@ -551,13 +551,18 @@ class BeamFullSkimOutputs(StepOutputsBase):
     ----------
     full_skims : Path
         Full-skim output file produced by FullSkimsCreatorApp.
+    final_skims_omx : Optional[Path]
+        Final OMX skims output when full skims produces an OMX file.
     """
 
     primary_output_attr: ClassVar[str] = "full_skims"
     declared_outputs: ClassVar[Tuple[str, ...]] = (BEAM_FULL_SKIMS,)
+    optional_outputs: ClassVar[Tuple[str, ...]] = (FINAL_SKIMS_OMX,)
     required_path_fields: ClassVar[Tuple[str, ...]] = ("full_skims",)
+    optional_path_fields: ClassVar[Tuple[str, ...]] = ("final_skims_omx",)
 
     full_skims: Path
+    final_skims_omx: Optional[Path] = None
 
     def _iter_record_items(self) -> Iterable[Tuple[str, Path, str]]:
         yield (
@@ -565,6 +570,12 @@ class BeamFullSkimOutputs(StepOutputsBase):
             self.full_skims,
             "BEAM full-skim background skims output",
         )
+        if self.final_skims_omx is not None:
+            yield (
+                FINAL_SKIMS_OMX,
+                self.final_skims_omx,
+                "Final skims OMX from BEAM full-skim step",
+            )
 
     @classmethod
     def from_record_store(
@@ -574,4 +585,8 @@ class BeamFullSkimOutputs(StepOutputsBase):
         path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
         if path is None:
             raise ValueError("Missing beam_full_skims in record store.")
-        return cls(full_skims=Path(path))
+        final_omx = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
+        return cls(
+            full_skims=Path(path),
+            final_skims_omx=Path(final_omx) if final_omx is not None else None,
+        )

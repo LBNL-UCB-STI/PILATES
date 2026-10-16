@@ -41,6 +41,7 @@ _OPTIONAL_OUTPUT_KEYS_BY_STEP: Dict[str, Tuple[str, ...]] = {
     "activitysim_postprocess": ASIM_OPTIONAL_RUN_OUTPUT_KEYS,
     "beam_preprocess": (LINKSTATS_WARMSTART, BEAM_VEHICLES_IN),
     "beam_postprocess": (FINAL_SKIMS_OMX,),
+    "beam_full_skim": (FINAL_SKIMS_OMX,),
 }
 
 

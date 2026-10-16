@@ -535,10 +535,10 @@ def test_numba_warmup_writes_only_to_isolated_compile_output_root(
     assert attempted_production_mutations == []
 
 
-def test_numba_warmup_mounts_the_staged_zarr_as_its_read_only_compile_input(
+def test_numba_warmup_mounts_the_staged_zarr_as_its_compile_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Warmup uses the body Zarr rather than a private copied replacement."""
+    """Warmup mounts the staged Zarr in place (read-write for ActivitySim cache .gitignore) rather than copying."""
     workspace = _Workspace(tmp_path)
     launch_context = _launch_context(tmp_path)
     zarr_path = launch_context.runtime_zarr_path
@@ -583,5 +583,5 @@ def test_numba_warmup_mounts_the_staged_zarr_as_its_read_only_compile_input(
 
     compile_zarr = tmp_path / "activitysim" / "compile-output" / "cache" / "skims.zarr"
     assert (launch_context.compile_output_dir / "cache").is_dir()
-    assert captured_volumes[str(launch_context.runtime_cache_dir)]["mode"] == "ro"
+    assert captured_volumes[str(launch_context.runtime_cache_dir)]["mode"] == "rw"
     assert not compile_zarr.exists()

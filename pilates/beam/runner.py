@@ -26,6 +26,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_MUTABLE_DATA_DIR,
     BEAM_NETWORK_FINAL,
     BEAM_OUTPUT_DIR,
+    FINAL_SKIMS_OMX,
 )
 from pilates.workspace import Workspace
 from workflow_state import WorkflowState
@@ -802,7 +803,7 @@ class BeamFullSkimRunner(GenericRunner):
             else "activitySimOmx"
         )
         output_filename = _full_skim_output_filename(skims_kind)
-        return {
+        outputs: Dict[str, Any] = {
             BEAM_FULL_SKIMS: (
                 Path(workspace.get_beam_output_dir())
                 / settings.run.region
@@ -810,6 +811,16 @@ class BeamFullSkimRunner(GenericRunner):
                 / output_filename
             )
         }
+        if skims_kind in (None, "activitySimOmx"):
+            omx_name = (
+                get_setting(settings, "beam.skims_fname", "skims.omx") or "skims.omx"
+            )
+            outputs[FINAL_SKIMS_OMX] = (
+                Path(workspace.get_beam_mutable_data_dir())
+                / settings.run.region
+                / str(omx_name)
+            )
+        return outputs
 
     def __init__(
         self,
@@ -1015,16 +1026,24 @@ class BeamFullSkimRunner(GenericRunner):
                 f"BEAM full skim completed but output was not found: {host_output_file}"
             )
 
-        return RecordStore(
-            recordList=[
+        records = [
+            FileRecord(
+                file_path=host_output_file,
+                year=self.state.forecast_year,
+                short_name=BEAM_FULL_SKIMS,
+                description="BEAM full-skim background skims output",
+            )
+        ]
+        if skims_kind in (None, "activitySimOmx"):
+            records.append(
                 FileRecord(
                     file_path=host_output_file,
                     year=self.state.forecast_year,
-                    short_name=BEAM_FULL_SKIMS,
-                    description="BEAM full-skim background skims output",
+                    short_name=FINAL_SKIMS_OMX,
+                    description="Final skims OMX from BEAM full-skim step",
                 )
-            ]
-        )
+            )
+        return RecordStore(recordList=records)
 
     def run(
         self,
@@ -1056,9 +1075,14 @@ class BeamFullSkimRunner(GenericRunner):
             description_prefix="BEAM full-skim warm-start input",
         )
         output_store = self._run(input_store, workspace, launch_config)
-        full_skims_path = artifact_to_path(
-            output_store.to_mapping().get(BEAM_FULL_SKIMS), workspace
-        )
+        mapping = output_store.to_mapping()
+        full_skims_path = artifact_to_path(mapping.get(BEAM_FULL_SKIMS), workspace)
         if full_skims_path is None:
             raise ValueError("Missing beam_full_skims in run outputs.")
-        return BeamFullSkimOutputs(full_skims=Path(full_skims_path))
+        final_omx_path = artifact_to_path(mapping.get(FINAL_SKIMS_OMX), workspace)
+        return BeamFullSkimOutputs(
+            full_skims=Path(full_skims_path),
+            final_skims_omx=(
+                Path(final_omx_path) if final_omx_path is not None else None
+            ),
+        )

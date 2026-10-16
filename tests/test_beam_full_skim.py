@@ -555,3 +555,178 @@ class TestBeamFullSkimMode:
             store, "/tmp/beam_input", "/tmp/beam_output"
         )
         assert selected == "/app/input/test_region/warmstart.linkstats.csv.gz"
+
+    def test_expected_outputs_emits_final_skims_omx_for_activitysim_omx(self):
+        """BeamFullSkimRunner.expected_outputs includes final_skims_omx when skims_kind is activitySimOmx."""
+        from pilates.beam.runner import BeamFullSkimRunner
+        from pilates.config.models import FullSkimsCreatorConfig
+        from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS, FINAL_SKIMS_OMX
+
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
+        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        state = SimpleNamespace(current_year=2025, current_inner_iter=1)
+
+        omx_settings = self._make_settings(
+            full_skim_cfg=FullSkimsCreatorConfig(skims_kind="activitySimOmx")
+        )
+        omx_outputs = BeamFullSkimRunner.expected_outputs(
+            omx_settings, state, workspace
+        )
+        assert FINAL_SKIMS_OMX in omx_outputs
+        assert omx_outputs[FINAL_SKIMS_OMX] == Path(
+            "/tmp/beam_input/test_region/skims.omx"
+        )
+        assert omx_outputs[BEAM_FULL_SKIMS] == Path(
+            "/tmp/beam_output/test_region/year-2025-iteration-1/skims.omx"
+        )
+
+        csv_settings = self._make_settings(
+            full_skim_cfg=FullSkimsCreatorConfig(skims_kind="od")
+        )
+        csv_outputs = BeamFullSkimRunner.expected_outputs(
+            csv_settings, state, workspace
+        )
+        assert FINAL_SKIMS_OMX not in csv_outputs
+
+    def test_resolve_beam_full_skim_inputs_without_population_inputs(self):
+        """_resolve_beam_full_skim_inputs succeeds when population artifacts are absent from coupler."""
+        from pilates.workflows.steps.beam import _resolve_beam_full_skim_inputs
+
+        settings = self._make_settings()
+        state = SimpleNamespace(current_year=2020, current_inner_iter=0)
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = "/tmp/beam_input"
+        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        coupler = {}
+
+        resolved = _resolve_beam_full_skim_inputs(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+            coupler=coupler,
+        )
+        assert resolved.step_name == "beam_full_skim"
+        assert resolved.required_roles == ()
+        assert resolved.binding.inputs == {}
+
+    def test_prepare_r5_raw_rebuild_removes_tolls_dat_and_directory2_caches(
+        self, tmp_path
+    ):
+        """prepare_r5_raw_rebuild cleans tolls.dat in primary R5 dir and derived caches in directory2."""
+        from pilates.beam.launch_paths import prepare_r5_raw_rebuild
+        from pilates.config.models import FullSkimsCreatorConfig
+
+        region_dir = tmp_path / "beam" / "test_region"
+        r5_primary = region_dir / "r5-simple"
+        r5_secondary = region_dir / "r5-ferry"
+        r5_primary.mkdir(parents=True)
+        r5_secondary.mkdir(parents=True)
+        (r5_primary / "osm.pbf").write_bytes(b"osm-primary")
+        (r5_secondary / "osm.pbf").write_bytes(b"osm-secondary")
+
+        for cache_file in ("network.dat", "osm.mapdb", "osm.mapdb.p", "tolls.dat"):
+            (r5_primary / cache_file).write_bytes(b"derived")
+            (r5_secondary / cache_file).write_bytes(b"derived2")
+
+        conf_path = region_dir / "beam.conf"
+        conf_path.write_text(
+            "\n".join(
+                [
+                    "beam.routing.r5 {",
+                    '  directory = ${beam.inputDirectory}"/r5-simple"',
+                    '  directory2 = ""',
+                    '  osmMapdbFile = ${beam.routing.r5.directory}"/osm.mapdb"',
+                    "}",
+                    'matsim.modules.network.inputNetworkFile = ${beam.routing.r5.directory}"/physsim-network.xml"',
+                    'beam.physsim.inputNetworkFilePath = ${beam.routing.r5.directory}"/physsim-network.xml"',
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        workspace = MagicMock()
+        workspace.full_path = str(tmp_path)
+        workspace.get_beam_mutable_data_dir.return_value = str(tmp_path / "beam")
+        workspace.get_beam_output_dir.return_value = str(tmp_path / "beam_out")
+
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="test_region"),
+            beam=SimpleNamespace(
+                config="beam.conf",
+                local_input_folder=str(tmp_path / "beam_immutable"),
+                local_mutable_data_folder="beam",
+                container_input_dir="/app/input",
+                container_output_dir="/app/output",
+                full_skim=FullSkimsCreatorConfig(directory2="r5-ferry"),
+            ),
+        )
+
+        prepare_r5_raw_rebuild(
+            settings=settings,
+            workspace=workspace,
+        )
+
+        for cache_file in ("network.dat", "osm.mapdb", "osm.mapdb.p", "tolls.dat"):
+            assert not (r5_primary / cache_file).exists()
+            assert not (r5_secondary / cache_file).exists()
+        assert (r5_primary / "osm.pbf").exists()
+        assert (r5_secondary / "osm.pbf").exists()
+
+    def test_skim_provenance_sidecar_and_inspection(self, tmp_path):
+        """write_skim_provenance_sidecar and inspect_skim_artifact inspect OMX with and without root attrs."""
+        import h5py
+        import numpy as np
+        from pilates.beam.skim_provenance import (
+            SKIM_PROVENANCE_SCHEMA_VERSION,
+            inspect_skim_artifact,
+            read_skim_provenance_sidecar,
+            write_skim_provenance_sidecar,
+        )
+
+        omx_path = tmp_path / "skims.omx"
+        with h5py.File(omx_path, "w") as h5:
+            h5.attrs["OMX_VERSION"] = np.bytes_("0.2")
+            h5.attrs["SHAPE"] = np.array([3, 3], dtype=np.int32)
+            h5.attrs["data_model_version"] = "beam_omx_v1"
+            h5.attrs["skim_matrix_version"] = "asim_omx_v1"
+            h5.attrs["beam_run_id"] = "run-123"
+            h5.attrs["created_at"] = "2026-10-14T12:00:00Z"
+            data_grp = h5.create_group("data")
+            data_grp.create_dataset("SOV_TIME__AM", data=np.zeros((3, 3)))
+            lookup_grp = h5.create_group("lookup")
+            lookup_grp.create_dataset("zone_number", data=np.array([1, 2, 3]))
+
+        sidecar_path, written_payload = write_skim_provenance_sidecar(
+            omx_path,
+            producer_step="beam_full_skim",
+            run_id="run-123",
+            scenario="test_scenario",
+            region="test_region",
+            year=2020,
+            iteration=0,
+        )
+        assert sidecar_path.is_file()
+        payload = read_skim_provenance_sidecar(sidecar_path)
+        assert payload == written_payload
+        assert payload["schema_version"] == SKIM_PROVENANCE_SCHEMA_VERSION
+        assert payload["producer"]["step"] == "beam_full_skim"
+        assert payload["identity"].startswith("sha256:file:")
+        assert payload["skim_metadata"]["data_model_version"] == "beam_omx_v1"
+        assert payload["skim_metadata"]["skim_matrix_version"] == "asim_omx_v1"
+        assert payload["skim_metadata"]["beam_run_id"] == "run-123"
+        assert payload["skim_metadata"]["matrix_count"] == 1
+        assert payload["skim_metadata"]["zone_count"] == 3
+        assert payload["skim_metadata"]["time_periods"] == ["AM"]
+
+        # Legacy OMX without custom root provenance attributes still inspects cleanly
+        legacy_omx = tmp_path / "legacy_skims.omx"
+        with h5py.File(legacy_omx, "w") as h5:
+            data_grp = h5.create_group("data")
+            data_grp.create_dataset("DIST", data=np.ones((2, 2)))
+        legacy_info = inspect_skim_artifact(legacy_omx)
+        assert legacy_info["skim_format"] == "omx"
+        assert legacy_info["has_embedded_provenance"] is False
+        assert legacy_info["data_model_version"] is None
+        assert legacy_info["matrix_count"] == 1
+        assert legacy_info["zone_count"] == 2

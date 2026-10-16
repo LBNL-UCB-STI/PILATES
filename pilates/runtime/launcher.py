@@ -757,6 +757,40 @@ def _preflight_bootstrap_urbansim_datastore_admission(
     )
 
 
+def _preflight_bootstrap_activitysim_skims_admission(
+    prepared: PreparedRunContext,
+) -> None:
+    """Record and enforce initial ActivitySim skims admission on the outer scenario run."""
+    from pilates.activitysim.admission import (
+        has_initial_skims_admission_policy,
+        preflight_activitysim_initial_skims_admission,
+    )
+    from pilates.workflows.input_authority import requires_prior_beam_skim_handoff
+
+    if not has_initial_skims_admission_policy(prepared.settings):
+        return
+    if requires_prior_beam_skim_handoff(
+        settings=prepared.settings, state=prepared.state
+    ):
+        return
+
+    active_outer_run = cr.current_run()
+    existing_admission_reports: Mapping[str, object] | None = None
+    if active_outer_run is not None:
+        reports = active_outer_run.meta.get("admission_reports")
+        if isinstance(reports, Mapping):
+            existing_admission_reports = reports
+
+    preflight_activitysim_initial_skims_admission(
+        settings=prepared.settings,
+        metadata_logger=prepared.tracker,
+        tracker=prepared.tracker,
+        workspace_path=Path(prepared.workspace.full_path),
+        report_dir=Path(prepared.archive_run_dir),
+        existing_admission_reports=existing_admission_reports,
+    )
+
+
 def _emit_pre_scenario_failure(
     prepared: PreparedRunContext,
     error: Exception,
@@ -916,6 +950,7 @@ def main(
             )
             if bootstrap_result is not None:
                 _preflight_bootstrap_urbansim_datastore_admission(prepared)
+                _preflight_bootstrap_activitysim_skims_admission(prepared)
             bootstrap_runtime.seed_bootstrap_artifacts_to_coupler(
                 settings=settings,
                 state=state,

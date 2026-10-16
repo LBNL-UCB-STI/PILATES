@@ -2367,6 +2367,20 @@ class ActivitysimPreprocessor(GenericPreprocessor):
             if explicit_skims_path is None and not os.path.exists(
                 path_to_beam_skims_in_current_run_workspace
             ):
+                from pilates.activitysim.admission import (
+                    ActivitySimInputAdmissionError,
+                    has_initial_skims_admission_policy,
+                )
+
+                if has_initial_skims_admission_policy(settings):
+                    policy = settings.activitysim.admission.initial_skims
+                    if policy is not None and policy.mode == "strict":
+                        raise ActivitySimInputAdmissionError(
+                            "ActivitySim initial skims admission policy is strict, "
+                            "but no staged skims exist in workspace and silent fallback "
+                            "to production skims is prohibited: "
+                            f"{path_to_beam_skims_in_current_run_workspace}"
+                        )
                 logger.info(
                     "[ActivitysimPreprocessor] BEAM skims not found in current workspace. Copying from production."
                 )

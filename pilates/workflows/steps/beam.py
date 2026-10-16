@@ -41,6 +41,11 @@ from pilates.beam.admission import (
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
+from pilates.beam.skim_provenance import (
+    read_skim_provenance_sidecar,
+    skim_provenance_sidecar_path,
+    write_skim_provenance_sidecar,
+)
 from pilates.config.models import PilatesConfig
 from pilates.utils.coupler_helpers import (
     artifact_to_existing_path,
@@ -58,6 +63,7 @@ from pilates.workflows.artifact_keys import (
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
+    FINAL_SKIMS_OMX,
     LINKSTATS,
     LINKSTATS_WARMSTART,
     ZARR_SKIMS,
@@ -551,6 +557,110 @@ def _project_beam_run_outputs(
     return projected
 
 
+def _attach_skim_provenance_to_output_artifacts(
+    outputs: Mapping[str, Any],
+    *,
+    workspace: Any,
+    skim_keys: Iterable[str],
+) -> None:
+    for key in skim_keys:
+        artifact = outputs.get(key)
+        if artifact is None:
+            continue
+        path = artifact_to_path(artifact, workspace=workspace)
+        if path is None:
+            continue
+        sidecar_path = skim_provenance_sidecar_path(path)
+        if not sidecar_path.is_file():
+            continue
+        try:
+            payload = read_skim_provenance_sidecar(sidecar_path)
+        except Exception as exc:
+            logger.debug(
+                "Unable to attach skim provenance sidecar from %s: %s",
+                sidecar_path,
+                exc,
+            )
+            continue
+        meta = getattr(artifact, "meta", None)
+        if isinstance(meta, dict):
+            meta["skim_provenance"] = payload
+            if payload.get("identity"):
+                meta["admission_file_identity"] = payload["identity"]
+
+
+def _emit_skim_provenance_sidecars(
+    *,
+    step_name: str,
+    declared_outputs: Mapping[str, Path],
+    source_paths: Mapping[str, Path],
+    settings: Any,
+    state: Any,
+    context: Any,
+    skim_keys: Iterable[str],
+) -> None:
+    try:
+        active_run = cr.current_run()
+    except RuntimeError:
+        active_run = None
+    try:
+        tracker = cr.current_tracker()
+    except RuntimeError:
+        tracker = None
+    run_id = active_run.id if active_run is not None else None
+    tracker_db_path = tracker.db_path if tracker is not None else None
+    run_cfg = getattr(settings, "run", None)
+    scenario_name = getattr(run_cfg, "scenario", None)
+    region_name = getattr(run_cfg, "region", None)
+    year = resolve_forecast_year(state)
+    iteration = getattr(state, "iteration", getattr(state, "current_inner_iter", None))
+
+    provenance_by_key: dict[str, dict[str, Any]] = {}
+    for key in skim_keys:
+        declared_path = declared_outputs.get(key)
+        source_path = source_paths.get(key)
+        target_path = (
+            Path(declared_path)
+            if declared_path is not None and Path(declared_path).exists()
+            else (
+                Path(source_path)
+                if source_path is not None and Path(source_path).exists()
+                else None
+            )
+        )
+        if target_path is None:
+            continue
+        try:
+            sidecar_path, payload = write_skim_provenance_sidecar(
+                target_path,
+                producer_step=step_name,
+                run_id=run_id,
+                scenario=scenario_name,
+                region=region_name,
+                year=int(year) if year is not None else None,
+                iteration=int(iteration) if iteration is not None else None,
+                tracker_db_path=tracker_db_path,
+            )
+            provenance_by_key[key] = payload
+            if (
+                source_path is not None
+                and Path(source_path).exists()
+                and Path(source_path).resolve() != target_path.resolve()
+            ):
+                source_sidecar = skim_provenance_sidecar_path(source_path)
+                source_sidecar.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(sidecar_path, source_sidecar)
+        except Exception as exc:
+            logger.warning(
+                "Failed to emit skim provenance sidecar for %s (%s): %s",
+                key,
+                target_path,
+                exc,
+            )
+    if provenance_by_key and context is not None and hasattr(context, "log_meta"):
+        context.log_meta(skim_provenance=provenance_by_key)
+
+
 def _project_beam_postprocess_outputs(
     outputs: Mapping[str, Any],
     *,
@@ -586,6 +696,11 @@ def _project_beam_postprocess_outputs(
         state=state,
         workspace=workspace,
         resolved_inputs=resolved_inputs,
+    )
+    _attach_skim_provenance_to_output_artifacts(
+        outputs,
+        workspace=workspace,
+        skim_keys=(ZARR_SKIMS, FINAL_SKIMS_OMX),
     )
     projected = BeamPostprocessOutputs(
         zarr_skims=(
@@ -653,8 +768,14 @@ def _project_beam_full_skim_outputs(
     workspace: Any,
     resolved_inputs: ResolvedStepInputs,
 ) -> BeamFullSkimOutputs:
+    del resolved_inputs
     declared_outputs = _beam_full_skim_native_output_paths(
         settings=settings, state=state, workspace=workspace
+    )
+    _attach_skim_provenance_to_output_artifacts(
+        outputs,
+        workspace=workspace,
+        skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
     )
     projected = BeamFullSkimOutputs(
         full_skims=_path_from_output(
@@ -663,7 +784,18 @@ def _project_beam_full_skim_outputs(
             key="beam_full_skims",
             declared_outputs=declared_outputs,
             workspace=workspace,
-        )
+        ),
+        final_skims_omx=(
+            _path_from_output(
+                outputs=outputs,
+                step_name="beam_full_skim",
+                key=FINAL_SKIMS_OMX,
+                declared_outputs=declared_outputs,
+                workspace=workspace,
+            )
+            if FINAL_SKIMS_OMX in outputs and FINAL_SKIMS_OMX in declared_outputs
+            else None
+        ),
     )
     _validate_native_outputs(
         projected,
@@ -1257,16 +1389,19 @@ def _resolve_beam_full_skim_inputs(
     coupler: Any,
     launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
+    del settings, state, launch_config
     return _resolved_beam_inputs(
         step_name="beam_full_skim",
         coupler=coupler,
         workspace=workspace,
-        required_roles=(
+        required_roles=(),
+        optional_roles=(
             BEAM_PLANS_IN,
             BEAM_HOUSEHOLDS_IN,
             BEAM_PERSONS_IN,
+            LINKSTATS_WARMSTART,
+            LINKSTATS,
         ),
-        optional_roles=(LINKSTATS_WARMSTART,),
     )
 
 
@@ -1583,6 +1718,15 @@ def _native_beam_postprocess(
         source_paths=produced_sources,
         declared_outputs=declared_outputs,
     )
+    _emit_skim_provenance_sidecars(
+        step_name="beam_postprocess",
+        declared_outputs=declared_outputs,
+        source_paths=produced_sources,
+        settings=settings,
+        state=state,
+        context=_consist_ctx,
+        skim_keys=(ZARR_SKIMS, FINAL_SKIMS_OMX),
+    )
     for key, path in produced_sources.items():
         if key == ZARR_SKIMS:
             continue
@@ -1593,13 +1737,15 @@ def _native_beam_postprocess(
 @define_step(
     model="beam_full_skim",
     name_template="beam_full_skim__y{year}__i{iteration}__phase_{phase}",
-    inputs={
-        BEAM_PLANS_IN: None,
-        BEAM_HOUSEHOLDS_IN: None,
-        BEAM_PERSONS_IN: None,
-    },
-    optional_input_keys=(LINKSTATS_WARMSTART,),
-    schema_outputs=["beam_full_skims"],
+    inputs={},
+    optional_input_keys=(
+        BEAM_PLANS_IN,
+        BEAM_HOUSEHOLDS_IN,
+        BEAM_PERSONS_IN,
+        LINKSTATS_WARMSTART,
+        LINKSTATS,
+    ),
+    schema_outputs=[BEAM_FULL_SKIMS, FINAL_SKIMS_OMX],
     output_paths=_native_contract_output_paths(_beam_full_skim_native_output_paths),
     input_binding="paths",
     **consist_step_meta(
@@ -1607,10 +1753,11 @@ def _native_beam_postprocess(
     ),
 )
 def _native_beam_full_skim(
-    plans_beam_in: Path,
-    households_beam_in: Path,
-    persons_beam_in: Path,
+    plans_beam_in: Path | None = None,
+    households_beam_in: Path | None = None,
+    persons_beam_in: Path | None = None,
     linkstats_warmstart: Path | None = None,
+    linkstats: Path | None = None,
     *,
     settings: Any,
     state: Any,
@@ -1622,13 +1769,17 @@ def _native_beam_full_skim(
         raise FileNotFoundError(
             f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
-    prepared = {
-        BEAM_PLANS_IN: plans_beam_in,
-        BEAM_HOUSEHOLDS_IN: households_beam_in,
-        BEAM_PERSONS_IN: persons_beam_in,
-    }
+    prepared: dict[str, Path] = {}
+    if plans_beam_in is not None:
+        prepared[BEAM_PLANS_IN] = plans_beam_in
+    if households_beam_in is not None:
+        prepared[BEAM_HOUSEHOLDS_IN] = households_beam_in
+    if persons_beam_in is not None:
+        prepared[BEAM_PERSONS_IN] = persons_beam_in
     if linkstats_warmstart is not None:
         prepared[LINKSTATS_WARMSTART] = linkstats_warmstart
+    elif linkstats is not None:
+        prepared[LINKSTATS_WARMSTART] = linkstats
     from pilates.beam.runner import BeamFullSkimRunner
 
     produced = BeamFullSkimRunner("beam_full_skim", state).run(
@@ -1650,13 +1801,26 @@ def _native_beam_full_skim(
     full_skims_path = produced.full_skims
     if full_skims_path:
         path_obj = Path(full_skims_path)
+        declared_outputs = _beam_full_skim_native_output_paths(
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+        source_paths: dict[str, Path] = {BEAM_FULL_SKIMS: path_obj}
+        if produced.final_skims_omx is not None:
+            source_paths[FINAL_SKIMS_OMX] = Path(produced.final_skims_omx)
         _materialize_native_outputs(
-            source_paths={BEAM_FULL_SKIMS: path_obj},
-            declared_outputs=_beam_full_skim_native_output_paths(
-                settings=settings,
-                state=state,
-                workspace=workspace,
-            ),
+            source_paths=source_paths,
+            declared_outputs=declared_outputs,
+        )
+        _emit_skim_provenance_sidecars(
+            step_name="beam_full_skim",
+            declared_outputs=declared_outputs,
+            source_paths=source_paths,
+            settings=settings,
+            state=state,
+            context=_consist_ctx,
+            skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
         if path_obj.name.endswith(".csv.gz"):
             suffix = ".csv.gz"
@@ -1678,6 +1842,12 @@ def _native_beam_full_skim(
         elif path_obj.resolve() != dest.resolve():
             shutil.copy2(path_obj, dest)
         enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
+        if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
+            enqueue_archive_copy(
+                key=FINAL_SKIMS_OMX,
+                path=declared_outputs[FINAL_SKIMS_OMX],
+                workspace=workspace,
+            )
     del _consist_ctx
 
 

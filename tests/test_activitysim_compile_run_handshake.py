@@ -147,10 +147,7 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
                 "cache", encoding="utf-8"
             )
             assert str(launch_context.runtime_cache_dir) in volumes
-            expected_mode = "ro" if selected_mode == "zarr" else "rw"
-            assert (
-                volumes[str(launch_context.runtime_cache_dir)]["mode"] == expected_mode
-            )
+            assert volumes[str(launch_context.runtime_cache_dir)]["mode"] == "rw"
             if selected_mode == "zarr":
                 assert (runtime_zarr / ".zgroup").read_bytes() == selected_zarr_bytes
             else:
@@ -159,12 +156,10 @@ def test_activitysim_prepare_body_handshake_preserves_selected_skim_semantics(
 
         assert model_name == "activitysim"
         calls.append("body")
+        assert str(launch_context.runtime_cache_dir) not in volumes
         if selected_mode == "zarr" or preparation_required:
-            assert str(launch_context.runtime_cache_dir) in volumes
-            assert volumes[str(launch_context.runtime_cache_dir)]["mode"] == "ro"
             assert runtime_zarr.exists()
         else:
-            assert str(launch_context.runtime_cache_dir) not in volumes
             assert not runtime_zarr.exists()
             _write_generated_zarr(runtime_zarr)
         return True
@@ -475,7 +470,7 @@ def test_numba_warmup_forwards_only_nondefault_mount_modes_to_consist(
     volume_modes = called["volume_modes"]
     assert volumes[str(selected_zarr.parent)].endswith("/output/cache")
     assert volumes[str(asim_compile_output_dir(workspace))].endswith("/output")
-    assert volume_modes[str(selected_zarr.parent)] == "ro"
+    assert str(selected_zarr.parent) not in volume_modes
     assert all(mode == "ro" for mode in volume_modes.values())
     assert str(asim_compile_output_dir(workspace)) not in volume_modes
     command = called["command"]
