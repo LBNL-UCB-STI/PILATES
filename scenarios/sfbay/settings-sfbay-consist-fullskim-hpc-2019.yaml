@@ -277,7 +277,7 @@ beam:
   config: scenarios/sfbay-pilates-base-calibrated.conf
   sample: 0.1
   replanning_portion: 0.4
-  memory: 180g
+  memory: 150g
   local_input_folder: pilates/beam/production/
   local_mutable_data_folder: beam/input/
   local_output_folder: beam/beam_output/
