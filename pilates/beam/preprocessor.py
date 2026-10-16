@@ -183,6 +183,21 @@ def _prepare_beam_zone_shapefile(
                 canonical_zones_gdf.columns.tolist(),
             )
 
+        local_crs = settings.shared.geography.local_crs
+        if (
+            isinstance(local_crs, str)
+            and local_crs.strip()
+            and canonical_zones_gdf.crs is not None
+        ):
+            target_crs = local_crs.strip()
+            if str(canonical_zones_gdf.crs).lower() != target_crs.lower():
+                logger.info(
+                    "Reprojecting BEAM canonical zones from %s to local_crs '%s'.",
+                    canonical_zones_gdf.crs,
+                    target_crs,
+                )
+                canonical_zones_gdf = canonical_zones_gdf.to_crs(target_crs)
+
         canonical_zones_gdf.to_file(output_shapefile_path, driver="GeoJSON")
 
         logger.info("--- BEAM Zone Shapefile Preparation Complete ---")
