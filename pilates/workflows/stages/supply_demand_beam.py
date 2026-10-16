@@ -793,13 +793,6 @@ def _run_beam_full_skim_step(
     return result
 
 
-def _has_beam_population_inputs_in_coupler(coupler: Any) -> bool:
-    return all(
-        coupler_storage_value(coupler, key) is not None
-        for key in (BEAM_PLANS_IN, BEAM_HOUSEHOLDS_IN, BEAM_PERSONS_IN)
-    )
-
-
 def _standalone_full_skim_preprocess_outputs(
     *,
     scenario: ScenarioWithCoupler,
@@ -809,18 +802,12 @@ def _standalone_full_skim_preprocess_outputs(
     from pilates.beam.outputs import BeamPreprocessOutputs
 
     prepared: Dict[str, Path] = {}
-    for key in (
-        BEAM_PLANS_IN,
-        BEAM_HOUSEHOLDS_IN,
-        BEAM_PERSONS_IN,
-        LINKSTATS_WARMSTART,
-    ):
-        existing = artifact_to_existing_path(
-            coupler_storage_value(scenario.coupler, key),
-            workspace=workspace,
-        )
-        if existing is not None:
-            prepared[key] = Path(existing)
+    existing_warmstart = artifact_to_existing_path(
+        coupler_storage_value(scenario.coupler, LINKSTATS_WARMSTART),
+        workspace=workspace,
+    )
+    if existing_warmstart is not None:
+        prepared[LINKSTATS_WARMSTART] = Path(existing_warmstart)
     if LINKSTATS_WARMSTART not in prepared:
         existing_linkstats = artifact_to_existing_path(
             coupler_storage_value(scenario.coupler, LINKSTATS),
@@ -894,21 +881,11 @@ def _run_traffic_assignment_phase(
 
     schedule = _full_skim_run_schedule(settings)
     if schedule == "standalone":
-        if _has_beam_population_inputs_in_coupler(scenario.coupler):
-            preprocess_outputs = _run_beam_preprocess_step(
-                scenario=scenario,
-                settings=settings,
-                state=state,
-                workspace=workspace,
-                year=inputs.year,
-                iteration=inputs.iteration,
-            )
-        else:
-            preprocess_outputs = _standalone_full_skim_preprocess_outputs(
-                scenario=scenario,
-                workspace=workspace,
-                settings=settings,
-            )
+        preprocess_outputs = _standalone_full_skim_preprocess_outputs(
+            scenario=scenario,
+            workspace=workspace,
+            settings=settings,
+        )
         launch_config = _compile_beam_launch_config(
             scenario=scenario,
             settings=settings,

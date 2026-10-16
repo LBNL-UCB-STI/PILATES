@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 from pathlib import Path
 import shutil
 from typing import Any, Mapping
@@ -31,6 +32,37 @@ from pilates.workflows.artifact_keys import (
 
 _BEAM_CONTAINER_OUTPUT_DIR = "/app/output"
 logger = logging.getLogger(__name__)
+
+
+def _link_or_copy_static_file(source: str | Path, dest: str | Path) -> str:
+    """Link static input files into the staged launch tree; copy mutable configs.
+
+    Files with extension ``.conf`` (case-insensitive) are copied to ensure that
+    any in-place modifications to HOCON configuration files never mutate the
+    underlying source repository or shared input tree. All other static files are
+    hardlinked where possible. If cross-device linking fails (e.g. ``EXDEV``
+    across filesystems), it falls back directly to copying rather than symlinking,
+    preventing broken container bind mounts and root-escape validation errors.
+    """
+
+    src = Path(source)
+    dst = Path(dest)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.unlink(missing_ok=True)
+
+    if src.suffix.lower() == ".conf":
+        shutil.copy2(src, dst)
+        return "copy"
+
+    try:
+        os.link(src, dst)
+        return "hardlink"
+    except OSError:
+        pass
+
+    dst.unlink(missing_ok=True)
+    shutil.copy2(src, dst)
+    return "copy"
 
 
 _ARTIFACT_FORMAT_POLICY_KEYS = {
@@ -158,13 +190,38 @@ def materialize_beam_launch_config(
         source_root=source_root,
         identity=identity,
     )
-    canonical_config = adapter.materialize(
-        list(source_roots),
-        BeamConfigOverrides(values=materialized_values),
-        output_dir=output_dir,
-        identity=identity,
-        strict=not allow_missing_override_keys,
-    )
+    orig_copytree = shutil.copytree
+
+    def _hardlink_copytree(
+        src: Any,
+        dst: Any,
+        symlinks: bool = False,
+        ignore: Any = None,
+        copy_function: Any = _link_or_copy_static_file,
+        ignore_dangling_symlinks: bool = False,
+        dirs_exist_ok: bool = True,
+    ) -> Any:
+        return orig_copytree(
+            src,
+            dst,
+            symlinks=symlinks,
+            ignore=ignore,
+            copy_function=_link_or_copy_static_file,
+            ignore_dangling_symlinks=ignore_dangling_symlinks,
+            dirs_exist_ok=dirs_exist_ok,
+        )
+
+    try:
+        shutil.copytree = _hardlink_copytree
+        canonical_config = adapter.materialize(
+            list(source_roots),
+            BeamConfigOverrides(values=materialized_values),
+            output_dir=output_dir,
+            identity=identity,
+            strict=not allow_missing_override_keys,
+        )
+    finally:
+        shutil.copytree = orig_copytree
 
     derived_primary_config = derived_root / settings.beam.config
     if canonical_config.primary_config != derived_primary_config:
@@ -180,7 +237,15 @@ def materialize_beam_launch_config(
             )
         destination = derived_root / staged_input.destination
         destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
         shutil.copy2(source, destination)
+        source_sidecar = Path(f"{source}.provenance.json")
+        if not source_sidecar.is_file():
+            source_sidecar = Path(f"{staged_input.source}.provenance.json")
+        if source_sidecar.is_file():
+            dest_sidecar = Path(f"{destination}.provenance.json")
+            dest_sidecar.unlink(missing_ok=True)
+            shutil.copy2(source_sidecar, dest_sidecar)
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 

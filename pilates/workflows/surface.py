@@ -5,9 +5,6 @@ from enum import Enum
 from typing import Any, Dict, FrozenSet, Mapping, Optional, Sequence, Tuple
 
 from pilates.activitysim.preprocessor import required_asim_config_dirs
-from pilates.workflows.artifact_keys import (
-    ZARR_SKIMS,
-)
 from pilates.workflows.catalog import (
     schema_step_specs,
     workflow_step_contracts_by_name,
@@ -21,7 +18,6 @@ from pilates.workflows._profile import (
 from pilates.workflows.runtime_overlays import (
     resolve_runtime_input_output_overrides,
     resolve_runtime_output_overrides,
-    resolve_runtime_role_policy_overrides,
 )
 
 
@@ -54,20 +50,6 @@ def _enabled_schema_step_names_from_profile(
 
 
 @dataclass(frozen=True)
-class RestartFrontierContract:
-    """Effective restart frontier for the enabled run shape.
-
-    The frontier answers a narrow question for restart/bootstrap code: if we
-    are resuming into a specific stage, which artifacts must already exist so
-    replay can safely continue without re-running upstream work?
-    """
-
-    frontier_stage: str
-    frontier_step: str
-    required_keys: Tuple[str, ...]
-
-
-@dataclass(frozen=True)
 class InputRolePolicy:
     """Runtime binding policy for one semantic input role.
 
@@ -79,8 +61,6 @@ class InputRolePolicy:
     explicit_inputs_allowed: bool
     coupler_fallback_allowed: bool
     workspace_archive_fallback_allowed: bool
-    restart_may_restore_synthetically: bool
-    restart_requires_explicit_before_execution: bool
 
     def to_dict(self) -> Dict[str, bool]:
         return asdict(self)
@@ -144,7 +124,6 @@ class EnabledWorkflowSurface:
     step_surfaces: Mapping[str, StepRuntimeSurface]
     bootstrap_owned_artifact_keys: FrozenSet[str]
     restart_prebootstrap_deferred_artifact_keys: FrozenSet[str]
-    restart_frontier_contract: Optional[RestartFrontierContract]
     _required_enabled_step_names: FrozenSet[str] = field(
         default_factory=frozenset,
         repr=False,
@@ -182,10 +161,6 @@ class EnabledWorkflowSurface:
     def is_restart_prebootstrap_deferred_artifact_key(self, key: str) -> bool:
         return str(key) in self.restart_prebootstrap_deferred_artifact_keys
 
-    def restart_frontier(self) -> Optional[RestartFrontierContract]:
-        """Return the effective restart frontier for this run, if any."""
-        return self.restart_frontier_contract
-
     def to_dict(self) -> Dict[str, Any]:
         """Serialize the surface for debugging and failure diagnostics."""
         return {
@@ -197,11 +172,6 @@ class EnabledWorkflowSurface:
             "bootstrap_owned_artifact_keys": sorted(self.bootstrap_owned_artifact_keys),
             "restart_prebootstrap_deferred_artifact_keys": sorted(
                 self.restart_prebootstrap_deferred_artifact_keys
-            ),
-            "restart_frontier_contract": (
-                asdict(self.restart_frontier_contract)
-                if self.restart_frontier_contract is not None
-                else None
             ),
             "step_surfaces": {
                 name: surface.to_dict()
@@ -297,63 +267,14 @@ def _bootstrap_owned_artifact_keys(settings: Any) -> FrozenSet[str]:
     return frozenset(keys)
 
 
-def _restart_frontier_contract(
-    *,
-    settings: Any,
-    state: Any,
-) -> Optional[RestartFrontierContract]:
-    current_major_stage = getattr(state, "current_major_stage", None)
-    current_sub_stage = getattr(state, "current_sub_stage", None)
-    stage_enum = getattr(state, "Stage", None)
-    if stage_enum is None:
-        return None
-    if current_major_stage != getattr(stage_enum, "supply_demand_loop", None):
-        return None
-    if current_sub_stage != getattr(stage_enum, "traffic_assignment", None):
-        return None
-
-    models = getattr(getattr(settings, "run", None), "models", None)
-    if models is None:
-        return None
-    if getattr(models, "activity_demand", None) != "activitysim":
-        return None
-    traffic_assignment = getattr(models, "traffic_assignment", None) or getattr(
-        models, "travel", None
-    )
-    if traffic_assignment != "beam":
-        return None
-
-    return RestartFrontierContract(
-        frontier_stage="traffic_assignment",
-        frontier_step="beam_preprocess",
-        required_keys=(
-            "beam_plans_asim_out",
-            "households_asim_out",
-            "persons_asim_out",
-            ZARR_SKIMS,
-        ),
-    )
-
-
 def _make_input_role_policy(
     *,
     rule: Any,
-    overrides: Mapping[str, Any],
 ) -> InputRolePolicy:
-    workspace_archive_fallback_allowed = bool(
-        overrides.get("workspace_archive_fallback_allowed", rule.allow_fallback)
-    )
-    restart_may_restore_synthetically = bool(
-        overrides.get("restart_may_restore_synthetically", rule.allow_fallback)
-    )
     return InputRolePolicy(
         explicit_inputs_allowed=bool(rule.allow_explicit),
         coupler_fallback_allowed=bool(rule.allow_coupler),
-        workspace_archive_fallback_allowed=workspace_archive_fallback_allowed,
-        restart_may_restore_synthetically=restart_may_restore_synthetically,
-        restart_requires_explicit_before_execution=bool(
-            overrides.get("restart_requires_explicit_before_execution", False)
-        ),
+        workspace_archive_fallback_allowed=bool(rule.allow_fallback),
     )
 
 
@@ -402,48 +323,21 @@ def _build_step_runtime_surface(
         optional_outputs=optional_outputs,
     )
 
-    policy_overrides = resolve_runtime_role_policy_overrides(
-        step_name=step_name,
-        land_use_enabled=profile.land_use_enabled,
-        run_mode=run_mode,
-    )
     input_role_policies: Dict[str, InputRolePolicy] = {}
     declared_input_keys = set(_ordered_unique(required_inputs, optional_inputs))
     if binding_rules:
         for rule in binding_rules:
-            if (
-                rule.semantic_key not in declared_input_keys
-                and rule.semantic_key not in policy_overrides
-            ):
+            if rule.semantic_key not in declared_input_keys:
                 continue
             input_role_policies[rule.semantic_key] = _make_input_role_policy(
                 rule=rule,
-                overrides=policy_overrides.get(rule.semantic_key, {}),
             )
-    for semantic_key, overrides in policy_overrides.items():
-        if semantic_key in input_role_policies:
-            continue
-        input_role_policies[semantic_key] = InputRolePolicy(
-            explicit_inputs_allowed=True,
-            coupler_fallback_allowed=True,
-            workspace_archive_fallback_allowed=bool(
-                overrides.get("workspace_archive_fallback_allowed", False)
-            ),
-            restart_may_restore_synthetically=bool(
-                overrides.get("restart_may_restore_synthetically", False)
-            ),
-            restart_requires_explicit_before_execution=bool(
-                overrides.get("restart_requires_explicit_before_execution", False)
-            ),
-        )
     for key in _ordered_unique(required_inputs, optional_inputs):
         if key not in input_role_policies:
             input_role_policies[key] = InputRolePolicy(
                 explicit_inputs_allowed=True,
                 coupler_fallback_allowed=True,
                 workspace_archive_fallback_allowed=False,
-                restart_may_restore_synthetically=False,
-                restart_requires_explicit_before_execution=False,
             )
 
     return StepRuntimeSurface(
@@ -497,10 +391,7 @@ def _validate_surface_invariants(
             _ordered_unique(surface.required_input_keys, surface.optional_input_keys)
         )
         unknown = sorted(
-            key
-            for key, policy in surface.input_role_policies.items()
-            if key not in known_inputs
-            and not policy.restart_requires_explicit_before_execution
+            key for key in surface.input_role_policies.keys() if key not in known_inputs
         )
         if unknown:
             raise RuntimeError(
@@ -518,7 +409,7 @@ def build_enabled_workflow_surface(
     Args:
         settings: Parsed PILATES settings.
         state: Optional workflow state. When present, restart-aware projections
-            such as run mode and restart frontier are included.
+            such as run mode are included.
 
     Returns:
         The enabled workflow surface that runtime callers should share.
@@ -561,11 +452,6 @@ def build_enabled_workflow_surface(
     )
 
     bootstrap_owned_artifact_keys = _bootstrap_owned_artifact_keys(settings)
-    restart_frontier_contract = (
-        _restart_frontier_contract(settings=settings, state=state)
-        if state is not None
-        else None
-    )
 
     return EnabledWorkflowSurface(
         profile=profile,
@@ -576,6 +462,5 @@ def build_enabled_workflow_surface(
         step_surfaces=step_surfaces,
         bootstrap_owned_artifact_keys=bootstrap_owned_artifact_keys,
         restart_prebootstrap_deferred_artifact_keys=bootstrap_owned_artifact_keys,
-        restart_frontier_contract=restart_frontier_contract,
         _required_enabled_step_names=required_enabled_step_names,
     )

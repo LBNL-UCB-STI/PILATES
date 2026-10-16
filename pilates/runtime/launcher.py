@@ -406,7 +406,13 @@ def _enforce_resume_rewind_guardrail(
     )
 
 
-def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) -> bool:
+def _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+    *,
+    state: Any,
+    tracker: Any = None,
+    run_name: Optional[str] = None,
+    coupler: Optional[Mapping[str, Any]] = None,
+) -> bool:
     """Re-enter the provider chain when restart lacks a BEAM checkpoint.
 
     A ``LandUseToSupplyDemandHandoff`` exists only within one launcher process.
@@ -434,6 +440,160 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
     is_enabled = getattr(state, "is_enabled", None)
     if not callable(is_enabled) or not is_enabled(activity_demand):
         return False
+
+    land_use_stage = getattr(stage_enum, "land_use", None)
+    veh_stage = getattr(stage_enum, "vehicle_ownership_model", None)
+    land_use_enabled = land_use_stage is not None and is_enabled(land_use_stage)
+    veh_enabled = veh_stage is not None and is_enabled(veh_stage)
+
+    def _satisfies_required_upstream(container: Any) -> bool:
+        if container is None:
+            return False
+        if hasattr(container, "keys"):
+            keys = set(container.keys())
+        elif isinstance(container, (set, list, tuple)):
+            keys = set(container)
+        else:
+            try:
+                keys = set(container)
+            except Exception:
+                return False
+
+        if not keys:
+            return False
+
+        if land_use_enabled:
+            usim_present = (
+                "usim_population_source_h5" in keys
+                or "usim_datastore_h5" in keys
+                or "usim_datastore_current_h5" in keys
+            )
+            if not usim_present:
+                return False
+
+        if veh_enabled:
+            atlas_present = any(
+                k == "atlas_vehicles2" or k.startswith("atlas_vehicles2") for k in keys
+            )
+            if not atlas_present:
+                return False
+
+        return True
+
+    if land_use_enabled or veh_enabled:
+        if coupler is not None and len(coupler) > 0:
+            if _satisfies_required_upstream(coupler):
+                logger.info(
+                    "[launcher][restart] scenario coupler contains upstream provider "
+                    "artifacts; skipping ActivitySim rewind."
+                )
+                return False
+
+        if tracker is not None:
+            candidate_ids: List[str] = []
+            for cand in (
+                run_name,
+                getattr(state, "scenario_id", None),
+                getattr(state, "run_id", None),
+                (
+                    Path(state.run_info_path).resolve().parent.name
+                    if getattr(state, "run_info_path", None)
+                    else None
+                ),
+            ):
+                if cand and str(cand) not in candidate_ids:
+                    candidate_ids.append(str(cand))
+
+            if candidate_ids:
+                try:
+                    current_year = getattr(state, "current_year", None)
+                    target_year: Optional[int] = None
+                    if current_year is not None:
+                        try:
+                            target_year = int(current_year)
+                        except (ValueError, TypeError):
+                            target_year = None
+
+                    find_snapshot = getattr(
+                        tracker, "find_latest_scenario_coupler_snapshot", None
+                    )
+                    if not callable(find_snapshot) and hasattr(tracker, "db"):
+                        find_snapshot = getattr(
+                            tracker.db, "find_latest_scenario_coupler_snapshot", None
+                        )
+
+                    synth_fn = (
+                        getattr(
+                            tracker.db, "synthesize_coupler_snapshot_from_history", None
+                        )
+                        if hasattr(tracker, "db")
+                        else None
+                    )
+
+                    for scenario_run_id in candidate_ids:
+                        snapshot_result = None
+                        if callable(find_snapshot):
+                            try:
+                                snapshot_result = find_snapshot(
+                                    str(scenario_run_id), phase="post", year=target_year
+                                )
+                            except TypeError:
+                                try:
+                                    snapshot_result = find_snapshot(
+                                        scenario_run_id=str(scenario_run_id),
+                                        phase="post",
+                                        year=target_year,
+                                    )
+                                except TypeError:
+                                    snapshot_result = find_snapshot(
+                                        str(scenario_run_id), phase="post"
+                                    )
+
+                        if snapshot_result is None and callable(synth_fn):
+                            try:
+                                snapshot_result = synth_fn(
+                                    scenario_run_id=str(scenario_run_id),
+                                    year=target_year,
+                                )
+                            except TypeError:
+                                try:
+                                    snapshot_result = synth_fn(
+                                        str(scenario_run_id), year=target_year
+                                    )
+                                except TypeError:
+                                    snapshot_result = synth_fn(str(scenario_run_id))
+
+                        if snapshot_result is not None:
+                            artifacts = None
+                            if isinstance(snapshot_result, dict):
+                                artifacts = snapshot_result
+                            elif isinstance(snapshot_result, tuple):
+                                if len(snapshot_result) == 3 and isinstance(
+                                    snapshot_result[2], (dict, Mapping)
+                                ):
+                                    artifacts = snapshot_result[2]
+                                elif len(snapshot_result) >= 1 and isinstance(
+                                    snapshot_result[0], (dict, Mapping)
+                                ):
+                                    artifacts = snapshot_result[0]
+                                elif len(snapshot_result) >= 2 and isinstance(
+                                    snapshot_result[1], (dict, Mapping)
+                                ):
+                                    artifacts = snapshot_result[1]
+
+                            if artifacts is not None and _satisfies_required_upstream(
+                                artifacts
+                            ):
+                                logger.info(
+                                    "[launcher][restart] latest coupler snapshot contains "
+                                    "upstream provider artifacts; skipping ActivitySim rewind."
+                                )
+                                return False
+                except Exception as exc:
+                    logger.debug(
+                        "Error querying scenario coupler snapshot for ActivitySim rewind check: %s",
+                        exc,
+                    )
 
     provider_boundary = supply_demand_loop
     major_stage_order = getattr(state, "major_stage_order", ())
@@ -624,7 +784,9 @@ def _prepare_run_context(
             archive_state_path=archive_state_path,
             allow_rewind_resume=settings.allow_rewind_resume,
         )
-        _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
+        _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+            state=state, tracker=tracker, run_name=run_name
+        )
     state.file_loc = archive_state_path
     state.mirror_file_loc = local_state_path
     if state.run_info_path != archive_state_path:
@@ -957,6 +1119,17 @@ def main(
                 workspace=workspace,
                 coupler=coupler,
             )
+            if not is_restart_run:
+                if callable(getattr(tagged_scenario, "capture_coupler_snapshot", None)):
+                    tagged_scenario.capture_coupler_snapshot(phase="init")
+            else:
+                restart_runtime.restore_restart_coupler_snapshot(
+                    scenario=tagged_scenario,
+                    tracker=tracker,
+                    settings=settings,
+                    state=state,
+                    workspace=workspace,
+                )
             if bootstrap_result is not None and not state.data_initialized:
                 state.set_data_initialized(True)
             if is_restart_run and state.data_initialized:
@@ -965,7 +1138,12 @@ def main(
                     "hydration and relying on scenario replay plus Consist cache hits."
                 )
 
-            _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
+            _rewind_uncommitted_activitysim_restart_to_provider_boundary(
+                state=state,
+                tracker=tracker,
+                run_name=run_name,
+                coupler=coupler,
+            )
 
             # 7. MAIN WORKFLOW LOOP
             # Iterates through forecast years. For each year, runs sequential stages:

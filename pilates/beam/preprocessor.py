@@ -4,7 +4,7 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping
+from typing import Optional, List, Tuple, TYPE_CHECKING, Dict, Any, Mapping, Sequence
 
 if TYPE_CHECKING:
     from pilates.workspace import Workspace
@@ -60,6 +60,8 @@ def _record_store_from_artifact_mappings(
                 path = os.fspath(value)
             if not path:
                 continue
+            meta = getattr(value, "meta", None)
+            record_metadata = dict(meta) if isinstance(meta, Mapping) else {}
             record_key = key_aliases.get(key, key) if key_aliases else key
             store.add_record(
                 FileRecord(
@@ -67,6 +69,7 @@ def _record_store_from_artifact_mappings(
                     short_name=record_key,
                     description=f"{description_prefix}: {record_key}",
                     content_hash=artifact_fingerprint(value),
+                    metadata=record_metadata,
                 )
             )
 
@@ -89,7 +92,6 @@ def _record_store_from_artifact_mappings(
             BEAM_PLANS_IN: "beam_plans",
             BEAM_HOUSEHOLDS_IN: "households",
             BEAM_PERSONS_IN: "persons",
-            LINKSTATS_WARMSTART: "linkstats",
         },
     )
     return combined
@@ -719,8 +721,11 @@ class BeamPreprocessor(GenericPreprocessor):
         )
 
     def _handle_linkstats(
-        self, workspace: "Workspace", previous_beam_records: List, store: RecordStore
-    ):
+        self,
+        workspace: "Workspace",
+        previous_beam_records: Sequence[FileRecord],
+        store: RecordStore,
+    ) -> None:
         beam_input_staging.handle_linkstats(
             workspace=workspace,
             previous_beam_records=previous_beam_records,
@@ -740,7 +745,7 @@ class BeamPreprocessor(GenericPreprocessor):
             (
                 record
                 for record in store.all_records()
-                if getattr(record, "short_name", None) == LINKSTATS_WARMSTART
+                if record.short_name == LINKSTATS_WARMSTART
             ),
             None,
         )

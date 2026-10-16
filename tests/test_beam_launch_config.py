@@ -859,3 +859,86 @@ def test_build_beam_launch_config_copies_fallback_blocks_parquet_to_nested_excha
     nested_blocks = launch_config.root / "urbansim" / "2018" / "blocks.parquet"
     assert nested_blocks.is_file()
     assert nested_blocks.read_bytes() == b"PAR1blocks"
+
+
+def test_build_beam_launch_config_hardlinks_static_files_and_copies_configs(
+    tmp_path: Path,
+) -> None:
+    import os
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    source_primary = _write_base_config(source_root)
+
+    # Create static assets in the source tree: a network file and a scenario table
+    static_net = source_root / "r5" / "network" / "osm.mapdb"
+    static_net.write_bytes(b"mock_mapdb_binary_content_12345")
+    static_table = source_root / "scenario" / "transit_vehicles.csv"
+    static_table.parent.mkdir(parents=True, exist_ok=True)
+    static_table.write_text("vehicle_id,type\nv1,bus\n", encoding="utf-8")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
+    staged_primary = launch_config.primary_config
+    staged_net = launch_config.root / "r5" / "network" / "osm.mapdb"
+    staged_table = launch_config.root / "scenario" / "transit_vehicles.csv"
+
+    # 1. Config (.conf) files must be copied (distinct inodes) so modifying the staged config
+    # never mutates the original source tree.
+    assert staged_primary.exists()
+    assert os.stat(staged_primary).st_ino != os.stat(source_primary).st_ino
+
+    # 2. Static non-config files must be hardlinked (identical inode numbers).
+    assert staged_net.exists()
+    assert os.stat(staged_net).st_ino == os.stat(static_net).st_ino
+    assert staged_table.exists()
+    assert os.stat(staged_table).st_ino == os.stat(static_table).st_ino
+
+    # 3. Overwriting a file in staged launch tree (or staging inputs) must not mutate source
+    # because destination is unlinked before writing or copying.
+    staged_table.unlink()
+    staged_table.write_text("vehicle_id,type\nv2,train\n", encoding="utf-8")
+    assert static_table.read_text(encoding="utf-8") == "vehicle_id,type\nv1,bus\n"
+
+
+def test_link_or_copy_static_file_falls_back_on_exdev(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    import errno
+    import os
+    from pilates.beam.launch_config import _link_or_copy_static_file
+
+    src_file = tmp_path / "data" / "large_network.dat"
+    src_file.parent.mkdir(parents=True, exist_ok=True)
+    src_file.write_bytes(b"payload_data")
+
+    dst_fallback = tmp_path / "stage_fallback" / "large_network.dat"
+
+    # Simulate cross-device link failure on os.link
+    def mock_link_fail(src, dst):
+        raise OSError(errno.EXDEV, "Cross-device link")
+
+    monkeypatch.setattr(os, "link", mock_link_fail)
+
+    # When os.link raises EXDEV, it must fall back directly to copy rather than symlink,
+    # preventing broken container bind mounts and root-escape validation errors.
+    result = _link_or_copy_static_file(src_file, dst_fallback)
+    assert result == "copy"
+    assert not dst_fallback.is_symlink()
+    assert dst_fallback.is_file()
+    assert os.stat(dst_fallback).st_ino != os.stat(src_file).st_ino
+    assert dst_fallback.read_bytes() == b"payload_data"
+
