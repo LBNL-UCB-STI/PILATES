@@ -54,6 +54,7 @@ from pilates.workflows.coupler_namespace import (
 )
 from pilates.workflows.artifact_keys import (
     ATLAS_VEHICLES2_OUTPUT,
+    BEAM_FULL_SKIMS,
     BEAM_HOUSEHOLDS_IN,
     BEAM_PERSONS_IN,
     BEAM_PLANS_IN,
@@ -1646,21 +1647,36 @@ def _native_beam_full_skim(
         workspace=workspace,
     )
     # Materialize and enqueue full skims
-    full_skims_path = getattr(produced, "full_skims", None)
+    full_skims_path = produced.full_skims
     if full_skims_path:
+        path_obj = Path(full_skims_path)
+        _materialize_native_outputs(
+            source_paths={BEAM_FULL_SKIMS: path_obj},
+            declared_outputs=_beam_full_skim_native_output_paths(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+            ),
+        )
+        if path_obj.name.endswith(".csv.gz"):
+            suffix = ".csv.gz"
+        elif path_obj.suffix == ".zarr":
+            suffix = ".zarr"
+        else:
+            suffix = path_obj.suffix or ".omx"
         dest = _native_output_destination(
             root=Path(workspace.get_beam_output_dir()),
             step_name="beam_full_skim",
             key="beam_full_skims",
-            suffix=".omx" if not Path(full_skims_path).suffix == ".zarr" else ".zarr",
+            suffix=suffix,
         )
         dest.parent.mkdir(parents=True, exist_ok=True)
-        if Path(full_skims_path).is_dir():
+        if path_obj.is_dir():
             if dest.exists():
                 shutil.rmtree(dest)
-            shutil.copytree(full_skims_path, dest)
-        else:
-            shutil.copy2(full_skims_path, dest)
+            shutil.copytree(path_obj, dest)
+        elif path_obj.resolve() != dest.resolve():
+            shutil.copy2(path_obj, dest)
         enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
     del _consist_ctx
 

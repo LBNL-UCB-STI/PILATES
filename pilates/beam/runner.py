@@ -135,6 +135,51 @@ def _require_beam_launch_config(
     return launch_config
 
 
+def _full_skim_output_filename(skims_kind: Optional[str]) -> str:
+    """Return the canonical FullSkimsCreatorApp output filename for ``skims_kind``."""
+    if skims_kind in (None, "activitySimOmx"):
+        return "skims.omx"
+    if skims_kind in ("activitySimZarr", "zarr"):
+        return "skims.zarr"
+    return "skimsODFull.csv.gz"
+
+
+def _resolve_full_skim_input_path(
+    configured_path: str,
+    *,
+    abs_beam_input: str,
+    abs_beam_output: str,
+    region: str,
+) -> tuple[str, Optional[str]]:
+    """Resolve a configured full-skim path to ``(container_path, host_path)``."""
+    if configured_path == "/app/input" or configured_path.startswith("/app/input/"):
+        rel = os.path.relpath(configured_path, "/app/input")
+        host_candidate = os.path.normpath(os.path.join(abs_beam_input, rel))
+        return configured_path, host_candidate
+    if configured_path == "/app/output" or configured_path.startswith("/app/output/"):
+        rel = os.path.relpath(configured_path, "/app/output")
+        host_candidate = os.path.normpath(os.path.join(abs_beam_output, rel))
+        return configured_path, host_candidate
+    if os.path.isabs(configured_path):
+        container_path = _map_host_path_to_container(
+            configured_path, abs_beam_input, abs_beam_output
+        )
+        return container_path, configured_path
+
+    region_candidate = os.path.join(abs_beam_input, region, configured_path)
+    root_candidate = os.path.join(abs_beam_input, configured_path)
+    if os.path.exists(region_candidate):
+        host_path = region_candidate
+    elif os.path.exists(root_candidate):
+        host_path = root_candidate
+    else:
+        host_path = region_candidate
+    container_path = _map_host_path_to_container(
+        host_path, abs_beam_input, abs_beam_output
+    )
+    return container_path, host_path
+
+
 def _select_latest_linkstats_path(
     records: Optional[RecordStore],
     abs_beam_input: str,
@@ -149,6 +194,8 @@ def _select_latest_linkstats_path(
     def _linkstats_rank(short_name: str) -> Optional[tuple[int, int, int]]:
         if "_sub" in short_name:
             return None
+        if short_name == "linkstats_warmstart":
+            return (-1, 0, 1)
         if short_name == "linkstats":
             return (0, 0, 1)
         if short_name == "linkstats_parquet":
@@ -747,12 +794,20 @@ class BeamFullSkimRunner(GenericRunner):
             iteration = getattr(state, "iteration", 0)
         if year is None:
             return {}
+        beam_cfg = getattr(settings, "beam", None)
+        skim_cfg = getattr(beam_cfg, "full_skim", None) if beam_cfg else None
+        skims_kind = (
+            getattr(skim_cfg, "skims_kind", "activitySimOmx")
+            if skim_cfg is not None
+            else "activitySimOmx"
+        )
+        output_filename = _full_skim_output_filename(skims_kind)
         return {
             BEAM_FULL_SKIMS: (
                 Path(workspace.get_beam_output_dir())
                 / settings.run.region
                 / f"year-{int(year)}-iteration-{int(iteration)}"
-                / "skimsODFull.csv.gz"
+                / output_filename
             )
         }
 
@@ -835,7 +890,9 @@ class BeamFullSkimRunner(GenericRunner):
         )
         parallelism = _calculate_optimal_parallelism(cpu_ratio)
 
-        host_output_file = os.path.join(output_dir, "skimsODFull.csv.gz")
+        skims_kind = getattr(skim_cfg, "skims_kind", "activitySimOmx")
+        output_filename = _full_skim_output_filename(skims_kind)
+        host_output_file = os.path.join(output_dir, output_filename)
         container_output_file = _map_host_path_to_container(
             host_output_file, abs_beam_input, abs_beam_output
         )
@@ -846,7 +903,7 @@ class BeamFullSkimRunner(GenericRunner):
             f"--parallelism={parallelism}",
             f"--routerType={skim_cfg.router_type}",
             f"--skimsGeoType={skim_cfg.skims_geo_type}",
-            f"--skimsKind={skim_cfg.skims_kind}",
+            f"--skimsKind={skims_kind}",
             f"--peakHours={','.join(str(hour) for hour in skim_cfg.peak_hours)}",
         ]
 
@@ -856,9 +913,50 @@ class BeamFullSkimRunner(GenericRunner):
         if enabled_modes:
             cmd_parts.append(f"--modesToBuild={','.join(enabled_modes)}")
 
-        linkstats_path = _select_latest_linkstats_path(
-            store, abs_beam_input, abs_beam_output
-        )
+        bifurcate_tolls = getattr(skim_cfg, "bifurcate_tolls", None)
+        if bifurcate_tolls is not None:
+            cmd_parts.append(f"--bifurcateTolls={str(bool(bifurcate_tolls)).lower()}")
+
+        generate_return_trips = getattr(skim_cfg, "generate_return_trips", None)
+        if generate_return_trips is not None:
+            cmd_parts.append(
+                f"--generateReturnTrips={str(bool(generate_return_trips)).lower()}"
+            )
+
+        extra_input_paths: list[str] = []
+        for attr_name, cli_flag in (
+            ("toll_file_path", "--tollFilePath"),
+            ("directory2", "--directory2"),
+            ("od_skims_path", "--ODSkimsPath"),
+            ("input_path", "--input"),
+        ):
+            configured_val = getattr(skim_cfg, attr_name, None)
+            if configured_val:
+                container_val, host_val = _resolve_full_skim_input_path(
+                    configured_val,
+                    abs_beam_input=abs_beam_input,
+                    abs_beam_output=abs_beam_output,
+                    region=region,
+                )
+                cmd_parts.append(f"{cli_flag}={container_val}")
+                if host_val is not None:
+                    extra_input_paths.append(host_val)
+
+        explicit_linkstats = getattr(skim_cfg, "linkstats_path", None)
+        linkstats_path: Optional[str] = None
+        if explicit_linkstats:
+            linkstats_path, host_linkstats = _resolve_full_skim_input_path(
+                explicit_linkstats,
+                abs_beam_input=abs_beam_input,
+                abs_beam_output=abs_beam_output,
+                region=region,
+            )
+            if host_linkstats is not None:
+                extra_input_paths.append(host_linkstats)
+        else:
+            linkstats_path = _select_latest_linkstats_path(
+                store, abs_beam_input, abs_beam_output
+            )
         if linkstats_path is None:
             router_dir = getattr(settings.beam, "router_directory", None)
             if router_dir:
@@ -872,10 +970,12 @@ class BeamFullSkimRunner(GenericRunner):
                     linkstats_path = _map_host_path_to_container(
                         init_parquet, abs_beam_input, abs_beam_output
                     )
+                    extra_input_paths.append(init_parquet)
                 elif os.path.exists(init_csv):
                     linkstats_path = _map_host_path_to_container(
                         init_csv, abs_beam_input, abs_beam_output
                     )
+                    extra_input_paths.append(init_csv)
         if linkstats_path is not None:
             cmd_parts.append(f"--linkstatsPath={linkstats_path}")
 
@@ -884,6 +984,9 @@ class BeamFullSkimRunner(GenericRunner):
             for record in store.all_records()
             if isinstance(record, FileRecord)
         ]
+        for extra_path in extra_input_paths:
+            if extra_path not in input_paths:
+                input_paths.append(extra_path)
 
         success = self.run_container(
             client=None,

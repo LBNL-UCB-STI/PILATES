@@ -390,3 +390,168 @@ class TestBeamFullSkimMode:
 
         # Verify all peak hours are formatted correctly
         assert "--peakHours=6.0,8.5,12.0,17.5,20.0" in command
+
+    def test_full_skims_creator_config_defaults_and_facet(self):
+        """FullSkimsCreatorConfig defaults to activitySimOmx and serializes to facet."""
+        from pilates.config.models import FullSkimsCreatorConfig
+
+        cfg = FullSkimsCreatorConfig()
+        assert cfg.run_schedule == "standalone"
+        assert cfg.skims_kind == "activitySimOmx"
+        assert cfg.modes_to_build == {"drive": True, "walk": True, "transit": True}
+        assert cfg.bifurcate_tolls is True
+        assert cfg.generate_return_trips is True
+        assert cfg.toll_file_path is None
+        assert cfg.directory2 is None
+        assert cfg.od_skims_path is None
+        assert cfg.input_path is None
+        assert cfg.linkstats_path is None
+
+        facet = cfg.to_consist_facet()
+        assert facet["skims_kind"] == "activitySimOmx"
+        assert facet["bifurcate_tolls"] is True
+        assert facet["generate_return_trips"] is True
+
+    def test_build_beam_identity_config_includes_full_skim_when_present(self):
+        """build_beam_identity_config includes full_skim facet when configured."""
+        from pilates.config.models import FullSkimsCreatorConfig
+        from pilates.utils.consist_config import build_beam_identity_config
+
+        full_skim = FullSkimsCreatorConfig(
+            skims_kind="activitySimOmx",
+            bifurcate_tolls=False,
+            toll_file_path="toll-prices.csv",
+        )
+        settings = SimpleNamespace(
+            write_skims_to_omx=True,
+            beam=SimpleNamespace(
+                config="beam.conf",
+                sample=1.0,
+                replanning_portion=0.4,
+                memory="180g",
+                discard_plans_every_year=False,
+                max_plans_memory=5,
+                router_directory="r5",
+                scenario_folder="scenario",
+                admission=None,
+                full_skim=full_skim,
+            ),
+        )
+        identity_cfg = build_beam_identity_config(settings)
+        assert "full_skim" in identity_cfg
+        assert identity_cfg["full_skim"]["skims_kind"] == "activitySimOmx"
+        assert identity_cfg["full_skim"]["bifurcate_tolls"] is False
+        assert identity_cfg["full_skim"]["toll_file_path"] == "toll-prices.csv"
+
+    def test_expected_outputs_maps_skims_kind_to_canonical_filename(self):
+        """BeamFullSkimRunner.expected_outputs maps skims_kind to .omx, .zarr, or .csv.gz."""
+        from pilates.beam.runner import BeamFullSkimRunner
+        from pilates.config.models import FullSkimsCreatorConfig
+        from pilates.workflows.artifact_keys import BEAM_FULL_SKIMS
+
+        workspace = MagicMock()
+        workspace.get_beam_output_dir.return_value = "/tmp/beam_output"
+        state = SimpleNamespace(current_year=2025, current_inner_iter=1)
+
+        for skims_kind, expected_name in (
+            ("activitySimOmx", "skims.omx"),
+            ("activitySimZarr", "skims.zarr"),
+            ("activitySim", "skimsODFull.csv.gz"),
+            ("od", "skimsODFull.csv.gz"),
+        ):
+            settings = self._make_settings(
+                full_skim_cfg=FullSkimsCreatorConfig(skims_kind=skims_kind)
+            )
+            outputs = BeamFullSkimRunner.expected_outputs(settings, state, workspace)
+            assert outputs[BEAM_FULL_SKIMS] == (
+                Path("/tmp/beam_output/test_region/year-2025-iteration-1")
+                / expected_name
+            )
+
+    @patch("pilates.beam.runner._calculate_optimal_parallelism")
+    @patch("pilates.beam.runner.BeamFullSkimRunner.run_container")
+    @patch("pilates.beam.runner.os.makedirs")
+    @patch("pilates.beam.runner.os.path.exists")
+    def test_full_skim_new_cli_options_and_input_artifacts(
+        self,
+        mock_exists,
+        mock_makedirs,
+        mock_run_container,
+        mock_calc_parallelism,
+    ):
+        """New FullSkimsCreatorConfig CLI options and input artifacts are wired."""
+        from pilates.config.models import FullSkimsCreatorConfig
+
+        mock_run_container.return_value = True
+        mock_exists.return_value = True
+        mock_calc_parallelism.return_value = 8
+
+        skim_cfg = FullSkimsCreatorConfig(
+            run_schedule="standalone",
+            skims_kind="activitySimOmx",
+            bifurcate_tolls=True,
+            generate_return_trips=False,
+            toll_file_path="toll-prices.csv",
+            directory2="r5-ferry",
+            od_skims_path="warmstart_od.csv.gz",
+            input_path="od_pairs.csv",
+            linkstats_path="congested_linkstats.csv.gz",
+        )
+
+        runner, workspace, store, launch_config = self._setup_runner_test(
+            skim_cfg, full_skim=True
+        )
+
+        with patch.object(
+            runner, "get_model_and_image", return_value=("beam", "beam:latest")
+        ):
+            result_store = runner._run(store, workspace, launch_config)
+
+        call_kwargs = mock_run_container.call_args.kwargs
+        command = call_kwargs["command"]
+
+        assert (
+            "--output=/app/output/test_region/year-2020-iteration-0/skims.omx"
+            in command
+        )
+        assert "--skimsKind=activitySimOmx" in command
+        assert "--bifurcateTolls=true" in command
+        assert "--generateReturnTrips=false" in command
+        assert "--tollFilePath=/app/input/test_region/toll-prices.csv" in command
+        assert "--directory2=/app/input/test_region/r5-ferry" in command
+        assert "--ODSkimsPath=/app/input/test_region/warmstart_od.csv.gz" in command
+        assert "--input=/app/input/test_region/od_pairs.csv" in command
+        assert (
+            "--linkstatsPath=/app/input/test_region/congested_linkstats.csv.gz"
+            in command
+        )
+
+        input_artifacts = call_kwargs["input_artifacts"]
+        launch_region = str(launch_config.root / "test_region")
+        assert f"{launch_region}/toll-prices.csv" in input_artifacts
+        assert f"{launch_region}/r5-ferry" in input_artifacts
+        assert f"{launch_region}/warmstart_od.csv.gz" in input_artifacts
+        assert f"{launch_region}/od_pairs.csv" in input_artifacts
+        assert f"{launch_region}/congested_linkstats.csv.gz" in input_artifacts
+
+        output_path = result_store.to_mapping()["beam_full_skims"]
+        assert str(output_path).endswith("test_region/year-2020-iteration-0/skims.omx")
+
+    def test_select_latest_linkstats_supports_linkstats_warmstart(self):
+        """_select_latest_linkstats_path selects linkstats_warmstart when present."""
+        from pilates.beam.runner import _select_latest_linkstats_path
+        from pilates.generic.records import FileRecord, RecordStore
+
+        store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path="/tmp/beam_input/test_region/warmstart.linkstats.csv.gz",
+                    short_name="linkstats_warmstart",
+                    description="Warmstart linkstats",
+                )
+            ]
+        )
+        selected = _select_latest_linkstats_path(
+            store, "/tmp/beam_input", "/tmp/beam_output"
+        )
+        assert selected == "/app/input/test_region/warmstart.linkstats.csv.gz"
