@@ -4,7 +4,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Union
+from typing import Any, Optional, Union
 
 from pilates.config.models import PilatesConfig
 from pilates.runtime.context import WorkflowRuntimeContext
@@ -236,9 +236,6 @@ def run_vehicle_ownership_stage(
     scenario: ScenarioWithCoupler,
     coupler: CouplerProtocol,
     year: int,
-    build_atlas_static_inputs_fallback: Callable[
-        [Workspace], Mapping[str, Union[str, os.PathLike]]
-    ],
     context: WorkflowRuntimeContext,
 ) -> None:
     """
@@ -263,14 +260,10 @@ def run_vehicle_ownership_stage(
         Coupler used to read/write artifacts across steps.
     year : int
         Forecast year being simulated.
-    build_atlas_static_inputs_fallback : Callable[[Workspace], Mapping[str, Union[str, os.PathLike]]]
-        Fallback builder for static ATLAS inputs when not already present in
-        the workspace input registry.
     """
     settings = context.settings
     state = context.state
     workspace = context.workspace
-    del build_atlas_static_inputs_fallback
 
     logger.info(
         "[vehicle_ownership] year=%s forecast_year=%s run_id=%s",

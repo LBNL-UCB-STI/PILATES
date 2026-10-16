@@ -941,4 +941,3 @@ def test_link_or_copy_static_file_falls_back_on_exdev(
     assert dst_fallback.is_file()
     assert os.stat(dst_fallback).st_ino != os.stat(src_file).st_ino
     assert dst_fallback.read_bytes() == b"payload_data"
-

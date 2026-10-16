@@ -12,15 +12,10 @@ from pilates.workflows.steps import (
     urbansim_postprocess,
     urbansim_run,
 )
-from pilates.workflows.coupler_namespace import resolve_coupler_value
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.artifact_keys import (
-    USIM_DATASTORE_BASE_H5,
-    USIM_DATASTORE_CURRENT_H5,
-    USIM_FORECAST_OUTPUT,
     USIM_POPULATION_SOURCE_H5,
 )
-from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +29,9 @@ def run_land_use_stage(
     coupler: CouplerProtocol,
     year: int,
     context: WorkflowRuntimeContext,
-) -> LandUseToSupplyDemandHandoff:
+) -> None:
     """
-    Run the UrbanSim land-use stage and return updated UrbanSim inputs.
+    Run the UrbanSim land-use stage.
 
     This stage is responsible for land-use evolution. It prepares UrbanSim
     inputs (including any pre-existing datastore), executes run/postprocess
@@ -104,7 +99,6 @@ def run_land_use_stage(
         phase="postprocess",
     )
 
-    usim_inputs: dict[str, str] = {}
     population_source_snapshot = postprocess_outputs.processed_outputs.get(
         USIM_POPULATION_SOURCE_H5
     )
@@ -112,24 +106,4 @@ def run_land_use_stage(
         raise RuntimeError(
             "UrbanSim postprocess did not produce the population-source snapshot"
         )
-    usim_inputs[USIM_FORECAST_OUTPUT] = str(population_source_snapshot)
-    usim_inputs[USIM_POPULATION_SOURCE_H5] = str(population_source_snapshot)
-    if postprocess_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(
-            postprocess_outputs.usim_datastore_h5
-        )
-    elif run_outputs.usim_datastore_h5:
-        usim_inputs[USIM_DATASTORE_CURRENT_H5] = str(run_outputs.usim_datastore_h5)
-
-    # Preserve the base-role handle as the static/exogenous input contract. If
-    # current/base collapsed earlier in the run, keep that role explicit here.
-    if (
-        USIM_DATASTORE_BASE_H5 not in usim_inputs
-        and USIM_DATASTORE_CURRENT_H5 in usim_inputs
-    ):
-        base = resolve_coupler_value(coupler, USIM_DATASTORE_BASE_H5).value
-        usim_inputs[USIM_DATASTORE_BASE_H5] = str(
-            base if base is not None else usim_inputs[USIM_DATASTORE_CURRENT_H5]
-        )
-
-    return LandUseToSupplyDemandHandoff.from_mapping(usim_inputs)
+    return None

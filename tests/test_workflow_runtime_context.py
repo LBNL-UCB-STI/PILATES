@@ -6,12 +6,8 @@ from types import SimpleNamespace
 import pytest
 
 from pilates.runtime.context import WorkflowRuntimeContext
-from pilates.workflows.stages.handoffs import LandUseToSupplyDemandHandoff
 from pilates.workflows.stages.postprocessing import run_postprocessing_stage
 from pilates.workflows.stages.supply_demand import run_supply_demand_stage
-from pilates.workflows.stages.supply_demand_activity import (
-    ActivityDemandPhaseOutputs,
-)
 from pilates.workflows.stages.supply_demand_beam import (
     TrafficAssignmentPhaseOutputs,
 )
@@ -118,7 +114,7 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         "pilates.workflows.stages.supply_demand._run_activity_demand_phase",
         lambda **kwargs: (
             seen.setdefault("activity_context", kwargs["context"]),
-            ActivityDemandPhaseOutputs(activity_demand_outputs={"plans": "ok"}),
+            None,
         )[1],
     )
     monkeypatch.setattr(
@@ -136,7 +132,6 @@ def test_run_supply_demand_stage_passes_runtime_context_to_phase_helpers(
         scenario=SimpleNamespace(),
         coupler=SimpleNamespace(),
         year=2018,
-        handoff=LandUseToSupplyDemandHandoff(),
         context=context,
     )
 
@@ -198,7 +193,6 @@ def test_supply_demand_snapshots_after_activitysim_before_beam(
         scenario=SimpleNamespace(),
         coupler=SimpleNamespace(),
         year=2018,
-        handoff=LandUseToSupplyDemandHandoff(),
         on_activity_demand_boundary=lambda _iteration: events.append("snapshot"),
         context=context,
     )
@@ -257,7 +251,6 @@ def test_supply_demand_fails_closed_for_uncommitted_restart_without_handoff(
             scenario=SimpleNamespace(),
             coupler=SimpleNamespace(),
             year=2018,
-            handoff=LandUseToSupplyDemandHandoff(),
             context=context,
         )
 

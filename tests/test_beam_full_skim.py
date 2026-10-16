@@ -1032,11 +1032,6 @@ class TestBeamFullSkimMode:
         from contextlib import ExitStack
 
         with ExitStack() as stack:
-            mock_preprocess_step = stack.enter_context(
-                patch(
-                    "pilates.workflows.stages.supply_demand_beam._run_beam_preprocess_step"
-                )
-            )
             mock_beam_steps = stack.enter_context(
                 patch("pilates.workflows.stages.supply_demand_beam._run_beam_steps")
             )
@@ -1068,7 +1063,6 @@ class TestBeamFullSkimMode:
             workspace=workspace,
             settings=settings,
         )
-        mock_preprocess_step.assert_not_called()
         mock_beam_steps.assert_not_called()
         mock_launch_config.assert_called_once()
         mock_full_skim_step.assert_called_once()

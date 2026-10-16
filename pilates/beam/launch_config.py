@@ -18,6 +18,7 @@ from typing import Any, Mapping
 from consist.core.identity import IdentityManager
 from consist.integrations.beam import BeamConfigAdapter, BeamConfigOverrides
 
+from pilates.beam.admission import copy_linkstats_provenance_sidecar
 from pilates.beam.config_hocon import (
     beam_config_env_overrides,
     resolve_beam_config_value,
@@ -239,13 +240,9 @@ def materialize_beam_launch_config(
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.unlink(missing_ok=True)
         shutil.copy2(source, destination)
-        source_sidecar = Path(f"{source}.provenance.json")
-        if not source_sidecar.is_file():
-            source_sidecar = Path(f"{staged_input.source}.provenance.json")
-        if source_sidecar.is_file():
-            dest_sidecar = Path(f"{destination}.provenance.json")
-            dest_sidecar.unlink(missing_ok=True)
-            shutil.copy2(source_sidecar, dest_sidecar)
+        copy_linkstats_provenance_sidecar(
+            source, destination, fallback_source_path=staged_input.source
+        )
     return BeamLaunchConfig(root=derived_root, primary_config=derived_primary_config)
 
 

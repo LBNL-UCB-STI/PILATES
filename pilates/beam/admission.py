@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from pathlib import Path
+import shutil
 from typing import Mapping, Protocol
 
 import consist
@@ -54,6 +56,45 @@ def read_linkstats_provenance_sidecar(sidecar_path: Path | str) -> dict[str, obj
             f"expected {LINKSTATS_PROVENANCE_SCHEMA_VERSION!r}."
         )
     return raw
+
+
+def write_linkstats_provenance_sidecar(
+    linkstats_path: Path | str, payload: Mapping[str, object]
+) -> Path:
+    """Atomically write a linkstats provenance sidecar."""
+    dest = linkstats_provenance_sidecar_path(linkstats_path)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp_dest = dest.parent / f".tmp_{dest.name}.{os.getpid()}"
+    tmp_dest.write_text(
+        json.dumps(dict(payload), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    tmp_dest.replace(dest)
+    return dest
+
+
+def copy_linkstats_provenance_sidecar(
+    source_path: Path | str,
+    target_path: Path | str,
+    *,
+    fallback_source_path: Path | str | None = None,
+) -> Path | None:
+    """Copy an adjacent linkstats provenance sidecar if one exists."""
+    src = linkstats_provenance_sidecar_path(source_path)
+    if not src.is_file() and fallback_source_path is not None:
+        src = linkstats_provenance_sidecar_path(fallback_source_path)
+    if not src.is_file():
+        return None
+    dst = linkstats_provenance_sidecar_path(target_path)
+    try:
+        if src.resolve() == dst.resolve():
+            return dst
+    except OSError:
+        pass
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.unlink(missing_ok=True)
+    shutil.copy2(src, dst)
+    return dst
 
 
 def _linkstats_admission_config(

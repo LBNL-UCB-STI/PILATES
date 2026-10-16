@@ -19,6 +19,7 @@ from pilates.utils.coupler_helpers import artifact_to_path
 from pilates.utils.consist_runtime import artifact_fingerprint
 from pilates.utils.io import is_activity_demand_enabled
 from pilates.utils.path_utils import find_project_root
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.artifact_keys import (
     ASIM_OUTPUT_DIR,
     ATLAS_OUTPUT_DIR,
@@ -223,8 +224,7 @@ class BeamPreprocessor(GenericPreprocessor):
             workspace,
         )
         preferred_format = (
-            getattr(getattr(settings, "activitysim", None), "file_format", None)
-            or "parquet"
+            get_setting(settings, "activitysim.file_format", "parquet") or "parquet"
         )
         beam_input_paths = {
             BEAM_PLANS_IN: beam_exchange.locate_existing_beam_exchange_input(
@@ -247,7 +247,7 @@ class BeamPreprocessor(GenericPreprocessor):
         atlas_output_dir = None
         if settings.runtime.flags.vehicle_ownership_model_enabled:
             atlas_output_dir = workspace.get_atlas_output_dir()
-        beam_config = getattr(getattr(settings, "beam", None), "config", None)
+        beam_config = get_setting(settings, "beam.config", None)
         beam_config_path = (
             os.path.join(
                 workspace.get_beam_mutable_data_dir(), settings.run.region, beam_config

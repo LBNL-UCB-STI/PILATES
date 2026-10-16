@@ -25,6 +25,7 @@ from pilates.runtime.scenario_runtime import resolve_cache_epoch
 from pilates.utils.coupler_helpers import (
     resolve_existing_path,
 )
+from pilates.utils.settings_helper import get as get_setting
 from pilates.workflows.binding import restart_required_local_artifact_policy
 
 logger = logging.getLogger(__name__)
@@ -589,7 +590,9 @@ def restore_restart_coupler_snapshot(
 ) -> Dict[str, Any]:
     """Restore coupler artifacts on restart and ensure missing workspace files exist."""
     candidate_ids: List[str] = []
+    output_run_name = get_setting(settings, "run.output_run_name", None)
     for cand in (
+        output_run_name,
         getattr(state, "scenario_id", None),
         getattr(state, "run_id", None),
         (
@@ -634,7 +637,7 @@ def restore_restart_coupler_snapshot(
 
     archive_run_dir_val = (
         getattr(workspace, "archive_run_dir", None)
-        or getattr(getattr(settings, "run", None), "archive_run_dir", None)
+        or get_setting(settings, "run.archive_run_dir", None)
         or (
             Path(state.run_info_path).parent
             if getattr(state, "run_info_path", None)

@@ -10,7 +10,6 @@ metadata, not a second execution path.
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from pathlib import Path
@@ -39,9 +38,13 @@ from pilates.beam.launch_paths import (
     validate_staged_linkstats_reference,
 )
 from pilates.beam.admission import (
+    copy_linkstats_provenance_sidecar,
     has_staged_linkstats_admission_policy,
+    linkstats_provenance_sidecar_path,
     preflight_staged_linkstats_admission,
+    read_linkstats_provenance_sidecar,
     reject_or_warn_for_missing_staged_linkstats,
+    write_linkstats_provenance_sidecar,
 )
 from pilates.beam.launch_config import BeamLaunchConfig
 from pilates.beam.runner import BeamRunner
@@ -103,8 +106,6 @@ from .shared import (
 
 logger = logging.getLogger(__name__)
 
-_BEAM_INCLUDE_RE = re.compile(r'^\s*include\s+(?:"([^"]+)"|file\("([^"]+)"\))')
-_BEAM_CONFIG_REFERENCE_MANIFEST = "__archive_manifest.json"
 _ATLAS_VEHICLES2_BASENAME_RE = re.compile(r"^vehicles2_\d{4}\.csv(?:\.gz)?$")
 
 
@@ -390,20 +391,6 @@ def _beam_full_skim_native_output_paths(
     }
 
 
-def _copy_adjacent_provenance_sidecar(source_path: Path, target_path: Path) -> None:
-    source_sidecar = Path(f"{source_path}.provenance.json")
-    if not source_sidecar.is_file():
-        return
-    target_sidecar = Path(f"{target_path}.provenance.json")
-    try:
-        if source_sidecar.resolve() == target_sidecar.resolve():
-            return
-    except OSError:
-        pass
-    target_sidecar.unlink(missing_ok=True)
-    shutil.copy2(source_sidecar, target_sidecar)
-
-
 def _materialize_native_outputs(
     *,
     source_paths: Mapping[str, Path],
@@ -423,7 +410,7 @@ def _materialize_native_outputs(
             )
         resolved = source.resolve()
         if resolved == destination.resolve():
-            _copy_adjacent_provenance_sidecar(resolved, destination)
+            copy_linkstats_provenance_sidecar(resolved, destination)
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
@@ -446,7 +433,7 @@ def _materialize_native_outputs(
                 staging.unlink()
             shutil.copy2(resolved, staging)
             staging.replace(destination)
-            _copy_adjacent_provenance_sidecar(resolved, destination)
+            copy_linkstats_provenance_sidecar(resolved, destination)
 
 
 def _beam_run_native_sources(produced: BeamRunOutputs) -> dict[str, Path]:
@@ -538,14 +525,14 @@ def _project_beam_preprocess_outputs(
 
     if LINKSTATS_WARMSTART in prepared:
         prepared_linkstats = prepared[LINKSTATS_WARMSTART]
-        sidecar_path = Path(f"{prepared_linkstats}.provenance.json")
+        sidecar_path = linkstats_provenance_sidecar_path(prepared_linkstats)
         if not sidecar_path.is_file():
             source = (resolved_inputs.binding.inputs or {}).get(LINKSTATS_WARMSTART)
             source_path = artifact_to_path(source, workspace=workspace)
             if not source_path and settings is not None and workspace is not None:
                 source_path = resolve_initial_linkstats_path(settings, workspace)
             if source_path:
-                _copy_adjacent_provenance_sidecar(source_path, prepared_linkstats)
+                copy_linkstats_provenance_sidecar(source_path, prepared_linkstats)
 
         if not sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
             artifact = outputs[LINKSTATS_WARMSTART]
@@ -555,15 +542,7 @@ def _project_beam_preprocess_outputs(
             )
             if isinstance(cached_prov, Mapping):
                 try:
-                    sidecar_path.parent.mkdir(parents=True, exist_ok=True)
-                    tmp_sidecar = (
-                        sidecar_path.parent / f".tmp_{sidecar_path.name}.{os.getpid()}"
-                    )
-                    tmp_sidecar.write_text(
-                        json.dumps(dict(cached_prov), indent=2, sort_keys=True) + "\n",
-                        encoding="utf-8",
-                    )
-                    tmp_sidecar.replace(sidecar_path)
+                    write_linkstats_provenance_sidecar(prepared_linkstats, cached_prov)
                 except Exception as exc:
                     logger.debug(
                         "Unable to materialize cached linkstats provenance sidecar to %s: %s",
@@ -574,7 +553,7 @@ def _project_beam_preprocess_outputs(
         if sidecar_path.is_file() and LINKSTATS_WARMSTART in outputs:
             artifact = outputs[LINKSTATS_WARMSTART]
             try:
-                payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+                payload = read_linkstats_provenance_sidecar(sidecar_path)
             except Exception as exc:
                 logger.debug(
                     "Unable to read linkstats provenance sidecar from %s: %s",
@@ -1124,19 +1103,6 @@ def _strict_requested_output_cache(
     )
 
 
-def _beam_linkstats_output_cache(
-    *, settings: Any, state: Any, workspace: Any
-) -> CacheOptions:
-    """Partition caches from the historical linkstats filename contract."""
-
-    del settings, state, workspace
-    return CacheOptions(
-        cache_hydration="outputs-requested",
-        cache_hydration_failure="miss",
-        cache_version=1,
-    )
-
-
 def _beam_run_output_cache(
     *, settings: Any, state: Any, workspace: Any
 ) -> CacheOptions:
@@ -1306,6 +1272,10 @@ def _resolve_beam_preprocess_inputs(
                         and resolve_initial_linkstats_path(settings, workspace)
                         is not None
                     )
+                    or (
+                        key == "vehicles_beam_in"
+                        and ATLAS_VEHICLES2_OUTPUT in (resolved.binding.inputs or {})
+                    )
                 )
             ),
         },
@@ -1318,8 +1288,8 @@ def _resolve_beam_run_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
-    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
+    del settings, state
     return _resolved_beam_inputs(
         step_name="beam_run",
         coupler=coupler,
@@ -1616,19 +1586,6 @@ def _resolve_beam_full_skim_inputs(
     )
 
 
-def _log_native_output_records(*, outputs: Any, context: Any) -> None:
-    logged_keys: set[str] = set()
-    for key, path, _description in outputs._iter_record_items():
-        if key in logged_keys:
-            continue
-        logged_keys.add(key)
-        context.log_output(
-            path,
-            key=key,
-            artifact_kind="directory" if Path(path).is_dir() else "file",
-        )
-
-
 def _is_direct_beam_zarr_output_key(key: str) -> bool:
     """Return whether ``key`` is BEAM's direct raw-OD Zarr artifact."""
 
@@ -1752,7 +1709,7 @@ def _native_beam_preprocess(
     for key, path in produced.prepared_inputs.items():
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
         if key == LINKSTATS_WARMSTART:
-            dest_sidecar = Path(f"{path}.provenance.json")
+            dest_sidecar = linkstats_provenance_sidecar_path(path)
             if dest_sidecar.is_file():
                 enqueue_archive_copy(
                     key=f"{LINKSTATS_WARMSTART}_provenance",
@@ -1760,7 +1717,7 @@ def _native_beam_preprocess(
                     workspace=workspace,
                 )
                 try:
-                    prov_payload = json.loads(dest_sidecar.read_text(encoding="utf-8"))
+                    prov_payload = read_linkstats_provenance_sidecar(dest_sidecar)
                     if isinstance(prov_payload, Mapping):
                         if hasattr(_consist_ctx, "run_metadata") and isinstance(
                             _consist_ctx.run_metadata, dict
