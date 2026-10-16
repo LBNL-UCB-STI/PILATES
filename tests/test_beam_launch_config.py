@@ -717,3 +717,44 @@ def test_beam_preprocess_step_identity_uses_portable_closure_shape(
         scheduler_allocation="67890",
         output_destination=tmp_path / "workspace-b" / "other-outputs",
     )
+
+
+def test_build_beam_launch_config_clears_missing_configured_vehicles_path(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.config_hocon import (
+        beam_config_env_overrides,
+        resolve_beam_config_value,
+    )
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    source_primary = _write_base_config(source_root)
+    source_primary.write_text(
+        source_primary.read_text(encoding="utf-8")
+        + '\nbeam.agentsim.agents.vehicles.vehiclesFilePath = ${beam.inputDirectory}"/urbansim/missing_vehicles.parquet"\n',
+        encoding="utf-8",
+    )
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
+    env = beam_config_env_overrides(settings, config_root=launch_config.root)
+    assert (
+        resolve_beam_config_value(
+            launch_config.primary_config,
+            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
+            env_overrides=env,
+        )
+        == ""
+    )

@@ -315,6 +315,17 @@ def build_beam_launch_config(
         overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = str(
             derived_root / vehicle_destination
         )
+    else:
+        configured_vehicles_path = resolve_beam_config_value(
+            source_primary,
+            key="beam.agentsim.agents.vehicles.vehiclesFilePath",
+            env_overrides=env_overrides,
+        )
+        if (
+            configured_vehicles_path
+            and not Path(str(configured_vehicles_path)).exists()
+        ):
+            overrides["beam.agentsim.agents.vehicles.vehiclesFilePath"] = ""
 
     if settings.beam.discard_plans_every_year:
         overrides["beam.replanning.maxAgentPlanMemorySize"] = 0
