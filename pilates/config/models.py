@@ -878,9 +878,9 @@ class FullSkimsCreatorConfig(BaseModel):
 
 
 class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
-    """Explicit prior-run expectation for one staged BEAM warm-start file."""
+    """Explicit prior-run or declared-digest expectation for one staged BEAM warm-start file."""
 
-    expectation: PriorRunExpectation
+    expectation: AdmissionExpectation
 
     @model_validator(mode="before")
     @classmethod
@@ -901,19 +901,25 @@ class BeamLinkstatsAdmissionConfig(AdmissionPolicyConfig):
         return normalized
 
     @property
-    def expected_run_id(self) -> str:
+    def expected_run_id(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.expected_run_id
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.expected_run_id
+        return None
 
     @property
-    def artifact_key(self) -> str:
+    def artifact_key(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.artifact_key
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.artifact_key
+        return None
 
     @property
     def expected_bytes_path(self) -> Optional[str]:
         """Compatibility view for BEAM's existing runtime admission helper."""
-        return self.expectation.expected_bytes_path
+        if isinstance(self.expectation, PriorRunExpectation):
+            return self.expectation.expected_bytes_path
+        return None
 
 
 class BeamAdmissionConfig(BaseModel):
@@ -921,7 +927,7 @@ class BeamAdmissionConfig(BaseModel):
 
     linkstats: Optional[BeamLinkstatsAdmissionConfig] = Field(
         None,
-        description="Optional prior-run admission for staged warm-start linkstats.",
+        description="Optional prior-run or declared-digest admission for staged warm-start linkstats.",
     )
 
 

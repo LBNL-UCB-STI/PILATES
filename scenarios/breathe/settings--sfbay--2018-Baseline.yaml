@@ -286,7 +286,15 @@ beam:
   local_output_folder: beam/beam_output/
   scenario_folder: urbansim/
   router_directory: r5/sfbay-cbg5500-weakConn-network
-  warmstart_linkstats_path: "{router_directory}/init.linkstats.csv.gz"
+  warmstart_linkstats_path: "{router_directory}/init.linkstats.parquet"
+  admission:
+    linkstats:
+      mode: strict
+      expectation:
+        kind: declared_digest
+        identity: "sha256:file:26e8153fa3e73cf3635c45cb00b185acf327dd75338ad77ca5e30ce060c6b2e5"
+        source_label: "beam-fc07-v260419-it3 (it.3)"
+        source_uri: "https://drive.google.com/file/d/10ubIO7oamqNbzvRlDfIWcQ8xSWcee9s5/view?usp=share_link"
   skims_shapefile: shape/zones.shp
   skim_zone_source_id_col: objectid
   skim_zone_geoid_col: geoid10

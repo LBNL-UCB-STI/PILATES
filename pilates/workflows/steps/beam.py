@@ -603,20 +603,30 @@ def _attach_skim_provenance_to_output_artifacts(
                 artifact.meta = current_meta
                 if not needs_persist:
                     continue
-                tracker_ref = get_tracker_ref(artifact)
-                owner_tracker = (
-                    tracker_ref() if tracker_ref is not None else None
-                ) or cr.current_tracker()
-                if owner_tracker is not None and owner_tracker.db is not None:
-                    owner_tracker.db.update_artifact_meta(artifact, updates)
-                    owner_tracker._run_artifacts_cache.clear()
-                    continue
                 producer_info = payload.get("producer")
                 tracker_db_path = (
                     producer_info.get("tracker_db_path")
                     if isinstance(producer_info, Mapping)
                     else None
                 ) or payload.get("tracker_db_path")
+                tracker_ref = get_tracker_ref(artifact)
+                owner_tracker = (
+                    tracker_ref() if tracker_ref is not None else None
+                ) or cr.current_tracker()
+                if owner_tracker is not None and owner_tracker.db is not None:
+                    owner_db_path = getattr(owner_tracker.db, "db_path", None)
+                    if (
+                        not isinstance(tracker_db_path, str)
+                        or not tracker_db_path
+                        or (
+                            owner_db_path is not None
+                            and Path(owner_db_path).resolve()
+                            == Path(tracker_db_path).resolve()
+                        )
+                    ):
+                        owner_tracker.db.update_artifact_meta(artifact, updates)
+                        owner_tracker._run_artifacts_cache.clear()
+                        continue
                 if (
                     isinstance(tracker_db_path, str)
                     and tracker_db_path

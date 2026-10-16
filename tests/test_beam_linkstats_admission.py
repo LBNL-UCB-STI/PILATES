@@ -224,3 +224,118 @@ def test_linkstats_admission_reports_are_isolated_by_run_directory(
         tmp_path / "outputs" / "run-b" / "admission" / "beam-linkstats-warmstart.json"
     ).exists()
     assert not (tmp_path / "tracker-root" / "admission").exists()
+
+
+def test_declared_digest_linkstats_admission_verifies_and_reads_sidecar(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    from pilates.beam import admission
+    from pilates.config.models import BeamLinkstatsAdmissionConfig
+
+    staged = tmp_path / "warmstart.parquet"
+    content = b"PAR1-converged-linkstats-bytes"
+    staged.write_bytes(content)
+    digest = "sha256:file:" + hashlib.sha256(content).hexdigest()
+
+    sidecar = tmp_path / "warmstart.parquet.provenance.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilates.linkstats_provenance.v1",
+                "artifact_name": "init.linkstats.parquet",
+                "format": "parquet",
+                "identity": digest,
+                "size_bytes": len(content),
+                "source": {
+                    "beam_run_label": "beam-fc07-v260419-it3",
+                    "source_uri": "https://drive.google.com/file/d/10ubIO7oamqNbzvRlDfIWcQ8xSWcee9s5/view?usp=share_link",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    linkstats_cfg = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expectation={
+            "kind": "declared_digest",
+            "identity": digest,
+            "source_label": "beam-fc07-v260419-it3",
+            "source_uri": "https://drive.google.com/file/d/10ubIO7oamqNbzvRlDfIWcQ8xSWcee9s5/view?usp=share_link",
+        },
+    )
+    settings = SimpleNamespace(
+        beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats_cfg))
+    )
+    tracker = _Tracker(tmp_path)
+
+    report = admission.preflight_staged_linkstats_admission(
+        tracker=tracker,
+        metadata_logger=tracker,
+        existing_admission_reports={},
+        settings=settings,
+        launch_reference=_reference(staged),
+        report_dir=tmp_path / "run-declared",
+    )
+
+    assert report is not None
+    assert report.outcome == "verified"
+    report_path = (
+        tmp_path / "run-declared" / "admission" / "beam-linkstats-warmstart.json"
+    )
+    saved = json.loads(report_path.read_text(encoding="utf-8"))
+    assert saved["outcome"] == "verified"
+    assert (
+        saved["sidecar_provenance"]["source"]["beam_run_label"]
+        == "beam-fc07-v260419-it3"
+    )
+
+
+def test_declared_digest_linkstats_admission_rejects_mismatched_sidecar(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    from pilates.beam import admission
+    from pilates.config.models import BeamLinkstatsAdmissionConfig
+
+    staged = tmp_path / "warmstart.parquet"
+    content = b"PAR1-converged-linkstats-bytes"
+    staged.write_bytes(content)
+    digest = "sha256:file:" + hashlib.sha256(content).hexdigest()
+
+    sidecar = tmp_path / "warmstart.parquet.provenance.json"
+    sidecar.write_text(
+        json.dumps(
+            {
+                "schema_version": "pilates.linkstats_provenance.v1",
+                "artifact_name": "init.linkstats.parquet",
+                "format": "parquet",
+                "identity": "sha256:file:" + ("0" * 64),
+                "size_bytes": len(content),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    linkstats_cfg = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expectation={
+            "kind": "declared_digest",
+            "identity": digest,
+        },
+    )
+    settings = SimpleNamespace(
+        beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats_cfg))
+    )
+    tracker = _Tracker(tmp_path)
+
+    with pytest.raises(admission.BeamInputAdmissionError, match="mismatched"):
+        admission.preflight_staged_linkstats_admission(
+            tracker=tracker,
+            metadata_logger=tracker,
+            existing_admission_reports={},
+            settings=settings,
+            launch_reference=_reference(staged),
+            report_dir=tmp_path / "run-declared-bad",
+        )
