@@ -629,10 +629,16 @@ def _attach_skim_provenance_to_output_artifacts(
                     current_meta.get(meta_key) != meta_val
                     for meta_key, meta_val in updates.items()
                 )
-                current_meta.update(updates)
-                artifact.meta = current_meta
                 if not needs_persist:
                     continue
+                current_meta.update(updates)
+                if isinstance(artifact.meta, dict):
+                    artifact.meta.update(updates)
+                else:
+                    try:
+                        artifact.meta = current_meta
+                    except Exception:
+                        artifact.__dict__["meta"] = current_meta
                 producer_info = payload.get("producer")
                 tracker_db_path = (
                     producer_info.get("tracker_db_path")
