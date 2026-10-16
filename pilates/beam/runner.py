@@ -1094,10 +1094,9 @@ class BeamFullSkimRunner(GenericRunner):
         workspace: Workspace,
         *,
         launch_config: BeamLaunchConfig,
-        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
     ) -> BeamFullSkimOutputs:
         """
-        Run FullSkimsCreatorApp from typed preprocess outputs and optional warm-start artifacts.
+        Run FullSkimsCreatorApp from typed preprocess outputs.
         """
         if not isinstance(inputs, BeamPreprocessOutputs):
             raise TypeError("BeamFullSkimRunner.run expects BeamPreprocessOutputs")
@@ -1111,11 +1110,6 @@ class BeamFullSkimRunner(GenericRunner):
                 )
                 for short_name, path, description in inputs._iter_record_items()
             ]
-        )
-        _append_artifact_mapping_records(
-            input_store,
-            previous_beam_outputs,
-            description_prefix="BEAM full-skim warm-start input",
         )
         output_store = self._run(input_store, workspace, launch_config)
         mapping = output_store.to_mapping()

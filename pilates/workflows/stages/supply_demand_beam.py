@@ -47,7 +47,6 @@ if TYPE_CHECKING:
 
 
 _FAIL_AFTER_BEAM_RUN_ENV = "PILATES_FAIL_AFTER_BEAM_RUN"
-_BEAM_VEHICLES_IN = "vehicles_beam_in"
 
 
 @dataclass
@@ -61,30 +60,10 @@ class TrafficAssignmentPhaseInputs:
         Forecast year being simulated.
     iteration : int
         Supply-demand iteration index for the year.
-    activity_demand_outputs : Optional[dict[str, Any]]
-        ActivitySim outputs used to seed BEAM inputs for this iteration.
-    previous_beam_outputs : Optional[dict[str, Any]]
-        Prior BEAM outputs (e.g., linkstats) used for warm-starting.
     """
 
     year: int
     iteration: int
-
-
-@dataclass
-class TrafficAssignmentPhaseOutputs:
-    """
-    Outputs from one BEAM (traffic-assignment) iteration.
-
-    Parameters
-    ----------
-    previous_beam_outputs : Optional[dict[str, Any]]
-        BEAM postprocess outputs for warm-starting the next iteration, if
-        available. BEAM-run artifacts remain in the pinned postprocess closure
-        and coupler rather than this public handoff.
-    """
-
-    pass
 
 
 def _full_skim_run_schedule(settings: PilatesConfig) -> str:
@@ -402,7 +381,6 @@ def _run_beam_full_skim_step(
         state=context.state,
         workspace=context.workspace,
         coupler=scenario.coupler,
-        launch_config=launch_config,
     )
     _, outputs = execute_step(
         scenario=scenario,
@@ -478,7 +456,7 @@ def _run_traffic_assignment_phase(
     scenario: ScenarioWithCoupler,
     inputs: TrafficAssignmentPhaseInputs,
     context: WorkflowRuntimeContext,
-) -> TrafficAssignmentPhaseOutputs:
+) -> None:
     """
     Run BEAM for a single supply-demand iteration.
 
@@ -498,10 +476,6 @@ def _run_traffic_assignment_phase(
         Coupler used to read/write artifacts across steps.
     inputs : TrafficAssignmentPhaseInputs
         Inputs required for this iteration.
-    Returns
-    -------
-    TrafficAssignmentPhaseOutputs
-        Combined BEAM outputs for warm-starting the next iteration.
     """
     settings = context.settings
     state = context.state
@@ -546,4 +520,4 @@ def _run_traffic_assignment_phase(
         state.Stage.traffic_assignment,
     )
 
-    return TrafficAssignmentPhaseOutputs()
+    return None

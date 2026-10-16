@@ -107,8 +107,6 @@ def test_preprocess_accepts_artifact_mappings_and_returns_typed_outputs(tmp_path
 
     outputs = preprocessor.preprocess(
         workspace,
-        activity_demand_outputs={"beam_plans": activity_path},
-        previous_beam_outputs={"linkstats_parquet_2018_0": previous_path},
         beam_preprocess_inputs={
             BEAM_PLANS_IN: activity_path,
             BEAM_HOUSEHOLDS_IN: fallback_path,

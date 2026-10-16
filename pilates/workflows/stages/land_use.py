@@ -4,7 +4,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from pilates.runtime.context import WorkflowRuntimeContext
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils import consist_runtime as cr
 
 from pilates.utils.formatting import formatted_print
@@ -26,7 +26,6 @@ if TYPE_CHECKING:
 def run_land_use_stage(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     year: int,
     context: WorkflowRuntimeContext,
 ) -> None:
@@ -57,14 +56,8 @@ def run_land_use_stage(
         Validated run configuration.
     workspace : Workspace
         Workspace managing run-local inputs/outputs.
-    coupler : CouplerProtocol
-        Consist coupler for reading/writing artifacts across steps.
     year : int
         Forecast year being simulated.
-    Returns
-    -------
-    LandUseToSupplyDemandHandoff
-        Updated UrbanSim datastore handoff for downstream supply-demand stages.
     """
     settings = context.settings
     state = context.state

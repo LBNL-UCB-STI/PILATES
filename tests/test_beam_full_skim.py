@@ -1020,6 +1020,7 @@ class TestBeamFullSkimMode:
         assert BEAM_HOUSEHOLDS_IN not in outputs.prepared_inputs
         assert BEAM_PERSONS_IN not in outputs.prepared_inputs
 
+        # Standalone mode unconditionally bypasses beam_preprocess
         # 2. Verify _run_traffic_assignment_phase calls _standalone_full_skim_preprocess_outputs and never _run_beam_preprocess_step
         state = MagicMock()
         context = SimpleNamespace(

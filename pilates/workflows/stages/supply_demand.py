@@ -5,7 +5,7 @@ from typing import Callable, Optional
 
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.utils.formatting import formatted_print
 
@@ -24,7 +24,6 @@ logger = logging.getLogger(__name__)
 def run_supply_demand_stage(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     year: int,
     on_activity_demand_boundary: Optional[Callable[[int], None]] = None,
     on_iteration_boundary: Optional[Callable[[int], None]] = None,

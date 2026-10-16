@@ -38,8 +38,6 @@ logger = logging.getLogger(__name__)
 
 def _record_store_from_artifact_mappings(
     *,
-    activity_demand_outputs: Optional[Mapping[str, Any]],
-    previous_beam_outputs: Optional[Mapping[str, Any]],
     beam_preprocess_inputs: Optional[Mapping[str, Any]],
 ) -> RecordStore:
     """
@@ -75,16 +73,6 @@ def _record_store_from_artifact_mappings(
             )
 
     combined = RecordStore()
-    _append_mapping(
-        combined,
-        activity_demand_outputs,
-        description_prefix="BEAM preprocess activity-demand input",
-    )
-    _append_mapping(
-        combined,
-        previous_beam_outputs,
-        description_prefix="BEAM preprocess warm-start input",
-    )
     _append_mapping(
         combined,
         beam_preprocess_inputs,
@@ -485,8 +473,6 @@ class BeamPreprocessor(GenericPreprocessor):
         self,
         workspace: "Workspace",
         *,
-        activity_demand_outputs: Optional[Mapping[str, Any]] = None,
-        previous_beam_outputs: Optional[Mapping[str, Any]] = None,
         beam_preprocess_inputs: Optional[Mapping[str, Any]] = None,
         beam_preprocess_context: Optional[Mapping[str, Any]] = None,
     ) -> BeamPreprocessOutputs:
@@ -505,8 +491,6 @@ class BeamPreprocessor(GenericPreprocessor):
             self._resolved_exchange_scenario_folder = str(exchange_scenario_folder)
             self._resolved_zone_context = beam_preprocess_context
         input_store = _record_store_from_artifact_mappings(
-            activity_demand_outputs=activity_demand_outputs,
-            previous_beam_outputs=previous_beam_outputs,
             beam_preprocess_inputs=beam_preprocess_inputs,
         )
         try:

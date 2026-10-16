@@ -276,7 +276,6 @@ def test_stubbed_beam_only_supply_demand_runs_without_activitysim_zarr_inputs(
 
     _run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=env["context"],
     )
@@ -480,7 +479,6 @@ def test_stubbed_activitysim_beam_supply_demand_allows_missing_optional_omx_arch
 
     _run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=env["context"],
     )
@@ -597,7 +595,6 @@ def test_stubbed_land_use_atlas_stage_keeps_usim_datastore_out_of_atlas_run_outp
 
     _run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=env["context"],
     )

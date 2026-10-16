@@ -824,13 +824,6 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         def get(self, key: str, default: object = None) -> object:
             return values.get(key, default)
 
-    launch_config_path = tmp_path / "beam-launch" / "beam.conf"
-    launch_config_path.parent.mkdir()
-    launch_config_path.write_text("beam {}\n", encoding="utf-8")
-    launch_config = BeamLaunchConfig(
-        root=launch_config_path.parent,
-        primary_config=launch_config_path,
-    )
     settings = object()
     state = SimpleNamespace()
     workspace = SimpleNamespace(
@@ -841,7 +834,6 @@ def test_beam_full_skim_resolver_keeps_ordinary_binding_for_workspace_runner(
         state=state,
         workspace=workspace,
         coupler=Coupler(),
-        launch_config=launch_config,
     )
 
     assert isinstance(resolved.binding, BindingResult)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pilates.runtime.context import WorkflowRuntimeContext
 from pilates.utils import consist_runtime as cr
-from pilates.utils.consist_types import CouplerProtocol, ScenarioWithCoupler
+from pilates.utils.consist_types import ScenarioWithCoupler
 from pilates.utils.coupler_helpers import flush_archive_queue
 from pilates.workflows.step_execution import execute_step
 from pilates.workflows.steps import postprocessing
@@ -14,7 +14,6 @@ logger = logging.getLogger(__name__)
 def run_postprocessing_stage(
     *,
     scenario: ScenarioWithCoupler,
-    coupler: CouplerProtocol,
     year: int,
     context: WorkflowRuntimeContext,
 ) -> None:

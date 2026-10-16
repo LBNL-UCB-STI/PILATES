@@ -99,31 +99,6 @@ def _export_atlas_table_to_csv(
     )
 
 
-def _discover_global_atlas_input_files(global_source_dir: str) -> List[Tuple[str, str]]:
-    """
-    Discover top-level static ATLAS global inputs that must be present in mutable input.
-
-    Returns tuples of (absolute_source_path, label_for_logging).
-    """
-    patterns = (
-        ("*.csv", "CSV"),
-        ("*.RData", "RData"),
-        ("*.Rdat", "Rdat"),
-        ("*.rdata", "RData"),
-        ("*.rdat", "Rdat"),
-    )
-    discovered: List[Tuple[str, str]] = []
-    seen: set[str] = set()
-    for pattern, label in patterns:
-        for path in glob.glob(os.path.join(global_source_dir, pattern)):
-            real = os.path.realpath(path)
-            if real in seen:
-                continue
-            seen.add(real)
-            discovered.append((real, label))
-    return discovered
-
-
 def _atlas_static_input_metadata(
     *,
     relpath: str,

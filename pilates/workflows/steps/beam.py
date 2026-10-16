@@ -410,7 +410,9 @@ def _materialize_native_outputs(
             )
         resolved = source.resolve()
         if resolved == destination.resolve():
-            copy_linkstats_provenance_sidecar(resolved, destination)
+            copy_linkstats_provenance_sidecar(
+                resolved, destination, fallback_source_path=source
+            )
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         if source.is_dir():
@@ -433,7 +435,9 @@ def _materialize_native_outputs(
                 staging.unlink()
             shutil.copy2(resolved, staging)
             staging.replace(destination)
-            copy_linkstats_provenance_sidecar(resolved, destination)
+            copy_linkstats_provenance_sidecar(
+                resolved, destination, fallback_source_path=source
+            )
 
 
 def _beam_run_native_sources(produced: BeamRunOutputs) -> dict[str, Path]:
@@ -1556,9 +1560,8 @@ def _resolve_beam_full_skim_inputs(
     state: Any,
     workspace: Any,
     coupler: Any,
-    launch_config: BeamLaunchConfig | None = None,
 ) -> ResolvedStepInputs:
-    del state, launch_config
+    del state
     schedule = (
         str(get_setting(settings, "beam.full_skim.run_schedule", "never") or "never")
         .strip()

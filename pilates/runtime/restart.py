@@ -4,7 +4,6 @@ import logging
 import os
 import shutil
 from bisect import bisect_left
-from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     Any,
@@ -412,77 +411,6 @@ def read_archive_run_state_year(
     return _coerce_int(year)
 
 
-def read_archive_run_state_snapshot(
-    state_path: str,
-    *,
-    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
-) -> RestartStateSnapshot:
-    if not state_path:
-        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
-    try:
-        year, stage, iteration, *_ = read_current_stage_fn(state_path)
-    except Exception as exc:
-        logger.warning(
-            "Failed reading archive run_state snapshot from %s: %s", state_path, exc
-        )
-        return RestartStateSnapshot(year=None, stage_name=None, iteration=None)
-    return RestartStateSnapshot(
-        year=_coerce_int(year),
-        stage_name=getattr(stage, "name", None) if stage is not None else None,
-        iteration=_coerce_int(iteration),
-    )
-
-
-def _runtime_state_snapshot(state: Any) -> RestartStateSnapshot:
-    current_stage = getattr(state, "current_sub_stage", None) or getattr(
-        state, "current_major_stage", None
-    )
-    return RestartStateSnapshot(
-        year=_coerce_int(getattr(state, "current_year", None)),
-        stage_name=getattr(current_stage, "name", None)
-        if current_stage is not None
-        else None,
-        iteration=_coerce_int(getattr(state, "current_inner_iter", None)),
-    )
-
-
-def _stage_progress_rank(stage_name: Optional[str]) -> int:
-    order = {
-        "initialize_data": 0,
-        "land_use": 10,
-        "vehicle_ownership_model": 20,
-        "activity_demand": 30,
-        "activity_demand_directly_from_land_use": 30,
-        "traffic_assignment": 40,
-        "postprocessing": 50,
-    }
-    return order.get(str(stage_name), -1)
-
-
-def _progress_tuple(snapshot: RestartStateSnapshot) -> Tuple[int, int, int]:
-    return (
-        snapshot.year if snapshot.year is not None else -1,
-        snapshot.iteration if snapshot.iteration is not None else 0,
-        _stage_progress_rank(snapshot.stage_name),
-    )
-
-
-def is_rewind_resume_request(
-    *,
-    state: Any,
-    archive_state_path: str,
-    read_current_stage_fn: Callable[[str], Tuple[Any, ...]],
-) -> bool:
-    requested = _runtime_state_snapshot(state)
-    archive = read_archive_run_state_snapshot(
-        archive_state_path,
-        read_current_stage_fn=read_current_stage_fn,
-    )
-    if requested.year is None or archive.year is None:
-        return False
-    return _progress_tuple(requested) < _progress_tuple(archive)
-
-
 def enforce_resume_rewind_guardrail(
     *,
     state: Any,
@@ -506,13 +434,6 @@ def enforce_resume_rewind_guardrail(
         logger.warning("%s Proceeding because --allow-rewind-resume was set.", message)
         return
     raise RuntimeError(message + " Use --allow-rewind-resume to override.")
-
-
-@dataclass(frozen=True)
-class RestartStateSnapshot:
-    year: Optional[int]
-    stage_name: Optional[str]
-    iteration: Optional[int]
 
 
 def _resolve_archived_artifact_source_path(
@@ -647,41 +568,33 @@ def restore_restart_coupler_snapshot(
     if archive_run_dir_val and restored:
         archive_run_dir = Path(archive_run_dir_val).resolve()
         for role_key, artifact in restored.items():
-            target_str = None
-            container_uri = getattr(artifact, "container_uri", None)
-            if container_uri:
-                target_str = resolve_workspace_uri_path(
-                    container_uri, workspace=workspace
+            target_str = resolve_workspace_uri_path(
+                getattr(artifact, "container_uri", None)
+                or getattr(artifact, "path", None),
+                workspace=workspace,
+            )
+            if not target_str or "://" in str(target_str):
+                continue
+            target_path = Path(target_str)
+            if not target_path.is_absolute() and getattr(workspace, "full_path", None):
+                target_path = Path(workspace.full_path) / target_path
+            if not target_path.exists():
+                source_path = _resolve_archived_artifact_source_path(
+                    tracker=tracker,
+                    artifact=artifact,
+                    archive_run_dir=archive_run_dir,
+                    workspace=workspace,
                 )
-            if not target_str:
-                art_path = getattr(artifact, "path", None)
-                if art_path:
-                    target_str = art_path
-
-            if target_str:
-                if not os.path.isabs(target_str) and getattr(
-                    workspace, "full_path", None
-                ):
-                    target_path = Path(workspace.full_path) / target_str
-                else:
-                    target_path = Path(target_str)
-                if not target_path.exists():
-                    source_path = _resolve_archived_artifact_source_path(
-                        tracker=tracker,
-                        artifact=artifact,
-                        archive_run_dir=archive_run_dir,
-                        workspace=workspace,
+                if source_path and source_path.exists():
+                    logger.info(
+                        "Staging missing restart artifact %s from archive %s -> %s",
+                        role_key,
+                        source_path,
+                        target_path,
                     )
-                    if source_path and source_path.exists():
-                        logger.info(
-                            "Staging missing restart artifact %s from archive %s -> %s",
-                            role_key,
-                            source_path,
-                            target_path,
-                        )
-                        _stage_archived_path(
-                            source_path=source_path,
-                            target_path=target_path,
-                        )
+                    _stage_archived_path(
+                        source_path=source_path,
+                        target_path=target_path,
+                    )
 
     return restored or {}

@@ -994,7 +994,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     # Phase 1: land-use stage publishes UrbanSim datastore handles.
     run_land_use_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=golden_stub_env["context"],
     )
@@ -1068,7 +1067,6 @@ def _legacy_golden_stub_workflow_stage_contract_with_real_consist(
     asim_archive_iteration = state.current_inner_iter
     run_supply_demand_stage(
         scenario=scenario,
-        coupler=coupler,
         year=state.forecast_year,
         context=golden_stub_env["context"],
     )

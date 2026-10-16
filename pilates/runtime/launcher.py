@@ -422,8 +422,15 @@ def _rewind_uncommitted_activitysim_restart_to_provider_boundary(*, state: Any) 
     activity_demand = getattr(stage_enum, "activity_demand", None)
     supply_demand_loop = getattr(stage_enum, "supply_demand_loop", None)
     current_major_stage = getattr(state, "current_major_stage", None)
+    current_sub_stage = getattr(state, "current_sub_stage", None)
 
     if current_major_stage != supply_demand_loop:
+        return False
+
+    if (
+        current_sub_stage == getattr(stage_enum, "traffic_assignment", None)
+        and getattr(state, "sub_stage_progress", None) == "beam_run_completed"
+    ):
         return False
 
     is_enabled = getattr(state, "is_enabled", None)
@@ -997,7 +1004,6 @@ def main(
                 if state.should_run(WorkflowState.Stage.land_use):
                     run_land_use_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
                         context=runtime_context,
                     )
@@ -1024,7 +1030,6 @@ def main(
                 if state.should_run(WorkflowState.Stage.supply_demand_loop):
                     run_supply_demand_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
                         on_activity_demand_boundary=(
                             lambda iteration, y=year: _snapshot_activitysim_boundary(
@@ -1051,7 +1056,6 @@ def main(
                     formatted_print("POST-PROCESSING")
                     run_postprocessing_stage(
                         scenario=cast(ScenarioWithCoupler, tagged_scenario),
-                        coupler=coupler,
                         year=year,
                         context=runtime_context,
                     )

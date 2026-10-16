@@ -157,3 +157,94 @@ def test_restore_restart_coupler_snapshot_stages_missing_files_from_archive(tmp_
         assert "beam_plans" in sc_restart.coupler
         assert target_missing_file.exists()
         assert target_missing_file.read_text() == "archived-plan-data\n"
+
+
+def test_restore_restart_coupler_snapshot_handles_beam_input_uri_and_skips_external_schemes(
+    tmp_path,
+):
+
+    db_path = str(tmp_path / "provenance.duckdb")
+    archive_dir = tmp_path / "archive_run"
+    archive_dir.mkdir()
+
+    tracker_arch = consist.Tracker(run_dir=archive_dir, db_path=db_path)
+    arch_beam_file = archive_dir / "beam" / "input" / "transit" / "schedule.csv"
+    arch_beam_file.parent.mkdir(parents=True, exist_ok=True)
+    arch_beam_file.write_text("beam-schedule-data\n")
+
+    external_file = tmp_path / "external" / "ref.csv"
+    external_file.parent.mkdir(parents=True, exist_ok=True)
+    external_file.write_text("external-ref-data\n")
+
+    with tracker_arch.scenario("archive_scenario") as sc_arch:
+
+        def step_fn():
+            art_beam = tracker_arch.log_artifact(
+                arch_beam_file,
+                key="beam_schedule",
+                container_uri="beam_input://transit/schedule.csv",
+            )
+            sc_arch.coupler.set("beam_schedule", art_beam)
+            art_ext = tracker_arch.log_artifact(
+                external_file,
+                key="external_ref",
+                container_uri="inputs://external/ref.csv",
+            )
+            sc_arch.coupler.set("external_ref", art_ext)
+
+        sc_arch.run(step_fn, name="produce_archive_artifacts")
+        sc_arch.capture_coupler_snapshot(phase="post")
+
+    fresh_ws = tmp_path / "fresh_workspace"
+    fresh_ws.mkdir()
+    tracker_fresh = consist.Tracker(run_dir=fresh_ws, db_path=db_path)
+
+    target_beam_file = fresh_ws / "beam" / "input" / "transit" / "schedule.csv"
+    assert not target_beam_file.exists()
+
+    settings = SimpleNamespace(run=SimpleNamespace(archive_run_dir=archive_dir))
+    state = SimpleNamespace(
+        scenario_id="archive_scenario",
+        run_info_path=str(archive_dir / "run_info.yaml"),
+    )
+    workspace = SimpleNamespace(full_path=fresh_ws, archive_run_dir=archive_dir)
+
+    with tracker_fresh.scenario("restart_scenario") as sc_restart:
+        restored = restart_runtime.restore_restart_coupler_snapshot(
+            scenario=sc_restart,
+            tracker=tracker_fresh,
+            settings=settings,
+            state=state,
+            workspace=workspace,
+        )
+
+        assert "beam_schedule" in restored
+        assert "external_ref" in restored
+        assert target_beam_file.exists()
+        assert target_beam_file.read_text() == "beam-schedule-data\n"
+        assert not (fresh_ws / "inputs").exists()
+
+
+def test_rewind_uncommitted_activitysim_restart_to_provider_boundary_preserves_completed_beam():
+    from pilates.runtime.launcher import (
+        _rewind_uncommitted_activitysim_restart_to_provider_boundary,
+    )
+
+    class _FakeStage:
+        activity_demand = "activity_demand"
+        supply_demand_loop = "supply_demand_loop"
+        traffic_assignment = "traffic_assignment"
+
+    state = SimpleNamespace(
+        is_restart_run=True,
+        Stage=_FakeStage,
+        current_major_stage="supply_demand_loop",
+        current_sub_stage="traffic_assignment",
+        sub_stage_progress="beam_run_completed",
+        is_enabled=lambda stage: True,
+        major_stage_order=("supply_demand_loop",),
+    )
+
+    rewound = _rewind_uncommitted_activitysim_restart_to_provider_boundary(state=state)
+    assert rewound is False
+    assert state.current_major_stage == "supply_demand_loop"
