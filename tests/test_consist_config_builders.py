@@ -1,10 +1,13 @@
 """Tests for Consist config builder registry and step kwargs."""
 
 from unittest.mock import MagicMock
-from types import SimpleNamespace
 
 import pytest
 
+from pilates.config.models import (
+    BeamAdmissionConfig,
+    BeamLinkstatsAdmissionConfig,
+)
 from pilates.utils import consist_config as consist_config_module
 from pilates.utils.consist_config import _CONFIG_BUILDERS, build_step_consist_kwargs
 from pilates.workflows import catalog
@@ -172,8 +175,8 @@ def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_
     expected_bytes = tmp_path / "archive" / "baseline-linkstats.csv.gz"
     expected_bytes.parent.mkdir()
     expected_bytes.write_bytes(b"baseline")
-    settings.beam.admission = SimpleNamespace(
-        linkstats=SimpleNamespace(
+    settings.beam.admission = BeamAdmissionConfig(
+        linkstats=BeamLinkstatsAdmissionConfig(
             mode="strict",
             expected_run_id="baseline-run",
             artifact_key="linkstats_warmstart",
@@ -192,9 +195,9 @@ def test_beam_linkstats_admission_affects_identity_and_expected_bytes_input(tmp_
 
     assert result["config"]["linkstats_admission"] == {
         "mode": "strict",
+        "kind": "prior_run",
         "expected_run_id": "baseline-run",
         "artifact_key": "linkstats_warmstart",
-        "expected_bytes_path": str(expected_bytes),
     }
     assert ("beam_admission_linkstats_expected_bytes", expected_bytes) in result[
         "identity_inputs"

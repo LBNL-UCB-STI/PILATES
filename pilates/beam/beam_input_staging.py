@@ -1238,4 +1238,11 @@ def _stage_warmstart_linkstats(
     staged_path.parent.mkdir(parents=True, exist_ok=True)
     if source_path != staged_path.resolve():
         shutil.copy2(source_path, staged_path)
+    source_sidecar = source_path.parent / f"{source_path.name}.provenance.json"
+    staged_sidecar = staged_path.parent / f"{staged_path.name}.provenance.json"
+    if (
+        source_sidecar.is_file()
+        and source_sidecar.resolve() != staged_sidecar.resolve()
+    ):
+        shutil.copy2(source_sidecar, staged_sidecar)
     return staged_path

@@ -730,3 +730,241 @@ class TestBeamFullSkimMode:
         assert legacy_info["data_model_version"] is None
         assert legacy_info["matrix_count"] == 1
         assert legacy_info["zone_count"] == 2
+
+    def test_select_latest_linkstats_maps_staged_warmstart_in_launch_config(
+        self, tmp_path
+    ):
+        """_select_latest_linkstats_path maps unmounted workspace warmstart to staged .pilates/warmstarts inside launch_config."""
+        from pilates.beam.runner import _select_latest_linkstats_path
+        from pilates.generic.records import FileRecord, RecordStore
+
+        workspace_warmstart = (
+            tmp_path
+            / "workspace"
+            / "beam"
+            / "input"
+            / "sfbay"
+            / "r5"
+            / "init.linkstats.parquet"
+        )
+        workspace_warmstart.parent.mkdir(parents=True)
+        workspace_warmstart.write_bytes(b"PAR1-fake-parquet")
+
+        launch_root = (
+            tmp_path
+            / "workspace"
+            / ".pilates-beam-launch-config"
+            / "y2019"
+            / "i0"
+            / "sfbay"
+        )
+        staged_warmstart = (
+            launch_root / ".pilates" / "warmstarts" / "init.linkstats.parquet"
+        )
+        staged_warmstart.parent.mkdir(parents=True)
+        staged_warmstart.write_bytes(b"PAR1-fake-parquet")
+
+        store = RecordStore(
+            recordList=[
+                FileRecord(
+                    file_path=str(workspace_warmstart),
+                    short_name="linkstats_warmstart",
+                    description="Warmstart linkstats",
+                )
+            ]
+        )
+        selected = _select_latest_linkstats_path(
+            store,
+            str(launch_root),
+            str(tmp_path / "workspace" / "beam" / "output"),
+        )
+        assert selected == "/app/input/.pilates/warmstarts/init.linkstats.parquet"
+
+    def test_resolve_full_skim_input_path_does_not_double_region_for_launch_root(
+        self, tmp_path
+    ):
+        """_resolve_full_skim_input_path does not double region when abs_beam_input already ends with region."""
+        from pilates.beam.runner import _resolve_full_skim_input_path
+
+        launch_root = (
+            tmp_path / ".pilates-beam-launch-config" / "y2019" / "i0" / "sfbay"
+        )
+        launch_root.mkdir(parents=True)
+        toll_file = launch_root / "toll-prices.csv"
+        toll_file.write_text("linkId,toll\n", encoding="utf-8")
+
+        container_path, host_path = _resolve_full_skim_input_path(
+            "toll-prices.csv",
+            abs_beam_input=str(launch_root),
+            abs_beam_output=str(tmp_path / "output"),
+            region="sfbay",
+        )
+        assert container_path == "/app/input/toll-prices.csv"
+        assert host_path == str(toll_file)
+
+    def test_standalone_full_skim_preprocess_outputs_resolves_warmstart_and_zones(
+        self, tmp_path
+    ):
+        """_standalone_full_skim_preprocess_outputs resolves initial warmstart linkstats and prepares canonical zones."""
+        from pilates.workflows.artifact_keys import LINKSTATS_WARMSTART
+        from pilates.workflows.stages.supply_demand_beam import (
+            _standalone_full_skim_preprocess_outputs,
+        )
+
+        beam_input_dir = tmp_path / "beam" / "input"
+        warmstart_file = (
+            beam_input_dir
+            / "sfbay"
+            / "r5"
+            / "sfbay-cbg5500-weakConn-network"
+            / "init.linkstats.parquet"
+        )
+        warmstart_file.parent.mkdir(parents=True)
+        warmstart_file.write_bytes(b"PAR1-warmstart")
+
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = str(beam_input_dir)
+        scenario = SimpleNamespace(coupler={})
+        settings = SimpleNamespace(
+            run=SimpleNamespace(region="sfbay"),
+            beam=SimpleNamespace(
+                router_directory="r5/sfbay-cbg5500-weakConn-network",
+                warmstart_linkstats_path="{router_directory}/init.linkstats.parquet",
+            ),
+            shared=SimpleNamespace(
+                geography=SimpleNamespace(
+                    zones=SimpleNamespace(
+                        source_file="pilates/activitysim/data/sfbay/taz_sfbay.geojson"
+                    )
+                )
+            ),
+        )
+
+        with patch(
+            "pilates.beam.preprocessor._prepare_beam_zone_shapefile"
+        ) as mock_prepare_zones:
+            outputs = _standalone_full_skim_preprocess_outputs(
+                scenario=scenario,
+                workspace=workspace,
+                settings=settings,
+            )
+
+        assert outputs.prepared_inputs[LINKSTATS_WARMSTART] == warmstart_file
+        assert scenario.coupler[LINKSTATS_WARMSTART] == warmstart_file
+        mock_prepare_zones.assert_called_once_with(workspace, settings)
+
+    def test_sfbay_standalone_fullskim_hpc_config_loads_validly(self):
+        """scenarios/sfbay/settings-sfbay-consist-fullskim-hpc-2019.yaml validates as a standalone activitySimOmx full-skim config."""
+        from pilates.config.models import load_config
+
+        cfg_path = (
+            Path(__file__).resolve().parents[1]
+            / "scenarios"
+            / "sfbay"
+            / "settings-sfbay-consist-fullskim-hpc-2019.yaml"
+        )
+        cfg = load_config(cfg_path)
+        assert cfg.run.region == "sfbay"
+        assert cfg.run.models.travel == "beam"
+        assert cfg.run.models.land_use is None
+        assert cfg.run.models.activity_demand is None
+        assert cfg.run.models.vehicle_ownership is None
+        assert cfg.beam is not None
+        assert cfg.beam.config == "scenarios/sfbay-pilates-base-calibrated.conf"
+        assert cfg.beam.full_skim is not None
+        assert cfg.beam.full_skim.run_schedule == "standalone"
+        assert cfg.beam.full_skim.skims_kind == "activitySimOmx"
+        assert cfg.beam.full_skim.peak_hours == [5.0, 8.5, 12.0, 17.5, 22.1]
+        assert cfg.beam.full_skim.modes_to_build == {
+            "drive": True,
+            "walk": True,
+            "transit": True,
+        }
+        assert cfg.beam.full_skim.toll_file_path == "toll-prices.csv"
+
+    def test_native_beam_full_skim_runs_linkstats_and_r5_preflight(self, tmp_path):
+        """_native_beam_full_skim runs linkstats admission and R5 execution reference preflight before launching BeamFullSkimRunner."""
+        from pilates.beam.launch_config import BeamLaunchConfig
+        from pilates.workflows.steps.beam import _native_beam_full_skim
+
+        launch_root = tmp_path / "launch"
+        launch_root.mkdir()
+        primary_conf = launch_root / "sfbay.conf"
+        primary_conf.write_text("# beam conf\n", encoding="utf-8")
+        launch_config = BeamLaunchConfig(
+            root=launch_root,
+            primary_config=primary_conf,
+        )
+
+        workspace = MagicMock()
+        workspace.get_beam_mutable_data_dir.return_value = str(
+            tmp_path / "beam" / "input"
+        )
+        state = SimpleNamespace(
+            run_info_path=str(tmp_path / "run_info.json"),
+            year=2019,
+            iteration=0,
+        )
+        settings = SimpleNamespace()
+        consist_ctx = SimpleNamespace(
+            run_metadata={"admission_reports": {"existing": True}}
+        )
+        fake_ref = SimpleNamespace(staged_path=tmp_path / "init.linkstats.parquet")
+
+        from contextlib import ExitStack
+
+        fn = getattr(_native_beam_full_skim, "__wrapped__", _native_beam_full_skim)
+        with ExitStack() as stack:
+            mock_validate_linkstats = stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.validate_staged_linkstats_reference",
+                    return_value=fake_ref,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.has_staged_linkstats_admission_policy",
+                    return_value=True,
+                )
+            )
+            mock_preflight_admission = stack.enter_context(
+                patch(
+                    "pilates.workflows.steps.beam.preflight_staged_linkstats_admission"
+                )
+            )
+            mock_validate_r5 = stack.enter_context(
+                patch("pilates.workflows.steps.beam.validate_r5_execution_reference")
+            )
+            mock_runner_cls = stack.enter_context(
+                patch("pilates.beam.runner.BeamFullSkimRunner")
+            )
+            stack.enter_context(
+                patch("pilates.workflows.steps.beam._validate_native_outputs")
+            )
+            mock_runner_cls.return_value.run.return_value = SimpleNamespace(
+                full_skims=None,
+                final_skims_omx=None,
+            )
+            fn(
+                settings=settings,
+                state=state,
+                workspace=workspace,
+                beam_launch_config=launch_config,
+                _consist_ctx=consist_ctx,
+            )
+
+        mock_validate_linkstats.assert_called_once_with(
+            settings=settings,
+            workspace=workspace,
+            run_context=consist_ctx,
+            config_root=launch_root,
+        )
+        mock_preflight_admission.assert_called_once()
+        assert mock_preflight_admission.call_args.kwargs["launch_reference"] is fake_ref
+        mock_validate_r5.assert_called_once_with(
+            settings=settings,
+            workspace=workspace,
+            run_context=consist_ctx,
+            config_root=launch_root,
+        )
+        mock_runner_cls.return_value.run.assert_called_once()

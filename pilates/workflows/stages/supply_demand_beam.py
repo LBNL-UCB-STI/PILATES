@@ -17,6 +17,7 @@ from pilates.utils.consist_types import (
 from pilates.utils.coupler_helpers import (
     _emit_artifact_lifecycle_event,
     artifact_to_existing_path,
+    set_coupler_from_artifact,
 )
 from pilates.utils.formatting import formatted_print
 from pilates.beam.launch_config import BeamLaunchConfig, build_beam_launch_config
@@ -803,6 +804,7 @@ def _standalone_full_skim_preprocess_outputs(
     *,
     scenario: ScenarioWithCoupler,
     workspace: Workspace,
+    settings: Optional[PilatesConfig] = None,
 ) -> Any:
     from pilates.beam.outputs import BeamPreprocessOutputs
 
@@ -826,6 +828,28 @@ def _standalone_full_skim_preprocess_outputs(
         )
         if existing_linkstats is not None:
             prepared[LINKSTATS_WARMSTART] = Path(existing_linkstats)
+    if LINKSTATS_WARMSTART not in prepared and settings is not None:
+        from pilates.utils.beam_warmstart import resolve_initial_linkstats_path
+
+        resolved_warmstart = resolve_initial_linkstats_path(settings, workspace)
+        if resolved_warmstart is not None:
+            prepared[LINKSTATS_WARMSTART] = Path(resolved_warmstart)
+            if isinstance(scenario.coupler, dict):
+                scenario.coupler[LINKSTATS_WARMSTART] = prepared[LINKSTATS_WARMSTART]
+            else:
+                set_coupler_from_artifact(
+                    scenario.coupler,
+                    LINKSTATS_WARMSTART,
+                    prepared[LINKSTATS_WARMSTART],
+                )
+    if settings is not None:
+        shared_cfg = getattr(settings, "shared", None)
+        geography_cfg = getattr(shared_cfg, "geography", None)
+        zones_cfg = getattr(geography_cfg, "zones", None)
+        if zones_cfg is not None:
+            from pilates.beam.preprocessor import _prepare_beam_zone_shapefile
+
+            _prepare_beam_zone_shapefile(workspace, settings)
     return BeamPreprocessOutputs(
         beam_mutable_data_dir=Path(workspace.get_beam_mutable_data_dir()),
         prepared_inputs=prepared,
@@ -883,6 +907,7 @@ def _run_traffic_assignment_phase(
             preprocess_outputs = _standalone_full_skim_preprocess_outputs(
                 scenario=scenario,
                 workspace=workspace,
+                settings=settings,
             )
         launch_config = _compile_beam_launch_config(
             scenario=scenario,

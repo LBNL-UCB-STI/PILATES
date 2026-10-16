@@ -20,11 +20,14 @@ from typing import Any, Callable, Iterable, Mapping
 
 import consist as cr
 from consist import (
+    Artifact,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
     define_step,
 )
+from consist.core.persistence import DatabaseManager
+from consist.models.artifact import get_tracker_ref
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -563,30 +566,123 @@ def _attach_skim_provenance_to_output_artifacts(
     workspace: Any,
     skim_keys: Iterable[str],
 ) -> None:
-    for key in skim_keys:
-        artifact = outputs.get(key)
-        if artifact is None:
-            continue
-        path = artifact_to_path(artifact, workspace=workspace)
-        if path is None:
-            continue
-        sidecar_path = skim_provenance_sidecar_path(path)
-        if not sidecar_path.is_file():
-            continue
-        try:
-            payload = read_skim_provenance_sidecar(sidecar_path)
-        except Exception as exc:
-            logger.debug(
-                "Unable to attach skim provenance sidecar from %s: %s",
-                sidecar_path,
-                exc,
-            )
-            continue
-        meta = getattr(artifact, "meta", None)
-        if isinstance(meta, dict):
-            meta["skim_provenance"] = payload
-            if payload.get("identity"):
-                meta["admission_file_identity"] = payload["identity"]
+    import json
+
+    db_cache: dict[str, DatabaseManager] = {}
+    try:
+        for key in skim_keys:
+            artifact = outputs.get(key)
+            if artifact is None:
+                continue
+            path = artifact_to_path(artifact, workspace=workspace)
+            if path is None:
+                continue
+            sidecar_path = skim_provenance_sidecar_path(path)
+            payload: Mapping[str, Any] | None = None
+            if sidecar_path.is_file():
+                try:
+                    payload = read_skim_provenance_sidecar(sidecar_path)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to attach skim provenance sidecar from %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+                    continue
+            else:
+                existing_meta = getattr(artifact, "meta", None)
+                cached_prov = (
+                    existing_meta.get("skim_provenance")
+                    if isinstance(existing_meta, Mapping)
+                    else None
+                )
+                if isinstance(cached_prov, Mapping) and Path(path).exists():
+                    payload = dict(cached_prov)
+                    try:
+                        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp_path = (
+                            sidecar_path.parent
+                            / f".tmp_{sidecar_path.name}.{os.getpid()}"
+                        )
+                        tmp_path.write_text(
+                            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                        tmp_path.replace(sidecar_path)
+                    except Exception as exc:
+                        logger.debug(
+                            "Unable to materialize cached skim provenance sidecar to %s: %s",
+                            sidecar_path,
+                            exc,
+                        )
+            if payload is None:
+                continue
+            updates: dict[str, Any] = {"skim_provenance": dict(payload)}
+            identity = payload.get("identity")
+            if isinstance(identity, str) and identity.startswith("sha256:file:"):
+                updates["admission_file_identity"] = identity
+            if isinstance(artifact, Artifact):
+                current_meta = (
+                    dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+                )
+                needs_persist = any(
+                    current_meta.get(meta_key) != meta_val
+                    for meta_key, meta_val in updates.items()
+                )
+                if not needs_persist:
+                    continue
+                current_meta.update(updates)
+                if isinstance(artifact.meta, dict):
+                    artifact.meta.update(updates)
+                else:
+                    try:
+                        artifact.meta = current_meta
+                    except Exception:
+                        artifact.__dict__["meta"] = current_meta
+                producer_info = payload.get("producer")
+                tracker_db_path = (
+                    producer_info.get("tracker_db_path")
+                    if isinstance(producer_info, Mapping)
+                    else None
+                ) or payload.get("tracker_db_path")
+                tracker_ref = get_tracker_ref(artifact)
+                explicit_owner = tracker_ref() if tracker_ref is not None else None
+                if explicit_owner is not None and explicit_owner.db is not None:
+                    explicit_owner.db.update_artifact_meta(artifact, updates)
+                    explicit_owner._run_artifacts_cache.clear()
+                    continue
+                active_tracker = cr.current_tracker()
+                if active_tracker is not None and active_tracker.db is not None:
+                    owner_db_path = getattr(active_tracker.db, "db_path", None)
+                    if (
+                        not isinstance(tracker_db_path, str)
+                        or not tracker_db_path
+                        or (
+                            owner_db_path is not None
+                            and Path(owner_db_path).resolve()
+                            == Path(tracker_db_path).resolve()
+                        )
+                    ):
+                        active_tracker.db.update_artifact_meta(artifact, updates)
+                        active_tracker._run_artifacts_cache.clear()
+                        continue
+                if (
+                    isinstance(tracker_db_path, str)
+                    and tracker_db_path
+                    and Path(tracker_db_path).is_file()
+                ):
+                    db = db_cache.get(tracker_db_path)
+                    if db is None:
+                        db = DatabaseManager(tracker_db_path)
+                        db_cache[tracker_db_path] = db
+                    db.update_artifact_meta(artifact, updates)
+            else:
+                meta = getattr(artifact, "meta", None)
+                if isinstance(meta, dict):
+                    meta.update(updates)
+    finally:
+        for db in db_cache.values():
+            db.engine.dispose()
 
 
 def _emit_skim_provenance_sidecars(
@@ -1543,6 +1639,54 @@ def _native_beam_preprocess(
     del _consist_ctx
 
 
+def _preflight_beam_launch_inputs(
+    *,
+    settings: Any,
+    state: Any,
+    workspace: Workspace,
+    beam_launch_config: BeamLaunchConfig,
+    run_context: Any,
+) -> None:
+    launch_reference = validate_staged_linkstats_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
+    if launch_reference is None:
+        reject_or_warn_for_missing_staged_linkstats(settings=settings)
+    elif has_staged_linkstats_admission_policy(settings=settings):
+        try:
+            active_run = cr.current_run()
+        except RuntimeError:
+            active_run = None
+        existing_admission_reports = (
+            active_run.meta.get("admission_reports", {})
+            if active_run is not None
+            else {}
+        )
+        if not isinstance(existing_admission_reports, Mapping):
+            existing_admission_reports = {}
+        try:
+            tracker = cr.current_tracker()
+        except RuntimeError:
+            tracker = None
+        preflight_staged_linkstats_admission(
+            tracker=tracker,
+            metadata_logger=run_context,
+            existing_admission_reports=existing_admission_reports,
+            settings=settings,
+            launch_reference=launch_reference,
+            report_dir=Path(state.run_info_path).parent,
+        )
+    validate_r5_execution_reference(
+        settings=settings,
+        workspace=workspace,
+        run_context=run_context,
+        config_root=beam_launch_config.root,
+    )
+
+
 @define_step(
     model="beam_run",
     name_template="beam_run__y{year}__i{iteration}__phase_{phase}",
@@ -1575,36 +1719,12 @@ def _native_beam_run(
         raise FileNotFoundError(
             f"beam_run config is missing: {beam_launch_config.primary_config}"
         )
-    launch_reference = validate_staged_linkstats_reference(
+    _preflight_beam_launch_inputs(
         settings=settings,
+        state=state,
         workspace=workspace,
+        beam_launch_config=beam_launch_config,
         run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
-    )
-    if launch_reference is None:
-        reject_or_warn_for_missing_staged_linkstats(settings=settings)
-    elif has_staged_linkstats_admission_policy(settings=settings):
-        active_run = cr.current_run()
-        existing_admission_reports = (
-            active_run.meta.get("admission_reports", {})
-            if active_run is not None
-            else {}
-        )
-        if not isinstance(existing_admission_reports, Mapping):
-            existing_admission_reports = {}
-        preflight_staged_linkstats_admission(
-            tracker=cr.current_tracker(),
-            metadata_logger=_consist_ctx,
-            existing_admission_reports=existing_admission_reports,
-            settings=settings,
-            launch_reference=launch_reference,
-            report_dir=Path(state.run_info_path).parent,
-        )
-    validate_r5_execution_reference(
-        settings=settings,
-        workspace=workspace,
-        run_context=_consist_ctx,
-        config_root=beam_launch_config.root,
     )
     prepared = {
         BEAM_PLANS_IN: plans_beam_in,
@@ -1731,6 +1851,14 @@ def _native_beam_postprocess(
         if key == ZARR_SKIMS:
             continue
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
+        if key == FINAL_SKIMS_OMX:
+            sidecar_path = skim_provenance_sidecar_path(path)
+            if sidecar_path.is_file():
+                enqueue_archive_copy(
+                    key=f"{key}_provenance",
+                    path=sidecar_path,
+                    workspace=workspace,
+                )
     del _consist_ctx
 
 
@@ -1769,6 +1897,13 @@ def _native_beam_full_skim(
         raise FileNotFoundError(
             f"beam_full_skim config is missing: {beam_launch_config.primary_config}"
         )
+    _preflight_beam_launch_inputs(
+        settings=settings,
+        state=state,
+        workspace=workspace,
+        beam_launch_config=beam_launch_config,
+        run_context=_consist_ctx,
+    )
     prepared: dict[str, Path] = {}
     if plans_beam_in is not None:
         prepared[BEAM_PLANS_IN] = plans_beam_in
@@ -1822,32 +1957,21 @@ def _native_beam_full_skim(
             context=_consist_ctx,
             skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
-        if path_obj.name.endswith(".csv.gz"):
-            suffix = ".csv.gz"
-        elif path_obj.suffix == ".zarr":
-            suffix = ".zarr"
-        else:
-            suffix = path_obj.suffix or ".omx"
-        dest = _native_output_destination(
-            root=Path(workspace.get_beam_output_dir()),
-            step_name="beam_full_skim",
-            key="beam_full_skims",
-            suffix=suffix,
-        )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if path_obj.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(path_obj, dest)
-        elif path_obj.resolve() != dest.resolve():
-            shutil.copy2(path_obj, dest)
-        enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
-        if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
-            enqueue_archive_copy(
-                key=FINAL_SKIMS_OMX,
-                path=declared_outputs[FINAL_SKIMS_OMX],
-                workspace=workspace,
-            )
+        for key in (BEAM_FULL_SKIMS, FINAL_SKIMS_OMX):
+            if key in source_paths and key in declared_outputs:
+                target_path = declared_outputs[key]
+                enqueue_archive_copy(
+                    key=key,
+                    path=target_path,
+                    workspace=workspace,
+                )
+                sidecar_path = skim_provenance_sidecar_path(target_path)
+                if sidecar_path.is_file():
+                    enqueue_archive_copy(
+                        key=f"{key}_provenance",
+                        path=sidecar_path,
+                        workspace=workspace,
+                    )
     del _consist_ctx
 
 
