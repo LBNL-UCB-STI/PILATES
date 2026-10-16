@@ -758,3 +758,104 @@ def test_build_beam_launch_config_clears_missing_configured_vehicles_path(
         )
         == ""
     )
+
+
+def test_build_beam_launch_config_writes_empty_parquet_exchange_stubs_when_no_population_inputs(
+    tmp_path: Path,
+) -> None:
+    import pyarrow.parquet as pq
+
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    _write_base_config(source_root)
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={},
+    )
+
+    exchange_dir = launch_config.root / "scenario"
+    expected_columns = {
+        "persons": [
+            "person_id",
+            "household_id",
+            "age",
+            "sex",
+            "industry",
+            "value_of_time",
+        ],
+        "plans": [
+            "trip_id",
+            "tour_id",
+            "person_id",
+            "PlanElementIndex",
+            "ActivityElement",
+            "trip_mode",
+            "ActivityType",
+            "x",
+            "y",
+            "departure_time",
+            "trip_dur_min",
+            "trip_cost_dollars",
+        ],
+        "households": ["household_id", "cars", "income", "block_id"],
+        "blocks": ["block_id", "x", "y"],
+    }
+    for stem, cols in expected_columns.items():
+        parquet_path = exchange_dir / f"{stem}.parquet"
+        assert parquet_path.is_file()
+        table = pq.read_table(parquet_path)
+        assert table.num_rows == 0
+        assert table.column_names == cols
+
+
+def test_build_beam_launch_config_copies_fallback_blocks_parquet_to_nested_exchange_folder(
+    tmp_path: Path,
+) -> None:
+    from pilates.beam.launch_config import build_beam_launch_config
+
+    settings = _settings()
+    settings.beam.scenario_folder = "urbansim"
+    source_root = tmp_path / "beam" / "input" / "seattle"
+    source_primary = _write_base_config(source_root)
+    source_primary.write_text(
+        source_primary.read_text(encoding="utf-8").replace(
+            '  exchange.scenario.folder = ${beam.inputDirectory}"/scenario"\n',
+            '  exchange.scenario.folder = ${beam.inputDirectory}"/urbansim/2018"\n',
+        ),
+        encoding="utf-8",
+    )
+    fallback_blocks = source_root / "urbansim" / "blocks.parquet"
+    fallback_blocks.parent.mkdir(parents=True, exist_ok=True)
+    fallback_blocks.write_bytes(b"PAR1blocks")
+
+    prepared_root = tmp_path / "preprocess-cache"
+    prepared_root.mkdir(parents=True)
+    plans_in = prepared_root / "plans.parquet"
+    plans_in.write_bytes(b"PAR1plans")
+
+    tracker = Tracker(
+        run_dir=tmp_path / "runs",
+        db_path=str(tmp_path / "provenance.duckdb"),
+    )
+
+    launch_config = build_beam_launch_config(
+        settings=settings,
+        source_root=source_root,
+        output_dir=tmp_path / "launch-config",
+        identity=tracker.identity,
+        prepared_inputs={"plans_beam_in": plans_in},
+    )
+
+    nested_blocks = launch_config.root / "urbansim" / "2018" / "blocks.parquet"
+    assert nested_blocks.is_file()
+    assert nested_blocks.read_bytes() == b"PAR1blocks"

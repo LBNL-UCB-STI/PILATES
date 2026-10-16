@@ -350,7 +350,7 @@ def build_beam_launch_config(
         overrides["matsim.modules.network.inputNetworkFile"] = str(generated_network)
         overrides["beam.physsim.inputNetworkFilePath"] = str(generated_network)
 
-    return materialize_beam_launch_config(
+    launch_config = materialize_beam_launch_config(
         settings=settings,
         source_root=source_root,
         output_dir=output_dir,
@@ -361,6 +361,112 @@ def build_beam_launch_config(
             introduces_missing_format_key or introduces_missing_skim_name_key
         ),
     )
+    if overrides.get("beam.exchange.scenario.fileFormat") == "parquet":
+        has_population_inputs = any(
+            prepared_inputs.get(key) is not None for key in population_stems
+        )
+        _ensure_parquet_exchange_scenario_files(
+            derived_root=launch_config.root,
+            exchange_relative=exchange_relative,
+            scenario_folder=settings.beam.scenario_folder,
+            has_population_inputs=has_population_inputs,
+        )
+    return launch_config
+
+
+def _ensure_parquet_exchange_scenario_files(
+    *,
+    derived_root: Path,
+    exchange_relative: Path,
+    scenario_folder: str,
+    has_population_inputs: bool,
+) -> None:
+    """Ensure ``UrbansimReaderV2`` finds required Parquet files in the exchange folder.
+
+    When ``beam.exchange.scenario.fileFormat`` is ``"parquet"``, BEAM's
+    ``UrbansimReaderV2`` unconditionally requires ``persons.parquet``,
+    ``plans.parquet``, ``households.parquet``, and ``blocks.parquet`` in
+    ``beam.exchange.scenario.folder``—even during standalone ``beam_full_skim``
+    where ``FullSkimsCreatorApp`` never uses the population or blocks.
+    Additionally, when ``beam.exchange.scenario.folder`` points to a nested
+    subdirectory (such as ``urbansim/2018``) while ``blocks.parquet`` lives in
+    the parent ``scenario_folder`` (``urbansim/blocks.parquet``), copy
+    ``blocks.parquet`` into ``exchange_dir`` if present, or write 0-row
+    schema-valid Parquet stubs for any missing files when no population inputs
+    were staged.
+    """
+
+    exchange_dir = derived_root / exchange_relative
+    exchange_dir.mkdir(parents=True, exist_ok=True)
+
+    blocks_dest = exchange_dir / "blocks.parquet"
+    if not blocks_dest.is_file() and scenario_folder:
+        fallback_blocks = derived_root / scenario_folder / "blocks.parquet"
+        if fallback_blocks.is_file():
+            shutil.copy2(fallback_blocks, blocks_dest)
+
+    if not has_population_inputs:
+        for stem in ("persons", "plans", "households", "blocks"):
+            target = exchange_dir / f"{stem}.parquet"
+            if not target.is_file():
+                _write_empty_parquet_stub(target, stem=stem)
+
+
+def _write_empty_parquet_stub(path: Path, *, stem: str) -> None:
+    """Write a 0-row Parquet file matching ``ParquetReaders.scala`` expectations."""
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    schemas: dict[str, pa.Schema] = {
+        "persons": pa.schema(
+            [
+                ("person_id", pa.int64()),
+                ("household_id", pa.int64()),
+                ("age", pa.int64()),
+                ("sex", pa.int64()),
+                ("industry", pa.string()),
+                ("value_of_time", pa.float64()),
+            ]
+        ),
+        "plans": pa.schema(
+            [
+                ("trip_id", pa.string()),
+                ("tour_id", pa.string()),
+                ("person_id", pa.int64()),
+                ("PlanElementIndex", pa.int64()),
+                ("ActivityElement", pa.string()),
+                ("trip_mode", pa.string()),
+                ("ActivityType", pa.string()),
+                ("x", pa.float64()),
+                ("y", pa.float64()),
+                ("departure_time", pa.float64()),
+                ("trip_dur_min", pa.float64()),
+                ("trip_cost_dollars", pa.float64()),
+            ]
+        ),
+        "households": pa.schema(
+            [
+                ("household_id", pa.int64()),
+                ("cars", pa.int64()),
+                ("income", pa.int64()),
+                ("block_id", pa.int64()),
+            ]
+        ),
+        "blocks": pa.schema(
+            [
+                ("block_id", pa.int64()),
+                ("x", pa.float64()),
+                ("y", pa.float64()),
+            ]
+        ),
+    }
+    schema = schemas[stem]
+    empty_table = pa.Table.from_pydict(
+        {field.name: [] for field in schema},
+        schema=schema,
+    )
+    pq.write_table(empty_table, path)
 
 
 def _activitysim_skims_file_base_name_override(
