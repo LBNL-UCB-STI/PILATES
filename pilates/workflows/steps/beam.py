@@ -1821,6 +1821,14 @@ def _native_beam_postprocess(
         if key == ZARR_SKIMS:
             continue
         enqueue_archive_copy(key=key, path=path, workspace=workspace)
+        if key == FINAL_SKIMS_OMX:
+            sidecar_path = skim_provenance_sidecar_path(path)
+            if sidecar_path.is_file():
+                enqueue_archive_copy(
+                    key=f"{key}_provenance",
+                    path=sidecar_path,
+                    workspace=workspace,
+                )
     del _consist_ctx
 
 
@@ -1914,11 +1922,19 @@ def _native_beam_full_skim(
         )
         for key in (BEAM_FULL_SKIMS, FINAL_SKIMS_OMX):
             if key in source_paths and key in declared_outputs:
+                target_path = declared_outputs[key]
                 enqueue_archive_copy(
                     key=key,
-                    path=declared_outputs[key],
+                    path=target_path,
                     workspace=workspace,
                 )
+                sidecar_path = skim_provenance_sidecar_path(target_path)
+                if sidecar_path.is_file():
+                    enqueue_archive_copy(
+                        key=f"{key}_provenance",
+                        path=sidecar_path,
+                        workspace=workspace,
+                    )
     del _consist_ctx
 
 

@@ -592,7 +592,7 @@ def admission_policy_fingerprint(
     else:
         fingerprint["expected_run_id"] = expectation.expected_run_id
         fingerprint["artifact_key"] = expectation.artifact_key
-        if expectation.direction not in ("input", "any"):
+        if expectation.direction != "any":
             fingerprint["direction"] = expectation.direction
     return fingerprint
 

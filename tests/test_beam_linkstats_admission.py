@@ -339,3 +339,131 @@ def test_declared_digest_linkstats_admission_rejects_mismatched_sidecar(
             launch_reference=_reference(staged),
             report_dir=tmp_path / "run-declared-bad",
         )
+
+
+def test_declared_digest_linkstats_admission_flags_unreadable_colocated_sidecar(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    from pilates.beam import admission
+    from pilates.config.models import BeamLinkstatsAdmissionConfig
+
+    staged = tmp_path / "warmstart.parquet"
+    content = b"PAR1-converged-linkstats-bytes"
+    staged.write_bytes(content)
+    digest = "sha256:file:" + hashlib.sha256(content).hexdigest()
+
+    sidecar = tmp_path / "warmstart.parquet.provenance.json"
+    sidecar.write_text("{corrupted-json", encoding="utf-8")
+
+    linkstats_cfg = BeamLinkstatsAdmissionConfig(
+        mode="warn",
+        expectation={
+            "kind": "declared_digest",
+            "identity": digest,
+        },
+    )
+    settings = SimpleNamespace(
+        beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats_cfg))
+    )
+    tracker = _Tracker(tmp_path)
+
+    report = admission.preflight_staged_linkstats_admission(
+        tracker=tracker,
+        metadata_logger=tracker,
+        existing_admission_reports={},
+        settings=settings,
+        launch_reference=_reference(staged),
+        report_dir=tmp_path / "run-declared-corrupt-sidecar",
+    )
+    assert report is not None
+    assert report.outcome == "unverified"
+    assert "sidecar_unreadable" in report.observations
+
+
+def test_declared_digest_linkstats_admission_preserves_missing_outcome_with_corrupt_sidecar(
+    tmp_path: Path,
+) -> None:
+    import hashlib
+    from pilates.beam import admission
+    from pilates.config.models import BeamLinkstatsAdmissionConfig
+
+    staged = tmp_path / "missing_warmstart.parquet"
+    digest = "sha256:file:" + hashlib.sha256(b"bytes").hexdigest()
+
+    sidecar = tmp_path / "missing_warmstart.parquet.provenance.json"
+    sidecar.write_text("{corrupted-json", encoding="utf-8")
+
+    linkstats_cfg = BeamLinkstatsAdmissionConfig(
+        mode="warn",
+        expectation={
+            "kind": "declared_digest",
+            "identity": digest,
+        },
+    )
+    settings = SimpleNamespace(
+        beam=SimpleNamespace(admission=SimpleNamespace(linkstats=linkstats_cfg))
+    )
+    tracker = _Tracker(tmp_path)
+
+    report = admission.preflight_staged_linkstats_admission(
+        tracker=tracker,
+        metadata_logger=tracker,
+        existing_admission_reports={},
+        settings=settings,
+        launch_reference=_reference(staged),
+        report_dir=tmp_path / "run-declared-missing-file",
+    )
+    assert report is not None
+    assert report.outcome == "unreadable"
+    assert report.observations == ("file_unreadable", "sidecar_unreadable")
+
+
+def test_beam_identity_config_uses_portable_admission_fingerprint(
+    tmp_path: Path,
+) -> None:
+    from pilates.config.models import BeamLinkstatsAdmissionConfig
+    from pilates.utils.consist_config import build_beam_identity_config
+
+    cfg_host_a = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expectation={
+            "kind": "prior_run",
+            "expected_run_id": "run_1",
+            "artifact_key": "linkstats",
+            "expected_direction": "output",
+            "expected_bytes_path": str(tmp_path / "host_a" / "linkstats.parquet"),
+        },
+    )
+    cfg_host_b = BeamLinkstatsAdmissionConfig(
+        mode="strict",
+        expectation={
+            "kind": "prior_run",
+            "expected_run_id": "run_1",
+            "artifact_key": "linkstats",
+            "expected_direction": "output",
+            "expected_bytes_path": str(tmp_path / "host_b" / "linkstats.parquet"),
+        },
+    )
+
+    def _make_settings(linkstats_cfg: BeamLinkstatsAdmissionConfig) -> SimpleNamespace:
+        return SimpleNamespace(
+            beam=SimpleNamespace(
+                config="sfbay.conf",
+                sample=0.1,
+                replanning_portion=0.4,
+                memory="16g",
+                discard_plans_every_year=False,
+                max_plans_memory=0,
+                router_directory="r5",
+                scenario_folder="sfbay",
+                admission=SimpleNamespace(linkstats=linkstats_cfg),
+            ),
+            defs=SimpleNamespace(),
+        )
+
+    ident_a = build_beam_identity_config(_make_settings(cfg_host_a))
+    ident_b = build_beam_identity_config(_make_settings(cfg_host_b))
+    assert ident_a["linkstats_admission"] == ident_b["linkstats_admission"]
+    assert "expected_bytes_path" not in ident_a["linkstats_admission"]
+    assert ident_a["linkstats_admission"]["direction"] == "output"

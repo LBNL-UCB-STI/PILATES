@@ -344,22 +344,7 @@ def build_beam_identity_config(settings: PilatesConfig) -> Dict[str, Any]:
     linkstats_admission = (
         admission_config.linkstats if admission_config is not None else None
     )
-    linkstats_admission_dict: Optional[Dict[str, Any]] = None
-    if linkstats_admission is not None:
-        expectation = getattr(linkstats_admission, "expectation", None)
-        if getattr(expectation, "kind", None) == "declared_digest":
-            linkstats_admission_dict = {
-                "mode": linkstats_admission.mode,
-                "kind": "declared_digest",
-                "identity": expectation.identity,
-            }
-        else:
-            linkstats_admission_dict = {
-                "mode": linkstats_admission.mode,
-                "expected_run_id": linkstats_admission.expected_run_id,
-                "artifact_key": linkstats_admission.artifact_key,
-                "expected_bytes_path": linkstats_admission.expected_bytes_path,
-            }
+    linkstats_admission_dict = admission_policy_fingerprint(linkstats_admission)
     identity_config: Dict[str, Any] = {
         "config": cfg.config,
         "sample": cfg.sample,

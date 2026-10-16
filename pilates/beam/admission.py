@@ -103,27 +103,38 @@ def _check_declared_digest_linkstats_expectation(
     try:
         sidecar_payload = read_linkstats_provenance_sidecar(sidecar_path)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        if explicit_sidecar:
-            report = report.model_copy(
-                update={
-                    "outcome": "unverified",
-                    "observations": (*report.observations, "sidecar_unreadable"),
-                    "reason": f"Configured provenance sidecar could not be read: {exc}",
-                }
-            )
+        sidecar_label = "Configured" if explicit_sidecar else "Co-located"
+        report = report.model_copy(
+            update={
+                "outcome": (
+                    "unverified" if report.outcome == "verified" else report.outcome
+                ),
+                "observations": (*report.observations, "sidecar_unreadable"),
+                "reason": (
+                    f"{sidecar_label} provenance sidecar could not be read: {exc}"
+                    if report.outcome == "verified"
+                    else report.reason
+                ),
+            }
+        )
         return report, None
 
     sidecar_identity = sidecar_payload.get("identity")
     if sidecar_identity != expectation.identity or (
-        report.observed_artifact_id is not None
+        report.outcome == "verified"
+        and report.observed_artifact_id is not None
         and sidecar_identity != report.observed_artifact_id
     ):
         report = report.model_copy(
             update={
-                "outcome": "mismatched",
+                "outcome": (
+                    "mismatched" if report.outcome == "verified" else report.outcome
+                ),
                 "observations": (*report.observations, "sidecar_identity_mismatched"),
                 "reason": (
                     "Provenance sidecar identity does not match expected or observed linkstats digest."
+                    if report.outcome == "verified"
+                    else report.reason
                 ),
             }
         )
@@ -220,13 +231,17 @@ def preflight_staged_linkstats_admission(
 
     if report.outcome == "verified":
         return report
+    observations = tuple(getattr(report, "observations", ()) or ())
+    obs_suffix = f" ({', '.join(observations)})" if observations else ""
     if linkstats_config.mode == "strict":
         raise BeamInputAdmissionError(
-            f"BEAM linkstats admission rejected before execution: {report.outcome}"
+            "BEAM linkstats admission rejected before execution: "
+            f"{report.outcome}{obs_suffix}"
         )
     logger.warning(
-        "BEAM linkstats admission recorded %s and will continue because mode=warn",
+        "BEAM linkstats admission recorded %s%s and will continue because mode=warn",
         report.outcome,
+        obs_suffix,
     )
     return report
 
