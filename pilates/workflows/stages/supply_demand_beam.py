@@ -688,17 +688,18 @@ def _run_beam_steps(
         if archive_run_dir is not None
         else Path(scenario.tracker.run_dir) / "archive"
     )
-    recovery_root = (
-        base_archive
-        if base_archive.name == run_result.run.id
-        else base_archive / run_result.run.id
-    )
-    _archive_beam_run_outputs_native(
-        run_id=run_result.run.id,
-        tracker=scenario.tracker,
-        recovery_root=recovery_root,
-        outputs=run_result.outputs,
-    )
+    if not getattr(run_result, "cache_hit", False):
+        recovery_root = (
+            base_archive
+            if base_archive.name == run_result.run.id
+            else base_archive / run_result.run.id
+        )
+        _archive_beam_run_outputs_native(
+            run_id=run_result.run.id,
+            tracker=scenario.tracker,
+            recovery_root=recovery_root,
+            outputs=run_result.outputs,
+        )
 
     logger.info("[beam] completed native beam_run run_id=%s", run_result.run.id)
     _maybe_fail_after_beam_run_for_canary(year=year, iteration=iteration)
@@ -724,7 +725,9 @@ def _run_beam_steps(
         phase="postprocess",
         resolved_inputs=postprocess_inputs,
     )
-    if isinstance(postprocess_result, RunResult):
+    if isinstance(postprocess_result, RunResult) and not getattr(
+        postprocess_result, "cache_hit", False
+    ):
         postprocess_recovery_root = (
             base_archive
             if base_archive.name == postprocess_result.run.id
