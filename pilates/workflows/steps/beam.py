@@ -20,11 +20,13 @@ from typing import Any, Callable, Iterable, Mapping
 
 import consist as cr
 from consist import (
+    Artifact,
     BindingResult,
     CacheOptions,
     ExecutionOptions,
     define_step,
 )
+from consist.core.persistence import DatabaseManager
 
 from pilates.beam import beam_exchange
 from pilates.beam.config_hocon import (
@@ -563,6 +565,7 @@ def _attach_skim_provenance_to_output_artifacts(
     workspace: Any,
     skim_keys: Iterable[str],
 ) -> None:
+    db_cache: dict[str, DatabaseManager] = {}
     for key in skim_keys:
         artifact = outputs.get(key)
         if artifact is None:
@@ -582,11 +585,41 @@ def _attach_skim_provenance_to_output_artifacts(
                 exc,
             )
             continue
-        meta = getattr(artifact, "meta", None)
-        if isinstance(meta, dict):
-            meta["skim_provenance"] = payload
-            if payload.get("identity"):
-                meta["admission_file_identity"] = payload["identity"]
+        updates: dict[str, Any] = {"skim_provenance": payload}
+        identity = payload.get("identity")
+        if isinstance(identity, str) and identity:
+            updates["admission_file_identity"] = identity
+        if isinstance(artifact, Artifact):
+            current_meta = (
+                dict(artifact.meta) if isinstance(artifact.meta, dict) else {}
+            )
+            needs_persist = any(
+                current_meta.get(meta_key) != meta_val
+                for meta_key, meta_val in updates.items()
+            )
+            current_meta.update(updates)
+            artifact.meta = current_meta
+            producer_info = payload.get("producer")
+            tracker_db_path = (
+                producer_info.get("tracker_db_path")
+                if isinstance(producer_info, Mapping)
+                else None
+            ) or payload.get("tracker_db_path")
+            if (
+                needs_persist
+                and isinstance(tracker_db_path, str)
+                and tracker_db_path
+                and Path(tracker_db_path).is_file()
+            ):
+                db = db_cache.get(tracker_db_path)
+                if db is None:
+                    db = DatabaseManager(tracker_db_path)
+                    db_cache[tracker_db_path] = db
+                db.update_artifact_meta(artifact, updates)
+        else:
+            meta = getattr(artifact, "meta", None)
+            if isinstance(meta, dict):
+                meta.update(updates)
 
 
 def _emit_skim_provenance_sidecars(
@@ -1822,25 +1855,27 @@ def _native_beam_full_skim(
             context=_consist_ctx,
             skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
-        if path_obj.name.endswith(".csv.gz"):
-            suffix = ".csv.gz"
-        elif path_obj.suffix == ".zarr":
-            suffix = ".zarr"
-        else:
-            suffix = path_obj.suffix or ".omx"
-        dest = _native_output_destination(
-            root=Path(workspace.get_beam_output_dir()),
-            step_name="beam_full_skim",
-            key="beam_full_skims",
-            suffix=suffix,
-        )
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        if path_obj.is_dir():
-            if dest.exists():
-                shutil.rmtree(dest)
-            shutil.copytree(path_obj, dest)
-        elif path_obj.resolve() != dest.resolve():
-            shutil.copy2(path_obj, dest)
+        dest = declared_outputs.get(BEAM_FULL_SKIMS)
+        if dest is None:
+            if path_obj.name.endswith(".csv.gz"):
+                suffix = ".csv.gz"
+            elif path_obj.suffix == ".zarr":
+                suffix = ".zarr"
+            else:
+                suffix = path_obj.suffix or ".omx"
+            dest = _native_output_destination(
+                root=Path(workspace.get_beam_output_dir()),
+                step_name="beam_full_skim",
+                key="beam_full_skims",
+                suffix=suffix,
+            )
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            if path_obj.is_dir():
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(path_obj, dest)
+            elif path_obj.resolve() != dest.resolve():
+                shutil.copy2(path_obj, dest)
         enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
         if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
             enqueue_archive_copy(

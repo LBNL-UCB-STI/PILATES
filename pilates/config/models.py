@@ -16,6 +16,7 @@ import warnings
 from dataclasses import dataclass, field as dataclass_field
 from typing import Annotated, Any, Dict, List, Literal, Optional, Sequence, Union
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -449,6 +450,8 @@ class InfrastructureConfig(BaseModel):
 class PriorRunExpectation(BaseModel):
     """Select one persisted artifact from a completed Consist run."""
 
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
     kind: Literal["prior_run"] = "prior_run"
     expected_run_id: str = Field(
         ..., description="Completed Consist run supplying the expected artifact."
@@ -457,7 +460,8 @@ class PriorRunExpectation(BaseModel):
         ..., description="Exact persisted artifact key on expected_run_id."
     )
     direction: Literal["input", "output", "any"] = Field(
-        "input",
+        "any",
+        validation_alias=AliasChoices("expected_direction", "direction"),
         description="Whether the expected artifact on expected_run_id is an input, output, or either.",
     )
     source_tracker_db: Optional[str] = Field(
@@ -468,6 +472,11 @@ class PriorRunExpectation(BaseModel):
         None,
         description="Optional immutable historical bytes for hash re-verification.",
     )
+
+    @property
+    def expected_direction(self) -> Literal["input", "output", "any"]:
+        """Alias matching Consist's PriorRunExpectation.expected_direction."""
+        return self.direction
 
 
 class DeclaredDigestExpectation(BaseModel):
@@ -536,7 +545,7 @@ def admission_policy_fingerprint(
     else:
         fingerprint["expected_run_id"] = expectation.expected_run_id
         fingerprint["artifact_key"] = expectation.artifact_key
-        if expectation.direction != "input":
+        if expectation.direction not in ("input", "any"):
             fingerprint["direction"] = expectation.direction
     return fingerprint
 
