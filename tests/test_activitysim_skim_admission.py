@@ -528,3 +528,98 @@ def test_attach_skim_provenance_skips_admission_file_identity_for_zarr_directory
         "sha256:dir_manifest:"
     )
     assert "admission_file_identity" not in dummy_artifact.meta
+
+
+def test_prior_run_expectation_rejects_blank_identifiers_and_facet_excludes_host_paths() -> (
+    None
+):
+    """PriorRunExpectation rejects whitespace identifiers at config load and ActivitySimConfig.to_consist_facet excludes host paths."""
+    from pilates.config.models import ActivitySimAdmissionConfig, ActivitySimConfig
+
+    with pytest.raises(
+        ValueError,
+        match="PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'",
+    ):
+        PriorRunExpectation(expected_run_id="   ", artifact_key="beam_full_skims")
+
+    with pytest.raises(
+        ValueError,
+        match="PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'",
+    ):
+        PriorRunExpectation(expected_run_id="run_1", artifact_key="   ")
+
+    policy = AdmissionPolicyConfig(
+        mode="strict",
+        expectation=PriorRunExpectation(
+            expected_run_id="run_123",
+            artifact_key="beam_full_skims",
+            direction="output",
+            source_tracker_db="/host/specific/provenance.duckdb",
+            expected_bytes_path="/host/specific/skims.omx",
+        ),
+    )
+    asim_cfg = ActivitySimConfig(
+        local_input_folder="in",
+        local_mutable_data_folder="mut",
+        local_output_folder="out",
+        local_configs_folder="cfg",
+        local_mutable_configs_folder="mcfg",
+        validation_folder="val",
+        command_template="echo ok",
+        final_plans_folder="plans",
+        admission=ActivitySimAdmissionConfig(initial_skims=policy),
+    )
+    facet = asim_cfg.to_consist_facet()
+    assert facet["admission"] == {
+        "initial_skims": {
+            "mode": "strict",
+            "kind": "prior_run",
+            "expected_run_id": "run_123",
+            "artifact_key": "beam_full_skims",
+            "direction": "output",
+        }
+    }
+
+
+def test_attach_skim_provenance_rematerializes_sidecar_from_cached_artifact_meta(
+    tmp_path: Path,
+) -> None:
+    """When a cache-hydrated output artifact has skim_provenance in meta, _attach_skim_provenance_to_output_artifacts writes the missing sidecar on disk."""
+    from pilates.beam.skim_provenance import (
+        read_skim_provenance_sidecar,
+        skim_provenance_sidecar_path,
+        write_skim_provenance_sidecar,
+    )
+    from pilates.workflows.steps.beam import (
+        _attach_skim_provenance_to_output_artifacts,
+    )
+
+    omx_path = tmp_path / "hydrated_skims.omx"
+    omx_path.write_bytes(b"cached-omx-bytes")
+    sidecar_path, payload = write_skim_provenance_sidecar(
+        omx_path,
+        producer_step="beam_full_skim",
+        run_id="cached_run_1",
+        region="sfbay",
+        year=2020,
+        iteration=0,
+    )
+    # Simulate Consist cache hydration: artifact file exists and artifact.meta has
+    # skim_provenance, but the unmanaged .provenance.json sidecar was not hydrated.
+    sidecar_path.unlink()
+    assert not skim_provenance_sidecar_path(omx_path).exists()
+
+    hydrated_artifact = MagicMock()
+    hydrated_artifact.meta = {"skim_provenance": payload}
+    hydrated_artifact.path = omx_path
+
+    _attach_skim_provenance_to_output_artifacts(
+        {"beam_full_skims": hydrated_artifact},
+        workspace=MagicMock(full_path=tmp_path),
+        skim_keys=("beam_full_skims",),
+    )
+
+    assert sidecar_path.is_file()
+    restored = read_skim_provenance_sidecar(sidecar_path)
+    assert restored == payload
+    assert hydrated_artifact.meta.get("admission_file_identity") == payload["identity"]

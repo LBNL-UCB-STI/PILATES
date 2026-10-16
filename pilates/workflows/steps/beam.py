@@ -566,6 +566,8 @@ def _attach_skim_provenance_to_output_artifacts(
     workspace: Any,
     skim_keys: Iterable[str],
 ) -> None:
+    import json
+
     db_cache: dict[str, DatabaseManager] = {}
     try:
         for key in skim_keys:
@@ -576,18 +578,46 @@ def _attach_skim_provenance_to_output_artifacts(
             if path is None:
                 continue
             sidecar_path = skim_provenance_sidecar_path(path)
-            if not sidecar_path.is_file():
-                continue
-            try:
-                payload = read_skim_provenance_sidecar(sidecar_path)
-            except Exception as exc:
-                logger.debug(
-                    "Unable to attach skim provenance sidecar from %s: %s",
-                    sidecar_path,
-                    exc,
+            payload: Mapping[str, Any] | None = None
+            if sidecar_path.is_file():
+                try:
+                    payload = read_skim_provenance_sidecar(sidecar_path)
+                except Exception as exc:
+                    logger.debug(
+                        "Unable to attach skim provenance sidecar from %s: %s",
+                        sidecar_path,
+                        exc,
+                    )
+                    continue
+            else:
+                existing_meta = getattr(artifact, "meta", None)
+                cached_prov = (
+                    existing_meta.get("skim_provenance")
+                    if isinstance(existing_meta, Mapping)
+                    else None
                 )
+                if isinstance(cached_prov, Mapping) and Path(path).exists():
+                    payload = dict(cached_prov)
+                    try:
+                        sidecar_path.parent.mkdir(parents=True, exist_ok=True)
+                        tmp_path = (
+                            sidecar_path.parent
+                            / f".tmp_{sidecar_path.name}.{os.getpid()}"
+                        )
+                        tmp_path.write_text(
+                            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+                            encoding="utf-8",
+                        )
+                        tmp_path.replace(sidecar_path)
+                    except Exception as exc:
+                        logger.debug(
+                            "Unable to materialize cached skim provenance sidecar to %s: %s",
+                            sidecar_path,
+                            exc,
+                        )
+            if payload is None:
                 continue
-            updates: dict[str, Any] = {"skim_provenance": payload}
+            updates: dict[str, Any] = {"skim_provenance": dict(payload)}
             identity = payload.get("identity")
             if isinstance(identity, str) and identity.startswith("sha256:file:"):
                 updates["admission_file_identity"] = identity
@@ -610,11 +640,14 @@ def _attach_skim_provenance_to_output_artifacts(
                     else None
                 ) or payload.get("tracker_db_path")
                 tracker_ref = get_tracker_ref(artifact)
-                owner_tracker = (
-                    tracker_ref() if tracker_ref is not None else None
-                ) or cr.current_tracker()
-                if owner_tracker is not None and owner_tracker.db is not None:
-                    owner_db_path = getattr(owner_tracker.db, "db_path", None)
+                explicit_owner = tracker_ref() if tracker_ref is not None else None
+                if explicit_owner is not None and explicit_owner.db is not None:
+                    explicit_owner.db.update_artifact_meta(artifact, updates)
+                    explicit_owner._run_artifacts_cache.clear()
+                    continue
+                active_tracker = cr.current_tracker()
+                if active_tracker is not None and active_tracker.db is not None:
+                    owner_db_path = getattr(active_tracker.db, "db_path", None)
                     if (
                         not isinstance(tracker_db_path, str)
                         or not tracker_db_path
@@ -624,8 +657,8 @@ def _attach_skim_provenance_to_output_artifacts(
                             == Path(tracker_db_path).resolve()
                         )
                     ):
-                        owner_tracker.db.update_artifact_meta(artifact, updates)
-                        owner_tracker._run_artifacts_cache.clear()
+                        active_tracker.db.update_artifact_meta(artifact, updates)
+                        active_tracker._run_artifacts_cache.clear()
                         continue
                 if (
                     isinstance(tracker_db_path, str)
@@ -1879,34 +1912,13 @@ def _native_beam_full_skim(
             context=_consist_ctx,
             skim_keys=(BEAM_FULL_SKIMS, FINAL_SKIMS_OMX),
         )
-        dest = declared_outputs.get(BEAM_FULL_SKIMS)
-        if dest is None:
-            if path_obj.name.endswith(".csv.gz"):
-                suffix = ".csv.gz"
-            elif path_obj.suffix == ".zarr":
-                suffix = ".zarr"
-            else:
-                suffix = path_obj.suffix or ".omx"
-            dest = _native_output_destination(
-                root=Path(workspace.get_beam_output_dir()),
-                step_name="beam_full_skim",
-                key="beam_full_skims",
-                suffix=suffix,
-            )
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            if path_obj.is_dir():
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(path_obj, dest)
-            elif path_obj.resolve() != dest.resolve():
-                shutil.copy2(path_obj, dest)
-        enqueue_archive_copy(key="beam_full_skims", path=dest, workspace=workspace)
-        if produced.final_skims_omx is not None and FINAL_SKIMS_OMX in declared_outputs:
-            enqueue_archive_copy(
-                key=FINAL_SKIMS_OMX,
-                path=declared_outputs[FINAL_SKIMS_OMX],
-                workspace=workspace,
-            )
+        for key in (BEAM_FULL_SKIMS, FINAL_SKIMS_OMX):
+            if key in source_paths and key in declared_outputs:
+                enqueue_archive_copy(
+                    key=key,
+                    path=declared_outputs[key],
+                    workspace=workspace,
+                )
     del _consist_ctx
 
 

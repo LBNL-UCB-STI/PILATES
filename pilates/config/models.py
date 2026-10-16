@@ -505,6 +505,16 @@ class PriorRunExpectation(BaseModel):
             payload.pop("expected_direction")
         return payload
 
+    @field_validator("expected_run_id", "artifact_key")
+    @classmethod
+    def _validate_non_empty_identifier(cls, value: str) -> str:
+        text = value.strip()
+        if not text:
+            raise ValueError(
+                "PriorRunExpectation requires non-empty 'expected_run_id' and 'artifact_key'."
+            )
+        return text
+
     @property
     def run_id(self) -> str:
         """Alias matching Consist's PriorRunExpectation.run_id."""
@@ -774,7 +784,11 @@ class ActivitySimConfig(BaseModel):
             "database": self.database.model_dump() if self.database else None,
         }
         if self.admission is not None:
-            facet["admission"] = self.admission.model_dump()
+            facet["admission"] = {
+                "initial_skims": admission_policy_fingerprint(
+                    self.admission.initial_skims
+                )
+            }
         return facet
 
 
